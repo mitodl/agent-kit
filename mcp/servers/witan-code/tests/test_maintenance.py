@@ -70,16 +70,70 @@ def test_spawn_background_optimize_throttles(monkeypatch, tmp_path):
     monkeypatch.setattr(maintenance.subprocess, "Popen", _FakePopen)
 
     # first call spawns and stamps; second (within window) is throttled
-    assert maintenance.spawn_background_optimize(store, now=50_000.0) is True
-    assert maintenance.spawn_background_optimize(store, now=50_000.0 + 5) is False
+    assert maintenance.spawn_background_optimize(store, now=1_000_000.0) is True
+    assert maintenance.spawn_background_optimize(store, now=1_000_000.0 + 5) is False
     assert len(calls) == 1
     argv, kwargs = calls[0]
-    assert argv[1:] == ["-m", "witan_code", "optimize", "--store", str(store)]
+    # never cleaned up before, so the first run also cleans up
+    assert argv[1:] == [
+        "-m",
+        "witan_code",
+        "optimize",
+        "--store",
+        str(store),
+        "--cleanup-older-than",
+        maintenance.CLEANUP_OLDER_THAN,
+    ]
     assert kwargs["start_new_session"] is True
 
-    # after the window elapses it spawns again
-    assert maintenance.spawn_background_optimize(store, now=50_000.0 + 4000) is True
+    # after the optimize window elapses it spawns again, without the cleanup,
+    # whose weekly window has not
+    assert maintenance.spawn_background_optimize(store, now=1_000_000.0 + 4000) is True
     assert len(calls) == 2
+    assert "--cleanup-older-than" not in calls[1][0]
+
+
+def test_cleanup_rides_optimize_on_its_own_window(monkeypatch, tmp_path):
+    """omnigraph 0.11 reclaims deleted branches' storage only in `cleanup`, so
+    the throttled optimize has to run one now and then or local stores grow
+    without bound."""
+    from witan_code import maintenance
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
+    monkeypatch.setenv("WITAN_CODE_CLEANUP_INTERVAL", "86400")
+    store = tmp_path / "g.omni"
+    store.mkdir()
+
+    calls = []
+    monkeypatch.setattr(
+        maintenance.subprocess, "Popen", lambda argv, **kw: calls.append(argv)
+    )
+
+    for hour in range(26):
+        maintenance.spawn_background_optimize(store, now=100_000.0 + hour * 3600)
+    cleaned = ["--cleanup-older-than" in argv for argv in calls]
+    assert len(calls) == 26
+    assert cleaned.count(True) == 2
+    assert cleaned[0] and cleaned[24]
+
+
+def test_cleanup_disabled_leaves_optimize_alone(monkeypatch, tmp_path):
+    from witan_code import maintenance
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
+    monkeypatch.setenv("WITAN_CODE_CLEANUP_INTERVAL", "0")
+    store = tmp_path / "g.omni"
+    store.mkdir()
+
+    calls = []
+    monkeypatch.setattr(
+        maintenance.subprocess, "Popen", lambda argv, **kw: calls.append(argv)
+    )
+
+    assert maintenance.spawn_background_optimize(store, now=50_000.0) is True
+    assert "--cleanup-older-than" not in calls[0]
 
 
 def test_spawn_marks_before_spawn_so_failure_does_not_hotloop(monkeypatch, tmp_path):
@@ -175,6 +229,16 @@ def test_cli_optimize_and_cleanup(tmp_path, capsys):
 
     cli_module.cleanup(store=str(store), keep=3, yes=True)
     assert "Cleaned up" in capsys.readouterr().out
+
+
+@requires_omnigraph
+def test_cli_optimize_then_cleanup(tmp_path, capsys):
+    from witan_code import cli as cli_module
+
+    store = _fresh_store(tmp_path)
+
+    cli_module.optimize(store=str(store), cleanup_older_than="30d")
+    assert "Optimized and cleaned up" in capsys.readouterr().out
 
 
 def test_cli_optimize_missing_store_is_noop(tmp_path, capsys):

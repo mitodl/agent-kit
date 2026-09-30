@@ -334,7 +334,10 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:        get faster; anything that deletes and then measures storage, or
 #:        immediately recreates, is now racing physical cleanup. Safe in
 #:        combination with #579, which stops a recreated branch sharing paths
-#:        with its predecessor.
+#:        with its predecessor. SUPERSEDED in 0.11, which moved fork reclaim
+#:        into `cleanup` (see the v0.11.0 entry below). That is why the
+#:        Stop-hook optimize in each server's `maintenance` now also runs a
+#:        throttled cleanup.
 #:
 #:   #571 `perf(query): enable projection pushdown for node scans` — a node
 #:        scan read every column of every row regardless of what the query

@@ -111,6 +111,7 @@ export WITAN_AUTHOR="Your Name"
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
 | `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |
+| `WITAN_CLEANUP_INTERVAL` | No | `604800` | Throttle window (seconds) for the `cleanup --older-than 30d` that rides a background compaction; `0` disables it |
 | `WITAN_REMOTE_WRITE_MAX_INFLIGHT` | No | `4` | Concurrent writes this process will send to one graph on a **remote** server before refusing. Sized from the measured write rate against the deployment's 30s deadline; `0` refuses every remote write |
 | `WITAN_REMOTE_WRITE_QUEUE_SECONDS` | No | `10` | How long a write waits for one of those slots before it is refused outright rather than admitted into a queue it cannot clear in time |
 
@@ -345,7 +346,7 @@ and `project tasks` exit 1 on a missing slug.
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |
 | `scan rules` | List active write-path scan detectors, their category, source, and enforcement mode |
 | `inject-context [--debug]` | The UserPromptSubmit hook body; `--debug` prints detection/read diagnostics to stderr (repo, branch, graph reads, counts, swallowed-failure reasons) to explain a blank block |
-| `optimize [--store URI]` | Compact the store's Lance fragments (non-destructive) so query latency doesn't bloat; safe to run on a cron/systemd-timer |
+| `optimize [--store URI] [--cleanup-older-than DURATION]` | Compact the store's Lance fragments so query latency doesn't bloat; safe to run on a cron/systemd-timer. Non-destructive unless `--cleanup-older-than` is given, which then runs a destructive `cleanup` of versions older than DURATION with no `--yes` prompt (the Stop hook passes it weekly) |
 | `cleanup [--keep N] [--older-than 7d] --yes` | Reclaim disk by GC-ing old Lance versions (destructive; requires `--yes`) |
 | `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 

@@ -97,6 +97,9 @@ _CLEARED = (
     "WITAN_AUTHOR",
     "WITAN_CONTEXT_TTL",
     "WITAN_OPTIMIZE_INTERVAL",
+    "WITAN_CLEANUP_INTERVAL",
+    "WITAN_CODE_OPTIMIZE_INTERVAL",
+    "WITAN_CODE_CLEANUP_INTERVAL",
     "AC_KIT_CONFIG",
     # Rendering and transport selectors. WITAN_OUTPUT_FORMAT is a cyclopts
     # `env_var` on both CLIs, so an ambient `json` turns every table command's

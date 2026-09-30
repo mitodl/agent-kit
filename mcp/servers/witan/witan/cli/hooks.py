@@ -145,7 +145,8 @@ def session_checkpoint() -> None:
             session_state.clear_handle(session_id)
 
     # Keep the store compacted so query latency doesn't re-bloat. Runs at most
-    # once per WITAN_OPTIMIZE_INTERVAL and detaches, so the Stop hook returns
+    # once per WITAN_OPTIMIZE_INTERVAL (cleaning up once per
+    # WITAN_CLEANUP_INTERVAL) and detaches, so the Stop hook returns
     # immediately; best-effort, never fails the hook.
     #
     # The config load is inside the guard: `load()` raises ValueError on a

@@ -169,9 +169,12 @@ dominates query latency — the same failure mode witan's own store hit (#98).
 This spawns a throttled, detached `witan-code optimize` (at most once per
 `WITAN_CODE_OPTIMIZE_INTERVAL`, default daily; 0 disables) for the current
 repo's store and the shared cross-repo bridge store, if either exists and is
-due. Best-effort and non-blocking — always exits 0 and prints nothing, so a
-missing binary or a bloated store taking tens of seconds to compact never
-delays the Stop hook itself (the compaction runs detached).
+due. At most once per `WITAN_CODE_CLEANUP_INTERVAL` (default weekly) that run
+also cleans up versions older than 30 days, which on omnigraph 0.11 is the
+only thing that reclaims the storage of deleted branches. Best-effort and
+non-blocking — always exits 0 and prints nothing, so a missing binary or a
+bloated store taking tens of seconds to compact never delays the Stop hook
+itself (the compaction runs detached).
 
 ## Environment Variables
 
@@ -184,5 +187,6 @@ the code-graph hooks use the witan-code variables:
 | `WITAN_MEMORY_TOKEN` | (empty) | Bearer token for http:// mode |
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | Per-repo code-store directory (code-graph hooks) |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | Throttle window in seconds for opportunistic store compaction; `0` disables |
+| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` (weekly) | Throttle window in seconds for the 30-day version cleanup that rides a compaction; `0` disables |
 | `CLAUDE_SESSION_ID` | (set by Claude Code) | Session UUID for state file keying |
 | `CLAUDE_PROJECT_DIR` | `$(pwd)` | Project root for git remote detection and the code-graph lock |

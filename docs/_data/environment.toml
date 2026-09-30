@@ -219,6 +219,10 @@ desc = "Reap per-branch views idle at least this long. `0` (or negative) disable
 default = "86400"
 desc = "Minimum seconds between throttled background `optimize` runs on the code stores. `0` disables."
 
+[section.vars.WITAN_CODE_CLEANUP_INTERVAL]
+default = "604800"
+desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
+
 # ── CI indexer ───────────────────────────────────────────────────────────────
 
 [[section]]
@@ -366,6 +370,10 @@ title = "Maintenance and observability"
 [section.vars.WITAN_OPTIMIZE_INTERVAL]
 default = "86400"
 desc = "Minimum seconds between throttled background `optimize` runs on the memory store. `0` disables. The `Stop` hook spawns a detached run at most this often, so compaction never blocks a session."
+
+[section.vars.WITAN_CLEANUP_INTERVAL]
+default = "604800"
+desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
 
 [section.vars.WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL]
 default = "86400"

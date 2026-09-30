@@ -48,22 +48,41 @@ def _client(graph_uri: str) -> OmnigraphClient:
 
 
 @app.command
-def optimize(*, store: str | None = None) -> None:
-    """Compact the graph store's Lance fragments (non-destructive).
+def optimize(
+    *, store: str | None = None, cleanup_older_than: str | None = None
+) -> None:
+    """Compact the graph store's Lance fragments, optionally then cleaning up.
 
     Collapses the many tiny fragments that accrue from every write so opening
     the store stays cheap. Safe to run repeatedly; takes the store write lock.
 
+    Non-destructive on its own. ``--cleanup-older-than`` adds a destructive
+    ``cleanup`` with no ``--yes`` prompt, because the Stop hook is what passes
+    it. The cleanup only runs if the optimize succeeded, and the hook has
+    already stamped both throttles, so a failing optimize also defers the
+    cleanup to the next cleanup window.
+
     Parameters
     ----------
-    store: Store URI to optimize (default: the configured graph store).
+    store
+        Store URI to optimize (default: the configured graph store).
+    cleanup_older_than
+        Then run ``cleanup`` removing versions older than this
+        Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
+        slower cadence than optimize itself.
     """
     graph_uri = _resolve_store(store)
     if graph_uri is None:
         return
     console.print(f"[dim]Optimizing {graph_uri} …[/dim]")
-    _client(graph_uri).optimize()
-    console.print("[green]Optimized.[/green] (run `witan cleanup` to reclaim disk)")
+    client = _client(graph_uri)
+    client.optimize()
+    if cleanup_older_than is None:
+        console.print("[green]Optimized.[/green] (run `witan cleanup` to reclaim disk)")
+        return
+    console.print(f"[dim]Cleaning up versions older than {cleanup_older_than} …[/dim]")
+    client.cleanup(older_than=cleanup_older_than)
+    console.print("[green]Optimized and cleaned up.[/green]")
 
 
 @app.command
@@ -78,14 +97,20 @@ def cleanup(
 
     ``optimize`` compacts fragments but leaves old versions behind; this GCs
     them, keeping the most recent ``keep`` versions per table (and/or those
-    newer than ``older_than``). Irreversible, so it requires ``--yes``.
+    newer than ``older_than``). From omnigraph 0.11 it is also the only thing
+    that reclaims the storage of deleted branches. Irreversible, so it requires
+    ``--yes``.
 
     Parameters
     ----------
-    store: Store URI to clean (default: the configured graph store).
-    keep: Number of recent versions to keep per table.
-    older_than: Also keep versions newer than this Go-style duration (e.g. 7d).
-    yes: Confirm the destructive operation (required to actually run).
+    store
+        Store URI to clean (default: the configured graph store).
+    keep
+        Number of recent versions to keep per table.
+    older_than
+        Also keep versions newer than this Go-style duration (e.g. 7d).
+    yes
+        Confirm the destructive operation (required to actually run).
     """
     graph_uri = _resolve_store(store)
     if graph_uri is None:

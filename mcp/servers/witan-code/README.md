@@ -321,6 +321,7 @@ symlink alternative:
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
+| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` (weekly) | throttle window (seconds) for the `cleanup --older-than 30d` that rides a `checkpoint` compaction; `0` disables it |
 | `WITAN_CODE_INDEX_ROLE` | `client` | `ci` designates this process the writer of a shared graph's default-branch view. Only meaningful against a shared cluster graph; local stores are unaffected. See [Branch indexing](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view) |
 | `WITAN_ACTOR` | derived from the `witan login` session | the identity that owns the branch views this process writes; an `act-…` id or a raw OIDC `sub`. For a non-interactive writer (CI, a maintenance job). See [Branch indexing](docs/BRANCH_INDEXING.md#per-writer-branch-views) |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
@@ -607,12 +608,18 @@ mechanisms keep this in check, mirroring that module (deliberately duplicated
 - **Opportunistic**: the `witan-code checkpoint` Stop hook spawns a
   throttled, detached `witan-code optimize` for the current repo's store and
   the shared bridge store, at most once per `WITAN_CODE_OPTIMIZE_INTERVAL`
-  (default daily; `0` disables) each — see [Hooks](#hooks).
-- **Scheduled**: `witan-code optimize [--store PATH | --bridge]` /
-  `witan-code cleanup --yes` for cron/systemd-timer driven maintenance on a
-  busy store. `optimize` is non-destructive and safe to run repeatedly;
-  `cleanup` GCs old Lance versions to reclaim disk and is destructive, so it
-  requires `--yes`.
+  (default daily; `0` disables) each — see [Hooks](#hooks). At most once per
+  `WITAN_CODE_CLEANUP_INTERVAL` (default weekly) the run also cleans up
+  versions older than 30 days. On omnigraph 0.11 that is the only thing that
+  reclaims the storage of branches deleted by `branches --prune` or
+  `reap-views --apply`; `optimize` no longer does.
+- **Scheduled**: `witan-code optimize [--store PATH | --bridge]
+  [--cleanup-older-than DURATION]` / `witan-code cleanup --yes` for
+  cron/systemd-timer driven maintenance on a busy store. `optimize` alone is
+  non-destructive and safe to run repeatedly. `cleanup` GCs old Lance versions
+  to reclaim disk and is destructive, so it requires `--yes`.
+  `--cleanup-older-than` makes `optimize` run that destructive cleanup
+  afterwards with no `--yes` prompt, which is how the Stop hook calls it.
 
 ## Rebuilding an unreadable store
 
