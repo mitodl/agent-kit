@@ -2,9 +2,9 @@
 name: validate-before-commit
 description: >
   Run the full validation sequence before declaring any task done. Use this skill
-  proactively after any code or infrastructure change — run pre-commit, mypy, and
-  pulumi preview (where applicable) without waiting to be asked. Never declare
-  success without passing checks.
+  proactively after any code or infrastructure change — run the repository's
+  hooks with prek, then mypy and pulumi preview (where applicable), without
+  waiting to be asked. Never declare success without passing checks.
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -19,7 +19,7 @@ Run these checks proactively — do not wait for the human to ask.
 
 ```bash
 # 1. Linting, formatting, and basic static checks
-uv run pre-commit run --all-files
+uv run prek run --all-files
 
 # 2. Type checking
 uv run mypy <package_or_src_dir>
@@ -28,12 +28,29 @@ uv run mypy <package_or_src_dir>
 pulumi preview --stack <stack-name>
 ```
 
+mitodl repositories run their hooks with [prek](https://prek.j178.dev), which
+reads the same `.pre-commit-config.yaml` (or `prek.toml`) that pre-commit
+did. Use the command for the repository's prek pin:
+
+| Repository | Hook command |
+|------------|--------------|
+| Python with `uv` (prek in the `prek` dependency group) | `uv run prek run --all-files` |
+| Node (`@j178/prek` in `devDependencies`) | `npx prek run --all-files` |
+| Neither (prek installed as a tool) | `prek run --all-files` |
+| Not yet migrated (still uses `pre-commit`) | `uv run pre-commit run --all-files` in a uv project, otherwise `pre-commit run --all-files` |
+
+In a repository with `.github/workflows/autofix.yml`, the same hooks run in CI
+as the `prek` check. When the hooks' only problems are ones they fixed
+themselves, autofix.ci commits those fixes to the PR, except under `.github/`.
+If any hook still fails, nothing is committed and the check stays red.
+Running the hooks locally first avoids both.
+
 ## Rules
 
-- Run pre-commit **before** mypy; pre-commit may auto-fix formatting that would
+- Run the hooks **before** mypy; they may auto-fix formatting that would
   otherwise produce mypy noise.
-- If pre-commit auto-fixes files, stage the changes and re-run pre-commit to
-  confirm all hooks pass cleanly.
+- If the hooks auto-fix files, stage the changes and re-run them to confirm
+  every hook passes cleanly.
 - mypy errors are blocking — do not leave type errors for the human to clean up.
 - `pulumi preview` output must be reviewed: unexpected replacements or deletions
   are bugs, not acceptable side effects.

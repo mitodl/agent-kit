@@ -31,7 +31,7 @@ Skills are organized by **category**. Each skill lives in
 | infrastructure | [`pulumi-modify-existing`](./infrastructure/pulumi-modify-existing/SKILL.md) | Modify existing stack entrypoint; never create new files; preserve `assumeRole` |
 | infrastructure | [`vault-k8s-auth`](./infrastructure/vault-k8s-auth/SKILL.md) | Wire Vault K8s auth via `hvac`; never hardcode role or mount path |
 | containers | [`docker-uv-image-builds`](./containers/docker-uv-image-builds/SKILL.md) | `mitodl/<service>` naming, git short-ref tags, relocatable `uv` venvs |
-| workflow | [`validate-before-commit`](./workflow/validate-before-commit/SKILL.md) | Run `pre-commit` → `mypy` → `pulumi preview` proactively before declaring done |
+| workflow | [`validate-before-commit`](./workflow/validate-before-commit/SKILL.md) | Run the hooks (`prek`) → `mypy` → `pulumi preview` proactively before declaring done |
 | workflow | [`creating-skills`](./workflow/creating-skills/SKILL.md) | Create a new skill: frontmatter, category placement, progressive disclosure, index updates |
 | workflow | [`extract-style-profile`](./workflow/extract-style-profile/SKILL.md) | Profile how a person, team, or repo codes and communicates from git/GitHub history; outputs CLAUDE.md/AGENTS.md rules with evidence |
 | process | [`create-ol-github-issue`](./process/create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |

@@ -40,9 +40,13 @@ RUN uv sync --frozen --no-dev
 Do **not** mount `ol-orchestrate-lib` (or any shared library) as a volume at
 runtime. Shared libraries are installed as build-time dependencies only.
 
-## Running pre-commit and type checks
+## Running hooks and type checks
 
 ```bash
-uv run pre-commit run --all-files
+uv run prek run --all-files
 uv run mypy <package>
 ```
+
+`prek` is pinned in the project's `prek` dependency group, which `dev`
+includes, so `uv sync` installs it. A project that still declares
+`pre-commit` instead runs `uv run pre-commit run --all-files`.

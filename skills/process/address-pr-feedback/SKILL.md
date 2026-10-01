@@ -3,8 +3,9 @@ name: address-pr-feedback
 description: >
   Fetch, categorize, and address GitHub pull request review feedback --
   inline review comments, review threads, top-level discussion comments,
-  and failing status checks (GitHub Actions jobs plus third-party checks
-  like pre-commit.ci, GitGuardian, and CodeQL) -- including paginating
+  and failing status checks (GitHub Actions jobs such as the prek/autofix.ci
+  hook check, plus third-party checks like pre-commit.ci, GitGuardian, and
+  CodeQL) -- including paginating
   through large or long-running PRs with many rounds of review. Applies
   fixes, replies to reviewers with evidence (never a generic "noted"),
   marks resolved review threads via the GraphQL API, and diagnoses/fixes
@@ -12,8 +13,8 @@ description: >
   feedback", "address the comments on <PR>", "resolve the review comments",
   "mark addressed comments as resolved", "fix the failing checks", "the CI
   is red on <PR>", or to triage feedback from bots (Copilot, Gemini, CodeQL,
-  Sentry), third-party check services (pre-commit.ci, GitGuardian), or
-  human reviewers on a specific pull request.
+  Sentry), hook autofixers (autofix.ci, pre-commit.ci), third-party check
+  services (GitGuardian), or human reviewers on a specific pull request.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -56,7 +57,8 @@ bundled with other git operations:
 - "Review the latest human-contributed feedback" / "there's more bot feedback
   to evaluate" (a re-check after previously addressing a first round)
 - "Fix the failing checks [on #N]" / "the CI is red, why?" / "address the
-  GitGuardian alert" / "pre-commit.ci is failing" — a checks-only request,
+  GitGuardian alert" / "prek is failing" / "pre-commit.ci is failing" — a
+  checks-only request,
   not review-comment feedback; jump straight to
   [Phase 1b — Checks](#phase-1b--checks) below
 - "Address the PR feedback" alone, with no mention of checks, still means
@@ -113,9 +115,9 @@ whether you recognize the login.
 ./skills/process/address-pr-feedback/scripts/fetch-checks.sh mitodl/agent-kit 116 /tmp/pr116-checks.json
 ```
 
-Covers both GitHub Actions jobs and third-party status checks (pre-commit.ci,
-GitGuardian, Sentry, CodeQL, and anything else posting to the PR's check
-bar) in one call. Excludes passing/skipped checks by default; add
+Covers both GitHub Actions jobs (including the `prek` hook check) and
+third-party status checks (pre-commit.ci, GitGuardian, Sentry, CodeQL, and
+anything else posting to the PR's check bar) in one call. Excludes passing/skipped checks by default; add
 `--include-passing` for the full bar (e.g. a final "everything green" report).
 
 Output shape: `{repo, pr, checks: [...], action_run_logs: {<run_id>:
@@ -192,11 +194,24 @@ Phase 3 — tag each one on the way in:
    `workflow` is a repo-owned workflow name). A code problem to fix like any
    other actionable item: read `action_run_logs[<run_id>]` for the actual
    failure, fix it, push, and the check re-runs on its own.
-2. **Auto-fixable formatting/lint bots** (pre-commit.ci is the common case).
-   These often can't be fixed by editing and pushing yourself — pre-commit.ci
-   in particular reacts to a PR comment (`pre-commit.ci autofix`) or you can
-   run the same hooks locally and push the diff. Check the failure's `link`
-   for the specific instruction before guessing.
+2. **Hook checks with an autofix bot.** In mitodl repositories this is
+   usually the `prek` check: a GitHub Actions job in
+   `.github/workflows/autofix.yml` (workflow name `autofix.ci`), so its log
+   is in `action_run_logs`. When the hooks only made fixable changes, the
+   check goes red and `autofix-ci[bot]` pushes one fix commit to the PR
+   branch, and the check re-runs green on it. When that commit is coming,
+   wait for it and `git pull` before pushing anything else, or your push is
+   rejected as non-fast-forward. On a fork PR without "allow edits by
+   maintainers", no commit comes: the app comments instead, and the author
+   applies the fix locally. The check stays red with no bot commit when a hook
+   reports something it can't fix, when the fix touches `.github/`
+   (autofix.ci refuses those), or when the fix doesn't apply to the PR head.
+   Fix those locally: run the repo's hooks (`uv run prek run --all-files` in
+   uv repos, `npx prek run --all-files` in Node repos), commit, and push.
+   Repositories not yet migrated use pre-commit.ci instead, which reacts to
+   a PR comment (`pre-commit.ci autofix`), or you can run the same hooks
+   locally and push the diff. Check the failure's log or `link` for the
+   specific instruction before guessing.
 3. **Security/compliance scanners** (GitGuardian, CodeQL alerts, Sentry-linked
    checks, secret scanning). Never treat these like an ordinary lint failure
    — see the "Security/compliance-flagged findings" rule in

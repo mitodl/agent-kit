@@ -16,8 +16,8 @@ script fetches.
 
 Each entry in `checks[]` has:
 
-- `name` — the check's display name (`"Analyze (python)"`, `"GitGuardian
-  Security Checks"`, `"pre-commit.ci"`)
+- `name` — the check's display name (`"Analyze (python)"`, `"prek"`,
+  `"GitGuardian Security Checks"`, `"pre-commit.ci - pr"`)
 - `bucket` — `pass` / `fail` / `pending` / `skipping` / `cancel` (`gh`'s own
   normalization of the underlying `state`/`conclusion` fields — use this,
   not `state`, for pass/fail branching)
@@ -54,7 +54,9 @@ has to it; the actual log lives on that service's infrastructure. For these:
 Re-running only applies to GitHub Actions runs — third-party checks re-run
 on whatever trigger the service itself defines (a new push, in most cases;
 pre-commit.ci additionally reacts to a PR comment reading `pre-commit.ci
-autofix` or `pre-commit.ci run`).
+autofix` or `pre-commit.ci run`). The `prek` check is an Actions job, so it
+re-runs like any other. autofix.ci acts from that job's last step, pushing
+at most one fix commit per run, so re-running the job is how to retry a fix.
 
 ```bash
 gh run rerun <run-id> -R mitodl/agent-kit --failed   # only the failed jobs, not the whole run
