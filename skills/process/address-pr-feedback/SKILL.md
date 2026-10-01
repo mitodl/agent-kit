@@ -199,10 +199,11 @@ Phase 3 — tag each one on the way in:
    `.github/workflows/autofix.yml` (workflow name `autofix.ci`), so its log
    is in `action_run_logs`. When the hooks only made fixable changes, the
    check goes red and `autofix-ci[bot]` pushes one fix commit to the PR
-   branch, and the check re-runs green on it. (On a fork PR without "allow
-   edits by maintainers", the app comments instead of pushing.) Wait for that commit and
-   `git pull` before pushing anything else, or your push is rejected as
-   non-fast-forward. The check stays red with no bot commit when a hook
+   branch, and the check re-runs green on it. When that commit is coming,
+   wait for it and `git pull` before pushing anything else, or your push is
+   rejected as non-fast-forward. On a fork PR without "allow edits by
+   maintainers", no commit comes: the app comments instead, and the author
+   applies the fix locally. The check stays red with no bot commit when a hook
    reports something it can't fix, when the fix touches `.github/`
    (autofix.ci refuses those), or when the fix doesn't apply to the PR head.
    Fix those locally: run the repo's hooks (`uv run prek run --all-files` in

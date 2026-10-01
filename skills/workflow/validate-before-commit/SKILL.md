@@ -37,11 +37,13 @@ did. Use the command for the repository's prek pin:
 | Python with `uv` (prek in the `prek` dependency group) | `uv run prek run --all-files` |
 | Node (`@j178/prek` in `devDependencies`) | `npx prek run --all-files` |
 | Neither (prek installed as a tool) | `prek run --all-files` |
-| Not yet migrated (still declares `pre-commit`) | `uv run pre-commit run --all-files` |
+| Not yet migrated (still uses `pre-commit`) | `uv run pre-commit run --all-files` in a uv project, otherwise `pre-commit run --all-files` |
 
 In a repository with `.github/workflows/autofix.yml`, the same hooks run in CI
-as the `prek` check, and autofix.ci commits any fixes they make to the PR.
-Running them locally first saves that round trip.
+as the `prek` check. When the hooks' only problems are ones they fixed
+themselves, autofix.ci commits those fixes to the PR, except under `.github/`.
+If any hook still fails, nothing is committed and the check stays red.
+Running the hooks locally first avoids both.
 
 ## Rules
 

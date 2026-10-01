@@ -59,7 +59,7 @@ needs - belongs behind a
 [same-named `cached_property`](prefetching.md#make-one-property-work-with-and-without-a-prefetch)
 on the model, so the serializer still just reads an attribute.
 
-drf-lint enforces this rule statically in CI and pre-commit; see
+drf-lint enforces this rule statically as a hook, locally and in CI; see
 [testing-and-lint.md](testing-and-lint.md#lint-serializers-with-drf-lint).
 
 ## Require prefetches in serializers

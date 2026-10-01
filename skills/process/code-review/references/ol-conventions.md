@@ -29,7 +29,8 @@ Check them in this order; earlier ones cost more when missed.
 
 ## Not findings on their own
 
-- Formatting and import order. Pre-commit (ruff, yamlfmt, prettier) owns them.
+- Formatting and import order. The repo's hooks (ruff, yamlfmt, prettier), run by
+  prek or pre-commit, own them.
 - Missing tests or docstrings in general. Raise one only when a specific untested
   path or a docstring that contradicts the code is part of a real finding.
 - A single hardcoded value in a workflow file that already exists once per
