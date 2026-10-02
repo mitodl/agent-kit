@@ -58,7 +58,7 @@ shares a prefix by construction. Against this repo's real local store — 534
 tasks, 129 memories, 93 sessions across 32 projects — merging two machines with
 a generous 50 sessions each on one hot project:
 
-```
+```text
 P(collision) ≈ 1 - exp(-(50 × 50) / 16_777_216) ≈ 0.015%
 ```
 

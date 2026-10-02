@@ -60,6 +60,7 @@ def iter_session_state_files() -> list[Path]:
 ```
 
 Callers rewired to this module:
+
 - `server.py:1231-1235` (`_STATE_FILE_PREFIX`, `_session_state_path`) → re-export/delegate.
 - `server.py:2098-2099` cleanup glob → `iter_session_state_files()`.
 - `context.py:195-196` (`session_checkpoint`) → `session_state_path(session_id)`.
@@ -107,6 +108,7 @@ def filter_ready(tasks: list[dict], *, now=None) -> list[dict]:
 ```
 
 Callers rewired:
+
 - `context.py:76-86` (the hook's inline `status in (open, blocked) and all
   blockers closed` + `_PRIORITY` sort) → `readiness.filter_ready(tasks)`. This
   is the divergence: the hook currently omits the `in_progress`+expired-lease
@@ -201,7 +203,7 @@ existed for this** — created this phase (see task creation below).
 Design: after the "Active Workflow Projects" block, for each shown project
 (top 3), fetch `list_sessions_by_project`, take the latest, and append:
 
-```
+```text
   Last session: <summary first line> (<ended <ts> | still open>)
 ```
 

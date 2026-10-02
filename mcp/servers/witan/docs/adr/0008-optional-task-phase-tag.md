@@ -54,7 +54,7 @@ and thread it through create/update/read as a *filter*, not a gate.
 
 ### 1. Schema (`schema/schema.pg`)
 
-```
+```text
 node Task {
     ...
     priority:    enum(p0, p1, p2, p3) @index

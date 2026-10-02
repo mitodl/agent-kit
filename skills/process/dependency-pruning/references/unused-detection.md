@@ -14,6 +14,7 @@ imports across the codebase. No installation needed with `uvx`.
 Exit codes: 0 = clean, 1 = issues found (check stdout for details).
 
 Relevant codes:
+
 - `DEP001` — dependency declared but never imported → removal candidate
 - `DEP002` — import found but not declared (missing dep) → ignore for pruning
 - `DEP003` — transitive dep used directly → note, don't remove
@@ -72,6 +73,7 @@ npx --yes depcheck --json 2>/dev/null
 ```
 
 Output structure:
+
 ```json
 {
   "dependencies": ["unused-pkg"],

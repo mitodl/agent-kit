@@ -49,7 +49,7 @@ get a `symbol_id`, then
 [`code_callers`](../reference/mcp-tools/code.md#code_callers) with that id. A
 symbol id looks like:
 
-```
+```text
 https://github.com/mitodl/agent-kit#packages/witan-core/witan_core/target_config.py::resolve_target
 ```
 
@@ -73,7 +73,7 @@ another calls, a package one publishes and another depends on.
 The **bridge store** links repositories by those shared keys, so the graph can
 answer questions that span two checkouts:
 
-```
+```text
 code_interface_providers(key="DATABASE_URL")   # who defines it
 code_interface_consumers(key="DATABASE_URL")   # who reads it
 code_cross_repo_impact(symbol_id=...)          # blast radius across repos

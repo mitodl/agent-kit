@@ -11,7 +11,7 @@ Custom agent definitions and instruction files for GitHub Copilot.
 
 ## Structure
 
-```
+```text
 copilot/
 ├── instructions/       # Reusable .github/copilot-instructions.md fragments
 │   └── <topic>/

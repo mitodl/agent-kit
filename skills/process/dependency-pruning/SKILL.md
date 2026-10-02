@@ -81,6 +81,7 @@ tree for each package name to find those never referenced.
 
 Automated tools miss things. After the tool run, scan the full declared dep
 list yourself and verify packages the tool didn't flag — especially:
+
 - Packages whose PyPI/npm name differs from the import name
 - Packages that are very old or rarely heard of
 - Packages that duplicate stdlib functionality
@@ -90,6 +91,7 @@ list yourself and verify packages the tool didn't flag — especially:
 **Django / Python projects**: deptry's **DEP001** false-positive rate can be
 very high (sometimes 30+ flags for a single project) because PyPI package names
 rarely match their Python module names:
+
 - `djangorestframework` → `rest_framework`
 - `beautifulsoup4` → `bs4`
 - `pyyaml` → `yaml`
@@ -114,6 +116,7 @@ a `django-*` package as unused.
 **Server runtime packages**: WSGI/ASGI servers (gunicorn, uwsgi, granian,
 hypercorn, uvicorn) are invoked via CLI in Dockerfile or Kubernetes manifests,
 not imported in Python. Before flagging any of these for removal:
+
 1. Check deployment configs (`Dockerfile`, `docker-compose.yml`, Helm charts, `Procfile`)
 2. Check git history for in-progress migrations (e.g., uwsgi→granian): if a pending
    PR or recent commit is switching servers, both the old and new runtime belong in
@@ -174,6 +177,7 @@ flag the package as a vendoring candidate. Include a one-sentence sketch of the
 replacement (e.g., "The 2 functions could be replaced with ~25 lines of Python").
 
 Also estimate package size:
+
 ```bash
 # Python
 python -c "
@@ -243,7 +247,7 @@ would be. Do not conflate "deprecated" with "remove" — flag these as
 
 Present a structured report:
 
-```
+```text
 # Dependency Audit: <repo-name>
 Thresholds: API surface <= N symbols, package LOC proxy <= N
 

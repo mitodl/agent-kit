@@ -7,9 +7,11 @@ Annotated examples from an audit of mitodl/ol-infrastructure (June 2026, 59 issu
 ## LIKELY_OUTDATED examples
 
 ### #4504 — Mailgun under Pulumi management
+
 **Verdict: LIKELY_OUTDATED — Close**
 
 Evidence found:
+
 ```bash
 ls src/ol_infrastructure/applications/mailgun/
 # __main__.py  Pulumi.yaml  Pulumi.applications.mailgun.applications.CI.yaml ...
@@ -25,9 +27,11 @@ Two commits confirm a full import landed in April 2026.
 ---
 
 ### #3119 — Keycloak metrics (replace aerogear SPI)
+
 **Verdict: LIKELY_OUTDATED — Close**
 
 Evidence found:
+
 ```bash
 rg "aerogear|keycloak-metrics-spi" src/ -l
 # (no output)
@@ -46,9 +50,11 @@ ServiceMonitor wired to Grafana Alloy. The issue's specific ask is done.
 ---
 
 ### #2030 — Prevent pre-release pre-commit upgrades
+
 **Verdict: LIKELY_OUTDATED — Close**
 
 Evidence found:
+
 ```bash
 grep "prettier" .pre-commit-config.yaml
 # (no output)
@@ -67,9 +73,11 @@ for a tool no longer present.
 ## POSSIBLY_OUTDATED examples
 
 ### #3984 — Epic: Sentry Noise Reduction
+
 **Verdict: POSSIBLY_OUTDATED — Verify then close**
 
 Evidence found:
+
 ```bash
 git log --oneline --grep="sentry.*sample\|sentry.*rate\|sentry.*noise" -i | head -5
 # a00282d45 Lower Sentry sample rates
@@ -85,9 +93,11 @@ issues; close this epic if they are resolved.
 ---
 
 ### #4340 — Remove kubewatch from #product-learn-ai / fix Slack posting
+
 **Verdict: POSSIBLY_OUTDATED — Verify then close**
 
 Evidence found:
+
 ```bash
 git log --oneline --grep="kubewatch" | head -5
 # b960d0b39 fix: Remove product specific kubewatch channels
@@ -105,9 +115,11 @@ closing; the code path is correct but operational confirmation is missing.
 ## STILL_RELEVANT examples
 
 ### #1745 — Require IMDSv2 on EC2 instances
+
 **Verdict: STILL_RELEVANT — Quick win**
 
 Evidence found:
+
 ```bash
 grep -n "http_tokens" src/ol_infrastructure/components/aws/auto_scale_group.py
 # 447:  http_tokens="optional",
@@ -123,9 +135,11 @@ issue was opened in September 2023.
 ---
 
 ### #3694 — Specify OpenAPI Generator version in pipeline config
+
 **Verdict: STILL_RELEVANT — Quick win**
 
 Evidence found:
+
 ```bash
 grep -n "openapi_generator_tag" \
   src/ol_concourse/pipelines/libraries/api_clients_pipeline.py
@@ -138,9 +152,11 @@ This is a one-line edit.
 ---
 
 ### #4485 — Slack Release Bot: replace Doof with a stateless Slack Bolt K8s service
+
 **Verdict: STILL_RELEVANT — Active work in flight (do not close)**
 
 Evidence found:
+
 ```bash
 git branch -r | grep release-bot
 # origin/feat/slack-release-bot

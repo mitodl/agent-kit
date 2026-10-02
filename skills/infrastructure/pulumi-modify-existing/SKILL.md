@@ -68,6 +68,7 @@ pulumi preview --stack <stack-name>
 ```
 
 Review the output carefully:
+
 - Unexpected resource **replacements** or **deletions** are bugs, not acceptable
   side effects. The common cause is a changed logical resource name, Helm release
   name, or component name on something that already exists. Keep the original

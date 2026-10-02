@@ -32,7 +32,7 @@ If no category fits, create a new one and add a `README.md` for it.
 
 The directory name becomes the skill's `name`. Use lowercase letters and hyphens only.
 
-```
+```text
 skills/<category>/<skill-name>/
 └── SKILL.md
 ```
@@ -74,7 +74,7 @@ Keep `SKILL.md` under ~500 lines. If the skill has deep reference material
 (e.g., a detailed API reference, form templates, domain-specific lookup tables),
 move it to a `references/` subdirectory and link to it from `SKILL.md`:
 
-```
+```text
 <skill-name>/
 ├── SKILL.md
 └── references/
@@ -116,6 +116,7 @@ npx skills-ref validate ./skills/<category>/<skill-name>
 ```
 
 If `skills-ref` is not installed, manually verify:
+
 - `name` matches the directory name
 - `description` is non-empty and under 1024 characters
 - `SKILL.md` is the correct filename (uppercase)

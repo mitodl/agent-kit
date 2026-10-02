@@ -25,7 +25,7 @@ argument for making the author choose.
 
 ## Slugs are readable on purpose
 
-```
+```text
 pat-always-use-uv
 pf-ol-django-vault-secrets
 les-no-raw-sql-in-views

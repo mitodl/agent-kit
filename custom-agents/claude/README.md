@@ -11,7 +11,7 @@ Custom sub-agent definitions and `CLAUDE.md` fragments for Claude Code.
 
 ## Structure
 
-```
+```text
 claude/
 ├── agents/             # Sub-agent definitions
 │   └── <agent-name>/

@@ -24,7 +24,7 @@ the site build, not committed.
 
 ## Repository Structure
 
-```
+```text
 .
 ├── mcp/servers/witan/         # witan-council — memory, tasks, workflow; the `witan` umbrella CLI
 ├── mcp/servers/witan-code/    # witan-code — tree-sitter code graph + cross-repo bridge

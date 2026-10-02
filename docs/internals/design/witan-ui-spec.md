@@ -577,8 +577,8 @@ of its 2026-01-26 revision. A tool names its view in `_meta.ui.resourceUri`; the
 view is a `ui://` resource of type `text/html;profile=mcp-app`; the host renders
 it in a sandboxed iframe and hands it the tool's `content` and
 `structuredContent` over `postMessage` (`ui/notifications/tool-result`).
-Sources: https://modelcontextprotocol.io/docs/extensions/apps and
-https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp.
+Sources: <https://modelcontextprotocol.io/docs/extensions/apps> and
+<https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp>.
 
 fastmcp 4.0.3 already implements the server half. `@mcp.tool(app=...)` takes an
 `AppConfig` and writes it into `meta["ui"]` (`fastmcp/server/server.py:1823,
@@ -607,7 +607,7 @@ so a widget bound to it could not render a rollup.
 - A widget renders the result it is handed and calls nothing back. The spec
   allows `tools/call` through the host, but many of our sessions are Claude Code,
   which renders no widgets and shows only the text result
-  (https://github.com/anthropics/claude-code/issues/95149;
+  (<https://github.com/anthropics/claude-code/issues/95149>;
   `pf-mcp-apps-sep-1865-ui-resources-render-in-claude--7e9cd9`). So the text
   result stays exactly what it is today, and a test asserts each bound tool's
   `content` is byte-identical with and without its `app=` config.

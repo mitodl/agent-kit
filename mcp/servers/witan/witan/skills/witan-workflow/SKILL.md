@@ -93,7 +93,7 @@ session on the suggestion alone.
 
 Call:
 
-```
+```text
 workflow_session_start(
     project_slug="<chosen slug>",
     session_id="<session id — see below>",
@@ -134,7 +134,7 @@ Do not call `workflow_project_create` until both are answered.
 
 Then call:
 
-```
+```text
 workflow_project_create(
     title="<title>",
     description="<brief description — ask if not obvious from the title>",
@@ -163,7 +163,7 @@ accomplished (will be saved to the workflow corpus)."
 
 Call:
 
-```
+```text
 workflow_session_end(
     session_slug="<slug from state file>",
     summary="<user's summary>",

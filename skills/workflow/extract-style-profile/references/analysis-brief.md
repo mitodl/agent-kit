@@ -6,6 +6,7 @@ analysis pass reads it first. Keep what's here; add subject-specific context
 
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Brief for style-analysis passes
 
 ## Subject

@@ -93,6 +93,7 @@ for Pi's specific caveats). Summary:
 Cross-cutting **scope** dimension (D8) applies to all five clusters above.
 
 Explicitly **out of scope** (stays in `witan`, not extracted):
+
 - `install_omnigraph` / `_download_omnigraph` and the omnigraph
   version/asset tables — witan's own binary-distribution concern.
 - Witan's actual MCP entry values (`uvx` invocation, `WITAN_AUTHOR` env) and
@@ -374,7 +375,7 @@ populated in the v1 `AGENTS` registry — adding one later is a new
 
 ### 6.1 New package skeleton
 
-```
+```text
 packages/agent-config-kit/
 ├── pyproject.toml          # name="agent-config-kit", hatchling, BSD-3-Clause, py>=3.11
 ├── agent_config_kit/
@@ -452,6 +453,7 @@ calls `apply`/`apply_all`/`detect_installed_platforms` directly (it's the
 only caller today).
 
 `witan`'s `pyproject.toml` gains:
+
 ```toml
 dependencies = [
     "agent-config-kit>=0.1,<1",
@@ -460,6 +462,7 @@ dependencies = [
 [tool.uv.sources]
 agent-config-kit = { path = "../agent-config-kit", editable = true }  # until first PyPI release
 ```
+
 (deleted once `agent-config-kit` is published and witan pins a released version)
 
 ### 6.4 Test porting

@@ -353,7 +353,6 @@ a MINOR bump may include breaking changes).
   write threw". Deliberately still non-fatal — the per-repo index succeeds and
   is worth keeping — but "non-fatal" and "unreported" are different claims.
 
-
 - **The test suite no longer asserts an environment.** Four tests
   (`test_branches.py`'s three branch-view assertions and
   `test_graph.py::test_a_shared_branch_view_needs_an_identity_to_own_it`)

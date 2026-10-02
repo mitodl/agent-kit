@@ -304,7 +304,6 @@ witan task comment tk-fix-flaky-retry-abc123 \
 
 ### `task run` — claim and launch
 
-
 Claim one or more tasks and launch an agent to execute them. Without a slug,
 shows an interactive picker of ready tasks; multiple selections offer a
 consolidated single-session prompt or sequential per-task runs.

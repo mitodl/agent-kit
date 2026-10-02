@@ -230,7 +230,7 @@ here) must:
    the Pulumi stack has no access to this tree at apply time.
 3. Gate maintenance ops (`repair`/`optimize`/`cleanup`) with **AWS IAM** on the
    backing bucket — Cedar cannot.
-5. **Schedule the stale-view reaper.** `witan-ci`'s `branch_delete` grant is
+4. **Schedule the stale-view reaper.** `witan-ci`'s `branch_delete` grant is
    authorization for a job that has to actually run: every developer's every git
    branch gets a view on the shared graph, and nothing else removes one. Run
    `witan-code reap-views --store <server-url> --graph <id> --apply` with

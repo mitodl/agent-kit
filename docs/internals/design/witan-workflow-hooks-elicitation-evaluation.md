@@ -40,6 +40,7 @@ opencode/kilo get none (`registry.py:27-164`).
 ### A1 — Context block emitted twice per prompt · **P1 / bug**
 
 Root cause: config drift with a dedup that keys on the exact command string.
+
 - Current `witan setup` registers the bare command `witan inject-context`
   (`setup.py:49`).
 - The still-current docs (`docs/agent-memory.md:1556-1571`) tell users to
@@ -52,6 +53,7 @@ Root cause: config drift with a dedup that keys on the exact command string.
   keeping the legacy path live.
 
 Recommend:
+
 - Pick one canonical command and make dedup robust: match on the
   `witan inject-context` / `witan session-checkpoint` substring (or a stable
   hook id/marker) rather than the whole string, so the wrapper and bare forms
@@ -198,12 +200,14 @@ without client support, so every use needs a non-interactive fallback (try/excep
 → today's behavior).
 
 ### Must stay non-interactive (headless hook/automation paths)
+
 `workflow_session_start`/`_end` (Stop hook auto-close), `workflow_project_list`
 (context hook), `memory_store` (automation), `code_reindex` (Pi background
 indexer), and `workflow_trace_mine` (its two-call handshake IS the
 non-interactive contract). Do not gate these on elicitation.
 
 ### Good fits (agent-in-the-loop, on-demand) — add with fallback
+
 - **C1 · `task_claim` force-steal** (`server.py:2535,2593`): replace the
   all-or-nothing `force` with a confirm — "held by {who} since {when}; steal?".
 - **C2 · `memory_link(kind="supersedes")`** (`server.py:1085`): confirm before
@@ -215,6 +219,7 @@ non-interactive contract). Do not gate these on elicitation.
   advance" note (currently no rationale is captured at a transition at all).
 
 ### Handle carefully (on hook-driven paths)
+
 - **C5 · repo=None on `memory_store`/`task_create`** (`server.py:812,2257`):
   when `detect()` returns None and no `repo` was passed, a repo-less node is
   silently persisted — `task_update`'s own docstring admits to retroactively

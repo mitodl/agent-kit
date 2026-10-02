@@ -1472,7 +1472,6 @@ what actually happened. -->
   `witan migrate`) — a per-site list would have the same shape as the bug,
   where the one site somebody forgets is indistinguishable from it.
 
-
 ## [0.19.0] - 2026-08-20
 
 ### Added
@@ -1860,7 +1859,7 @@ what actually happened. -->
 - **`witan login` was broken for anyone installing from PyPI**, with an
   `ImportError` before the CLI could start:
 
-  ```
+  ```text
   ImportError: cannot import name 'SessionLife' from 'witan_core.remote.oidc'
   ```
 

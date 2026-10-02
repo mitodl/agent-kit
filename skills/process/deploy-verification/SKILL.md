@@ -102,7 +102,7 @@ Use whichever `toolhive-swe` tier matches the environment
 repo's `agent-config.toml`) to query Prometheus directly rather than eyeballing
 a dashboard:
 
-```
+```text
 mcp__toolhive-swe-<tier>__grafana_query_prometheus
 ```
 

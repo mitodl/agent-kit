@@ -80,7 +80,7 @@ constraint 3 in discovery §5).
 
 After the existing `Supersedes`/`AppliesTo` declarations (`schema.pg:34,38`), add:
 
-```
+```text
 // Refines: a newer memory sharpens/extends an older one without replacing it.
 edge Refines: Memory -> Memory
 
@@ -101,7 +101,7 @@ old task with a `resolution` pointing at the new slug instead).
 
 After `link_applies_to` (`mutations.gq:75`):
 
-```
+```text
 query link_refines($from: String, $to: String) {
     insert Refines { from: $from, to: $to }
 }
@@ -118,7 +118,7 @@ query link_related_to($from: String, $to: String) {
 Two read shapes are needed: (a) **neighbour traversal** for `memory_neighbors`
 and the §8 expand step, and (b) **superseded-slug collection** for pruning.
 
-```
+```text
 // Direct neighbours of a memory along one edge kind (out-direction).
 query supersedes_targets($slug: String) {
     match { $m: Memory { slug: $slug } $m supersedes $other }
@@ -313,7 +313,7 @@ re-uses the node).
 `Informed: WorkflowProject -> Memory` (`schema.pg:121`) covers project-grain
 provenance. Add **session-grain**:
 
-```
+```text
 // SessionProduced: a WorkflowSession created or substantively updated a Memory.
 // Bare name `Produced` is taken (WorkflowProject -> WorkflowTrace), hence the
 // qualified name.
@@ -322,7 +322,7 @@ edge SessionProduced: WorkflowSession -> Memory
 
 ### 5.2 Mutation — `queries/mutations.gq`
 
-```
+```text
 query link_session_produced($from: String, $to: String) {
     insert SessionProduced { from: $from, to: $to }
 }
@@ -334,7 +334,7 @@ Both endpoints are bound as typed nodes, and the traversal predicate is the edge
 type lowercased with underscores stripped (`sessionproduced`, not
 `session_produced`) — the engine's convention confirmed in discovery.
 
-```
+```text
 // Memories produced during a session (provenance walk).
 query session_produced_memories($session_slug: String) {
     match {
@@ -420,7 +420,7 @@ This is the join surface used by §4 (contracts) and §8 (expand). Land it befor
 
 ### 6.1 Schema diff — `schema/schema.pg`
 
-```
+```text
 // Topic: a join-surface node memories attach to. One node type, several kinds:
 //   topic    — promoted from a free-string tag
 //   contract — name == bridge key_norm (env_var/endpoint/package/service)
@@ -443,7 +443,7 @@ upserts idempotent.
 
 ### 6.2 Mutations — `queries/mutations.gq`
 
-```
+```text
 query insert_topic($slug: String, $name: String, $kind: String, $created_at: DateTime) {
     insert Topic { slug: $slug, name: $name, kind: $kind, created_at: $created_at }
 }
@@ -458,7 +458,7 @@ keeps slugs unique).
 
 ### 6.3 Reads — `queries/read.gq`
 
-```
+```text
 query get_topic($slug: String) {
     match { $tp: Topic { slug: $slug } }
     return { $tp.slug, $tp.name, $tp.kind, $tp.created_at }
@@ -516,7 +516,7 @@ engine cannot express the composite in `order` (discovery §5.2).
 
 Add to `node Memory` (after `symbol_refs`, `schema.pg:29`):
 
-```
+```text
     confidence: F32?   // author/agent-set trust 0.0–1.0; null treated as default
 ```
 
@@ -528,7 +528,7 @@ projections (so the re-rank can read it).
 
 Composite score over the BM25 candidate set:
 
-```
+```text
 score = w_bm25   * norm_bm25
       + w_recency * exp(-age_days / half_life_days)
       + w_corrob  * log1p(corroboration)

@@ -49,7 +49,7 @@ arbitration applies. See [`docs/BRANCH_INDEXING.md`](docs/BRANCH_INDEXING.md).
 The two layers compose through **soft symbol-ID references**. A Layer-1 node
 (e.g. a `lesson` or `agent_context`) can record symbol ids of the form:
 
-```
+```text
 repo#relative/path.py::QualifiedName
 e.g. https://github.com/mitodl/ol-django#app/svc.py::Service.run
 ```

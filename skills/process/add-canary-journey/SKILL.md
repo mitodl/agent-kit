@@ -85,7 +85,7 @@ rather than on spec-writing.
 
 ### 2. Write the spec
 
-```
+```text
 specs/<property>/<journey>.spec.ts
 ```
 
@@ -169,7 +169,7 @@ result signal.
 
 ### 1. Create the spec directory
 
-```
+```text
 specs/<property>/README.md          # environment targeted, who owns the journeys
 specs/<property>/<journey>.spec.ts
 ```

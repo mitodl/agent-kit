@@ -147,7 +147,7 @@ reviewer's own label when it supplies one (bot reviewers like
 severity in the comment body or as a badge) — otherwise infer from
 substance:
 
-```
+```text
 1. **gemini-code-assist** (medium): transport type mismatch in agent-config.toml
 2. **copilot-pull-request-reviewer** (nitpick): variable naming in fetch loop
 3. **human — tmacey** (substantive): reconsider the retry backoff strategy
@@ -290,7 +290,7 @@ opener, no restating the reviewer's comment back at them, no closing offer to
 discuss further, no emoji. A reviewer reading twelve replies wants twelve
 facts.
 
-```
+```text
 Fixed in a1b2c3d: transport is now streamable-http.
 Verified — ensure_bridge_store runs at every call site, so this path is
 unreachable. Not adding the guard.

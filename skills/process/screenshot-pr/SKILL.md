@@ -272,6 +272,7 @@ document.querySelector('#my-learning')?.scrollIntoView({block: 'start'})
 
 When a click triggers a network request or animation, always use the IIFE and
 wait before the screenshot resolves. Suggested minimums:
+
 - Simple scroll: 500ms
 - CSS expand/collapse animation (e.g. MUI Accordion): 2000ms
 - Click that triggers a network request: 2000ms+
@@ -341,7 +342,7 @@ shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
 
 List created files by viewport:
 
-```
+```text
 desktop/  (N files)   tablet/  (N files)   mobile/  (N files)
   homepage.png          homepage.png          homepage.png
   dashboard.png         dashboard.png         dashboard.png
@@ -350,6 +351,7 @@ desktop/  (N files)   tablet/  (N files)   mobile/  (N files)
 If any shots failed, list them with the HTTP status or error.
 
 Suggest next steps if relevant:
+
 - Add screenshots to the PR description: `gh pr edit --body-file -`.
 - Re-run with `--no-clobber` to skip already-captured shots on retry.
 - If auth expired, delete `/tmp/screenshot-auth.json` and re-run from Step 1.

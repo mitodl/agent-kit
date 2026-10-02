@@ -5,14 +5,14 @@ for the packaged triage flow.
 
 ## Triage with `/witan-task`
 
-```
+```text
 /witan-task
 ```
 
 The skill calls `task_ready()` for the current repo and asks you to pick, via
 an interactive question rather than a wall of text:
 
-```
+```text
 Claim task
 Which task do you want to work on?
   ○ Retry logic drops the last attempt's error
@@ -58,7 +58,7 @@ task_create(
 
 Once the fix is in and tested:
 
-```
+```text
 /witan-task close
 ```
 

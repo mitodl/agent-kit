@@ -162,7 +162,7 @@ proves clumsy, a follow-up may allow naming hooks — deferred.)
 
 ### 4.4 CLI
 
-```
+```text
 agent-kit apply [MANIFEST] --profile NAME...      # repeatable; union
 agent-kit validate [MANIFEST] --profile NAME...
 agent-kit profiles [MANIFEST]                     # list a manifest's profiles + resolved entry counts
@@ -218,7 +218,7 @@ targeted profile-of-an-include appears.
 
 ### 5.3 Precedence summary (most-wins-last)
 
-```
+```text
 included manifests (depth-first, left→right)
   → including manifest's own entries
     → selected profile(s)

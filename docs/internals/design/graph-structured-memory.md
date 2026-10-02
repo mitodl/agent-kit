@@ -97,6 +97,7 @@ supersession is wanted, declare *new* typed edges per type-pair, matching the
 existing convention where the task and project worlds already use distinct names
 rather than overloading one (task `Blocks` vs project `ProjectBlocks`; task→memory
 `Addresses` vs project→memory `Informed`):
+
 - `TaskSupersedes: Task -> Task`, `ProjectSupersedes: WorkflowProject -> WorkflowProject`.
 - Do **not** assume omnigraph allows declaring one edge name for multiple
   type-pairs (overloading) — the schema deliberately never does this; use distinct
@@ -180,7 +181,7 @@ The capstone — assembles everything above into one `recall(...)` tool:
 
 ## 4. Recommended sequencing
 
-```
+```text
 3.1 typed edges (p1)  ──┬─→ 3.3 provenance ─┐
                         ├─→ 3.4 topics/anchors ─┼─→ 3.5 ranking ─→ 3.6 recall API
                         └─→ 3.2 symbol/contract links ─┘

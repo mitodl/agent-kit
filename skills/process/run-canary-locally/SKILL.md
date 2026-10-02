@@ -58,7 +58,7 @@ npx playwright install chromium
 `package-lock.json` — so `npm ci` installs six packages and **downloads no
 browser at all**. Skipping the second line gets you:
 
-```
+```text
 browserType.launch: Executable doesn't exist at
 /home/<you>/.cache/ms-playwright/chromium_headless_shell-1243/...
 ```

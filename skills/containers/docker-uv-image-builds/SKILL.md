@@ -52,7 +52,7 @@ dependencies — do **not** mount them as Docker volumes at runtime. Add them to
 
 Exclude development artifacts:
 
-```
+```text
 .venv/
 __pycache__/
 *.pyc

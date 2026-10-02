@@ -11,7 +11,7 @@ this repo's [`agent-config.toml`](./agent-config.toml) manifest.
 
 ## Repository Layout
 
-```
+```text
 skills/          # Reusable skills (SKILL.md per skill), organized by category
   python/        # uv, cyclopts CLI conventions
   dagster/       # dg-based code location structure

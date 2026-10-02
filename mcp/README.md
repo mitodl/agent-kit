@@ -5,7 +5,7 @@ Install helpers, configuration snippets, and setup notes for common
 
 ## Structure
 
-```
+```text
 mcp/
 └── servers/
     └── <server-name>/
