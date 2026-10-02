@@ -74,6 +74,20 @@ witan setup --agent all                # register with every detected platform
     that on its own — re-run `witan setup` so the installed skills, hooks, and
     binary match the version you just installed.
 
+## Upgrade
+
+```bash
+uv tool upgrade ol-agent-kit    # or: uv tool upgrade witan-council
+witan setup --agent claude      # or: pi — refreshes the copied files
+```
+
+`uv tool upgrade` re-resolves every package in the tool's environment, so it
+also picks up new `agent-config-kit`, `witan-council`, `witan-code`, and
+`witan-core` releases. Running `uv tool install ol-agent-kit` again does not:
+it reports that the tool is already installed and leaves every version as it
+was. Then re-run `witan setup` (see the warning above) and restart the agent,
+or run `/reload` in Pi, so it loads the refreshed skills and extensions.
+
 ## Verify
 
 ```bash

@@ -28,8 +28,10 @@ Version bumps go through [`bump-my-version`](https://github.com/callowayproject/
 (config in `[tool.bumpversion]`), same as `agent-config-kit`, `witan`, and
 `witan-code`. `dependencies` versions in `pyproject.toml` are open-ended
 floors with no upper bound, so a new release of any of the three is picked up
-by a fresh install automatically without needing a matching `ol-agent-kit`
-release. The floors themselves move as the meta-package comes to depend on
+by a fresh install, or by `uv tool upgrade ol-agent-kit` on an existing one,
+without needing a matching `ol-agent-kit` release. (`uv tool install
+ol-agent-kit` on an existing install does not upgrade anything: it reports that
+the tool is already installed.) The floors themselves move as the meta-package comes to depend on
 newer behaviour — currently the two servers are floored at the releases that
 speak MCP 2026-07-28 — so read them from `pyproject.toml` rather than from
 here.

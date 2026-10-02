@@ -66,6 +66,12 @@ script is still `agent-kit` either way):
 uv tool install ol-agent-kit
 ```
 
+To upgrade later, run `uv tool upgrade ol-agent-kit`, which upgrades every
+package in the tool's environment. Running `uv tool install` again does not:
+it reports that the tool is already installed and changes nothing. Then
+re-run `witan setup` (and `agent-kit apply`), since both copy files that an
+upgrade does not refresh on its own.
+
 ### Applying this repo's manifest
 
 ```bash
