@@ -21,10 +21,13 @@ cannot see in its tool list is not actionable, so the block leads with the
 ``ToolSearch`` that makes the tools callable and then gives a call template to
 fill in.
 
-That unlock step is Claude Code's. Pi has no ``ToolSearch``: its MCP tools
-reach the agent through pi-mcp-adapter's ``mcp`` proxy tool, so the Pi
-extension asks for ``--client pi`` and gets the proxy's search-then-call
-instructions instead (see :func:`_discovery_line`).
+That unlock step is Claude Code's. Pi has no ``ToolSearch``. Its built-in
+MCP support (Pi 0.99 and later) hands MCP tools to ``codemode`` scripts, so
+the Pi extension asks for ``--client pi-builtin`` and gets a
+search-then-call script. With pi-mcp-adapter installed instead, the tools sit
+behind the adapter's ``mcp`` proxy tool, so the extension asks for
+``--client pi`` and gets the proxy's search-then-call instructions (see
+:func:`_discovery_line`).
 
 Kept short on purpose: this is prepended to *every* prompt, so tokens spent
 here are spent for the life of every session.
@@ -151,12 +154,30 @@ def indexing_in_progress() -> bool:
 _TOOLSEARCH_QUERY = '`ToolSearch(query="+code_ find_definition callers impact")`'
 
 # Which agent the block is rendered for. Passed explicitly by the caller (the
-# Pi extension runs `witan-code inject-context --client pi`), never inferred
-# from the environment: an ambient variable leaking across a nested shell or a
-# subprocess would silently hand one agent the other's calling convention.
-Client = Literal["claude", "pi"]
+# Pi extension runs `witan-code inject-context --client pi-builtin`, or
+# `--client pi` when pi-mcp-adapter's `mcp` tool is registered), never
+# inferred from the environment: an ambient variable leaking across a nested
+# shell or a subprocess would silently hand one agent the other's calling
+# convention. `pi` keeps meaning pi-mcp-adapter because Pi extensions
+# installed before `pi-builtin` existed pass it.
+Client = Literal["claude", "pi", "pi-builtin"]
 
-# Pi has no ToolSearch. Under pi-mcp-adapter's default config (no
+# Pi's built-in MCP registers each tool as `mcp__<server>__<tool>`, with every
+# character other than letters, digits and `_` replaced by `_`
+# (`mcp__witan__code_callers`, or `mcp__witan_code__code_callers` for a
+# server named `witan-code`), and by default declares none of them to the
+# model: a `codemode` script calls them as `tools.<name>(args)` and finds
+# them with `searchTools(query)` (docs/mcp.md "Control tool exposure",
+# docs/codemode.md). The server name is config-dependent, so the block has
+# the agent search first and call whatever name the search returned.
+# `searchTools()` waits for every server to connect, so there is no connect
+# step. It ranks by BM25, so this query puts the three workhorse tools
+# first, the same job the `+code_` form does for ToolSearch. A script's
+# output is only what it returns or prints, so both templates `return`.
+_PI_BUILTIN_SEARCH = '`return await searchTools("code_find_definition callers impact")`'
+_PI_BUILTIN_CALL = '`return await tools.<name the search returned>({ name: "X" })`'
+
+# pi-mcp-adapter replaces the built-in when installed. Under its default config (no
 # `directTools`, which `witan-code setup --agent pi` does not set) every MCP
 # tool sits behind the adapter's single `mcp` proxy tool, and its name carries
 # a server prefix (`toolPrefix`, default "server": `witan-code_code_callers`
@@ -181,6 +202,15 @@ _PI_CONNECT_CALL = '`mcp({ connect: "witan-code" })` (or `"witan"`)'
 
 def _discovery_line(client: Client) -> str:
     """How to reach the ``code_*`` tools from this client, then what to call."""
+    if client == "pi-builtin":
+        return (
+            "`code_*` tools are MCP tools you call from a `codemode` script, "
+            "not in your tool list — find their exact names with "
+            f"{_PI_BUILTIN_SEARCH}, then call one with {_PI_BUILTIN_CALL} "
+            "instead of grep: `code_find_definition` "
+            "→ `symbol_id` → `code_callers` / `code_impact` (blast radius "
+            "before editing). More: `/skill:witan-code`."
+        )
     if client == "pi":
         return (
             "`code_*` tools are behind the `mcp` proxy tool, not in your tool "
@@ -306,7 +336,9 @@ def inject_context(client: Client = "claude") -> str:
     to report), so this hook adds no noise for repos that don't use witan-code.
 
     ``client`` picks the tool-discovery instructions: Claude's ``ToolSearch``
-    (the default) or Pi's ``mcp`` proxy. Everything else is client-neutral.
+    (the default), a ``codemode`` script for Pi's built-in MCP
+    (``pi-builtin``), or pi-mcp-adapter's ``mcp`` proxy (``pi``). Everything
+    else is client-neutral.
     """
     cfg = cfg_module.load()
     slug = store_module.detect_repo(cfg)

@@ -228,13 +228,17 @@ def test_witan_code_mounted_false_when_subcommand_help_fails(monkeypatch):
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_setup_pi_warns_when_pi_mcp_adapter_is_missing(
+def test_setup_pi_warns_when_pi_cannot_load_mcp(
     tmp_path, monkeypatch, _no_network, capsys, dry_run
 ):
     """`witan setup --agent pi` inherits agent-config-kit's MCP prerequisite
     preflight via witan_core.cli.report_install: Pi ignores
-    ~/.pi/agent/mcp.json without the pi-mcp-adapter package."""
+    ~/.pi/agent/mcp.json when its built-in MCP is turned off and the
+    pi-mcp-adapter package is not installed."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    settings = tmp_path / ".pi" / "agent" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"extensions": ["-builtin:mcp"]}))
 
     setup_cmd.setup(agent="pi", dry_run=dry_run)
 
@@ -249,13 +253,32 @@ def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     settings = tmp_path / ".pi" / "agent" / "settings.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({"packages": ["npm:pi-mcp-adapter@2.37.0"]}))
+    settings.write_text(
+        json.dumps(
+            {
+                "packages": ["npm:pi-mcp-adapter@2.37.0"],
+                "extensions": ["-builtin:mcp"],
+            }
+        )
+    )
 
     setup_cmd.setup(agent="pi", dry_run=True)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "⚠ warning" not in out
     assert "pi-mcp-adapter is declared in" in out
+
+
+def test_setup_pi_notes_when_pi_builtin_mcp_is_on(
+    tmp_path, monkeypatch, _no_network, capsys
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    setup_cmd.setup(agent="pi", dry_run=True)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "⚠ warning" not in out
+    assert "built-in MCP is not turned off" in out
 
 
 def _dangling_pi_extension(tmp_path) -> Path:

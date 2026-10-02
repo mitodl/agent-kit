@@ -153,10 +153,18 @@ def _pi_setup_output(tmp_path, monkeypatch, capsys, *, dry_run: bool) -> str:
     return " ".join(capsys.readouterr().out.split())
 
 
-def test_setup_pi_warns_when_pi_mcp_adapter_is_missing(tmp_path, monkeypatch, capsys):
+def _pi_settings(tmp_path, cfg: dict) -> None:
+    settings = tmp_path / ".pi" / "agent" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps(cfg))
+
+
+def test_setup_pi_warns_when_pi_cannot_load_mcp(tmp_path, monkeypatch, capsys):
     """`witan-code setup --agent pi` inherits agent-config-kit's MCP
-    prerequisite preflight: Pi ignores ~/.pi/agent/mcp.json without the
-    pi-mcp-adapter package, so the report must say so on dry-run and apply."""
+    prerequisite preflight: Pi ignores ~/.pi/agent/mcp.json when its
+    built-in MCP is turned off and pi-mcp-adapter is not installed, so the
+    report must say so on dry-run and apply."""
+    _pi_settings(tmp_path, {"extensions": ["-builtin:mcp"]})
     for dry_run in (True, False):
         out = _pi_setup_output(tmp_path, monkeypatch, capsys, dry_run=dry_run)
         assert "WARNING:" in out
@@ -164,15 +172,24 @@ def test_setup_pi_warns_when_pi_mcp_adapter_is_missing(tmp_path, monkeypatch, ca
 
 
 def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(tmp_path, monkeypatch, capsys):
-    settings = tmp_path / ".pi" / "agent" / "settings.json"
-    settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({"packages": ["npm:pi-mcp-adapter"]}))
+    _pi_settings(
+        tmp_path,
+        {"packages": ["npm:pi-mcp-adapter"], "extensions": ["-builtin:mcp"]},
+    )
 
     out = _pi_setup_output(tmp_path, monkeypatch, capsys, dry_run=True)
 
     assert "WARNING:" not in out
     assert "note:" in out
     assert "pi-mcp-adapter is declared in" in out
+
+
+def test_setup_pi_notes_when_pi_builtin_mcp_is_on(tmp_path, monkeypatch, capsys):
+    out = _pi_setup_output(tmp_path, monkeypatch, capsys, dry_run=True)
+
+    assert "WARNING:" not in out
+    assert "note:" in out
+    assert "built-in MCP is not turned off" in out
 
 
 def _dangling_pi_extension(tmp_path) -> Path:
@@ -263,7 +280,16 @@ def test_configs_pi_mirror_matches_the_package_extension():
 
 
 def test_pi_extension_asks_for_pi_rendered_context():
-    """Without `--client pi` the block tells Pi to call a ToolSearch it lacks."""
+    """Without a Pi `--client` the block tells Pi to call a ToolSearch it
+    lacks, and with the wrong one it names the other MCP support's calling
+    convention: the extension must pick `pi` only when pi-mcp-adapter's
+    `mcp` tool is registered."""
     source = _PKG_EXT.read_text()
 
-    assert 'spawnSync("witan-code", ["inject-context", "--client", "pi"]' in source
+    assert re.search(
+        r'spawnSync\(\s*"witan-code",\s*\["inject-context", "--client", client\]',
+        source,
+    )
+    assert "const client = piClient(pi);" in source
+    assert 'pi.getAllTools().some((tool) => tool?.name === "mcp")' in source
+    assert re.search(r'\?\s*"pi"\s*:\s*"pi-builtin"', source)

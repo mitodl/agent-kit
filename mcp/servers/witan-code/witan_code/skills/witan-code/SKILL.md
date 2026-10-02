@@ -74,8 +74,18 @@ depends on the agent:
   directly: `code_find_definition(name="X")`. Their full names carry an
   `mcp__<server>__` prefix that depends on your MCP config, which is why the
   `+code_` query form is used rather than `select:`.
-- **Pi** — Pi has no `ToolSearch`. pi-mcp-adapter puts every MCP tool behind
-  its `mcp` proxy tool, under a server-prefixed name (for example
+- **Pi** — Pi has no `ToolSearch`. Pi's built-in MCP (Pi 0.99 and later)
+  declares no MCP tool to you by default; call them from a `codemode`
+  script, under a server-prefixed name (for example
+  `mcp__witan__code_find_definition` when witan serves the code tools, or
+  `mcp__witan_code__code_find_definition`). Search for the exact name, then
+  call it:
+  `return await searchTools("code_find_definition callers impact")`, then
+  `return await tools.<name the search returned>({ name: "X" })`.
+  `return await describeTool("<name>")` shows a tool's parameters.
+- **Pi with pi-mcp-adapter** — when the `mcp` tool is in your tool list,
+  pi-mcp-adapter has replaced the built-in and puts every MCP tool behind
+  that proxy, under a server-prefixed name (for example
   `witan-code_code_find_definition`, or `witan_code_find_definition` when
   witan serves the code tools). Search for the exact name, then call it with
   `args`:
@@ -83,8 +93,9 @@ depends on the agent:
   `mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`.
   Search reads only cached tool metadata, so if it finds nothing, run
   `mcp({ connect: "witan-code" })` (or `"witan"`) and search again.
-  `mcp({ describe: "<name>" })` shows a tool's parameters. Invoke this skill
-  as `/skill:witan-code`.
+  `mcp({ describe: "<name>" })` shows a tool's parameters.
+
+On Pi, invoke this skill as `/skill:witan-code`.
 
 ## Tool reference
 

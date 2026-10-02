@@ -752,10 +752,11 @@ already mounts witan-code's tools in-process. A single ``witan setup``
 then covers both packages; otherwise install witan-code separately with
 ``witan-code setup`` (or the mounted ``witan code setup``).
 
-Pi has no built-in MCP support: the witan entry written to
-``~/.pi/agent/mcp.json`` is read only by the pi-mcp-adapter Pi package
-(``pi install npm:pi-mcp-adapter``). The install report warns when that
-package is not declared in Pi's settings.
+Pi reads the witan entry written to ``~/.pi/agent/mcp.json`` with its
+built-in MCP support (Pi 0.99 or later), or with the pi-mcp-adapter Pi
+package when that is installed. The install report warns when Pi's
+settings show neither one would load it (the built-in turned off with
+``-builtin:mcp``, or a Pi older than 0.99, and no adapter declared).
 
 Re-run after every upgrade to refresh installed files.
 
@@ -1613,9 +1614,12 @@ current repo.
 **Parameters**:
 
 * `--client CHOICE`: Which agent the block's tool-discovery instructions are written for:
-    ``claude`` (``ToolSearch``, the default) or ``pi`` (pi-mcp-adapter's
-    ``mcp`` proxy). The Pi extension passes ``--client pi``; nothing is
-    inferred from the environment. *[choices: claude, pi]* *[default: claude]*
+    ``claude`` (``ToolSearch``, the default), ``pi-builtin`` (a
+    ``codemode`` script, for Pi's built-in MCP), or ``pi``
+    (pi-mcp-adapter's ``mcp`` proxy). The Pi extension passes
+    ``--client pi`` when the adapter's ``mcp`` tool is registered and
+    ``--client pi-builtin`` otherwise; nothing is inferred from the
+    environment. *[choices: claude, pi, pi-builtin]* *[default: claude]*
 
 ### witan code serve
 
@@ -1776,10 +1780,11 @@ witan-code MCP server entry into the agent's config file. Independent of
 `witan setup` — running both is fine (each only touches its own entries);
 running just this one is enough for a witan-code-only install.
 
-Pi has no built-in MCP support: the witan-code entry written to
-``~/.pi/agent/mcp.json`` is read only by the pi-mcp-adapter Pi package
-(``pi install npm:pi-mcp-adapter``). The install report warns when that
-package is not declared in Pi's settings.
+Pi reads the witan-code entry written to ``~/.pi/agent/mcp.json`` with
+its built-in MCP support (Pi 0.99 or later), or with the pi-mcp-adapter
+Pi package when that is installed. The install report warns when Pi's
+settings show neither one would load it (the built-in turned off with
+``-builtin:mcp``, or a Pi older than 0.99, and no adapter declared).
 
 Re-run after every upgrade to refresh installed files.
 

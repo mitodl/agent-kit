@@ -33,7 +33,8 @@ from .models import (
 class Prerequisite:
     """Something a platform needs installed before the entries this run
     planned for it take effect (``AgentPlatform.mcp_conditional_on``) — e.g.
-    Pi reads MCP servers only through the pi-mcp-adapter package.
+    Pi reads MCP servers only while its built-in MCP or pi-mcp-adapter is
+    loaded.
 
     ``satisfied`` is the platform's read-only preflight result: ``True``
     when it looks installed, ``False`` when it looks missing, ``None`` when

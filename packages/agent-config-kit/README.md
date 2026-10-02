@@ -273,33 +273,46 @@ the zero-arg "magic" stays legible.
 Exit codes: `0` success, `1` a platform's target couldn't be parsed as JSON,
 `2` the manifest failed to load.
 
-#### Platform prerequisites (Pi and pi-mcp-adapter)
+#### Platform prerequisites (Pi MCP)
 
-Some platforms only honor an entry once something else is installed
-(`AgentPlatform.mcp_conditional_on`). Today that is Pi: Pi core has no MCP
-support, and the files this library writes for Pi MCP servers are read by the
-third-party `pi-mcp-adapter` Pi package.
+Some platforms only honor an entry once something else is loaded
+(`AgentPlatform.mcp_conditional_on`). Today that is Pi: the files this
+library writes for Pi MCP servers are read by Pi's built-in MCP extension
+(Pi 0.99 and later), or by the third-party `pi-mcp-adapter` Pi package, which
+replaces the built-in when installed and reads the same files. Entries are
+written in Pi's own format, which both accept: an OAuth server gets an
+`oauth` object with a `callbackUrl` and no `"auth": "oauth"` field. Two OAuth
+settings only work under the built-in, because pi-mcp-adapter 5.x drops them
+when it translates Pi's format: `oauth.authServerMetadataUrl` is ignored, and
+an OAuth server that also sends `headers` gets no OAuth sign-in.
 
-| Scope | Pi MCP file written | Where `pi install` records the adapter |
-|-------|---------------------|----------------------------------------|
-| `global` | `~/.pi/agent/mcp.json` | `~/.pi/agent/settings.json` (`pi install npm:pi-mcp-adapter`) |
-| `project` | `.pi/mcp.json` | `.pi/settings.json` (`pi install npm:pi-mcp-adapter -l`), or the global one |
+| Scope | Pi MCP file written | Settings files the preflight reads |
+|-------|---------------------|------------------------------------|
+| `global` | `~/.pi/agent/mcp.json` | `~/.pi/agent/settings.json` |
+| `project` | `.pi/mcp.json` | `.pi/settings.json`, then the global one |
 
-Install it, restart Pi, then confirm with `pi list` (the package is listed)
-and `/mcp` inside Pi (the servers are listed). Project-local packages load only
-after Pi has been granted trust for that project.
+Confirm with `pi mcp list` (built-in) or `/mcp` inside Pi (either one).
+Project MCP files and project-local packages load only after Pi has been
+granted trust for that project.
 
 Whenever an `apply` (dry-run or not, with or without `--prune`) plans MCP
 entries for such a platform, the report prints the requirement after the
-results table. For Pi it runs a read-only preflight that looks for
-`pi-mcp-adapter` in the `packages` (or `extensions`) array of the settings
-files above. It never runs `pi` or `npm` and never touches the network. A
-missing adapter prints a yellow `⚠` warning with the install command; a found
-one prints a dim note. Neither changes the exit code, because the write
-succeeded and takes effect as soon as the adapter is installed. The check is
-best-effort: a package disabled via `pi config` still counts as present.
-Library callers get the same information as `InstallResult.prerequisites`
-(a list of `Prerequisite`).
+results table. For Pi it runs a read-only preflight of the settings files
+above. `pi-mcp-adapter` in a `packages` (or `extensions`) array counts.
+Otherwise the built-in counts unless an `extensions` entry turns it off with
+`-builtin:mcp` (what `pi config` writes, and what `pi-mcp-adapter` writes when
+it is installed, and leaves behind when it is removed), read with Pi's own
+precedence (`-` beats `+` beats a `!` glob in user settings; a project's
+last matching entry overrides them). It also does not count when the global
+settings' `lastChangelogVersion`, the newest Pi that has started an
+interactive session, is older than 0.99. The preflight never runs `pi` or
+`npm` and never touches the network. When neither is
+loaded it prints a yellow `⚠` warning saying how to turn the built-in back on
+or install the adapter; otherwise it prints a dim note. Neither changes the
+exit code, because the write succeeded and takes effect once either one
+loads. The check is best-effort: a package disabled via `pi config` still
+counts as present. Library callers get the same information as
+`InstallResult.prerequisites` (a list of `Prerequisite`).
 
 ### `agent-kit validate`
 

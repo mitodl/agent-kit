@@ -417,10 +417,31 @@ def test_inject_context_default_and_explicit_claude_render_the_same(
     assert "`/witan-code`" in default
 
 
+def test_inject_context_for_pi_builtin_names_a_codemode_script(tmp_path, monkeypatch):
+    """Pi's built-in MCP declares no MCP tool to the model by default: a
+    `codemode` script finds them with `searchTools()` and calls them as
+    `tools.<name>()`. The `mcp__<server>__` prefix depends on the user's
+    config, so the block must search first and then call the returned name.
+    """
+    _indexed(tmp_path, monkeypatch)
+
+    text = context.inject_context(client="pi-builtin")
+
+    assert "ToolSearch" not in text
+    assert "mcp({" not in text
+    assert "`codemode` script" in text
+    assert 'return await searchTools("code_find_definition callers impact")' in text
+    assert 'return await tools.<name the search returned>({ name: "X" })' in text
+    assert "/skill:witan-code" in text
+    # The status lines above the discovery line are client-neutral.
+    assert "https://github.com/test/cg" in text
+    assert "3 files" in text
+
+
 def test_inject_context_for_pi_names_the_mcp_proxy_not_toolsearch(
     tmp_path, monkeypatch
 ):
-    """Pi has no ToolSearch; its MCP tools sit behind pi-mcp-adapter's `mcp`.
+    """With pi-mcp-adapter (`--client pi`), MCP tools sit behind its `mcp`.
 
     The adapter prefixes each tool with its server name, and that prefix
     depends on the user's config, so the block must search first and then

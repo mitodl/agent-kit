@@ -66,6 +66,12 @@ script is still `agent-kit` either way):
 uv tool install ol-agent-kit
 ```
 
+To upgrade later, run `uv tool upgrade ol-agent-kit`, which upgrades every
+package in the tool's environment. Running `uv tool install` again does not:
+it reports that the tool is already installed and changes nothing. Then
+re-run `witan setup` (and `agent-kit apply`), since both copy files that an
+upgrade does not refresh on its own.
+
 ### Applying this repo's manifest
 
 ```bash
@@ -88,24 +94,24 @@ Run `agent-kit apply agent-config.toml --scope project` instead of the default
 `global` scope to register servers/skills in the current project only
 rather than user-wide.
 
-#### Pi: install pi-mcp-adapter first
+#### Pi: use Pi 0.99 or later
 
-Pi core has no built-in MCP support. The MCP servers `agent-kit` (and
-`witan setup --agent pi` / `witan-code setup --agent pi`) register for Pi are
-read by the third-party `pi-mcp-adapter` Pi package, so install it once:
-
-```bash
-pi install npm:pi-mcp-adapter      # user-wide, recorded in ~/.pi/agent/settings.json
-pi install npm:pi-mcp-adapter -l   # or: this project only, in .pi/settings.json
-```
-
-Restart Pi, then confirm it is loaded: `pi list` shows it among the configured
-packages, and `/mcp` inside Pi lists the registered servers. The files
+Pi 0.99 and later read the MCP servers `agent-kit` (and
+`witan setup --agent pi` / `witan-code setup --agent pi`) register for Pi
+with their built-in MCP support: no extra package is needed. The files
 `agent-kit` writes for Pi are `~/.pi/agent/mcp.json` (global scope) and
-`.pi/mcp.json` (project scope). Skills and extensions do not need the adapter.
-`agent-kit apply` checks Pi's settings files for the package on every run that
-writes Pi MCP entries, including `--dry-run`, and prints a warning when it
-cannot find it.
+`.pi/mcp.json` (project scope), in Pi's own format. Confirm with
+`pi mcp list`, or `/mcp` inside Pi, and sign in to OAuth servers with
+`pi mcp login <server>`.
+
+The third-party `pi-mcp-adapter` package still works: it replaces the
+built-in when installed and reads the same files. It turns the built-in off
+with `-builtin:mcp` in `~/.pi/agent/settings.json` and leaves that entry
+behind when removed, so after `pi remove npm:pi-mcp-adapter`, turn the
+built-in back on under Built-in in `pi config`. `agent-kit apply` checks
+Pi's settings files on every run that writes Pi MCP entries, including
+`--dry-run`, and prints a warning when neither the built-in nor the adapter
+would load them.
 
 This registers the skill catalog plus the [`toolhive-swe`](./mcp/servers/toolhive-swe/README.md)
 remote MCP server (one entry per environment tier). It does **not** register
