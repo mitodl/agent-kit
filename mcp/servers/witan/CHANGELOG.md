@@ -8,6 +8,20 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.40.1] - 2026-10-02
+
+### Changed
+
+- `witan setup --agent pi` no longer warns that pi-mcp-adapter is missing when
+  Pi's built-in MCP (Pi 0.99 and later) will read the witan entry. The docs
+  describe the built-in as the default.
+- Requires `agent-config-kit>=0.12`, which has that check; with an older one,
+  `witan setup --agent pi` still printed the pi-mcp-adapter warning.
+
+### Fixed
+
+- The `Stop` hook's background `witan optimize` now also runs `cleanup --older-than 30d` at most once per `WITAN_CLEANUP_INTERVAL` (default weekly; `0` disables). On omnigraph 0.11 `optimize` no longer reclaims deleted branches' storage and only `cleanup` does, so a local store otherwise grew without bound. `witan optimize` gains `--cleanup-older-than` to run both in one process.
+
 ## [0.40.0] - 2026-09-30
 
 ### Added
