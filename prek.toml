@@ -90,12 +90,29 @@ args = ["--no-progress", "--min-severity=high", "--min-confidence=medium"]
 
 # ── Secrets: gitleaks (priority 10, parallel with shellcheck) ─────────────────
 # Comprehensive secret scanning; complements the builtin detect-private-key.
-# Checks staged changes only (gitleaks protect).
+# `gitleaks` scans staged changes only, so it checks nothing once the work is committed
+# (CI, `prek run --all-files`). `gitleaks-pr` is the CI counterpart: manual stage, so
+# `prek run --all-files` and the commit hook skip it, and the autofix workflow runs it
+# explicitly over the commits the pull request adds. `--pre-commit=false` and
+# `--staged=false` cancel the flags in the hook's entry (the last occurrence wins);
+# with either left on, gitleaks ignores --log-opts and scans nothing.
+# It needs origin/main and full history, which the workflow fetches.
 
 [[repos]]
 repo = "https://github.com/gitleaks/gitleaks"
 rev = "v8.30.1"
-hooks = [{ id = "gitleaks", priority = 10 }]
+
+[[repos.hooks]]
+id = "gitleaks"
+priority = 10
+
+[[repos.hooks]]
+id = "gitleaks"
+alias = "gitleaks-pr"
+name = "Detect hardcoded secrets in the commits a PR adds"
+stages = ["manual"]
+args = ["--pre-commit=false", "--staged=false", "--log-opts=--no-merges origin/main..HEAD"]
+priority = 10
 
 # ── Markdown: markdownlint (priority 10, parallel) ────────────────────────────
 # MD013 disabled — code blocks in skill files have long lines by necessity.
