@@ -112,7 +112,9 @@ the shared RNG and the same resolver, and returns the objects it created:
 def skewed_books(context):
     authors = context.objects["authors"]
     return [
-        BookFactory.create(author=authors[0 if i % 4 == 0 else 1 + i % (len(authors) - 1)])
+        BookFactory.create(
+            author=authors[0 if i % 4 == 0 else 1 + i % (len(authors) - 1)]
+        )
         for i in range(context.knobs["books"])
     ]
 ```

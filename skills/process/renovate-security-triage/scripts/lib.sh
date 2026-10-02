@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
 # Shared helpers for the renovate-security-triage scripts. Sourced by every
 # script here (which also pulls in paths.sh); not executable on its own.
 
