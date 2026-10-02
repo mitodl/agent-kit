@@ -8,7 +8,8 @@
   URI as before, and a manifest's `oauth.redirectUri` becomes
   `oauth.callbackUrl`.
 - The Pi MCP preflight now counts Pi's built-in MCP: `apply` warns only when
-  Pi's settings turn it off (`-builtin:mcp`, which pi-mcp-adapter adds and
-  leaves behind when removed) and pi-mcp-adapter is not declared. The warning
-  says how to turn the built-in back on. `adapters.pi.mcp_adapter_prerequisite`
-  is renamed `mcp_prerequisite`.
+  pi-mcp-adapter is not declared and Pi's settings turn the built-in off
+  (`-builtin:mcp`, which pi-mcp-adapter adds and leaves behind when removed)
+  or record a Pi older than 0.99 as the last one run
+  (`lastChangelogVersion`). The warning says how to turn the built-in back
+  on. `adapters.pi.mcp_adapter_prerequisite` is renamed `mcp_prerequisite`.

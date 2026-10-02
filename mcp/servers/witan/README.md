@@ -70,9 +70,10 @@ as those lineages diverge.
 built-in MCP support, or by the third-party
 [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter) Pi package when that
 is installed (it replaces the built-in). Check with `pi mcp list` or `/mcp`
-inside Pi. `witan setup` warns when Pi's settings turn the built-in off
-(`-builtin:mcp`, which the adapter adds and leaves behind when removed) and
-the adapter is not declared; the hooks/extension half works either way.
+inside Pi. `witan setup` warns when Pi's settings show neither one would
+load it: the built-in turned off with `-builtin:mcp` (which the adapter adds
+and leaves behind when removed), or a Pi older than 0.99, and no adapter
+declared. The hooks/extension half works either way.
 
 **Without persistent CLI** — enough for the **MCP-only agents** (Copilot, OpenCode,
 Kilo), whose server runs via `uvx`, so no install is needed:

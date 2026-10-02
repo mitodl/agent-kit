@@ -30,6 +30,7 @@ from ..models import McpServer, RemoteServer, Scope, StdioServer
 MCP_ADAPTER_PACKAGE = "pi-mcp-adapter"
 MCP_ADAPTER_INSTALL = "pi install npm:pi-mcp-adapter"
 BUILTIN_MCP = "builtin:mcp"
+BUILTIN_MCP_SINCE = (0, 99, 0)  # Pi CHANGELOG: built-in MCP added in 0.99.0
 
 # Matches every way Pi's docs/packages.md lets a source name the package:
 # "npm:pi-mcp-adapter", "npm:pi-mcp-adapter@2.37.0",
@@ -144,6 +145,17 @@ def _project_builtin_mcp_setting(cfg: dict) -> bool | None:
     return setting
 
 
+def _last_run_version(cfg: dict) -> tuple[int, int, int] | None:
+    """The Pi version recorded in the user settings' ``lastChangelogVersion``,
+    or ``None`` when it is absent or unparseable. Pi's interactive mode
+    writes it on the first new session after an install or upgrade, so it
+    is the newest Pi that has run interactively: a lower bound on the
+    installed version, read without running ``pi``."""
+    value = cfg.get("lastChangelogVersion")
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", value) if isinstance(value, str) else None
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
 def mcp_prerequisite(scope: Scope) -> tuple[bool, str]:
     """Read-only check that something in Pi will load the mcp.json being
     written: never runs ``pi``/``npm`` or touches the network, only reads
@@ -164,10 +176,14 @@ def mcp_prerequisite(scope: Scope) -> tuple[bool, str]:
     Removing pi-mcp-adapter leaves the ``-builtin:mcp`` it added behind, so
     that case reports as missing.
 
+    The built-in needs Pi 0.99 or later. The installed version is not read
+    (that would mean running ``pi``); when the user settings'
+    ``lastChangelogVersion`` names an older one, the built-in does not count.
+
     Best-effort: a package disabled through ``pi config``, or a project
     package Pi has not yet been granted trust to load, still reads as
-    present, and the Pi version is not checked (the built-in needs 0.99 or
-    later)."""
+    present, and settings without ``lastChangelogVersion`` assume a Pi new
+    enough for the built-in."""
     global_settings = Path.home() / ".pi" / "agent" / "settings.json"
     candidates = [global_settings]
     if scope == Scope.PROJECT:
@@ -191,18 +207,30 @@ def mcp_prerequisite(scope: Scope) -> tuple[bool, str]:
         setting = read(cfg or {})
         if setting is not None:
             builtin_on, decided_by = setting, path
-    if builtin_on:
-        where = f"turned on in {decided_by}" if decided_by else "not turned off"
-        return True, (
-            f"Pi's built-in MCP is {where} (it needs Pi 0.99 or later; "
-            "confirm with `pi mcp list`)"
-        )
     checked = " or ".join(str(p) for p in candidates)
     local_hint = (
         f" (or `{MCP_ADAPTER_INSTALL} -l` for this project only)"
         if scope == Scope.PROJECT
         else ""
     )
+    last_run = _last_run_version(loaded[0][1] or {})
+    if builtin_on and last_run is not None and last_run < BUILTIN_MCP_SINCE:
+        version = ".".join(map(str, last_run))
+        return False, (
+            f"{global_settings} records Pi {version} as the last version run "
+            "(`lastChangelogVersion`), which is older than 0.99 and has no "
+            f"built-in MCP, and {MCP_ADAPTER_PACKAGE} was not found in "
+            f"{checked}, so Pi will ignore these MCP servers. Upgrade Pi, or "
+            f"run `{MCP_ADAPTER_INSTALL}`{local_hint}; then restart Pi and "
+            "confirm with `pi mcp list` (an upgraded Pi updates that setting "
+            "the next time it starts a new interactive session)."
+        )
+    if builtin_on:
+        where = f"turned on in {decided_by}" if decided_by else "not turned off"
+        return True, (
+            f"Pi's built-in MCP is {where} (it needs Pi 0.99 or later; "
+            "confirm with `pi mcp list`)"
+        )
     return False, (
         f"Pi's built-in MCP is turned off in {decided_by} (an `extensions` "
         f"entry such as `-{BUILTIN_MCP}`) and {MCP_ADAPTER_PACKAGE} was not "

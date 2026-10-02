@@ -281,7 +281,10 @@ library writes for Pi MCP servers are read by Pi's built-in MCP extension
 (Pi 0.99 and later), or by the third-party `pi-mcp-adapter` Pi package, which
 replaces the built-in when installed and reads the same files. Entries are
 written in Pi's own format, which both accept: an OAuth server gets an
-`oauth` object with a `callbackUrl` and no `"auth": "oauth"` field.
+`oauth` object with a `callbackUrl` and no `"auth": "oauth"` field. Two OAuth
+settings only work under the built-in, because pi-mcp-adapter 5.x drops them
+when it translates Pi's format: `oauth.authServerMetadataUrl` is ignored, and
+an OAuth server that also sends `headers` gets no OAuth sign-in.
 
 | Scope | Pi MCP file written | Settings files the preflight reads |
 |-------|---------------------|------------------------------------|
@@ -298,9 +301,12 @@ results table. For Pi it runs a read-only preflight of the settings files
 above. `pi-mcp-adapter` in a `packages` (or `extensions`) array counts.
 Otherwise the built-in counts unless an `extensions` entry turns it off with
 `-builtin:mcp` (what `pi config` writes, and what `pi-mcp-adapter` writes when
-it is installed, and leaves behind when it is removed). A project's entry
-overrides the global one. The preflight never runs `pi` or `npm`, never
-touches the network, and does not check the Pi version. When neither is
+it is installed, and leaves behind when it is removed), read with Pi's own
+precedence (`-` beats `+` beats a `!` glob in user settings; a project's
+last matching entry overrides them). It also does not count when the global
+settings' `lastChangelogVersion`, the newest Pi that has started an
+interactive session, is older than 0.99. The preflight never runs `pi` or
+`npm` and never touches the network. When neither is
 loaded it prints a yellow `⚠` warning saying how to turn the built-in back on
 or install the adapter; otherwise it prints a dim note. Neither changes the
 exit code, because the write succeeded and takes effect once either one

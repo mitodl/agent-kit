@@ -755,8 +755,8 @@ then covers both packages; otherwise install witan-code separately with
 Pi reads the witan entry written to ``~/.pi/agent/mcp.json`` with its
 built-in MCP support (Pi 0.99 or later), or with the pi-mcp-adapter Pi
 package when that is installed. The install report warns when Pi's
-settings turn the built-in off (``-builtin:mcp``) and the adapter is not
-declared.
+settings show neither one would load it (the built-in turned off with
+``-builtin:mcp``, or a Pi older than 0.99, and no adapter declared).
 
 Re-run after every upgrade to refresh installed files.
 
@@ -1783,8 +1783,8 @@ running just this one is enough for a witan-code-only install.
 Pi reads the witan-code entry written to ``~/.pi/agent/mcp.json`` with
 its built-in MCP support (Pi 0.99 or later), or with the pi-mcp-adapter
 Pi package when that is installed. The install report warns when Pi's
-settings turn the built-in off (``-builtin:mcp``) and the adapter is not
-declared.
+settings show neither one would load it (the built-in turned off with
+``-builtin:mcp``, or a Pi older than 0.99, and no adapter declared).
 
 Re-run after every upgrade to refresh installed files.
 

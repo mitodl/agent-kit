@@ -269,8 +269,9 @@ witan-code setup --author "Jane Doe"  # attribution (default: git config user.na
 On Pi, the MCP server entry (`~/.pi/agent/mcp.json`) is read by Pi's
 built-in MCP support (Pi 0.99 and later), or by the pi-mcp-adapter Pi
 package when that is installed; confirm with `pi mcp list` or `/mcp` inside
-Pi. `witan-code setup --agent pi` warns when Pi's settings turn the built-in
-off (`-builtin:mcp`) and the adapter is not declared.
+Pi. `witan-code setup --agent pi` warns when Pi's settings show neither one
+would load it (the built-in turned off with `-builtin:mcp`, or a Pi older
+than 0.99, and no adapter declared).
 
 If `witan` is *also* installed and witan-code is importable in that same
 environment (e.g. via the `--with` in the `uv tool install`/MCP server's

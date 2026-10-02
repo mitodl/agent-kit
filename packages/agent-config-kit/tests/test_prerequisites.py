@@ -138,6 +138,46 @@ def test_preflight_reads_the_global_builtin_mcp_setting_like_pi(
     assert mcp_prerequisite(Scope.GLOBAL)[0] is satisfied
 
 
+@pytest.mark.parametrize(
+    ("version", "satisfied"),
+    [
+        ("0.87.1", False),
+        ("0.98.9", False),
+        ("0.99.0", True),
+        ("1.0.0", True),
+        ("1.0.0-beta.1", True),
+        ("not a version", True),  # unknown: assume a new enough Pi
+        (99, True),
+    ],
+)
+def test_preflight_builtin_needs_pi_0_99(home, version, satisfied):
+    """Pi records the newest version that has run interactively as
+    ``lastChangelogVersion``; one older than 0.99 has no built-in MCP."""
+    path = _global_settings(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"lastChangelogVersion": version}))
+
+    ok, detail = mcp_prerequisite(Scope.GLOBAL)
+
+    assert ok is satisfied
+    if not satisfied:
+        assert f"records Pi {version}" in detail
+        assert "older than 0.99" in detail
+        assert "pi install npm:pi-mcp-adapter" in detail
+
+
+def test_preflight_old_pi_with_the_adapter_is_satisfied(home):
+    path = _global_settings(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {"lastChangelogVersion": "0.87.1", "packages": ["npm:pi-mcp-adapter"]}
+        )
+    )
+
+    assert mcp_prerequisite(Scope.GLOBAL)[0] is True
+
+
 def test_preflight_names_the_file_that_turns_the_builtin_on(home):
     _write_settings(_global_settings(home), extensions=["+builtin:mcp"])
 
