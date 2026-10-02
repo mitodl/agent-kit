@@ -215,6 +215,10 @@ desc = "Declares what the indexing process is entitled to write **on a shared gr
 default = "14"
 desc = "Reap per-branch views idle at least this long. `0` (or negative) disables reaping entirely."
 
+[section.vars.WITAN_CODE_VIEW_SURVEY_WORKERS]
+default = "8"
+desc = "How many views `reap-views` ages at once. Each view costs one `commit list` against the store, so a shared graph with hundreds of views needs them overlapped to finish inside the reaper job's deadline. `1` ages them one at a time."
+
 [section.vars.WITAN_CODE_OPTIMIZE_INTERVAL]
 default = "86400"
 desc = "Minimum seconds between throttled background `optimize` runs on the code stores. `0` disables."

@@ -108,6 +108,7 @@ from the memory/task graph.
 | `WITAN_CODE_TOKEN` | — | Bearer token for `WITAN_CODE_SERVER`. |
 | `WITAN_CODE_TRANSPORT` | `direct` | How the `witan code` CLI reaches the index: `direct` opens the store in-process; `mcp` proxies through a deployed witan endpoint. |
 | `WITAN_CODE_VIEW_MAX_IDLE_DAYS` | `14` | Reap per-branch views idle at least this long. `0` (or negative) disables reaping entirely. |
+| `WITAN_CODE_VIEW_SURVEY_WORKERS` | `8` | How many views `reap-views` ages at once. Each view costs one `commit list` against the store, so a shared graph with hundreds of views needs them overlapped to finish inside the reaper job's deadline. `1` ages them one at a time. |
 
 ## CI code-graph indexer
 
