@@ -17,7 +17,7 @@ witan task create "Retry logic drops the last attempt's error" \
   --description "The final exception is swallowed, so a permanent failure looks like a timeout."
 ```
 
-```
+```text
 Created task: tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
   status: open
   repo: mitodl/agent-kit

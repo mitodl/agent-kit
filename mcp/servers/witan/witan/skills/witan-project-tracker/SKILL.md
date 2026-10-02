@@ -31,7 +31,7 @@ project slug manually.
 
 When the hook injects context showing an active project that matches your work:
 
-```
+```text
 workflow_session_start(
     project_slug="wp-add-vault-k8s-auth-a3f912",
     session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi>",
@@ -61,7 +61,7 @@ so the handle is the only link between these calls.
 
 If no active project in the injected context matches the work:
 
-```
+```text
 workflow_project_create(
     title="Add Vault K8s auth to ol-django",
     description="Wire Vault K8s auth using hvac for secret injection at runtime. Driven by compliance requirement to stop using static env secrets.",
@@ -73,7 +73,7 @@ workflow_project_create(
 
 Then immediately start a session:
 
-```
+```text
 workflow_session_start(
     project_slug="<slug returned above>",
     session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi>",
@@ -95,7 +95,7 @@ A project can span several repos (e.g. a Django service, its frontend, and the
 infra repo that deploys it) or none (a cross-cutting objective). Pass the set
 via `repos`; the repo you create from is added automatically:
 
-```
+```text
 workflow_project_create(
     title="B2B self-serve analytics",
     description="StarRocks MVs + FastAPI service surfaced in the MIT Learn site",
@@ -116,7 +116,7 @@ known during discovery — so the set is editable. Getting it right matters:
 repo-scoped recall from a repo missing from the set will not surface the project
 at all.
 
-```
+```text
 workflow_project_update(
     slug="wp-b2b-self-serve-analytics-8db781",
     add_repos=["https://github.com/mitodl/ol-analytics-api"],
@@ -132,7 +132,7 @@ on the project node, so a removal really removes.
 `workflow_project_update` is the general escape hatch for metadata set wrong or
 learned later. Every argument is optional and only what you pass is touched:
 
-```
+```text
 workflow_project_update(
     slug="wp-...",
     title="B2B self-serve analytics",       # renamed
@@ -156,7 +156,7 @@ Two things it deliberately can't do:
 When the project moves between phases (e.g. spec is approved, implementation
 begins):
 
-```
+```text
 workflow_project_advance(
     slug="wp-add-vault-k8s-auth-a3f912",
     phase="implementation",
@@ -171,7 +171,7 @@ Phases do not need to be sequential; a project can return to a phase.
 
 Before closing a session, record what was accomplished:
 
-```
+```text
 workflow_session_end(
     session_slug="ws-...",  # returned by workflow_session_start
     summary="Implemented hvac client wrapper and unit tests. Still need to wire env injection at app startup and add integration test. Decided to use lazy initialization pattern.",
@@ -188,7 +188,7 @@ and better context for the next session.
 
 When the work is delivered:
 
-```
+```text
 workflow_project_complete(
     slug="wp-add-vault-k8s-auth-a3f912",
     outcome="Vault K8s auth fully wired. hvac reads secrets at pod startup via env injection. Static env secrets removed. Merged in PR #892. Integration tests passing in CI.",
@@ -205,7 +205,7 @@ nodes, not on the aggregate trace.
 
 ## Listing Projects
 
-```
+```text
 workflow_project_list()                       # active projects in this repo
 workflow_project_list(status="completed")     # completed projects in this repo
 workflow_project_list(repo="")                # active projects across all repos
@@ -226,13 +226,13 @@ call is idempotent: the second call returns the existing trace without error.
 
 Completed projects accumulate as `WorkflowTrace` nodes:
 
-```
+```text
 workflow_project_list(status="completed")   # list finished projects
 ```
 
 Fetch a specific trace:
 
-```
+```text
 workflow_trace_get(slug="wp-add-vault-k8s-auth-a3f912")   # accepts the wp- or wt- slug
 ```
 
@@ -249,7 +249,7 @@ are the inputs for extracting reusable patterns and generating new skills.
 
 When a session produces a pattern or lesson worth storing:
 
-```
+```text
 memory_store(kind="lesson", title="...", content="...")
 # → returns {"slug": "les-..."}
 

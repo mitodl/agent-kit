@@ -237,7 +237,7 @@ If these return the team's data rather than yours alone, the read path works.
 Then check a write actually lands — this is the step that exercises the whole
 ADR-0004 chain (JWT → actor → that actor's own omnigraph bearer token → Cedar):
 
-```
+```text
 memory_store(kind="lesson", title="onboarding probe", content="delete me")
 ```
 
@@ -263,7 +263,7 @@ projects that other people created.
 A configured-but-unreachable remote fails the command you ran, naming the
 endpoint and saying so out loud:
 
-```
+```text
 The deployed service at https://witan.qa.ol.mit.edu/mcp could not be reached:
 Client failed to connect: All connection attempts failed. witan does not fall
 back to your local store — falling back silently would split your memory across
@@ -300,7 +300,7 @@ roughly one every 3-4 seconds, so a burst of concurrent writers queues.
 
 You may see either of two answers, and they say different things:
 
-```
+```text
 omnigraph mutate was refused before it was sent: 4 writes are already in flight
 against https://.../council and no slot freed within 10s. … NOTHING WAS
 WRITTEN — retry once the burst clears.
@@ -309,7 +309,7 @@ WRITTEN — retry once the burst clears.
 That one is clean. It happened before anything left the client, so the graph is
 untouched and retrying is unambiguous.
 
-```
+```text
 The deployed service at https://… answered HTTP 502 for `memory_store`: the
 request reached it and was cut off before a reply came back. `memory_store`
 writes, so ITS OUTCOME IS INDETERMINATE — the write may or may not have been

@@ -10,7 +10,7 @@ Desktop, GitHub Copilot) can read and write without platform-specific code.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Agent (any platform)                    │
 │   pi / Claude Desktop / GitHub Copilot / Claude Code           │
@@ -195,7 +195,7 @@ disposable — delete and re-index freely.
 
 Everything lives under `mcp/servers/witan/` in `agent-kit`:
 
-```
+```text
 mcp/servers/witan/
 ├── README.md                  # User-facing setup guide
 ├── install.sh                 # Install omnigraph binary + init local graph
@@ -225,7 +225,7 @@ mcp/servers/witan/
 
 The skill lives at:
 
-```
+```text
 mcp/servers/witan/witan/skills/witan-memory/
 └── SKILL.md
 ```
@@ -1392,8 +1392,10 @@ Call this **first** whenever you start working in a repository you haven't
 used in this session:
 
 ```
+
 memory_get_project_facts()
-```
+
+```text
 
 Returns all structural facts for the current repo: architecture, deployment
 topology, testing conventions, known dependencies, environment quirks. Read
@@ -1405,19 +1407,23 @@ Before implementing something non-trivial, check what patterns the team has
 already documented:
 
 ```
+
 memory_list_patterns()                          # all patterns in this repo
 memory_list_patterns(language="python")         # filtered by language
-```
+
+```text
 
 ### `memory_search` — find relevant context by topic
 
 When you need to know if the team has encountered something similar before:
 
 ```
+
 memory_search("vault secrets injection")
 memory_search("database migration rollback strategy")
 memory_search("rate limiting approach", kind="pattern")
-```
+
+```text
 
 ### `memory_store` — record something worth remembering
 
@@ -1425,6 +1431,7 @@ memory_search("rate limiting approach", kind="pattern")
 you apply a team convention that should be made explicit:
 
 ```
+
 memory_store(
     kind="pattern",
     title="Always use uv, never pip",
@@ -1432,42 +1439,49 @@ memory_store(
     language="python",
     tags=["tooling", "environment"]
 )
-```
+
+```text
 
 **Store a `project_fact`** when you learn something structural about a
 codebase that a future agent would need to know:
 
 ```
+
 memory_store(
     kind="project_fact",
     title="Vault secrets injected via env at runtime",
     content="This service reads secrets from Vault at startup via the ...",
     category="deployment"
 )
-```
+
+```text
 
 **Store a `lesson`** when a mistake was made or a correction was needed:
 
 ```
+
 memory_store(
     kind="lesson",
     title="Do not run migrations without a backup in staging",
     content="On 2025-05-10, a migration was run without a prior snapshot ...",
     severity="warning"
 )
-```
+
+```text
 
 **Store `agent_context`** when handing off a task or leaving breadcrumbs
 for a future agent session:
 
 ```
+
 memory_store(
     kind="agent_context",
     title="Ticket 1234 — approach taken",
     content="Chose to use the existing TaskQueue infrastructure rather than ...",
     tags=["ticket-1234"]
 )
-```
+
+```text
 
 ## Quality Guidelines
 
@@ -1506,7 +1520,8 @@ not affect the v1 interface.
 | **`memory_update` tool** | Expose `update_memory` query as a first-class tool. v1 workaround: `memory_get` + `memory_store`. |
 | ~~**`link_supersedes` / `link_applies_to` tools**~~ | **Delivered** as `memory_link(from, to, kind)` (kinds: `supersedes`, `refines`, `applies_to`, `contradicts`, `related_to`) + `memory_neighbors(slug)`. `memory_search` hides superseded memories by default (`include_superseded=True` to surface). See `docs/design/graph-structured-memory-spec.md` §3. |
 | **`memory_delete` tool** | Requires a separate `delete.gq` file (D₂ constraint: cannot mix deletes with inserts/updates). Deliberately omitted to prevent accidental data loss in v1. |
-```
+
+```text
 
 ---
 
@@ -1537,6 +1552,7 @@ runs before every prompt in a repo that has active projects. It injects
 context like:
 
 ```
+
 ## Active Workflow Projects
 
 This repository has 1 active tracked project:
@@ -1544,7 +1560,8 @@ This repository has 1 active tracked project:
 - **Add Vault K8s auth to ol-django** (slug: `wp-add-vault-k8s-auth-a3f912`)
   Phase: implementation
   Issue: github.com/mitodl/ol-django/issues/847
-```
+
+```text
 
 The agent reads this and calls `workflow_session_start` with the slug — no
 user intervention required. Parallel sessions each call `workflow_session_start`

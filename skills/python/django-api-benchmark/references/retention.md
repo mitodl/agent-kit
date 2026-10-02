@@ -80,7 +80,7 @@ counts — raise `requests` and see whether the rate holds or decays.
 graph is walked upward to the first module or class, and the chain is printed
 root-first:
 
-```
+```text
 CLASS courses.models.Course
   -> dict(len=48, keys=['__module__', 'course_page', ...])
     -> lru_method_cache._MethodCacheDescriptor

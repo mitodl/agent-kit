@@ -94,7 +94,7 @@ export WITAN_AUTHOR="Your Name"
 > **Manual wiring** (if you prefer to configure agents by hand): run
 > `./install.sh` to initialise the local graph, then copy the appropriate
 > config snippet from `config/` into your agent's MCP config file.
-
+>
 > **Local development setup** (both servers, hooks, and skills wired from your
 > checkout): see
 > [Local Development Setup](../../../docs/internals/agent-memory.md#local-development-setup).
@@ -387,7 +387,7 @@ deployment instructions, the graph schema, and the v2 roadmap.
 
 ## Project Structure
 
-```
+```text
 witan/
 ├── README.md                  # This file
 ├── install.sh                 # Initialise local graph (manual alternative to `witan setup`)

@@ -86,7 +86,7 @@ task to execute as written.
 
 When you find a problem with a task you are not executing, say it on the task:
 
-```
+```text
 task_comment(slug="tk-...", text="<the correction, with evidence>")
 ```
 
@@ -181,7 +181,7 @@ Then gather, if relevant: a one-line description, a parent epic slug
 (`parent`), blocker slugs (`blocked_by`), a GitHub issue/PR URL
 (`external_uri`), and a project slug (`project_slug`). Call:
 
-```
+```text
 task_create(
     title="<title>",
     description="<description>",
@@ -209,7 +209,7 @@ assignee, blocked_by, external_uri. Group sub-issues under their parent when a
 
 Ask which task (slug) and an optional resolution note, then:
 
-```
+```text
 task_close(slug="<slug>", resolution="<what was done / outcome>")
 ```
 
@@ -243,7 +243,7 @@ For a task scoped to specific code, attach code-graph **symbol ids** via
 `witan-code` tools — `code_find_definition` / `code_search_symbol`
 return them in the `symbol_id` field (`<repo>#<path/to/file.py>::<QualifiedName>`):
 
-```
+```text
 task_create(
     title="Refactor Service.run for lazy init",
     description="...",

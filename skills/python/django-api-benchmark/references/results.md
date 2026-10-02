@@ -55,7 +55,7 @@ Each row of `per_query` has SQL time and gap time, separately, for both arms —
 and, where a production baseline is configured, what the same query costs in
 production:
 
-```
+```text
 query               prod tot  base sql  base gap  base tot  br sql  br gap  br tot  delta
 topics prefetch       168.90      3.69     36.35     40.04    3.48    6.60   10.08  -29.96
 books prefetch         12.40      1.46      4.36      5.81    1.41    4.35    5.76   -0.05

@@ -3,7 +3,7 @@
 A graph that answers every read, every write and `omnigraph repair` with the
 same error is quarantined by an unresolved OCC recovery sidecar:
 
-```
+```text
 OCC recovery sidecar '01M2V544QY00SSGZA0PSRK3B9X' found original commit id
 '01M2V54457QR0XB7ZW47H5V88H' but its manifest delta differs
 ```

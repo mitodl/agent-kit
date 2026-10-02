@@ -193,7 +193,7 @@ packaging weight.
 
 Three `cyclopts` subcommands under the `agent-kit` console script (M3/M4):
 
-```
+```text
 agent-kit apply MANIFEST [--scope global|project] [--platform NAME]...
                        [--prune/--no-prune] [--dry-run] [--state-file PATH]
                        [--cache-dir PATH]
@@ -312,6 +312,7 @@ don't change, which is the same granularity `apply()` already uses implicitly
 (a hook that changes its `command` is, for merge purposes, a different hook).
 
 **Prune algorithm**, per platform, on `apply --prune`:
+
 1. Load the previous state file (absent → treat as empty, i.e. first run
    never prunes anything).
 2. Run the normal `apply()` merge for the current manifest.

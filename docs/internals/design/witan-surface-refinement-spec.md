@@ -28,7 +28,7 @@ convention is hoisted into the server `instructions=` string.
 
 ### C1 — Symbol-id format (one spelling, everywhere)
 
-```
+```text
 <repo_uri>#<relative/path/to/file.py>::<QualifiedName>
 ```
 
@@ -105,6 +105,7 @@ one instructions paragraph plus a one-line per-tool reference:
 ### C8 — Error/return convention
 
 One convention across sibling tools:
+
 - **Lookup by slug/id that finds nothing** → return `None` (or a shaped-empty
   result for aggregate returns). Never raise. Aligns `memory_get`/`task_get`
   (already `None`) with `mine_trace`/`workflow_trace_annotate` (currently raise
@@ -156,6 +157,7 @@ One convention across sibling tools:
 `tk-strip-internal-changelog-spec-prose-from-docstri-bd047d`
 
 Apply C3, C6, C7 mechanically across both servers:
+
 - Delete the repeated `repo` block (C3) from every docstring that just restates
   the default; hoist to instructions.
 - Delete spec/section refs, internal paths, env-var names, changelog prose (C6).
@@ -257,6 +259,7 @@ to the checkout branch; `code_find_references`/`code_callers`/`code_impact` rout
 purely by `symbol_id` and silently read whatever store the id resolves to.
 
 Decision: **make branch-awareness explicit and uniform.**
+
 - The reference/caller/impact tools route by `symbol_id`, whose `repo#path`
   prefix already pins the store. Document that clearly: "Reads the store the
   `symbol_id` belongs to; branch is implied by the id's origin, not a separate
@@ -275,6 +278,7 @@ Decision: **make branch-awareness explicit and uniform.**
 `tk-standardize-error-return-conventions-across-sibl-cda8fc`
 
 Apply **C8**:
+
 - `workflow_project_block` self-block: return
   `{"blocked": false, "reason": "cannot block a project on itself"}` instead of
   raising `ValueError` (match `memory_link` self-link shape).
@@ -295,6 +299,7 @@ unblock sweep); `task_update(parent=…)` duplicates `task_link(kind="parent")`;
 get_blockers` reimplement task `blocked_by`/`ready` on a second node type.
 
 Decisions (narrow the mutation surface, keep one obvious path per intent):
+
 - **Closing**: `task_close` is the only documented close path. `task_update`
   drops `status="closed"` special-casing from its docstring and points to
   `task_close`; keep the code path working (so a raw `status="closed"` still
@@ -314,7 +319,7 @@ Decisions (narrow the mutation surface, keep one obvious path per intent):
 
 ## Sequencing
 
-```
+```text
 Task 2 ─┐
 Task 1 ─┴─ (SEVERE, independent, do first)
 Task 4 ── Task 5 ── (renames build on the C1/C2 id story)

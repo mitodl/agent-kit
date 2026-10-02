@@ -30,7 +30,7 @@ inconsistency.
 
 ## The invariant
 
-```
+```text
 witan-core          ← imports neither server
    ↑        ↑
 witan-council → witan-code     (`witan` mounts `witan code`; never the reverse)

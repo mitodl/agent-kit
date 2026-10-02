@@ -59,7 +59,7 @@ and hand back a slug like `pat-run-package-tests-through-just-a1b2c3`. The
 witan memory "test isolation"
 ```
 
-```
+```text
         Memory search: 'test isolation'
 ┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ kind    ┃ slug                   ┃ title                   ┃

@@ -404,7 +404,7 @@ distinct:
 **Which `MANIFEST`** (only relevant when it's omitted — an explicit
 positional argument always wins outright):
 
-```
+```text
 explicit MANIFEST argument
   → repo-local agent-config.toml (at the git repo root)
     → [[org]] match (git remote's GitHub owner)
@@ -419,7 +419,7 @@ by `--profile`/`--scope` if given.
 **Within a resolved manifest**, once loaded (`include` folding, then
 profile selection, then CLI overrides):
 
-```
+```text
 included manifests (depth-first, left→right)
   → including manifest's own entries
     → selected profile(s) (--profile, or [options] default_profiles)

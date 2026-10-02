@@ -17,7 +17,7 @@ type, slug, title, and a few more columns — with
 witan task claim tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
 ```
 
-```
+```text
 Claimed tk-retry-logic-drops-the-last-attempt-s-e-4f9c21 (assignee=tmacey)
 ```
 
@@ -38,7 +38,7 @@ witan task create "Retry loop swallows CancelledError" \
   --discovered-from tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
 ```
 
-```
+```text
 Created task: tk-retry-loop-swallows-cancellederror-b81a02
 ```
 
@@ -53,7 +53,7 @@ witan task close tk-retry-logic-drops-the-last-attempt-s-e-4f9c21 \
   --resolution "Re-raise the final exception instead of swallowing it; test added"
 ```
 
-```
+```text
 Closed tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
 ```
 

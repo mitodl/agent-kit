@@ -93,7 +93,7 @@ bridge store predates `RepoSymbol` — the write is never blocked on it.
 
 ## Inspecting
 
-```
+```text
 witan code symbols [--repo URI] [--role exported|external] [--scheme http]
 witan code stitch [--repo URI] [--unresolved]
 ```

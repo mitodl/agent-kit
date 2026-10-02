@@ -54,7 +54,7 @@ to confirm it's reachable:
 
 | Area | What to look for |
 |------|------------------|
-| Injection | Raw SQL built with string formatting (`.raw()`, `.extra()`, `cursor.execute(f"...")`); `subprocess` with `shell=True` or a shell string holding input; template output marked safe (`|safe`, `mark_safe`, `dangerouslySetInnerHTML`) on user data |
+| Injection | Raw SQL built with string formatting (`.raw()`, `.extra()`, `cursor.execute(f"...")`); `subprocess` with `shell=True` or a shell string holding input; template output marked safe (`\|safe`, `mark_safe`, `dangerouslySetInnerHTML`) on user data |
 | Authorization | A new view, viewset action, or API route whose effective permissions are too broad: `AllowAny` set explicitly, or no `permission_classes` in a project whose `DEFAULT_PERMISSION_CLASSES` setting is unset or permissive (check settings before reporting); object lookups by id that don't scope to the requesting user; admin-only behavior checked in the frontend only |
 | Secrets | Credentials, tokens, or keys committed in code, fixtures, or Pulumi config without `secure:`; secrets written to logs, error messages, Sentry context, or trace attributes |
 | SSRF / outbound requests | A URL or host from a request passed to `requests`/`httpx` without an allowlist; `verify=False` on TLS |

@@ -55,7 +55,7 @@ It sits here rather than under `packages/` because it is not independently
 versioned. It ships inside the witan wheel and moves with the tools it reads,
 so its version is witan's.
 
-```
+```text
 ui/
   src/
     mcp.ts        The read layer. The ONLY file that knows it speaks MCP.

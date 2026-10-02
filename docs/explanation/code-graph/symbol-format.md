@@ -23,7 +23,7 @@ the `:CALLS/heuristic` fallback.
 
 ## Format
 
-```
+```text
 {scheme}:{manager}:{package}:{version}:{descriptor}
 ```
 
@@ -45,7 +45,7 @@ never encoded (they are terminal).
 
 ### `endpoint` → scheme `http`
 
-```
+```text
 {METHOD} {normalized-path}
 ```
 
@@ -59,7 +59,7 @@ never encoded (they are terminal).
   representation, not the resource, and no consumer/provider pair would agree
   on them syntactically.
 
-```
+```text
 provider:  http:pypi:mit-learn:main:GET /api/v0/users/me
 consumer:  http:.:.:.:* /api/v0/users/me
 ```
@@ -68,7 +68,7 @@ consumer:  http:.:.:.:* /api/v0/users/me
 
 Descriptor is the variable name, verbatim.
 
-```
+```text
 provider:  env:.:mit-learn:main:MITOL_APP_BASE_URL
 consumer:  env:.:.:.:MITOL_APP_BASE_URL
 ```
@@ -79,7 +79,7 @@ The symbol identifies the package itself; the descriptor is `.`. Manager and
 package name come from the import site (consumer) or the publishing repo's
 package map / `package.json` (provider).
 
-```
+```text
 provider:  pkg:npm:@mitodl/course-search-utils:main:.
 consumer:  pkg:npm:@mitodl/course-search-utils:.:.
 ```
@@ -88,7 +88,7 @@ consumer:  pkg:npm:@mitodl/course-search-utils:.:.
 
 Descriptor is `{sub_kind}/{key_norm}` (sub_kind: `repo` | `image` | `name`).
 
-```
+```text
 provider:  svc:.:ol-infrastructure:main:repo/https://github.com/mitodl/mit-learn
 ```
 

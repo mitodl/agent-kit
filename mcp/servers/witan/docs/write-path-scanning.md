@@ -176,7 +176,7 @@ emits exactly one audit event, with `outcome = "suppressed"` and
    an author knows a specific write is fine and wants to say so inline rather
    than editing config:
 
-   ```
+   ```text
    Run with API_KEY=AKIAIOSFODNN7EXAMPLE (docs fixture) witan: allow-secret:aws_access_key
    ```
 

@@ -44,7 +44,7 @@ extraction PR references this decision.
 
 ## `witan_core` package layout (decided)
 
-```
+```text
 packages/witan-core/
   pyproject.toml
   witan_core/
@@ -232,6 +232,7 @@ ctor arg, `load()`, `list_branches`/`ensure_branch`/`delete_branch`,
 existing `test_graph.py` passing unchanged.
 
 **Blocking dependencies (carry forward, do not paper over):**
+
 - The unverified "flock-skip-for-remote is a safe write-serialization strategy"
   assumption is a launch blocker tracked by spike
   `tk-spike-validate-omnigraph-server-remote-write-ser-1a8058`. The base must keep
@@ -320,6 +321,7 @@ deploy (`wp-witan-multi-user-service-deployment-dcf6ee`): `graph.py`,
 `remote/`. The deploy has already restructured them.
 
 **Sequencing rule:**
+
 1. **Now, deploy-independent:** scaffold (#0), `popen_detached` (#1), omnigraph
    installer (#2), elicit + `now_iso` (#3), `repo_key` (#4), maintenance (#6).
    These don't touch the deploy's surface.
@@ -330,7 +332,7 @@ deploy (`wp-witan-multi-user-service-deployment-dcf6ee`): `graph.py`,
 
 ## Task DAG (already created; this spec ratifies it)
 
-```
+```text
 epic …-6182db
 └─ scaffold …-55159e (open, ready — root of everything)
    ├─ popen_detached …-8c4171 ──→ maintenance …-0ce376

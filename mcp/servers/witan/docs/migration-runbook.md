@@ -200,7 +200,7 @@ witan migrate merge alice.jsonl --target-uri combined.omni
 
 Preview with `--dry-run` first. The merge then verifies itself:
 
-```
+```text
 Merged … into …: 2 added, 1 updated, 1 kept (target already newer-or-equal), 5 rows loaded.
 Verified: all 6 source row(s) accounted for (2 added + 1 updated + 1 kept + 2 unkeyed).
 ```
@@ -228,7 +228,7 @@ accounting.
 
 ## Flags
 
-```
+```text
 witan migrate merge [SOURCE] [--from <name>] [--to <name>] [--target-uri <uri>] [--dry-run]
 ```
 
@@ -278,7 +278,7 @@ timestamp in the source, and the newest that will be in the target once this
 merge's winners land. The next merge uses it to name the nodes both sides have
 written since:
 
-```
+```text
 2 node(s) changed on BOTH sides since the last merge (2026-08-19T19:46:00Z).
 Newest-record-wins keeps one side and drops the other's edit …
   WorkflowProject   wp-witan-multi-user-service-deployment-dcf6ee

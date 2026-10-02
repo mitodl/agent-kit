@@ -9,7 +9,7 @@ lesson worth keeping; only the caller changes.
 Someone already filed the bug from [Tasks and
 projects](../getting-started/tasks-and-projects.md#file-a-task):
 
-```
+```text
 tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
   "Retry logic drops the last attempt's error"
   bug · p1 · open

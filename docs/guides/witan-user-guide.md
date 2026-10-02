@@ -181,7 +181,7 @@ A typical session:
    a lesson from a bug you just fixed — belongs in witan, not your agent's
    private session memory, so other sessions and teammates can find it:
 
-   ```
+   ```text
    memory_store(kind="pattern", title="...", content="...", repo=<auto>, tags=[...])
    ```
 

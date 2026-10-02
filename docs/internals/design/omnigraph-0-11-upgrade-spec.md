@@ -33,7 +33,7 @@ rollback is the backed-up format-6 root with the 0.10 image.
 Syntax (verified; the key goes inside the braces, and a `@key` on the
 `edge X: A -> B` line is a parse error):
 
-```
+```text
 edge Tagged: Memory -> Topic {
     @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index

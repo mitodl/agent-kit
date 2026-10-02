@@ -96,12 +96,14 @@ helm dependency list        # shows pinned versions; compare against helm search
 ### Docker base images
 
 There is no universal "outdated" command for base images. Check freshness by:
+
 ```bash
 # Pull the latest version of the pinned tag, then compare repo digests
 docker pull <image>:<tag> --quiet
 docker inspect <image>:<tag> --format '{{index .RepoDigests 0}}'
 # Compare against the digest pinned in your Dockerfile (FROM <image>@sha256:...)
 ```
+
 Or check the image's registry page / GitHub releases for the upstream project.
 
 ### Terraform / OpenTofu providers
@@ -136,6 +138,7 @@ git diff HEAD~1 -- '*.toml' '*.json' '*.yaml' '*.lock' 'Dockerfile*' '*.tf'
 ```
 
 Establish for each package:
+
 - Version range: old → new
 - Bump classification: patch / minor / major / digest
 - Direct or transitive dependency
@@ -151,11 +154,13 @@ Establish for each package:
 2. **Package registry pages** — PyPI, npm, crates.io, pkg.go.dev all link to changelogs
 3. **`CHANGELOG.md`** in the repo — often more complete than release notes
 4. **Helm charts** — diff `values.yaml` between versions, which is where breaking changes hide:
+
    ```bash
    helm show values <repo>/<chart> --version <old> > old.yaml
    helm show values <repo>/<chart> --version <new> > new.yaml
    diff old.yaml new.yaml
    ```
+
 5. **Docker base images** — check the upstream project release page plus the base OS release notes (e.g., Debian Bookworm migration guide)
 
 ### What to flag
@@ -221,6 +226,7 @@ Cross-reference each usage site against the changelog flags from Phase 2.
 ### Layer-specific checks
 
 **Base image (Docker):**
+
 - A base image bump often changes two things simultaneously: the OS version (e.g., Buster → Bookworm) and the bundled runtime (e.g., Python 3.9 → 3.12). Evaluate both axes separately.
 - Check `apt-get install` lines for packages that were renamed or removed in the new OS version
 - Run `docker build` locally — ABI and missing-library failures surface here, not at changelog review time
@@ -228,24 +234,28 @@ Cross-reference each usage site against the changelog flags from Phase 2.
 - **Python runtime stdlib removals** — two distinct waves (PEP numbers tell you the version):
   - **Python 3.12** (PEP 632): `distutils` removed — use `setuptools` instead. This is the most common silent build-time kill for packages that call `setup.py` or import `distutils` directly.
   - **Python 3.13** (PEP 594): `cgi`, `cgitb`, `imghdr`, `aifc`, `chunk`, `crypt`, `mailcap`, `msilib`, `nis`, `nntplib`, `ossaudiodev`, `pipes`, `sndhdr`, `spwd`, `sunau`, `telnetlib`, `uu`, `xdrlib` — all removed. If the target base image bundles Python 3.13, search for any of these:
+
   ```bash
   rg "import (cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes|telnetlib)" --type py
   pip show setuptools   # must be present if any dep still calls distutils at install time
   ```
 
 **Helm chart major bumps:**
+
 - Diff CRDs: fields may be promoted, removed, or have changed validation
 - Verify `apiVersion` in rendered manifests is supported by your target cluster version
 - Identify renamed or removed `values.yaml` keys against your override files
 - Run `helm template <release> <chart> --version <new> -f your-values.yaml | kubectl apply --dry-run=server -f -` to surface renamed or missing keys before upgrading
 
 **Database / operator major versions:**
+
 - Check for removed SQL functions, changed defaults, wire protocol changes
 - Verify the ORM or driver supports the new server version
 - Determine if the chart upgrade implies a data migration — PostgreSQL major upgrades require `pg_upgrade` or a dump-restore cycle; this must be planned independently of the chart bump
 - Validate against a staging or local instance before applying to production
 
 **Infrastructure tooling:**
+
 - Run `plan` / `preview` before merging — provider majors often rename resources or move arguments
 - Check for deprecated resource types that were removed in the new version
 
@@ -258,6 +268,7 @@ Make the **minimum change** to satisfy the new API. Do not refactor surrounding 
 If the package provides a codemod, migration script, or official upgrade guide, follow it rather than hand-editing.
 
 After adapting:
+
 - Re-run type checkers and linters
 - Confirm the changed call sites resolve (`python -c "import <pkg>"`, `go build ./...`, etc.)
 - For Docker: rebuild locally and confirm startup behavior
@@ -280,6 +291,7 @@ bundle exec rspec      # Ruby
 Also run linters and type checkers — minor bumps can introduce type errors without breaking tests.
 
 For infrastructure:
+
 ```bash
 helm template . -f values.yaml | kubectl apply --dry-run=server -f -
 pulumi preview --stack <stack>
@@ -320,11 +332,13 @@ Run Phase 0 for every ecosystem in the project. Produce a flat list: package nam
 Many updates within a tier can be applied simultaneously:
 
 **Safe to batch (apply together, one test run):**
+
 - All patch bumps within a single ecosystem (e.g., every Go module patch in one `go get -u=patch ./...`)
 - All minor bumps within an ecosystem that have no breaking flags and no dependency relationships between them
 - Updates across different ecosystems at the same tier (Go patches and npm patches can proceed simultaneously on separate branches)
 
 **Must be sequenced (one at a time or in explicit order):**
+
 - **Runtime before libraries** — if a library requires Python 3.12+, upgrade Python first; the library upgrade is blocked until then
 - **Leaf before root** — if package A imports package B, upgrade B before A, or their version constraints may conflict
 - **DB client before DB server** — the driver or ORM must support the new protocol before the server is upgraded
@@ -335,7 +349,7 @@ For cross-ecosystem updates (Go service + npm frontend + Helm charts), those eco
 
 ### Step 4: Apply in waves, test between each
 
-```
+```text
 Wave 1 — Security: apply individually; fast-path merge
 Wave 2 — Patches: batch per ecosystem with `uv sync`, `go get -u=patch`, `npm update --save-exact`, etc.
 Wave 3 — Clean minors: one ecosystem group at a time; full test suite after each group
@@ -379,7 +393,7 @@ helm dependency update
 
 Keep a simple checklist in a tracking issue or branch description:
 
-```
+```text
 [ ] Wave 1 — security: CVE-2024-xxxxx (pkg A), CVE-2024-yyyyy (pkg B)
 [x] Wave 2 — patches: 14 Go modules, 8 npm packages — CI green
 [ ] Wave 3 — clean minors: Go (in progress), npm (pending), Helm (pending)

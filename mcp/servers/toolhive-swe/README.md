@@ -69,7 +69,7 @@ merge [`config/claude.json`](./config/claude.json) into it by hand.
 > before running `agent-kit apply` — each tier is a separate OAuth prompt and
 > you likely only have Keycloak access to some of them. Selecting a
 > `--profile` also skips them, since they aren't part of any profile.
-
+>
 > Remote MCP over Streamable HTTP with OAuth requires a recent agent version.
 > If your client doesn't support remote HTTP transport, upgrade it first.
 

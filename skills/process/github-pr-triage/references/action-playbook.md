@@ -108,10 +108,12 @@ This is the bucket that needs real judgment, not just a script call:
 
 1. Pull the full thread for context, not just the summary already in the
    classified JSON:
+
    ```bash
    gh pr view <number> -R <repo> --json latestReviews,comments,reviews \
      --jq '.latestReviews[] | {author: .author.login, state, body}'
    ```
+
 2. Read what's actually being asked. Bot reviews (Copilot, Gemini, etc.) often
    bundle several findings in one comment body — treat each as a separate
    item, not a single ask.

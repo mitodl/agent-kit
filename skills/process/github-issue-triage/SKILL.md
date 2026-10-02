@@ -145,6 +145,7 @@ separate batch with manual label assignment.
 Read the (annotated) issue list and group into 4–6 thematic batches.
 
 **For direct repos**, split by feature domain or component:
+
 - Monitoring / alerting
 - Release pipeline / CI
 - Auth / SSO
@@ -227,7 +228,7 @@ prints a warning.
 Use it verbatim as the subagent prompt in parallel mode, or as your own
 checklist for the batch in the sequential fallback.
 
-```
+```text
 You are auditing open GitHub issues for <tracker-or-direct-repo>.
 
 For each issue, determine:
@@ -282,25 +283,31 @@ deliberately skipped bot issues) has exactly one verdict; a missing issue means
 a batch was dropped, not that the issue was fine.
 
 ### Tier 1: Close — work clearly done or superseded
+
 Direct evidence: the artifact exists in code, a named commit landed the fix, or
 a newer issue explicitly covers the same scope.
 
 ### Tier 2: Close — superseded by a newer issue
+
 Older epics or exploratory issues where 2+ newer, concrete issues now track the
 same work. Reference the superseding issue numbers.
 
 ### Tier 3: Verify then close
+
 Probably done but no smoking-gun commit — work may have landed in a sibling repo,
 or the problem was resolved indirectly. Flag for a 5-minute manual check.
 
 ### Tier 4: Keep — quick wins
+
 Confirmed gap that could be addressed in a small PR (a one-line config change, a
 missing lifecycle policy, a version pin upgrade).
 
 ### Tier 5: Keep — active work in flight
+
 A feature branch or recent commits indicate work is underway but not merged.
 
 ### Tier 6: Keep — genuine open gap
+
 The batch investigation confirmed the work has not been done and the need
 remains valid.
 
@@ -358,11 +365,13 @@ close is visible to the whole team and hard to walk back.
 ## Common patterns
 
 ### "Work done in another repo" (direct repo)
+
 Issue asks for something in this repo; implementation landed in a sibling repo.
 Evidence: no local code; git log has no related commits. Verdict: POSSIBLY_OUTDATED —
 flag for manual check, not automatic close.
 
 ### "Tracker repo issue with no product label"
+
 The issue has no label matching the label map. It may be a meta/process issue
 scoped to the tracker itself (infra, hiring, process), or may have been mislabelled.
 Do not search the tracker codebase — instead check the issue body for explicit
@@ -370,21 +379,25 @@ mentions of a target repo and search there, or mark as POSSIBLY_OUTDATED with a
 note requesting a label.
 
 ### "Technology replaced"
+
 Issue asks for feature X using tool A, but the team adopted tool B which
 inherently provides X. Evidence: tool A absent in the target codebase; tool B
 present and covers the use case. Verdict: LIKELY_OUTDATED.
 
 ### "Superseded by a newer, more specific issue"
+
 Old epic or exploratory issue, now tracked by 2–5 concrete sub-issues. Evidence:
 newer issues reference the old one by number, or their titles clearly cover the
 old scope. Verdict: LIKELY_OUTDATED for the old issue; note superseding numbers.
 
 ### "Feature branch exists, not yet merged"
+
 Active work. Evidence: `git -C <resolved_path> branch -r | grep <keyword>`
 returns hits; recent commits on a non-main branch. Verdict: STILL_RELEVANT — do
 not close.
 
 ### "Bot-maintained issue"
+
 Renovate Dependency Dashboard and similar bot-maintained issues are permanent
 tracking surfaces, not actionable items. Skip them in the triage — they close
 only when the bot is removed.

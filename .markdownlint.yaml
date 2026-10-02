@@ -1,0 +1,31 @@
+# markdownlint-cli reads this file; keep rule choices here rather than in prek.toml
+# `args`, because `--disable <rules...>` is variadic and swallows the filenames
+# prek appends, so the hook silently lints nothing.
+default: true
+
+# Code blocks in skill files have long lines by necessity.
+MD013: false
+# Issue/PR template skills contain HTML comments as placeholders.
+MD033: false
+# Table pipe alignment: a formatting preference, and the docs tables are hand-compacted.
+MD060: false
+# Both `-` and `*` bullets are in use across skills and docs.
+MD004: false
+# Changelogs and ADRs repeat headings (Added / Changed / Fixed) by design.
+MD024: false
+# Admonition and tab content on the docs site is indented, which reads as an indented code block.
+MD046: false
+# Nested lists under numbered steps use 4-space indents.
+MD007: false
+# Mirrored docs pages open with a MIRRORED banner and an admonition, and changelog
+# fragments start with a list; neither begins with an H1.
+MD041: false
+# Bold run-in labels ("**Verdict: ...**") are used deliberately instead of headings.
+MD036: false
+# Inline code spans deliberately keep a trailing space (`RFC: `, `expected `): MD038
+# would strip it and change the text.
+MD038: false
+# Grid-card lists on the docs site use "-   " markers, which the site's Markdown relies on.
+MD030: false
+# Both * and _ emphasis are in use; do not churn them.
+MD049: false

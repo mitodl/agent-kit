@@ -90,7 +90,7 @@ only makes it authoritative.
 One `PackageMap` node per repo in the bridge store, keyed on the repo URI and
 overwritten on every full-repo index (merge-by-slug):
 
-```
+```text
 node PackageMap {
     slug: String @key      // canonical repo URI
     repo: String @index

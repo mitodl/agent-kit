@@ -20,6 +20,7 @@ Two independent features, each usable without the other:
    longer matches what the manifest's current source would install, not
    just whether it's present.
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Part A — inline config-level overlays
 
 ## 1. Motivation
@@ -124,7 +125,7 @@ means "relative to `config.toml`."
 
 Two distinct merges happen at two distinct stages, not one:
 
-```
+```text
 Stage 1 — combining the overlay's own two layers (resolve.resolve_overlay):
   matched [[org]]/[[scope]] overlay, if any (I3)
     → global [overlay] (I3, wins collision)
@@ -213,6 +214,7 @@ All resolved as of Part A landing:
   right after `resolve_profile`, inside the existing `try`/`except
   ManifestError` block.
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Part B — staleness detection for skills/plugin hooks
 
 ## 9. Staleness detection

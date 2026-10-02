@@ -18,7 +18,7 @@ Code locations live under `dg_projects/` as separate subdirectories, each manage
 by `dg`. Shared code (base classes, utilities, sensors used by multiple locations)
 lives in `packages/ol-orchestrate-lib/`.
 
-```
+```text
 dg_projects/
   <code_location_name>/
     pyproject.toml

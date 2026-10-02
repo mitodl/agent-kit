@@ -7,7 +7,7 @@ to fit your workflow.
 
 ## Structure
 
-```
+```text
 configs/
 ├── copilot/     # GitHub Copilot configuration samples (.vscode/settings.json, mcp.json)
 └── claude/      # Claude Code configuration samples (claude_desktop_config.json, CLAUDE.md)
