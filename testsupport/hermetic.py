@@ -100,6 +100,10 @@ _CLEARED = (
     "WITAN_CLEANUP_INTERVAL",
     "WITAN_CODE_OPTIMIZE_INTERVAL",
     "WITAN_CODE_CLEANUP_INTERVAL",
+    # The view reaper's knobs. An ambient non-number fails every survey test;
+    # an ambient `1` survey worker silently runs them serially.
+    "WITAN_CODE_VIEW_MAX_IDLE_DAYS",
+    "WITAN_CODE_VIEW_SURVEY_WORKERS",
     "AC_KIT_CONFIG",
     # Rendering and transport selectors. WITAN_OUTPUT_FORMAT is a cyclopts
     # `env_var` on both CLIs, so an ambient `json` turns every table command's

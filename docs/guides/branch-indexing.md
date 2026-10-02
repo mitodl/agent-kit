@@ -232,6 +232,8 @@ date, owner, or size. Two rules follow:
   ago — reaping it would race the indexer that just created it.
 
 The window is `WITAN_CODE_VIEW_MAX_IDLE_DAYS` (default 14; `0` disables).
+Ageing a view is one `commit list` per view, so the sweep ages
+`WITAN_CODE_VIEW_SURVEY_WORKERS` views at once (default 8; `1` is serial).
 Idleness is not abandonment: a branch parked past the window and picked back up
 loses its view, not its work, and the next index rebuilds it. Reporting is the
 default and `--apply` deletes, because the window is the one input nothing

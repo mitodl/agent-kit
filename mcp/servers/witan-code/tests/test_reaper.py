@@ -10,6 +10,8 @@ branch's own last write is recoverable from `commit list --branch` via
 identically, so it is asserted rather than mocked.
 """
 
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -108,6 +110,27 @@ def test_a_malformed_window_is_an_error_not_a_default(monkeypatch):
     monkeypatch.setenv(reaper_module.MAX_IDLE_ENV_VAR, "two weeks")
     with pytest.raises(ValueError, match="not a number of days"):
         reaper_module.max_idle_days()
+
+
+def test_survey_workers_defaults_when_unset(monkeypatch):
+    monkeypatch.delenv(reaper_module.SURVEY_WORKERS_ENV_VAR, raising=False)
+    assert reaper_module.survey_workers() == reaper_module.DEFAULT_SURVEY_WORKERS
+
+
+def test_survey_workers_reads_the_env_var(monkeypatch):
+    monkeypatch.setenv(reaper_module.SURVEY_WORKERS_ENV_VAR, "3")
+    assert reaper_module.survey_workers() == 3
+
+
+def test_survey_workers_below_one_means_one(monkeypatch):
+    monkeypatch.setenv(reaper_module.SURVEY_WORKERS_ENV_VAR, "0")
+    assert reaper_module.survey_workers() == 1
+
+
+def test_malformed_survey_workers_is_an_error_not_a_default(monkeypatch):
+    monkeypatch.setenv(reaper_module.SURVEY_WORKERS_ENV_VAR, "lots")
+    with pytest.raises(ValueError, match="not a whole number of workers"):
+        reaper_module.survey_workers()
 
 
 # ── Authority ────────────────────────────────────────────────────────────────
@@ -439,3 +462,58 @@ def test_survey_skips_protected_views_entirely():
     )
     reaper_module.survey(client, now=NOW, max_idle=14)
     assert asked == ["act-alice/x"]
+
+
+def test_survey_ages_views_concurrently():
+    """One `commit list` per view, serially, is what outgrew the CronJob's
+    600s deadline on production's 309-view bridge graph. Each call waits at a
+    barrier that opens only once `workers` calls are in flight together, so a
+    serial survey breaks the barrier instead of passing."""
+    workers = 4
+    barrier = threading.Barrier(workers)
+
+    def last_write(name):
+        barrier.wait(timeout=5)
+        return NOW
+
+    client = SimpleNamespace(
+        list_branches=lambda: [f"act-alice/v{i}" for i in range(workers)],
+        branch_last_write=last_write,
+    )
+    ages, _ = reaper_module.survey(client, now=NOW, max_idle=14, workers=workers)
+    assert len(ages) == workers
+
+
+def test_a_concurrent_survey_pairs_each_view_with_its_own_last_write():
+    """Completion order must not leak into the result: a view aged against
+    its neighbour's timestamp is reaped, or kept, on someone else's evidence.
+    Earlier views finish last here, so an order-of-completion bug shows."""
+    names = [f"act-alice/v{i}" for i in range(6)]
+    idle_days = {name: 30.0 - i for i, name in enumerate(names)}
+
+    def last_write(name):
+        time.sleep(0.01 * (len(names) - names.index(name)))
+        return NOW - idle_days[name] * DAY
+
+    client = SimpleNamespace(list_branches=lambda: names, branch_last_write=last_write)
+    ages, _ = reaper_module.survey(client, now=NOW, max_idle=14, workers=3)
+
+    assert [a.view for a in ages] == names
+    assert {a.view: a.idle_days(NOW) for a in ages} == pytest.approx(idle_days)
+
+
+def test_a_concurrent_survey_still_raises_on_a_failed_read():
+    """The CLI turns a RuntimeError from the survey into `FAILED to survey`
+    and a non-zero exit. Running the reads on a pool must not swallow it."""
+
+    def last_write(name):
+        if name == "act-alice/bad":
+            raise RuntimeError("omnigraph commit list failed")
+        return NOW
+
+    client = SimpleNamespace(
+        list_branches=lambda: ["act-alice/ok", "act-alice/bad", "act-bob/ok"],
+        branch_last_write=last_write,
+    )
+    with pytest.raises(RuntimeError, match="commit list failed"):
+        reaper_module.survey(client, now=NOW, max_idle=14, workers=3)
