@@ -108,10 +108,10 @@ def test_pi_serialized_remote_entry_is_schema_valid_and_has_no_leaked_fields():
 
 
 def test_pi_serialized_remote_entry_with_oauth_transforms_callback_port():
-    # Pi's own callbackPort means http://127.0.0.1:<port>/callback, but the
-    # manifest's canonical {clientId, callbackPort} has always meant the
-    # localhost URI Claude Code uses (a pre-registered client needs it
-    # exactly), so the port becomes a callbackUrl. No "auth": "oauth":
+    # Pi's own callbackPort means http://127.0.0.1:<port>/callback, but this
+    # adapter has always written the manifest's callbackPort as the
+    # localhost URI (a pre-registered client needs it exactly), so the port
+    # becomes a callbackUrl. No "auth": "oauth":
     # Pi and pi-mcp-adapter 5.x both skip an entry whose auth is a string.
     remote = RemoteServer(
         url="https://example.com/mcp",

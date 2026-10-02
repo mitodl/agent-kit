@@ -245,7 +245,7 @@ def serialize_mcp(server: McpServer) -> dict:
     # (docs/mcp.md "Authenticate with OAuth", and the validator in
     # dist/core/mcp-servers.js, Pi 1.0.0) differs in one way that matters:
     # Pi turns callbackPort into http://127.0.0.1:<port>/callback, while
-    # Claude Code and this adapter's earlier "redirectUri" output used
+    # this adapter's earlier "redirectUri" output used
     # http://localhost:<port>/callback. A pre-registered client needs the
     # exact URI, so the port becomes a callbackUrl that keeps localhost. A
     # manifest's own callbackUrl wins over that (and over a callbackPort
