@@ -5,6 +5,8 @@ exception escape (the hooks are documented as "always exits 0"), and must
 not print an extra trailing newline beyond what the backend already returns.
 """
 
+import pytest
+
 from witan_code import cli
 
 
@@ -62,7 +64,8 @@ def test_inject_context_cmd_defaults_to_the_claude_client(monkeypatch, capsys):
     assert seen == ["claude"]
 
 
-def test_inject_context_cmd_passes_an_explicit_pi_client_through(monkeypatch):
+@pytest.mark.parametrize("client", ["pi", "pi-builtin"])
+def test_inject_context_cmd_passes_an_explicit_pi_client_through(monkeypatch, client):
     import witan_code.context as context_module
 
     seen = []
@@ -70,7 +73,7 @@ def test_inject_context_cmd_passes_an_explicit_pi_client_through(monkeypatch):
         context_module, "inject_context", lambda client: seen.append(client) or ""
     )
 
-    command, bound, _ = cli.app.parse_args(["inject-context", "--client", "pi"])
+    command, bound, _ = cli.app.parse_args(["inject-context", "--client", client])
     command(*bound.args, **bound.kwargs)
 
-    assert seen == ["pi"]
+    assert seen == [client]

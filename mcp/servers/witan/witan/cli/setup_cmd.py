@@ -70,10 +70,11 @@ def setup(
     then covers both packages; otherwise install witan-code separately with
     ``witan-code setup`` (or the mounted ``witan code setup``).
 
-    Pi has no built-in MCP support: the witan entry written to
-    ``~/.pi/agent/mcp.json`` is read only by the pi-mcp-adapter Pi package
-    (``pi install npm:pi-mcp-adapter``). The install report warns when that
-    package is not declared in Pi's settings.
+    Pi reads the witan entry written to ``~/.pi/agent/mcp.json`` with its
+    built-in MCP support (Pi 0.99 or later), or with the pi-mcp-adapter Pi
+    package when that is installed. The install report warns when Pi's
+    settings turn the built-in off (``-builtin:mcp``) and the adapter is not
+    declared.
 
     Re-run after every upgrade to refresh installed files.
 

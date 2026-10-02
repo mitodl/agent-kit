@@ -417,10 +417,9 @@ def test_apply_project_scope_pi_writes_dot_pi_not_dot_pi_agent(tmp_path, monkeyp
 
 
 def test_apply_project_scope_pi_writes_mcp_to_dot_pi_mcp_json(tmp_path, monkeypatch):
-    """Regression: pi-mcp-adapter reads its Pi project override from
-    ``.pi/mcp.json`` (config.ts getProjectPiConfigPath). ``.pi/settings.json``
-    is Pi core's own settings file, which the adapter never reads MCP servers
-    from — a project-scoped apply must not create it."""
+    """Regression: Pi (and pi-mcp-adapter) read project MCP servers from
+    ``.pi/mcp.json``. ``.pi/settings.json`` is Pi core's own settings file,
+    which holds no MCP servers — a project-scoped apply must not create it."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.chdir(tmp_path)
 

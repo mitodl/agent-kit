@@ -108,9 +108,11 @@ def test_pi_serialized_remote_entry_is_schema_valid_and_has_no_leaked_fields():
 
 
 def test_pi_serialized_remote_entry_with_oauth_transforms_callback_port():
-    # Pi's real shape differs from the manifest's canonical
-    # {clientId, callbackPort} — a top-level "auth" discriminator, and
-    # callbackPort becomes a full localhost redirectUri.
+    # Pi's own callbackPort means http://127.0.0.1:<port>/callback, but the
+    # manifest's canonical {clientId, callbackPort} has always meant the
+    # localhost URI Claude Code uses (a pre-registered client needs it
+    # exactly), so the port becomes a callbackUrl. No "auth": "oauth":
+    # Pi and pi-mcp-adapter 5.x both skip an entry whose auth is a string.
     remote = RemoteServer(
         url="https://example.com/mcp",
         oauth={"clientId": "example-cli", "callbackPort": 8080},
@@ -120,17 +122,16 @@ def test_pi_serialized_remote_entry_with_oauth_transforms_callback_port():
     PiMcpServer.model_validate(entry)
     assert entry == {
         "url": "https://example.com/mcp",
-        "auth": "oauth",
         "oauth": {
             "clientId": "example-cli",
-            "redirectUri": "http://localhost:8080/callback",
+            "callbackUrl": "http://localhost:8080/callback",
         },
     }
 
 
 def test_pi_serialized_remote_entry_with_oauth_preserves_shared_fields():
-    # clientSecret/scope/authServerMetadataUrl are identically-named on both
-    # the manifest's canonical shape and Pi's real one — they must pass
+    # clientSecret/scope/clientName/authServerMetadataUrl are identically
+    # named on both the manifest's canonical shape and Pi's — they must pass
     # through untouched, not be dropped alongside the callbackPort rename.
     remote = RemoteServer(
         url="https://example.com/mcp",
@@ -139,6 +140,7 @@ def test_pi_serialized_remote_entry_with_oauth_preserves_shared_fields():
             "callbackPort": 8080,
             "clientSecret": "shh",
             "scope": "openid offline_access",
+            "clientName": "Claude Code",
             "authServerMetadataUrl": "https://example.com/.well-known/oauth-authorization-server",
         },
     )
@@ -147,16 +149,17 @@ def test_pi_serialized_remote_entry_with_oauth_preserves_shared_fields():
     PiMcpServer.model_validate(entry)
     assert entry["oauth"] == {
         "clientId": "example-cli",
-        "redirectUri": "http://localhost:8080/callback",
+        "callbackUrl": "http://localhost:8080/callback",
         "clientSecret": "shh",
         "scope": "openid offline_access",
+        "clientName": "Claude Code",
         "authServerMetadataUrl": "https://example.com/.well-known/oauth-authorization-server",
     }
 
 
 def test_pi_serialized_remote_entry_with_oauth_explicit_redirect_uri_wins():
-    # An explicit redirectUri (Pi's own field) must not be clobbered by one
-    # derived from callbackPort (the manifest's canonical field).
+    # A manifest written for pi-mcp-adapter 2.x's redirectUri keeps its URI,
+    # as Pi's callbackUrl, rather than one derived from callbackPort.
     remote = RemoteServer(
         url="https://example.com/mcp",
         oauth={
@@ -168,7 +171,32 @@ def test_pi_serialized_remote_entry_with_oauth_explicit_redirect_uri_wins():
     entry = pi.serialize_mcp(remote)
 
     PiMcpServer.model_validate(entry)
-    assert entry["oauth"]["redirectUri"] == "http://localhost:3118/callback"
+    assert entry["oauth"] == {
+        "clientId": "example-cli",
+        "callbackUrl": "http://localhost:3118/callback",
+    }
+
+
+def test_pi_serialized_remote_entry_with_oauth_explicit_callback_url_wins():
+    # Pi's own callbackUrl passes through, and so does a callbackPort beside
+    # it: Pi adds that port to a callbackUrl that names none.
+    remote = RemoteServer(
+        url="https://example.com/mcp",
+        oauth={
+            "clientId": "example-cli",
+            "callbackPort": 8080,
+            "callbackUrl": "http://localhost/callback",
+            "redirectUri": "http://localhost:3118/callback",
+        },
+    )
+    entry = pi.serialize_mcp(remote)
+
+    PiMcpServer.model_validate(entry)
+    assert entry["oauth"] == {
+        "clientId": "example-cli",
+        "callbackPort": 8080,
+        "callbackUrl": "http://localhost/callback",
+    }
 
 
 def test_claude_serialized_remote_entry_has_no_leaked_fields():
@@ -220,8 +248,8 @@ def test_pi_serialized_remote_entry_with_headers_is_schema_valid():
 
 def test_pi_serialized_entries_omit_empty_and_default_fields():
     # Defaults (cwd=None, env={}, args=[], headers={}) must not surface as
-    # null/empty keys: pi-mcp-adapter treats configured headers as a signal
-    # to skip its OAuth auto-detection, so an empty object is not harmless.
+    # null/empty keys: Pi only signs in with OAuth when an HTTP server sends
+    # no Authorization header, so an empty headers object is noise at best.
     stdio = pi.serialize_mcp(StdioServer(command="uvx"))
     remote = pi.serialize_mcp(RemoteServer(url="https://example.com/mcp"))
 
@@ -241,10 +269,9 @@ def test_pi_serialized_remote_entry_with_headers_and_oauth():
     assert entry == {
         "url": "https://example.com/mcp",
         "headers": {"X-Api-Key": "k"},
-        "auth": "oauth",
         "oauth": {
             "clientId": "example-cli",
-            "redirectUri": "http://localhost:8080/callback",
+            "callbackUrl": "http://localhost:8080/callback",
         },
     }
 
@@ -256,3 +283,21 @@ def test_pi_wire_model_rejects_wrongly_typed_cwd_and_headers():
         PiMcpServer.model_validate({"url": "u", "headers": {"X": 1}})
     with pytest.raises(ValidationError):
         PiMcpServer.model_validate({"url": "u", "headers": ["X: 1"]})
+
+
+def test_pi_wire_model_rejects_adapter_only_fields():
+    """Pi's validator rejects a string ``auth`` (it means
+    ``{"provider": ...}``), and the adapter-2.x-only keys are not Pi's, so
+    the model must not let a serializer drift back to either."""
+    with pytest.raises(ValidationError):
+        PiMcpServer.model_validate({"url": "https://example.com/mcp", "auth": "oauth"})
+    for field in ("lifecycle", "directTools", "idleTimeout"):
+        with pytest.raises(ValidationError):
+            PiMcpServer.model_validate({"command": "uvx", field: "lazy"})
+    with pytest.raises(ValidationError):
+        PiMcpServer.model_validate(
+            {"url": "https://example.com/mcp", "oauth": {"redirectUri": "u"}}
+        )
+    PiMcpServer.model_validate(
+        {"url": "https://example.com/mcp", "auth": {"provider": "radius"}}
+    )

@@ -14,15 +14,18 @@ so the omnigraph trackers work the same under Pi.
   installed by `witan-code setup --agent pi`) —
   - `session_start`: seeds/refreshes the whole repo's Layer-2 code graph in the background.
   - `tool_call`/`tool_result` (`edit`/`write`): incrementally re-indexes the edited file.
-  - `before_agent_start`: runs `witan-code inject-context --client pi` and
+  - `before_agent_start`: runs `witan-code inject-context --client pi-builtin`
+    (or `--client pi` when pi-mcp-adapter's `mcp` tool is registered) and
     appends its block: whether the code graph is indexed (file count,
     last-updated) or still being built, cross-repo coverage, and how to reach
-    the `code_*` tools under Pi. Pi has no `ToolSearch`, and the generated
-    pi-mcp-adapter config does not set `directTools`, so the tools sit behind
-    the adapter's `mcp` proxy under a server-prefixed name
-    (`witan-code_code_find_definition` under the default
-    `toolPrefix: "server"`). The block therefore says to search for the exact
-    name and call that:
+    the `code_*` tools under Pi. Pi has no `ToolSearch`. Its built-in MCP
+    declares no MCP tool to the model by default; a `codemode` script calls
+    them under a server-prefixed name (`mcp__witan__code_find_definition`, or
+    `mcp__witan_code__code_find_definition` for the `witan-code` server). The
+    block therefore says to search for the exact name and call that:
+    `await searchTools("code_find_definition callers impact")`, then
+    `await tools.<name the search returned>({ name: "X" })`. Under
+    pi-mcp-adapter the same steps go through its `mcp` proxy:
     `mcp({ search: "code_find_definition callers impact" })`, then
     `mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`.
   - `session_shutdown`: opportunistically compacts the current repo's store and

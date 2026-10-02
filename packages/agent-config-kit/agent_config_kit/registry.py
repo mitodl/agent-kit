@@ -74,31 +74,29 @@ def _registry() -> dict[str, AgentPlatform]:
                         path=Path.home() / ".pi" / "agent" / "mcp.json",
                         key_path=("mcpServers",),
                     ),
-                    # pi-mcp-adapter's Pi-specific project override. Verified
-                    # against the installed adapter (v2.37.0): config.ts's
-                    # getProjectPiConfigPath() resolves
-                    # <cwd>/<configDir>/mcp.json (configDir defaults to
-                    # ".pi"), and its README lists `.pi/mcp.json` as the
-                    # highest-precedence "Pi project override" layer. Pi
+                    # Pi's project MCP file (docs/mcp.md "Configure
+                    # servers"), read once the project is trusted; a
+                    # project entry replaces a user-level one of the same
+                    # name. pi-mcp-adapter 5.x reads the same path. Pi
                     # core's own `.pi/settings.json` is a different file
-                    # (packages, models, ...) that the adapter never reads
-                    # MCP servers from — writing mcpServers there was a
-                    # silent no-op.
+                    # (packages, models, ...) that holds no MCP servers —
+                    # writing mcpServers there was a silent no-op.
                     "project": ScopeTarget(
                         path=Path(".pi") / "mcp.json",
                         key_path=("mcpServers",),
                     ),
                 }
             ),
-            # Pi core has no MCP support; ~/.pi/agent/mcp.json and
-            # .pi/mcp.json are pi-mcp-adapter's own files. plan.apply surfaces
-            # this (with the preflight's result) whenever it plans MCP entries.
+            # Pi reads these files with its built-in MCP extension (Pi 0.99
+            # and later) unless settings turn it off, or with pi-mcp-adapter
+            # when that is installed. plan.apply surfaces this (with the
+            # preflight's result) whenever it plans MCP entries.
             mcp_conditional_on=(
-                "requires the third-party pi-mcp-adapter Pi package; Pi core "
-                "has no MCP support, so writing this file is a silent no-op "
-                "without it"
+                "needs Pi's built-in MCP (Pi 0.99 or later) or the "
+                "pi-mcp-adapter Pi package to load this file; without either "
+                "one, writing it is a silent no-op"
             ),
-            mcp_prerequisite_check=pi_adapter.mcp_adapter_prerequisite,
+            mcp_prerequisite_check=pi_adapter.mcp_prerequisite,
             mcp_serialize=pi_adapter.serialize_mcp,
             hooks=CapabilityScope(
                 **{
