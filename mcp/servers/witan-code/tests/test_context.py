@@ -430,8 +430,8 @@ def test_inject_context_for_pi_builtin_names_a_codemode_script(tmp_path, monkeyp
     assert "ToolSearch" not in text
     assert "mcp({" not in text
     assert "`codemode` script" in text
-    assert 'await searchTools("code_find_definition callers impact")' in text
-    assert 'await tools.<name the search returned>({ name: "X" })' in text
+    assert 'return await searchTools("code_find_definition callers impact")' in text
+    assert 'return await tools.<name the search returned>({ name: "X" })' in text
     assert "/skill:witan-code" in text
     # The status lines above the discovery line are client-neutral.
     assert "https://github.com/test/cg" in text

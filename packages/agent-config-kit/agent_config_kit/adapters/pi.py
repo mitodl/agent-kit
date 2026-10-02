@@ -20,7 +20,9 @@ docstring).
 from __future__ import annotations
 
 import re
+from fnmatch import fnmatchcase
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ..jsonio import parse_json_object
 from ..models import McpServer, RemoteServer, Scope, StdioServer
@@ -90,17 +92,55 @@ def _declares_adapter(cfg: dict) -> bool:
     return False
 
 
-def _builtin_mcp_setting(cfg: dict) -> bool | None:
-    """Whether a Pi settings object turns the built-in MCP extension on
-    (``+builtin:mcp``) or off (``-builtin:mcp``, what ``pi config`` writes,
-    and what pi-mcp-adapter writes when it is installed), or ``None`` when
-    it says nothing. The last matching entry wins. A ``!`` prefix counts as
-    off, the same way pi-mcp-adapter reads it."""
-    setting = None
+def _override_patterns(cfg: dict) -> list[str]:
+    """The ``extensions`` entries Pi treats as overrides: ``+path``
+    (force-include), ``-path`` (force-exclude) and ``!pattern`` (exclude by
+    glob). A bare entry never turns a built-in off."""
     extensions = cfg.get("extensions")
-    for entry in extensions if isinstance(extensions, list) else []:
-        if isinstance(entry, str) and entry.strip().lstrip("+!-") == BUILTIN_MCP:
-            setting = not entry.strip().startswith(("!", "-"))
+    return [
+        entry
+        for entry in (extensions if isinstance(extensions, list) else [])
+        if isinstance(entry, str) and entry.startswith(("!", "+", "-"))
+    ]
+
+
+def _names_builtin_mcp(pattern: str) -> bool:
+    """Whether an override pattern matches ``builtin:mcp``: ``+``/``-``
+    entries exactly, ``!`` entries as a glob (Pi uses minimatch, so
+    ``!builtin:*`` matches; ``fnmatchcase`` agrees on the ``*``/``?``/``[]``
+    forms that can name it, though not on ``{a,b}`` braces)."""
+    target = pattern[1:]
+    if pattern.startswith("!"):
+        return fnmatchcase(BUILTIN_MCP, target)
+    return target.removeprefix("./") == BUILTIN_MCP
+
+
+def _global_builtin_mcp_setting(cfg: dict) -> bool | None:
+    """Whether the user settings turn the built-in MCP extension on or off,
+    or ``None`` when no override names it. Mirrors Pi's
+    ``isEnabledByOverrides`` (dist/core/package-manager.js, Pi 1.0.0), where
+    order does not matter: a matching ``-`` entry beats a ``+`` entry, which
+    beats a ``!`` glob. ``-builtin:mcp`` is what ``pi config`` writes, and
+    what pi-mcp-adapter writes when it is installed."""
+    matching = {p[0] for p in _override_patterns(cfg) if _names_builtin_mcp(p)}
+    if "-" in matching:
+        return False
+    if "+" in matching:
+        return True
+    if "!" in matching:
+        return False
+    return None
+
+
+def _project_builtin_mcp_setting(cfg: dict) -> bool | None:
+    """Whether the project settings turn the built-in MCP extension on or
+    off, or ``None`` when no override names it. Mirrors Pi's
+    ``applyAutoloadDisabledPatterns`` over project overrides, where the last
+    matching entry wins and replaces the user setting."""
+    setting = None
+    for pattern in _override_patterns(cfg):
+        if _names_builtin_mcp(pattern):
+            setting = pattern.startswith("+")
     return setting
 
 
@@ -116,10 +156,11 @@ def mcp_prerequisite(scope: Scope) -> tuple[bool, str]:
     global settings file; project scope also accepts a project-local
     declaration.
 
-    Otherwise Pi's built-in MCP counts unless ``-builtin:mcp`` turns it off.
-    Built-in extensions load by default, and a project's ``+``/``-`` entry
-    overrides the user's (docs/settings.md "Resources"), so global scope
-    reads the global setting and project scope lets the project's win.
+    Otherwise Pi's built-in MCP counts unless an override such as
+    ``-builtin:mcp`` turns it off. Built-in extensions load by default, and a
+    project's matching ``+``/``-``/``!`` entry overrides the user's
+    (docs/settings.md "Resources"), so global scope reads the global setting
+    and project scope lets the project's win.
     Removing pi-mcp-adapter leaves the ``-builtin:mcp`` it added behind, so
     that case reports as missing.
 
@@ -145,8 +186,9 @@ def mcp_prerequisite(scope: Scope) -> tuple[bool, str]:
             "permissions, then confirm with `pi mcp list`."
         )
     builtin_on, decided_by = True, None
-    for path, cfg in loaded:
-        setting = _builtin_mcp_setting(cfg or {})
+    readers = [_global_builtin_mcp_setting, _project_builtin_mcp_setting]
+    for (path, cfg), read in zip(loaded, readers, strict=False):
+        setting = read(cfg or {})
         if setting is not None:
             builtin_on, decided_by = setting, path
     if builtin_on:
@@ -162,13 +204,21 @@ def mcp_prerequisite(scope: Scope) -> tuple[bool, str]:
         else ""
     )
     return False, (
-        f"Pi's built-in MCP is turned off in {decided_by} (`-{BUILTIN_MCP}`) "
-        f"and {MCP_ADAPTER_PACKAGE} was not found in {checked}, so Pi will "
-        "ignore these MCP servers. Turn the built-in back on under Built-in "
-        f"in `pi config` (or remove `-{BUILTIN_MCP}` from that file), or run "
+        f"Pi's built-in MCP is turned off in {decided_by} (an `extensions` "
+        f"entry such as `-{BUILTIN_MCP}`) and {MCP_ADAPTER_PACKAGE} was not "
+        f"found in {checked}, so Pi will ignore these MCP servers. Turn the "
+        "built-in back on under Built-in in `pi config` (or remove that "
+        "entry), or run "
         f"`{MCP_ADAPTER_INSTALL}`{local_hint}; then restart Pi and confirm "
         "with `pi mcp list`."
     )
+
+
+def _url_port(url: object) -> int | None:
+    try:
+        return urlsplit(url).port if isinstance(url, str) else None
+    except ValueError:
+        return None
 
 
 def serialize_mcp(server: McpServer) -> dict:
@@ -198,8 +248,9 @@ def serialize_mcp(server: McpServer) -> dict:
     # Claude Code and this adapter's earlier "redirectUri" output used
     # http://localhost:<port>/callback. A pre-registered client needs the
     # exact URI, so the port becomes a callbackUrl that keeps localhost. A
-    # manifest's own callbackUrl wins over that, and a redirectUri (the
-    # field pi-mcp-adapter 2.x read) is carried over as the callbackUrl.
+    # manifest's own callbackUrl wins over that (and over a callbackPort
+    # that disagrees with its port), and a redirectUri (the field
+    # pi-mcp-adapter 2.x read) is carried over as the callbackUrl.
     # Every other field (clientSecret, scope, clientName,
     # authServerMetadataUrl) is named the same in both shapes and passes
     # through untouched.
@@ -213,7 +264,11 @@ def serialize_mcp(server: McpServer) -> dict:
         oauth = dict(server.oauth)
         redirect_uri = oauth.pop("redirectUri", None)
         if "callbackUrl" in oauth:
-            pass  # explicit; Pi reads it with any callbackPort beside it
+            # Pi adds a callbackPort to a callbackUrl without a port, but
+            # rejects the pair when the URL names a different one; the URL
+            # is the Pi-specific field, so it wins.
+            if _url_port(oauth["callbackUrl"]) is not None:
+                oauth.pop("callbackPort", None)
         elif redirect_uri is not None:
             oauth.pop("callbackPort", None)
             oauth["callbackUrl"] = redirect_uri

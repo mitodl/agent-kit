@@ -118,14 +118,21 @@ def test_preflight_builtin_is_on_by_default(home, settings):
     [
         (["-builtin:mcp"], False),
         (["!builtin:mcp"], False),
+        (["!builtin:*"], False),  # `!` is a glob
+        (["!*"], False),
         (["+builtin:mcp"], True),
-        (["builtin:mcp"], True),
-        (["-builtin:mcp", "+builtin:mcp"], True),  # the last entry wins
+        (["builtin:mcp"], True),  # not an override, so the default stands
+        (["-builtin:mcp", "+builtin:mcp"], False),  # `-` beats `+` in any order
         (["+builtin:mcp", "-builtin:mcp"], False),
+        (["!builtin:*", "+builtin:mcp"], True),  # `+` beats `!`
+        (["-builtin:*", "+builtin:*"], True),  # `+`/`-` are exact, not globs
         (["-builtin:codemode", "-builtin:mcpx", 7], True),  # other entries
     ],
 )
-def test_preflight_reads_the_builtin_mcp_setting(home, extensions, satisfied):
+def test_preflight_reads_the_global_builtin_mcp_setting_like_pi(
+    home, extensions, satisfied
+):
+    """Pi's ``isEnabledByOverrides`` (dist/core/package-manager.js)."""
     _write_settings(_global_settings(home), extensions=extensions)
 
     assert mcp_prerequisite(Scope.GLOBAL)[0] is satisfied
@@ -158,6 +165,12 @@ def test_preflight_adapter_counts_even_with_builtin_off(home):
         (["+builtin:mcp"], ["-builtin:mcp"], False),
         (None, ["-builtin:mcp"], False),
         (["-builtin:mcp"], None, False),
+        (["+builtin:mcp"], ["!builtin:*"], False),
+        # In project settings the last matching override wins
+        # (Pi's ``applyAutoloadDisabledPatterns``).
+        (["-builtin:mcp"], ["-builtin:mcp", "+builtin:mcp"], True),
+        (None, ["+builtin:mcp", "!builtin:*"], False),
+        (["-builtin:mcp"], ["builtin:mcp"], False),  # bare: no override
     ],
 )
 def test_preflight_project_builtin_setting_overrides_global(

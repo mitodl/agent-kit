@@ -80,9 +80,9 @@ depends on the agent:
   `mcp__witan__code_find_definition` when witan serves the code tools, or
   `mcp__witan_code__code_find_definition`). Search for the exact name, then
   call it:
-  `await searchTools("code_find_definition callers impact")`, then
-  `await tools.<name the search returned>({ name: "X" })`.
-  `await describeTool("<name>")` shows a tool's parameters.
+  `return await searchTools("code_find_definition callers impact")`, then
+  `return await tools.<name the search returned>({ name: "X" })`.
+  `return await describeTool("<name>")` shows a tool's parameters.
 - **Pi with pi-mcp-adapter** — when the `mcp` tool is in your tool list,
   pi-mcp-adapter has replaced the built-in and puts every MCP tool behind
   that proxy, under a server-prefixed name (for example

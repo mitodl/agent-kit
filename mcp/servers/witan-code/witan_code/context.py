@@ -172,9 +172,10 @@ Client = Literal["claude", "pi", "pi-builtin"]
 # the agent search first and call whatever name the search returned.
 # `searchTools()` waits for every server to connect, so there is no connect
 # step. It ranks by BM25, so this query puts the three workhorse tools
-# first, the same job the `+code_` form does for ToolSearch.
-_PI_BUILTIN_SEARCH = '`await searchTools("code_find_definition callers impact")`'
-_PI_BUILTIN_CALL = '`await tools.<name the search returned>({ name: "X" })`'
+# first, the same job the `+code_` form does for ToolSearch. A script's
+# output is only what it returns or prints, so both templates `return`.
+_PI_BUILTIN_SEARCH = '`return await searchTools("code_find_definition callers impact")`'
+_PI_BUILTIN_CALL = '`return await tools.<name the search returned>({ name: "X" })`'
 
 # pi-mcp-adapter replaces the built-in when installed. Under its default config (no
 # `directTools`, which `witan-code setup --agent pi` does not set) every MCP

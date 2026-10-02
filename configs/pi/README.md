@@ -23,8 +23,8 @@ so the omnigraph trackers work the same under Pi.
     them under a server-prefixed name (`mcp__witan__code_find_definition`, or
     `mcp__witan_code__code_find_definition` for the `witan-code` server). The
     block therefore says to search for the exact name and call that:
-    `await searchTools("code_find_definition callers impact")`, then
-    `await tools.<name the search returned>({ name: "X" })`. Under
+    `return await searchTools("code_find_definition callers impact")`, then
+    `return await tools.<name the search returned>({ name: "X" })`. Under
     pi-mcp-adapter the same steps go through its `mcp` proxy:
     `mcp({ search: "code_find_definition callers impact" })`, then
     `mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`.

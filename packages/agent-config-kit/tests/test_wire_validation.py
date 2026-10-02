@@ -199,6 +199,26 @@ def test_pi_serialized_remote_entry_with_oauth_explicit_callback_url_wins():
     }
 
 
+def test_pi_serialized_remote_entry_drops_callback_port_beside_a_ported_url():
+    # Pi and pi-mcp-adapter 5.x both reject a callbackUrl whose port differs
+    # from callbackPort, so a callbackUrl that names a port wins outright.
+    remote = RemoteServer(
+        url="https://example.com/mcp",
+        oauth={
+            "clientId": "example-cli",
+            "callbackPort": 8080,
+            "callbackUrl": "http://localhost:3118/callback",
+        },
+    )
+    entry = pi.serialize_mcp(remote)
+
+    PiMcpServer.model_validate(entry)
+    assert entry["oauth"] == {
+        "clientId": "example-cli",
+        "callbackUrl": "http://localhost:3118/callback",
+    }
+
+
 def test_claude_serialized_remote_entry_has_no_leaked_fields():
     # No published schema covers ~/.claude.json's MCP servers (see spec's open
     # questions) so there's no vendored model to validate against — only
