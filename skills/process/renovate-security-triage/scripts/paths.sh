@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
 # Shared default file locations for the renovate-security-triage pipeline.
 # Sourced by every script here; not executable on its own.
 #

@@ -1,0 +1,5 @@
+# Follow the `# shellcheck source=` directives in the scripts, resolved relative
+# to each script, instead of reporting SC1091 (not following) and SC2154
+# (variable set in a sourced file).
+external-sources=true
+source-path=SCRIPTDIR
