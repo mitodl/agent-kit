@@ -120,6 +120,11 @@ def test_preflight_builtin_is_on_by_default(home, settings):
         (["!builtin:mcp"], False),
         (["!builtin:*"], False),  # `!` is a glob
         (["!*"], False),
+        (["!builtin:{mcp,codemode}"], False),  # minimatch expands braces
+        (["!builtin:{codemode,tool-search}"], True),
+        (["!builtin:{m,x}cp"], False),
+        (["!{builtin:{mcp,x},y}"], False),  # nested groups
+        (["!builtin:{mcp}"], True),  # a group without a comma stays literal
         (["+builtin:mcp"], True),
         (["builtin:mcp"], True),  # not an override, so the default stands
         (["-builtin:mcp", "+builtin:mcp"], False),  # `-` beats `+` in any order
@@ -210,6 +215,7 @@ def test_preflight_adapter_counts_even_with_builtin_off(home):
         # (Pi's ``applyAutoloadDisabledPatterns``).
         (["-builtin:mcp"], ["-builtin:mcp", "+builtin:mcp"], True),
         (None, ["+builtin:mcp", "!builtin:*"], False),
+        (["+builtin:mcp"], ["!builtin:{mcp,codemode}"], False),
         (["-builtin:mcp"], ["builtin:mcp"], False),  # bare: no override
     ],
 )

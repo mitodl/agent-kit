@@ -105,14 +105,34 @@ def _override_patterns(cfg: dict) -> list[str]:
     ]
 
 
+_BRACE_GROUP = re.compile(r"\{([^{}]*,[^{}]*)\}")
+
+
+def _expand_braces(pattern: str) -> list[str]:
+    """``a{b,c}d`` -> ``["abd", "acd"]``, innermost group first, the way
+    minimatch expands a comma-separated group before matching. A group
+    without a comma stays literal, as in minimatch; numeric/letter ranges
+    (``{1..3}``) are not expanded, since none can name ``builtin:mcp``."""
+    match = _BRACE_GROUP.search(pattern)
+    if match is None:
+        return [pattern]
+    head, tail = pattern[: match.start()], pattern[match.end() :]
+    return [
+        expanded
+        for alternative in match.group(1).split(",")
+        for expanded in _expand_braces(head + alternative + tail)
+    ]
+
+
 def _names_builtin_mcp(pattern: str) -> bool:
     """Whether an override pattern matches ``builtin:mcp``: ``+``/``-``
-    entries exactly, ``!`` entries as a glob (Pi uses minimatch, so
-    ``!builtin:*`` matches; ``fnmatchcase`` agrees on the ``*``/``?``/``[]``
-    forms that can name it, though not on ``{a,b}`` braces)."""
+    entries exactly, ``!`` entries as a glob. Pi matches those with
+    minimatch, so ``!builtin:*`` and ``!builtin:{mcp,codemode}`` both match;
+    brace groups are expanded here, then ``fnmatchcase`` agrees with
+    minimatch on the ``*``/``?``/``[]`` forms that can name it."""
     target = pattern[1:]
     if pattern.startswith("!"):
-        return fnmatchcase(BUILTIN_MCP, target)
+        return any(fnmatchcase(BUILTIN_MCP, glob) for glob in _expand_braces(target))
     return target.removeprefix("./") == BUILTIN_MCP
 
 
