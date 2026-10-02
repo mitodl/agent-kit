@@ -8,6 +8,32 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.24.0] - 2026-10-02
+
+### Added
+
+- `witan-code setup --force` replaces a symlink or non-directory occupying an install destination (e.g. a stale symlink under `~/.pi/agent/extensions`). Without it, `witan-code setup` now exits 2 with the conflicting path instead of a `FileNotFoundError` traceback.
+
+- `witan-code inject-context --client pi-builtin` renders the code-tool
+  discovery line for Pi's built-in MCP: a `codemode` script that finds the
+  `mcp__<server>__code_*` name with `searchTools()` and calls it as
+  `tools.<name>()`. The Pi extension passes it unless pi-mcp-adapter's `mcp`
+  tool is registered, in which case it still passes `--client pi`, whose
+  output is unchanged.
+
+### Changed
+
+- The `witan-code` skill describes calling the `code_*` tools under Pi's
+  built-in MCP as well as under pi-mcp-adapter, and `witan-code setup --agent
+  pi` no longer warns that pi-mcp-adapter is missing when Pi's built-in MCP
+  will read the witan-code entry.
+- Requires `agent-config-kit>=0.12`, which has that check; with an older one,
+  `witan-code setup --agent pi` still printed the pi-mcp-adapter warning.
+
+### Fixed
+
+- `witan-code checkpoint`'s background `optimize` now also runs `cleanup --older-than 30d` at most once per `WITAN_CODE_CLEANUP_INTERVAL` (default weekly; `0` disables). On omnigraph 0.11 `optimize` no longer reclaims the storage of branches deleted by `branches --prune` or `reap-views --apply`, and nothing ran `cleanup` unless done by hand. `witan-code optimize` gains `--cleanup-older-than` to run both in one process.
+
 ## [0.23.0] - 2026-09-28
 
 ### Added
