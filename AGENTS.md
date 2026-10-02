@@ -47,10 +47,11 @@ cd mcp/servers/witan && uv sync
 cd mcp/servers/witan-code && uv sync
 ```
 
-Install pre-commit hooks (uses `prek`):
+Install the git hooks (`prek`, pinned in the root `pyproject.toml` and locked in `uv.lock`):
 
 ```bash
-prek install
+uv sync                 # installs the pinned prek
+uv run prek install -f  # -f replaces a pre-commit git hook if one is installed
 ```
 
 ## Key Commands
@@ -62,11 +63,15 @@ prek install
 | `agent-kit apply agent-config.toml --profile <name>` | Install just one profile's skills (+ `universal`) |
 | `agent-kit validate agent-config.toml` | Check for drift between the manifest and on-disk config |
 | `agent-kit profiles agent-config.toml` | List profiles and their resolved entry counts |
-| `prek run --all-files` | Run all pre-commit checks |
+| `uv run prek run --all-files` | Run all hooks (`prek.toml`), as CI's `prek` check does |
 | `just test-all` (alias `just test`) | Run every workspace package's tests, each isolated, all in parallel |
 | `just test-witan-core` / `test-witan-council` / `test-witan-code` / `test-agent-config-kit` / `test-ol-agent-kit` | Run one package's tests in isolation (`*args` forwards to pytest, e.g. `just test-witan-council -k merge`) |
 
-CI runs on push/PR: skill ZIP packaging (on tags) and per-package tests.
+CI runs on push/PR: skill ZIP packaging (on tags), per-package tests, and the `autofix.ci` workflow
+(`.github/workflows/autofix.yml`), whose `prek` job is the `prek` check. It runs every hook twice:
+a fixing pass, then a pass that must converge. If a hook only needs to rewrite files, `autofix-ci[bot]`
+pushes one commit to the PR and the check re-runs; a fix under `.github/` is refused, so run prek locally
+for those. The workflow trusts its own copy in the PR, so review any `autofix.yml` diff as a change to the gate.
 
 ## Adding a Skill
 

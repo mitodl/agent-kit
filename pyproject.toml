@@ -31,6 +31,15 @@ src = [
     "mcp/servers/witan-code",
 ]
 
+# prek runs the repo's hooks (prek.toml) locally and in CI. It is pinned here,
+# the single place both read it from: `uv sync --frozen --only-group prek` in
+# .github/workflows/autofix.yml installs just this group, hash-checked against
+# uv.lock. The root is virtual, so `dev` only exists to pull the group in for a
+# plain `uv sync` / `uv run prek`.
+[dependency-groups]
+prek = ["prek==0.5.3"]
+dev = [{ include-group = "prek" }]
+
 [tool.uv.workspace]
 members = [
     "packages/agent-config-kit",
