@@ -131,7 +131,7 @@ hooks = [{ id = "markdownlint", priority = 10, exclude = "^docs/reference/" }]
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.16.7"
+rev = "v0.16.8"
 
 [[repos.hooks]]
 id = "ruff-format"
