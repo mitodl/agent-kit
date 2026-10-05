@@ -11,6 +11,16 @@
 			"description": "The custom manager below rewrites only the omnigraph VERSION lines. It leaves the release tag and asset digests on the old release, so CI tests the old binary under the new label (agent-kit#342). A release can also move the storage format, which means rebuilding every deployed graph (0.11.0 moved it from 6 to 9). A bump always needs a human to move the tag, the digests and all three _OMNIGRAPH_INTERNAL_SCHEMA declarations (witan-core's plus the OMNIGRAPH_INTERNAL_SCHEMA build arg in each Dockerfile, which the images advertise as a label), and to plan any rebuild.",
 			"matchDepNames": ["ModernRelay/omnigraph"],
 			"automerge": false
+		},
+		{
+			"description": "The test workflows pin `uvx ruff@X` to the ruff-pre-commit rev in prek.toml so CI lint and the hook run the same ruff. They are two dependencies from two datasources, so without a group they arrive as separate PRs and merging one alone reopens the gap.",
+			"matchDepNames": ["ruff", "astral-sh/ruff-pre-commit"],
+			"groupName": "ruff"
+		},
+		{
+			"description": "`just bump` parses bump-my-version's human-readable `show-bump` output, and scriv's output becomes CHANGELOG.md text verbatim. Both run only at release time and no CI job exercises them, so a green PR says nothing about whether the bump is safe. A human compares `show-bump --ascii` and a `scriv collect` before merging.",
+			"matchDepNames": ["bump-my-version", "scriv"],
+			"automerge": false
 		}
 	],
 	"customManagers": [
@@ -28,6 +38,23 @@
 			],
 			"datasourceTemplate": "github-releases",
 			"depNameTemplate": "ModernRelay/omnigraph"
+		},
+		{
+			"customType": "regex",
+			"description": "PyPI tools run through `uvx <tool>@<version>` (or `pip install \"<tool>==<version>\"` on Read the Docs) instead of being workspace dependencies, so uv.lock never sees them and no built-in manager does either. Each tool is pinned in several files that must agree: ruff across the per-package test workflows, zensical across the justfile, docs.yml and .readthedocs.yaml, bump-my-version and scriv across the justfile and the docs that quote the command. One manager over all of them puts every occurrence of a tool in the same PR. The three patterns are the three spellings in use: a literal `uvx tool@X`, the justfile's `*_TOOL=\"tool@X\"` variables, and the Read the Docs `pip install`.",
+			"managerFilePatterns": [
+				"/^justfile$/",
+				"/^\\.github/workflows/[^/]+\\.ya?ml$/",
+				"/^\\.readthedocs\\.yaml$/",
+				"/^AGENTS\\.md$/",
+				"/(^|/)changelog\\.d/README\\.md$/"
+			],
+			"matchStrings": [
+				"uvx (?<depName>[a-z][a-z0-9-]*)@(?<currentValue>\\d+(?:\\.\\d+)+)",
+				"_TOOL=\"(?<depName>[a-z][a-z0-9-]*)@(?<currentValue>\\d+(?:\\.\\d+)+)\"",
+				"pip install \"(?<depName>[a-z][a-z0-9-]*)==(?<currentValue>[^\"]+)\""
+			],
+			"datasourceTemplate": "pypi"
 		}
 	]
 }
