@@ -27,7 +27,7 @@ ARG NODE_VERSION=24
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
 # version is an outage. Renovate covers all three; `just check-omnigraph-pins`
 # is the CI backstop.
-ARG OMNIGRAPH_VERSION=0.11.0
+ARG OMNIGRAPH_VERSION=0.12.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
