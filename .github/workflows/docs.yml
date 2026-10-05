@@ -112,7 +112,7 @@ jobs:
         # its summary would otherwise pass the digit test by saying nothing.
         run: |
           set -o pipefail
-          uvx zensical@0.0.56 build 2>&1 | tee build.log
+          uvx zensical@0.0.67 build 2>&1 | tee build.log
           if grep -qE '[0-9]+ issues? found' build.log; then
             echo "::error::Zensical reported unresolved links or anchors."
             grep -B2 -A4 'Warning:' build.log | head -60

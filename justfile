@@ -274,7 +274,7 @@ changelog package:
 bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
-    BUMP_TOOL="bump-my-version@1.4.1"   # keep in step with AGENTS.md
+    BUMP_TOOL="bump-my-version@1.5.1"   # keep in step with AGENTS.md
     SCRIV_TOOL="scriv@1.8.0"            # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
@@ -403,9 +403,9 @@ docs-check:
 # one CI checks and Read the Docs publishes — which is the exact drift the CI
 # pin exists to prevent. Renovate bumps all three together.
 docs-build:
-    uvx zensical@0.0.56 build
+    uvx zensical@0.0.67 build
     ./bin/gen_llms.py
 
 # Serve the docs locally with incremental rebuilds.
 docs-serve:
-    uvx zensical@0.0.56 serve
+    uvx zensical@0.0.67 serve

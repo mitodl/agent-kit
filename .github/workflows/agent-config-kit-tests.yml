@@ -48,7 +48,7 @@ jobs:
       - name: Lint (ruff check)
         # Pinned to match the ruff-pre-commit rev in prek.toml so CI and
         # local hooks enforce the same rules.
-        run: uvx ruff@0.15.15 check .
+        run: uvx ruff@0.16.8 check .
 
       - name: Lint (ruff format)
-        run: uvx ruff@0.15.15 format --check .
+        run: uvx ruff@0.16.8 format --check .
