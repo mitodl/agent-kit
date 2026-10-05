@@ -37,7 +37,7 @@ src = [
 # uv.lock. The root is virtual, so `dev` only exists to pull the group in for a
 # plain `uv sync` / `uv run prek`.
 [dependency-groups]
-prek = ["prek==0.5.3"]
+prek = ["prek==0.5.5"]
 dev = [{ include-group = "prek" }]
 
 [tool.uv.workspace]
