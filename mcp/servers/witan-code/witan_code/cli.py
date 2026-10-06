@@ -841,6 +841,7 @@ def reap_views(
         return
     try:
         idle = reaper_module.max_idle_days() if max_idle_days is None else max_idle_days
+        workers = reaper_module.survey_workers()
     except ValueError as exc:
         print(exc)
         raise SystemExit(1) from None
@@ -865,9 +866,18 @@ def reap_views(
 
     failed_graphs = 0
     for name, client in targets:
+        # Before the survey, not after: the report only prints once a graph is
+        # done, so a job killed mid-survey otherwise leaves no trace of which
+        # graph it was on.
+        print(f"{name}: surveying views", flush=True)
         try:
             report = reaper_module.reap(
-                client, graph=name, max_idle=idle, apply=apply, cfg=cfg
+                client,
+                graph=name,
+                max_idle=idle,
+                apply=apply,
+                cfg=cfg,
+                workers=workers,
             )
         except PermissionError as exc:
             print(exc)
