@@ -2,6 +2,8 @@
 
 import subprocess
 
+import pytest
+
 from .conftest import SCHEMA, requires_omnigraph
 
 # ── throttle logic (no omnigraph needed) ─────────────────────────────────────
@@ -200,6 +202,59 @@ def test_cli_optimize_and_cleanup(tmp_path, monkeypatch):
     printed.clear()
     cli_maint.cleanup(store=str(store), keep=3, yes=True)
     assert any("Cleaned up" in p for p in printed)
+
+
+def test_cli_cleanup_with_no_bound_keeps_the_hooks_window(tmp_path, monkeypatch):
+    """From omnigraph 0.12 `--keep` counts graph commits, so a default of
+    `--keep 10` would cut a store to its last ten writes. No bound means the
+    age window the Stop hook already uses."""
+    from witan import maintenance
+    from witan.cli import maintenance as cli_maint
+
+    store = tmp_path / "s.omni"
+    store.mkdir()
+    printed = []
+    calls = []
+
+    class _Client:
+        def cleanup(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(
+        cli_maint.console, "print", lambda *a, **k: printed.append(str(a[0]))
+    )
+    monkeypatch.setattr(cli_maint, "_client", lambda _uri: _Client())
+
+    cli_maint.cleanup(store=str(store))
+    assert f"newer than {maintenance.CLEANUP_OLDER_THAN}" in printed[-1]
+    assert calls == []
+
+    cli_maint.cleanup(store=str(store), yes=True)
+    cli_maint.cleanup(store=str(store), keep=3, yes=True)
+    assert calls == [
+        {"keep": None, "older_than": maintenance.CLEANUP_OLDER_THAN},
+        {"keep": 3, "older_than": None},
+    ]
+
+
+@pytest.mark.parametrize("command", ["optimize", "cleanup"])
+def test_cli_maintenance_refuses_a_deployed_graph(monkeypatch, command):
+    """Both are direct-storage commands, and from omnigraph 0.12 the server's
+    `serve` lock refuses them anyway. Say so instead of running the CLI into
+    its own error."""
+    from witan.cli import maintenance as cli_maint
+
+    printed = []
+    monkeypatch.setattr(
+        cli_maint.console, "print", lambda *a, **k: printed.append(str(a[0]))
+    )
+    monkeypatch.setattr(
+        cli_maint, "_client", lambda _uri: pytest.fail("must not build a client")
+    )
+
+    getattr(cli_maint, command)(store="https://omnigraph.test")
+
+    assert "serve" in printed[-1] and "Nothing to do" in printed[-1]
 
 
 @requires_omnigraph

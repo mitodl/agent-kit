@@ -231,6 +231,37 @@ def test_cli_optimize_and_cleanup(tmp_path, capsys):
     assert "Cleaned up" in capsys.readouterr().out
 
 
+def test_cli_cleanup_with_no_bound_keeps_the_hooks_window(
+    tmp_path, capsys, monkeypatch
+):
+    """From omnigraph 0.12 `--keep` counts graph commits, so a default of
+    `--keep 10` would cut a store to its last ten writes. No bound means the
+    age window the Stop hook already uses."""
+    from witan_code import cli as cli_module
+    from witan_code import maintenance
+
+    store = tmp_path / "s.omni"
+    store.mkdir()
+    calls = []
+
+    class _Client:
+        def cleanup(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_maintenance_client", lambda _ref: _Client())
+
+    cli_module.cleanup(store=str(store))
+    assert f"newer than {maintenance.CLEANUP_OLDER_THAN}" in capsys.readouterr().out
+    assert calls == []
+
+    cli_module.cleanup(store=str(store), yes=True)
+    cli_module.cleanup(store=str(store), keep=3, yes=True)
+    assert calls == [
+        {"keep": None, "older_than": maintenance.CLEANUP_OLDER_THAN},
+        {"keep": 3, "older_than": None},
+    ]
+
+
 @requires_omnigraph
 def test_cli_optimize_then_cleanup(tmp_path, capsys):
     from witan_code import cli as cli_module

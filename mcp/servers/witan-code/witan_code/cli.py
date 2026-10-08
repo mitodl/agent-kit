@@ -680,7 +680,10 @@ def _resolve_store(store: str | None, *, bridge: bool = False):
     if ref.is_remote:
         print(
             f"{ref} is a shared cluster graph — compaction runs server-side "
-            "against the storage root, not from a client. Nothing to do here."
+            "against the storage root, not from a client. From omnigraph 0.12 "
+            "it is also refused while the server holds the cluster's `serve` "
+            "lock, so the data tier's maintenance job runs it in a stop "
+            "window. Nothing to do here."
         )
         return None
     if not ref.exists():
@@ -744,17 +747,20 @@ def cleanup(
     *,
     store: str | None = None,
     bridge: bool = False,
-    keep: int = 10,
+    keep: int | None = None,
     older_than: str | None = None,
     yes: bool = False,
 ) -> None:
     """Remove old Lance versions from a code-graph store (**destructive**).
 
     ``optimize`` compacts fragments but leaves old versions behind; this GCs
-    them, keeping the most recent ``keep`` versions per table (and/or those
-    newer than ``older_than``). From omnigraph 0.11 it is also the only thing
-    that reclaims the storage of deleted branches (``branches --prune``,
+    the ones no retained graph commit pins. A commit is retained when either
+    bound keeps it. From omnigraph 0.11 it is also the only thing that
+    reclaims the storage of deleted branches (``branches --prune``,
     ``reap-views --apply``). Irreversible, so it requires ``--yes``.
+
+    With neither bound given it keeps the last 30 days, the same policy the
+    Stop hook and the deployed maintenance job use.
 
     Parameters
     ----------
@@ -763,24 +769,36 @@ def cleanup(
     bridge
         Clean the shared cross-repo bridge store instead.
     keep
-        Number of recent versions to keep per table.
+        Keep the newest N graph commits of every live branch, whatever
+        their age. (omnigraph 0.11 counted versions per table instead.)
     older_than
-        Also keep versions newer than this Go-style duration (e.g. 7d).
+        Keep every graph commit newer than this Go-style duration (e.g. 7d).
     yes
         Confirm the destructive operation (required to actually run).
     """
+    from . import maintenance
+
     ref = _resolve_store(store, bridge=bridge)
     if ref is None:
         return
+    if keep is None and older_than is None:
+        older_than = maintenance.CLEANUP_OLDER_THAN
+    kept = []
+    if keep is not None:
+        kept.append(
+            f"the {keep} newest graph commit(s) of every live branch "
+            "(version(s) per table on omnigraph 0.11)"
+        )
+    if older_than is not None:
+        kept.append(f"every graph commit newer than {older_than}")
+    policy = " and ".join(kept)
     if not yes:
         print(
-            f"cleanup is destructive — would keep the {keep} most recent "
-            f"version(s) per table"
-            + (f" and anything newer than {older_than}" if older_than else "")
-            + f" in {ref}.\nRe-run with --yes to proceed."
+            f"cleanup is destructive — would keep {policy} in {ref}.\n"
+            "Re-run with --yes to proceed."
         )
         return
-    print(f"Cleaning up {ref} (keep={keep}) …")
+    print(f"Cleaning up {ref} (keeping {policy}) …")
     _maintenance_client(ref).cleanup(keep=keep, older_than=older_than)
     print("Cleaned up.")
 

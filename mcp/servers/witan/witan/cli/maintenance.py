@@ -12,10 +12,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import config as cfg_module
+from .. import maintenance
 from ..graph import OmnigraphClient
 from ._common import app, console
 
-_REMOTE_PREFIXES = ("http://", "https://", "s3://")
+_SERVER_PREFIXES = ("http://", "https://")
+_REMOTE_PREFIXES = (*_SERVER_PREFIXES, "s3://")
 
 
 def _resolve_store(store: str | None) -> str | None:
@@ -27,6 +29,15 @@ def _resolve_store(store: str | None) -> str | None:
     """
     cfg = cfg_module.load()
     graph_uri = store or cfg.graph_uri
+    if graph_uri.startswith(_SERVER_PREFIXES):
+        console.print(
+            f"{graph_uri} is a deployed graph. `optimize` and `cleanup` are "
+            "direct-storage commands (omnigraph rejects `--server` for them), "
+            "and from omnigraph 0.12 they are refused while the server holds "
+            "the cluster's `serve` lock. The data tier's maintenance job runs "
+            "them against the storage root in a stop window. Nothing to do here."
+        )
+        return None
     if not graph_uri.startswith(_REMOTE_PREFIXES):
         graph_uri = str(Path(graph_uri).expanduser())
         if not Path(graph_uri).exists():
@@ -89,40 +100,53 @@ def optimize(
 def cleanup(
     *,
     store: str | None = None,
-    keep: int = 10,
+    keep: int | None = None,
     older_than: str | None = None,
     yes: bool = False,
 ) -> None:
     """Remove old Lance versions to reclaim disk (**destructive**).
 
     ``optimize`` compacts fragments but leaves old versions behind; this GCs
-    them, keeping the most recent ``keep`` versions per table (and/or those
-    newer than ``older_than``). From omnigraph 0.11 it is also the only thing
-    that reclaims the storage of deleted branches. Irreversible, so it requires
+    the ones no retained graph commit pins. A commit is retained when either
+    bound keeps it. From omnigraph 0.11 it is also the only thing that
+    reclaims the storage of deleted branches. Irreversible, so it requires
     ``--yes``.
+
+    With neither bound given it keeps the last 30 days, the same policy the
+    Stop hook and the deployed maintenance job use.
 
     Parameters
     ----------
     store
         Store URI to clean (default: the configured graph store).
     keep
-        Number of recent versions to keep per table.
+        Keep the newest N graph commits of every live branch, whatever
+        their age. (omnigraph 0.11 counted versions per table instead.)
     older_than
-        Also keep versions newer than this Go-style duration (e.g. 7d).
+        Keep every graph commit newer than this Go-style duration (e.g. 7d).
     yes
         Confirm the destructive operation (required to actually run).
     """
     graph_uri = _resolve_store(store)
     if graph_uri is None:
         return
+    if keep is None and older_than is None:
+        older_than = maintenance.CLEANUP_OLDER_THAN
+    kept = []
+    if keep is not None:
+        kept.append(
+            f"the {keep} newest graph commit(s) of every live branch "
+            "(version(s) per table on omnigraph 0.11)"
+        )
+    if older_than is not None:
+        kept.append(f"every graph commit newer than {older_than}")
+    policy = " and ".join(kept)
     if not yes:
         console.print(
-            f"[yellow]cleanup is destructive[/yellow] — would keep the {keep} most "
-            f"recent version(s) per table"
-            + (f" and anything newer than {older_than}" if older_than else "")
-            + f" in {graph_uri}.\nRe-run with [bold]--yes[/bold] to proceed."
+            f"[yellow]cleanup is destructive[/yellow] — would keep {policy} "
+            f"in {graph_uri}.\nRe-run with [bold]--yes[/bold] to proceed."
         )
         return
-    console.print(f"[dim]Cleaning up {graph_uri} (keep={keep}) …[/dim]")
+    console.print(f"[dim]Cleaning up {graph_uri} (keeping {policy}) …[/dim]")
     _client(graph_uri).cleanup(keep=keep, older_than=older_than)
     console.print("[green]Cleaned up.[/green]")

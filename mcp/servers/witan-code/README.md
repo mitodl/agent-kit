@@ -551,7 +551,9 @@ graph):
   instead.
 - `cleanup [--store PATH] [--bridge] [--keep N] [--older-than DUR] --yes` —
   reclaim disk by GC'ing old Lance versions (**destructive**; requires
-  `--yes`).
+  `--yes`). `--keep N` retains the newest N graph commits of every live
+  branch (omnigraph 0.12+; versions per table on 0.11); with neither bound it
+  keeps the last 30 days.
 - `checkpoint` — opportunistically compact the current repo's store and the
   bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
   not usually run by hand.
