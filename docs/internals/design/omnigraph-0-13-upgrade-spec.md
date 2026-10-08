@@ -136,8 +136,34 @@ force-unlocks first takes one Kubernetes Lease (`coordination.k8s.io`,
 entrypoint takes it before the pod check, renews it through the apply, and
 lets it expire shortly after `exec`, by which time the server holds its
 `serve` lock. If another holder has it, the entrypoint exits 1. The
-maintenance job holds and renews it for its whole window. Each ServiceAccount
-that unlocks gets `get`/`create`/`update` on that one Lease, and the server's
+maintenance job holds and renews it for its whole window.
+
+The Lease excludes other holders only while it is valid. During an API
+partition it can expire while its holder is still writing, and a second
+process can then take it. So every holder fails closed:
+
+- Renew well inside `leaseDurationSeconds`. Treat ownership as lost as soon as
+  no renewal has succeeded within a renew deadline shorter than the duration.
+  Having taken the Lease once is not evidence of still holding it.
+- Before each `force-unlock`, confirm that the Lease still names this holder
+  (`holderIdentity`) and that the last successful renewal leaves more than the
+  unlock's own runtime before expiry. If either check fails, do not unlock.
+- When ownership is lost, stop before the Lease can expire: TERM the running
+  child (apply, optimize, cleanup), wait for it to exit, then exit 1 without
+  unlocking, restoring replicas or releasing anything. The duration minus the
+  renew deadline must be longer than the slowest child shutdown, so the
+  child's I/O is terminal before anyone else can take the Lease.
+
+A lock left behind this way blocks the next unlocker in the normal way:
+D3's boot exits 1 on `graph_operation` and on an outstanding `deployment`,
+and the runbook clears it. That is the intended fail-closed state.
+
+RBAC cannot restrict top-level `create` by `resourceNames`, so a `create`
+grant would cover every Lease in the namespace. Pulumi therefore pre-creates
+the `omnigraph-unlock` Lease with no holder and ignores later changes to its
+`spec`, so an update does not reset a live holder. Each ServiceAccount that
+unlocks gets only `get`/`update` on that named Lease. It takes the Lease with
+an `update` carrying the `resourceVersion` it read. The server's
 ServiceAccount also gets `list` on pods.
 
 A `replicas: 1` StatefulSet would give the same ordering without the API call,
@@ -161,9 +187,14 @@ render group membership (render_groups.py, unchanged)
 cluster plan --config $dir --json -> exit 1 if it removes a graph not in
                                      the allow-list (D4)
 cluster apply --config $dir --as <admin actor> --json
-if locked and lock_operation == deployment: force-unlock that lock_id
+status := cluster status --config $dir --json   # re-read: apply left a new lock
+if locked and lock_operation == deployment: force-unlock <status.lock_id>
 exec omnigraph-server "$@"
 ```
+
+Every `force-unlock` in this sequence runs only after re-confirming the Lease,
+under the fail-closed rules above. If the last one is skipped, the next boot
+finds a `deployment` lock with no outstanding deployment and releases it.
 
 Because the Lease and the pod check come first, the `deployment` branch can
 only meet a lock whose owner has exited: an earlier boot of this Deployment that crashed
@@ -247,31 +278,36 @@ the same admission. There are no HTTP maintenance routes. The nightly
 They are replaced by one CronJob (`concurrencyPolicy: Forbid`) that owns a
 stop window:
 
-1. Skip the run, successfully, if a migration is armed or the Deployment is
-   already at 0 replicas. Otherwise record the current replica count.
-2. Take the `omnigraph-unlock` Lease (D3) and hold it, renewing, until step 5.
+1. Skip the run, successfully, if a migration is armed (the Deployment
+   carries `ol.mit.edu/migration-armed`) or the Deployment is already at 0
+   replicas. Otherwise record the current replica count.
+2. Take the `omnigraph-unlock` Lease (D3) and hold it, renewing, until step 5,
+   under D3's fail-closed rules.
 3. Scale `omnigraph-server` to 0 and wait until no live pod matches its
    selector (D3's rule), then unlock the `serve` lock.
 4. For each graph: `optimize`, then force-unlock the `graph_operation` lock it
    left. On the cleanup day, also run `cleanup` with the existing retention
    and unlock after it. The job unlocks only lock ids it created (the CLI
    prints `lock_id=` on stderr), and only after the child command has exited.
-5. Restore the recorded replica count, then release the Lease.
+5. Restore the recorded replica count only if no migration was armed in the
+   meantime (see the failure modes below), then release the Lease.
 
 Shutdown has to restore service too. The container runs `/bin/sh -c` as PID
 1, which ignores SIGTERM unless it traps it, and a trapping shell still waits
 for the running child before acting. So:
 
 - run each child in the background and `wait` for it;
-- trap TERM and EXIT: forward TERM to the child, wait for it, unlock its lock,
-  restore the replica count, release the Lease;
+- trap TERM and EXIT: forward TERM to the child, wait for it, unlock its lock
+  (if the Lease is still confirmed), run step 5's conditional restore, release
+  the Lease;
 - wrap each child in `timeout`, and set `activeDeadlineSeconds` below the
   window, so the deadline is reached by the trap and not by a SIGKILL;
 - set the pod's termination grace above one child's shutdown time.
 
 The job runs as its own ServiceAccount: an IRSA role for S3 and a namespaced
-Role limited to `get`/`patch` on `deployments/scale` for `omnigraph-server`,
-`list`/`watch` on its pods, and the Lease. Today the maintenance CronJobs reuse the
+Role limited to `get` on the `omnigraph-server` Deployment, `get`/`update` on
+its `deployments/scale`, `list`/`watch` on its pods, and `get`/`update` on the
+named Lease. Today the maintenance CronJobs reuse the
 server's `omnigraph-server` ServiceAccount (`maintenance.py`). Binding the
 scale Role there would let the server scale its own Deployment, which is the
 hidden privilege `maintenance.py` warns against.
@@ -281,15 +317,26 @@ Failure modes:
 - If the job pod dies hard (OOM, lost node), no trap runs and the Deployment
   stays at 0 with a `graph_operation` lock left behind. The Lease expires on
   its own. The council probe's first run after the window fails, and that is
-  the alert. Also alert when the Deployment has 0 available replicas outside
+  the alert. Losing the Lease mid-window (D3's fail-closed rules) ends the
+  same way, except the child has exited cleanly first. Also alert when the Deployment has 0 available replicas outside
   the window. The runbook clears the lock and scales back up.
 - If Pulumi scales the Deployment up mid-window, the new pod finds the Lease
   held and exits 1 until the window ends, so it neither unlocks nor serves
   until the job has released the Lease.
-- Arming a migration suspends the CronJob but does not stop a running Job.
-  Step 5 restores the recorded count, and that count can predate the
-  migration being armed. So the D8 pre-flight also waits for the Deployment
-  to be at 0 replicas with no pods, not only for maintenance Jobs to finish.
+- Arming a migration suspends the CronJob but does not stop a running Job,
+  and Pulumi does not reconcile `replicas` after it writes them. An
+  unconditional restore would bring the server back with a migration armed,
+  and the D8 pre-flight would then wait forever. Pulumi therefore sets the
+  `ol.mit.edu/migration-armed` annotation on the Deployment in the same update
+  that sets `replicas: 0`. The annotation also changes the Deployment's
+  `resourceVersion`, even when `replicas` was already 0 because the job had
+  scaled it down. At step 5 the job GETs the Deployment. It restores only if
+  the annotation is absent and `spec.replicas` is still 0, by PUTting
+  `deployments/scale` with the `resourceVersion` it read. An arm that lands
+  between the read and the write makes that PUT fail with 409. The job then
+  re-reads, finds the annotation and leaves the count at 0. The D8 pre-flight
+  still waits for the Deployment to be at 0 replicas with no pods, as well
+  as for maintenance Jobs to finish.
 
 The window is a nightly outage for every witan user. Schedule: keep the 03:20
 UTC slot, and the window must close before the 04:00 UTC CI indexer run.
@@ -310,8 +357,9 @@ ends in a fresh open.
 
 0.13 `/readyz` reports `loading`, `serving`, `degraded`, `blocked` or
 `draining`. It is 503 while any graph is loading. After startup it is 200 when
-at least one graph is ready, and 503 when none are or shutdown has begun
-(upstream `docs/user/deployment.md`; healthy state verified). One blocked code
+at least one graph is ready or the applied inventory is empty, and 503 when
+every graph in a nonempty inventory is unavailable or shutdown has begun
+(upstream `docs/user/deployment.md` at v0.13.0; healthy state verified). One blocked code
 graph therefore leaves the pod Ready, which keeps the blast-radius decision at
 `data_tier.py:194-229`. Leave `OMNIGRAPH_REQUIRE_ALL_GRAPHS` unset and update
 that comment from 0.11's `quarantined_graph_count` to the 0.13 states.
