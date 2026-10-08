@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit-html";
+import { UNASSIGNED } from "./assignee.js";
 import { repoLabel } from "./format.js";
 import type { Route } from "./route.js";
 import { routeHref } from "./route.js";
@@ -46,6 +47,12 @@ export interface ShellProps {
 	repos: string[];
 	/** Projects to offer in the project filter, from the current repo scope. */
 	projects: FilterOption[];
+	/**
+	 * The people to offer in the assignee filter, normalized (see
+	 * `assignee.ts`). Derived from the tasks the active view has loaded, since
+	 * the graph has no list of people to enumerate.
+	 */
+	assignees: string[];
 	/** The read-state line: last read time, staleness, refresh. */
 	status: TemplateResult;
 	/** The active view. */
@@ -54,6 +61,12 @@ export interface ShellProps {
 	panel: TemplateResult | typeof nothing;
 	/** Called when a filter changes, with the route patch it implies. */
 	onNavigate: (patch: Partial<Route>) => void;
+	/**
+	 * Called when the Assignee menu opens or closes. On the Projects list the
+	 * people to offer come from a task read the page makes only while someone
+	 * is looking at them or filtering by them, so it has to know.
+	 */
+	onAssigneeMenu: (open: boolean) => void;
 	/**
 	 * Whether the server has witan-code's tools. Without them the Bridge tab
 	 * is left out rather than drawn and broken: witan-code is optional.
@@ -139,6 +152,7 @@ export function shell(props: ShellProps): TemplateResult {
 						)}
           </select>
         </label>
+        ${assigneeFilter(route, props.assignees, onNavigate, props.onAssigneeMenu)}
         <label class="closed-toggle">
           <input
             type="checkbox"
@@ -157,6 +171,70 @@ export function shell(props: ShellProps): TemplateResult {
       <main>${props.body}</main>
       ${props.panel}
     </div>
+  `;
+}
+
+/**
+ * The assignee multi-select: a checkbox per person, with Unassigned pinned at
+ * the top.
+ *
+ * A `<details>` rather than a `<select multiple>`, which is unusable by mouse
+ * without a modifier key. The open state is the element's own, so a poll
+ * re-render, which does not bind `open`, leaves the list open under the cursor.
+ * Each change is one navigation, so the selection is in the URL the moment it
+ * is made. The Projects list keeps a project when one of its tasks matches;
+ * a project has no assignee of its own.
+ */
+function assigneeFilter(
+	route: Route,
+	people: string[],
+	onNavigate: (patch: Partial<Route>) => void,
+	onMenu: (open: boolean) => void,
+): TemplateResult {
+	const toggle = (value: string, on: boolean) =>
+		onNavigate({
+			assignees: on
+				? [...route.assignees, value]
+				: route.assignees.filter((selected) => selected !== value),
+			// The open task may not be in the narrowed list.
+			slug: null,
+		});
+	const option = (value: string, label: string) => html`
+    <label>
+      <input
+        type="checkbox"
+        .checked=${route.assignees.includes(value)}
+        @change=${(event: Event) =>
+					toggle(value, (event.target as HTMLInputElement).checked)}
+      />
+      ${label}
+    </label>
+  `;
+	const count = route.assignees.length;
+	return html`
+    <details
+      class="assignee-filter"
+      @toggle=${(event: Event) =>
+				onMenu((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary>
+        Assignee${count > 0 ? html` <span class="count">${count}</span>` : nothing}
+      </summary>
+      <div class="assignee-options">
+        ${option(UNASSIGNED, "Unassigned")}
+        ${people.map((person) => option(person, person))}
+        ${
+					count > 0
+						? html`<button
+                type="button"
+                @click=${() => onNavigate({ assignees: [], slug: null })}
+              >
+                Clear
+              </button>`
+						: nothing
+				}
+      </div>
+    </details>
   `;
 }
 

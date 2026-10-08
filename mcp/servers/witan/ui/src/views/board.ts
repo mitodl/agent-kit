@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit-html";
+import { filterByAssignee } from "../assignee.js";
 import { emptyBox } from "../chrome.js";
 import { absolute, ago, parseTimestamp, repoLabel } from "../format.js";
 import { type Route, routeHref } from "../route.js";
@@ -125,10 +126,15 @@ export function latestBySlug(rows: TaskRow[]): Map<string, TaskRow> {
 export function columns(board: Board, route: Route): Columns {
 	const live = latestBySlug(board.live);
 	const ready = new Set(board.ready.map((task) => task.slug));
-	const scoped = [...live.values()].filter((task) => inScope(task, route));
+	// `live` stays whole: blocked cards resolve their blockers in it, and a
+	// blocker held by someone else is still a blocker.
+	const scoped = filterByAssignee(
+		[...live.values()].filter((task) => inScope(task, route)),
+		route.assignees,
+	);
 
 	return {
-		ready: board.ready,
+		ready: filterByAssignee(board.ready, route.assignees),
 		// Longest-held first: an old claim is the one a person opens the board
 		// to find, and a lapsed one is necessarily among the oldest.
 		inProgress: scoped
@@ -146,7 +152,9 @@ export function columns(board: Board, route: Route): Columns {
 					at(b.updated_at) - at(a.updated_at),
 			),
 		closed: board.closed
-			? [...board.closed].sort((a, b) => at(b.closed_at) - at(a.closed_at))
+			? filterByAssignee(board.closed, route.assignees).sort(
+					(a, b) => at(b.closed_at) - at(a.closed_at),
+				)
 			: null,
 		live,
 	};

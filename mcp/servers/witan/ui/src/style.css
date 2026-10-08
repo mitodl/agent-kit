@@ -238,6 +238,30 @@ button:hover {
 	max-width: 16rem;
 }
 
+.assignee-filter {
+	position: relative;
+}
+
+.assignee-filter summary {
+	cursor: pointer;
+}
+
+.assignee-options {
+	position: absolute;
+	z-index: 10;
+	margin-top: 0.25rem;
+	padding: 0.5rem 0.75rem;
+	min-width: 14rem;
+	max-height: 20rem;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	background: var(--bg);
+	border: 1px solid var(--muted);
+	border-radius: 0.25rem;
+}
+
 .search-box {
 	display: flex;
 	gap: 0.35rem;
@@ -1221,4 +1245,11 @@ ul.bridge-contracts li {
 .bridge-drill .read-status {
 	margin: 0.5rem 0 0;
 	justify-content: flex-end;
+}
+
+/* Waves the assignee filter leaves out of focus: still drawn, so the chain
+   they sit in stays readable. */
+.wv-labels li.dim,
+.wv-bar.dim {
+	opacity: 0.3;
 }

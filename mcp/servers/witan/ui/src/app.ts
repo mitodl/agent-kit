@@ -1,4 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit-html";
+import { assigneeOptions } from "./assignee.js";
 import { emptyBox, placeholderFor, readStatus } from "./chrome.js";
 import { DAY } from "./format.js";
 import { KeyedRead, LiveRead, type Snapshot } from "./live.js";
@@ -29,9 +30,10 @@ import type {
 	InterfaceBinding,
 	RepoDependencies,
 	TaskDetail,
+	TaskRow,
 	WorkflowProjectSummary,
 } from "./types.js";
-import { type Board, board, TASK_LIMIT } from "./views/board.js";
+import { type Board, board, latestBySlug, TASK_LIMIT } from "./views/board.js";
 import {
 	type BridgeGraph,
 	bindingTable,
@@ -95,6 +97,17 @@ export class App {
 
 	private readonly rollup = new KeyedRead<Rollup>(() => this.draw());
 	private readonly board = new KeyedRead<Board>(() => this.draw());
+	/**
+	 * Every task, for the project list: the assignee filter keeps a project by
+	 * the tasks in it, and the dropdown needs people to offer.
+	 */
+	private readonly projectTasks = new KeyedRead<TaskRow[]>(() => this.draw());
+	/**
+	 * Whether the Assignee menu is open. On the Projects list that is what
+	 * starts the task read (see `syncReads`): the menu needs people to offer,
+	 * and nobody else on that landing tab needs the tasks at all.
+	 */
+	private assigneeMenuOpen = false;
 	/**
 	 * No interval (spec §6.6): it plots elapsed time, so a poll every 30
 	 * seconds would only move the right edge. Focus and Refresh still read.
@@ -220,6 +233,7 @@ export class App {
 		this.projects.stop();
 		this.rollup.stop();
 		this.board.stop();
+		this.projectTasks.stop();
 		this.timeline.stop();
 		this.waves.stop();
 		this.memoryPage.stop();
@@ -276,6 +290,22 @@ export class App {
 		// `readRollup`), so keying on it only bought a pointless re-read.
 		const project = route.view === "projects" ? route.project : null;
 		this.rollup.sync(project, () => readRollup(project as string));
+
+		// The project list has no tasks of its own. They are read only while a
+		// filter narrows by them or the menu is open to offer people from them:
+		// Projects is the landing tab, and three task_list reads of up to
+		// TASK_LIMIT rows every 30 seconds is not something to spend on a page
+		// that never touches the filter. Keyed on `closed` alone, because the
+		// filter narrows in the browser.
+		const listScope =
+			route.view === "projects" &&
+			!route.project &&
+			(route.assignees.length > 0 || this.assigneeMenuOpen)
+				? { closed: route.closed }
+				: null;
+		this.projectTasks.sync(listScope && JSON.stringify(listScope), () =>
+			readProjectTasks(listScope as { closed: boolean }),
+		);
 
 		// Every argument any of the board's reads takes, and nothing else, so
 		// opening a card in the panel does not re-read five tools.
@@ -386,9 +416,17 @@ export class App {
 				return { snapshot: read.snapshot, refresh: () => read.refresh() };
 			}
 		}
+		// The project list's own reads: the list, and the tasks the assignee
+		// filter keeps a project by. The bar reports the task read when it has
+		// failed, so a narrowed list drawn from stale tasks is marked stale and a
+		// failed first read has somewhere to retry. Refresh re-reads both.
+		const tasks = this.projectTasks.snapshot;
 		return {
-			snapshot: this.projectsSnapshot,
-			refresh: () => this.projects.refresh(),
+			snapshot: tasks?.error ? tasks : this.projectsSnapshot,
+			refresh: () => {
+				this.projects.refresh();
+				this.projectTasks.refresh();
+			},
 		};
 	}
 
@@ -407,16 +445,59 @@ export class App {
 					value: project.slug,
 					label: project.title,
 				})),
+				assignees: assigneeOptions(this.loadedTasks(), this.route.assignees),
 				status: readStatus(snapshot, refresh),
 				body: this.body(inScope),
 				panel: this.panel(),
 				onNavigate: (patch) => this.navigate(patch),
+				onAssigneeMenu: (open) => this.setAssigneeMenu(open),
 				codeGraph: this.codeGraph === true,
 			}),
 			this.root,
 		);
 
 		this.moveFocus();
+	}
+
+	private setAssigneeMenu(open: boolean): void {
+		if (open === this.assigneeMenuOpen) {
+			return;
+		}
+		this.assigneeMenuOpen = open;
+		this.syncReads();
+		this.draw();
+	}
+
+	/**
+	 * The tasks the active view has read, for the assignee filter's options.
+	 *
+	 * From what is already loaded rather than a read of its own: the filter
+	 * offers the people in the view in front of it, and a view still reading
+	 * offers none yet (a selected person is kept regardless, see
+	 * `assigneeOptions`).
+	 */
+	private loadedTasks(): { assignee: string | null }[] {
+		const route = this.route;
+		if (route.view === "board") {
+			const data = this.board.snapshot?.data;
+			return data ? [...data.live, ...data.ready, ...(data.closed ?? [])] : [];
+		}
+		if (route.view === "timeline") {
+			return this.timeline.snapshot?.data?.tasks ?? [];
+		}
+		if (route.view === "waves") {
+			const data = this.waves.snapshot?.data;
+			return data ? [...data.tasks, ...data.outside] : [];
+		}
+		if (route.view === "search") {
+			return this.search.snapshot?.data?.tasks ?? [];
+		}
+		if (route.view === "projects") {
+			return route.project
+				? (this.rollup.snapshot?.data?.tasks ?? [])
+				: (this.projectTasks.snapshot?.data ?? []);
+		}
+		return [];
 	}
 
 	private body(inScope: WorkflowProjectSummary[]): TemplateResult {
@@ -552,7 +633,18 @@ export class App {
 		if (waiting) {
 			return waiting;
 		}
-		return projectList(inScope, this.route);
+		// With no filter the list does not need the tasks, so it is not held up
+		// by them; with one, a list drawn before they land would be unfiltered.
+		if (this.route.assignees.length === 0) {
+			return projectList(inScope, this.route);
+		}
+		const taskSnapshot = this.projectTasks.snapshot;
+		const waitingTasks = taskSnapshot
+			? placeholderFor(taskSnapshot, "tasks")
+			: emptyBox("Reading tasks…");
+		return (
+			waitingTasks ?? projectList(inScope, this.route, taskSnapshot?.data ?? [])
+		);
 	}
 
 	/**
@@ -706,6 +798,27 @@ async function readRollup(slug: string): Promise<Rollup> {
 		workflowSessionList({ project_slug: slug }),
 	]);
 	return { detail, status, tasks, sessions };
+}
+
+/**
+ * Every live task in the graph, closed ones too when asked, for the project
+ * list. Three status reads rather than one unfiltered one, as the board does,
+ * so the common case does not drag every closed task along.
+ */
+async function readProjectTasks(scope: {
+	closed: boolean;
+}): Promise<TaskRow[]> {
+	const everywhere = (status: string) =>
+		taskList({ repo: "", status, limit: TASK_LIMIT });
+	const [open, blocked, inProgress, closed] = await Promise.all([
+		everywhere("open"),
+		everywhere("blocked"),
+		everywhere("in_progress"),
+		scope.closed ? everywhere("closed") : Promise.resolve([]),
+	]);
+	return [
+		...latestBySlug([...open, ...blocked, ...inProgress, ...closed]).values(),
+	];
 }
 
 /** The route fields that are arguments to the board's reads. */

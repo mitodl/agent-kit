@@ -24,7 +24,12 @@ import type {
 	WorkflowSession,
 } from "../types.js";
 import { unwrap } from "../unwrap.js";
-import { projectList, projectRollup, type Rollup } from "./projects.js";
+import {
+	projectList,
+	projectRollup,
+	projectsWithAssignee,
+	type Rollup,
+} from "./projects.js";
 
 /**
  * The rollup and the list, rendered from REAL recorded tool results.
@@ -238,5 +243,128 @@ describe("projectRollup", () => {
 		);
 		expect(links).toContain("#projects?project=wp-other");
 		expect(links).toContain("#projects?project=wp-later");
+	});
+});
+
+describe("projectRollup with an assignee filter", () => {
+	const ME = "dfrapp@mit.edu";
+	const mine = {
+		...(tasks[0] as TaskRow),
+		slug: "tk-mine",
+		assignee: `${ME}#1`,
+	};
+	const nobody = {
+		...(tasks[0] as TaskRow),
+		slug: "tk-nobody",
+		assignee: null,
+	};
+	const filtered = { ...rollup, tasks: [mine, nobody] };
+
+	function rows(assignees: string[]): string[] {
+		render(projectRollup(filtered, { ...DEFAULT_ROUTE, assignees }), root);
+		return [...root.querySelectorAll("table a[href*='slug=']")].map(
+			(link) =>
+				new URLSearchParams((link as HTMLAnchorElement).hash.split("?")[1]).get(
+					"slug",
+				) as string,
+		);
+	}
+
+	it("narrows the task table to the person", () => {
+		expect(rows([ME])).toEqual(["tk-mine"]);
+	});
+
+	it("narrows it to unassigned tasks", () => {
+		expect(rows(["unassigned"])).toEqual(["tk-nobody"]);
+	});
+
+	it("narrows the Ready list to the selection", () => {
+		const held = {
+			...status,
+			ready_tasks: status.ready_tasks.map((task) => ({
+				...task,
+				assignee: "ada@mit.edu",
+			})),
+		};
+		render(
+			projectRollup(
+				{ ...rollup, status: held },
+				{ ...DEFAULT_ROUTE, assignees: [ME] },
+			),
+			root,
+		);
+
+		expect(root.querySelectorAll(".ready li")).toHaveLength(0);
+	});
+});
+
+describe("projectsWithAssignee", () => {
+	const ME = "dfrapp@mit.edu";
+	const [first, second] = projects as [
+		WorkflowProjectSummary,
+		WorkflowProjectSummary,
+	];
+	const other = { ...first, slug: "wp-other" };
+	const third = { ...second, slug: "wp-third" };
+	const all = [first, other, third];
+	const base = tasks[0] as TaskRow;
+	const held = (project: string, assignee: string | null) => ({
+		...base,
+		project_slug: project,
+		assignee,
+	});
+	const slugs = (list: WorkflowProjectSummary[]) => list.map((p) => p.slug);
+
+	it("keeps every project with no selection", () => {
+		expect(projectsWithAssignee(all, [], [])).toBe(all);
+	});
+
+	it("keeps only projects with a task held by the person, whatever the session", () => {
+		const list = projectsWithAssignee(
+			all,
+			[held(first.slug, `${ME}#abc`), held("wp-other", "ada@mit.edu")],
+			[ME],
+		);
+
+		expect(slugs(list)).toEqual([first.slug]);
+	});
+
+	it("keeps projects with an unassigned task for Unassigned", () => {
+		const list = projectsWithAssignee(
+			all,
+			[held(first.slug, ME), held("wp-other", null)],
+			["unassigned"],
+		);
+
+		expect(slugs(list)).toEqual(["wp-other"]);
+	});
+
+	it("is the union of the people selected", () => {
+		const list = projectsWithAssignee(
+			all,
+			[held(first.slug, ME), held("wp-third", "ada@mit.edu")],
+			[ME, "ada@mit.edu"],
+		);
+
+		expect(slugs(list)).toEqual([first.slug, "wp-third"]);
+	});
+
+	it("ignores tasks that belong to no project", () => {
+		expect(projectsWithAssignee(all, [held("", ME)], [ME])).toEqual([]);
+	});
+});
+
+describe("projectList with an assignee filter", () => {
+	it("says so when no project matches", () => {
+		render(
+			projectList(
+				projects,
+				{ ...DEFAULT_ROUTE, assignees: ["nobody@x.edu"] },
+				[],
+			),
+			root,
+		);
+
+		expect(text()).toContain("No projects have a task held by");
 	});
 });

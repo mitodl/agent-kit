@@ -569,3 +569,27 @@ describe("timeline", () => {
 		).toBeNull();
 	});
 });
+
+describe("layout with an assignee filter", () => {
+	const ME = "dfrapp@mit.edu";
+	const mine = { ...inFlight, slug: "tk-mine", assignee: `${ME}#1` };
+	const theirs = { ...inFlight, slug: "tk-theirs", assignee: "ada@mit.edu" };
+	const nobody = { ...inFlight, slug: "tk-nobody", assignee: null };
+	const drawn = (assignees: string[]) =>
+		layout(data({ tasks: [mine, theirs, nobody] }), {
+			...DEFAULT_ROUTE,
+			assignees,
+		}).groups.flatMap((group) => group.bars.map((b) => b.task.slug));
+
+	it("keeps only the person's bars", () => {
+		expect(drawn([ME])).toEqual(["tk-mine"]);
+	});
+
+	it("keeps only unassigned bars for Unassigned", () => {
+		expect(drawn(["unassigned"])).toEqual(["tk-nobody"]);
+	});
+
+	it("draws everything with no selection", () => {
+		expect(drawn([]).sort()).toEqual(["tk-mine", "tk-nobody", "tk-theirs"]);
+	});
+});
