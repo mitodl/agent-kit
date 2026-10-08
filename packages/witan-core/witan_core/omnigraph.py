@@ -1750,8 +1750,10 @@ class OmnigraphClient:
         commit you fenced ON before the call — this is the commit that exists
         AFTER it, and is a floor a caller can compare a later unconstrained
         read's own reported commit against, to tell a genuinely fresher read
-        apart from one that is still stale (omnigraph's commit ids are ULIDs —
-        docs/user/concepts/storage.md — so string comparison orders them).
+        apart from one that is still stale. Do not order the two as strings:
+        from 0.12 an id is ``hb1.<block>.<slot>.<nonce>`` with a decimal slot,
+        so slot 10 sorts before slot 9 (council's ``witan.commit_ids`` parses
+        them).
         Empirically confirmed via HTTP (2026-08-18): the server always answers
         a mutate with the new commit inline, so no separate read is needed to
         learn it.

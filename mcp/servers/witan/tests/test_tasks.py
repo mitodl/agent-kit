@@ -1416,6 +1416,15 @@ async def _instant_sleep(_seconds):
     and there is no reason a unit test should actually wait out the backoff."""
 
 
+# Two commits of one 0.12+ history block, slots 9 and 10. Compared as strings
+# the older one sorts last, so a catch-up check that does that trusts the
+# stale read.
+_HISTORY_BLOCK = "01M4E8BJQ4NRAGQJE0B36BDV5N"
+_STALE_COMMIT = f"hb1.{_HISTORY_BLOCK}.9.01M4E8BKX6DYM327NMQRDXB4B2"
+_WRITE_COMMIT = f"hb1.{_HISTORY_BLOCK}.10.01M4E8BKZGE3C8Q4Y5GY9FMKXB"
+_OLDEST_COMMIT = "0" * 26
+
+
 @requires_omnigraph
 def test_claim_verification_retries_until_caught_up(server, monkeypatch):
     """★ THE CATCH-UP LOOP, THE ACTUAL FIX FOR
@@ -1443,7 +1452,7 @@ def test_claim_verification_retries_until_caught_up(server, monkeypatch):
         # The real write still happens — this only substitutes the returned
         # commit id, so the row content read back afterwards is genuine.
         real_change(*args, **kwargs)
-        return "01WRITE"
+        return _WRITE_COMMIT
 
     calls = {"n": 0}
     verify_calls = {"n": 0}
@@ -1458,8 +1467,8 @@ def test_claim_verification_retries_until_caught_up(server, monkeypatch):
             return rows, real_commit
         verify_calls["n"] += 1
         if verify_calls["n"] < 3:
-            return rows, "00STALE"
-        return rows, "01WRITE"
+            return rows, _STALE_COMMIT
+        return rows, _WRITE_COMMIT
 
     monkeypatch.setattr(srv.client, "change", fake_change)
     monkeypatch.setattr(srv.client, "read_with_commit", staggered_read)
@@ -1484,7 +1493,7 @@ def test_claim_verification_gives_up_after_max_attempts(server, monkeypatch):
 
     def fake_change(*args, **kwargs):
         real_change(*args, **kwargs)
-        return "01WRITE"
+        return _WRITE_COMMIT
 
     calls = {"n": 0}
 
@@ -1493,7 +1502,7 @@ def test_claim_verification_gives_up_after_max_attempts(server, monkeypatch):
         calls["n"] += 1
         if calls["n"] == 1:
             return rows, real_commit
-        return rows, "00STALE"
+        return rows, _STALE_COMMIT
 
     monkeypatch.setattr(srv.client, "change", fake_change)
     monkeypatch.setattr(srv.client, "read_with_commit", always_stale_read)
@@ -1506,6 +1515,39 @@ def test_claim_verification_gives_up_after_max_attempts(server, monkeypatch):
     # No rival ever wrote, so even the still-stale last read shows agentA —
     # the point here is termination, not this particular outcome.
     assert res["claimed"] is True
+
+
+@requires_omnigraph
+def test_a_commit_id_of_unknown_shape_does_not_fail_a_claim_already_written(
+    server, monkeypatch
+):
+    """The comparison runs after the claim is written. An id it cannot place
+    (a future omnigraph format) must cost the bounded retry loop, not turn a
+    claim the caller holds into a tool error on every call."""
+    from witan import server as srv
+
+    t = server.task_create(title="unknown-commit-shape", description="x")
+    real_read_with_commit = srv.client.read_with_commit
+    real_change = srv.client.change
+
+    def fake_change(*args, **kwargs):
+        real_change(*args, **kwargs)
+        return "hb2.some-future-shape"
+
+    calls = {"n": 0}
+
+    def counting_read(*args, **kwargs):
+        calls["n"] += 1
+        return real_read_with_commit(*args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change", fake_change)
+    monkeypatch.setattr(srv.client, "read_with_commit", counting_read)
+    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert res["claimed"] is True
+    assert calls["n"] == 1 + srv._VERIFY_CAUGHT_UP_MAX_ATTEMPTS
 
 
 def _verify_events(capfd):
@@ -1556,13 +1598,13 @@ def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
 
     real_change = srv.client.change
 
-    # Sorts BEFORE a real ULID (which currently starts "01M..."), so the
-    # catch-up comparison is satisfied on the first read. A sentinel sorting
-    # after one would exhaust the retry loop and report caught_up=False —
-    # correctly, which is the ordering these ids are chosen for.
+    # Older than any commit a real store reports, so the catch-up comparison
+    # is satisfied on the first read. A sentinel newer than one would exhaust
+    # the retry loop and report caught_up=False — correctly, which is the
+    # ordering this id is chosen for.
     def change_returning_a_commit(*args, **kwargs):
         real_change(*args, **kwargs)
-        return "00WRITE"
+        return _OLDEST_COMMIT
 
     configure_logging(log_format="json", level="INFO", force=True)
     try:
@@ -1589,7 +1631,7 @@ def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
     assert supplied["caught_up"] is degraded["caught_up"] is True
     assert supplied["verify_attempts"] == degraded["verify_attempts"] == 1
     # The new field is the only thing that separates them.
-    assert supplied["write_graph_commit_id"] == "00WRITE"
+    assert supplied["write_graph_commit_id"] == _OLDEST_COMMIT
     assert degraded["write_graph_commit_id"] is None
 
 

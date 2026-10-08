@@ -60,6 +60,7 @@ from . import (
     ui_widgets,
 )
 from . import repo as repo_module
+from .commit_ids import commit_reached
 from .graph import (
     OmnigraphClient,
     OmnigraphConflict,
@@ -1037,6 +1038,24 @@ def _claim_backoff(attempt: int) -> float:
 # loop gives up and falls back to trusting whatever it last saw.
 _VERIFY_CAUGHT_UP_MAX_ATTEMPTS = 6
 _VERIFY_CAUGHT_UP_BACKOFF_SECONDS = 0.5
+
+
+def _verify_caught_up(verify_commit: str | None, write_commit: str) -> bool:
+    """Whether a verification read is at least as new as the claim's write.
+
+    An id ``commit_reached`` cannot place counts as not caught up, and is
+    logged. By the time this runs the claim is already written, so raising
+    would report a failure for a claim the caller in fact holds, and would do
+    so on every claim until the parser learned the new shape. Not caught up
+    costs the bounded retry loop instead.
+    """
+    if verify_commit is None:
+        return False
+    try:
+        return commit_reached(verify_commit, write_commit)
+    except ValueError as exc:
+        logger.warning("witan.task_claim.verify.unorderable_commit", error=str(exc))
+        return False
 
 
 def _project_repos(row: dict) -> list[str]:
@@ -7391,10 +7410,12 @@ async def task_claim(
     #
     # So: read unconstrained (to stay able to see a later clobber), but do not
     # TRUST it until its own reported commit has caught up to (or passed)
-    # `write_commit` — omnigraph's commit ids are ULIDs
-    # (docs/user/concepts/storage.md upstream), lexicographically sortable by
-    # creation time, so a plain string comparison is a valid "at least as new"
-    # check. A read that is still behind ours is retried rather than trusted;
+    # `write_commit`. `commit_reached` decides that from the two ids, because
+    # a read's envelope carries nothing else to order on, and it parses them
+    # rather than comparing strings: from omnigraph 0.12 an id is
+    # `hb1.<block>.<slot>.<nonce>` with a decimal slot, so slot 10 sorts before
+    # slot 9 as text. A read that is still behind ours is retried rather than
+    # trusted;
     # `write_commit is None` (the degraded path: a tier that supplied no
     # `graph_commit_id`, or the CLI transport, which never does) skips the
     # catch-up check entirely, since there is nothing to catch up to.
@@ -7403,8 +7424,9 @@ async def task_claim(
     )
     verify_attempts = 1
     if write_commit is not None:
-        while verify_attempts < _VERIFY_CAUGHT_UP_MAX_ATTEMPTS and (
-            verify_commit is None or verify_commit < write_commit
+        while (
+            verify_attempts < _VERIFY_CAUGHT_UP_MAX_ATTEMPTS
+            and not _verify_caught_up(verify_commit, write_commit)
         ):
             await anyio.sleep(_VERIFY_CAUGHT_UP_BACKOFF_SECONDS)
             rows, verify_commit = await _offload(
@@ -7412,9 +7434,7 @@ async def task_claim(
             )
             verify_attempts += 1
     winner = rows[0].get("assignee") if rows else None
-    caught_up = write_commit is None or (
-        verify_commit is not None and verify_commit >= write_commit
-    )
+    caught_up = write_commit is None or _verify_caught_up(verify_commit, write_commit)
     # ★ `write_graph_commit_id` IS WHAT MAKES THE OTHER TWO FIELDS READABLE.
     # `caught_up` is `True` both when the catch-up check ran and passed AND
     # when `write_commit is None` short-circuited it, and `verify_attempts`

@@ -89,10 +89,12 @@ than the second silently overwriting the first.
 and detect the collision at commit time, instead of serialising them up front.
 
 **Graph commit id** — the identifier of the snapshot a read was served from,
-and the precondition a CAS write states. They are
-[ULIDs](https://github.com/ulid/spec), so they sort lexicographically in
-creation order — which is what makes "is this snapshot at least as new as my
-write?" a string comparison.
+and the precondition a CAS write states. Through omnigraph 0.11 they are
+[ULIDs](https://github.com/ulid/spec), which sort lexicographically in
+creation order. From 0.12 every commit after a graph's first is
+`hb1.<block>.<slot>.<nonce>` with a decimal slot, which does not, so "is this
+snapshot at least as new as my write?" is answered by parsing the two ids
+(`witan/commit_ids.py`), not by comparing them as strings.
 
 **Advisory lock** — a filesystem lock (`flock`) that serialises writers sharing
 a local store. It is deliberately **skipped for any store it cannot
