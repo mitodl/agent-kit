@@ -656,7 +656,6 @@ class PooledTransport:
             if response.will_close:
                 self._discard()
 
-            text = raw.decode("utf-8", errors="replace")
             succeeded = 200 <= response.status < 300
             contract_values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
             violation = contract_violation(contract_values)
@@ -681,6 +680,7 @@ class PooledTransport:
                     ),
                     status=response.status,
                 )
+            text = raw.decode("utf-8", errors="replace")
             if succeeded:
                 return Outcome(kind=OK, body=text, status=response.status)
             message = error_message(response.status, text)
