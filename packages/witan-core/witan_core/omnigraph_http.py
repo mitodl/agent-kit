@@ -50,6 +50,8 @@ import time
 import urllib.parse
 from typing import NamedTuple
 
+from .omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
+
 # Classification vocabulary shared with the subprocess path. `_execute` maps a
 # subprocess's stderr onto these same names, so a condition is handled
 # identically no matter which transport reported it.
@@ -152,6 +154,12 @@ RECOVERY_REQUIRED = "recovery_required"
 #: one legible failure into a repair that fails the same way.
 STORE_QUARANTINED = "store_quarantined"
 
+#: The response did not carry the server's HTTP contract stamp, or carried
+#: another contract's (see :func:`contract_violation`). Never retried. Its own
+#: kind, not FATAL, so the policy loop can raise ``WriteIndeterminate`` for a
+#: write: nothing in such a response says whether the write was applied.
+CONTRACT_VIOLATION = "contract_violation"
+
 #: The conditional-write precondition header (upstream #470). Sent raw and
 #: exactly once, and ONLY to the dedicated routes below — the ordinary
 #: ``/mutate`` rejects it outright rather than ignoring an unknown header,
@@ -160,6 +168,28 @@ IF_GRAPH_COMMIT_HEADER = "Omnigraph-If-Graph-Commit"
 
 #: Path suffix selecting the conditional variant of a write route.
 IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
+
+#: The HTTP contract discriminator omnigraph-server 0.12 introduced. Every
+#: protected route (everything this module calls; ``/healthz`` and ``/readyz``
+#: are public) answers ``400 api_contract_mismatch`` unless the request
+#: carries exactly one of these with exactly the server's value, and the
+#: server stamps the same header on every response, errors included.
+HTTP_API_CONTRACT_HEADER = "Omnigraph-Http-Api"
+
+#: The contract this client speaks. Upstream keeps it separate from the
+#: package version (``omnigraph-api-types``: "independent of the package
+#: version and graph-storage stamp"), so it is its own constant and not
+#: derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12`` and 0.13.0
+#: requires ``0.13``. A 0.11 server ignores the header.
+HTTP_API_CONTRACT = "0.13"
+
+#: The storage format of the servers that stamp :data:`HTTP_API_CONTRACT_HEADER`
+#: on responses (observed on 0.13.0, format 14). A 0.11 server (format 9)
+#: sends none, so an absent header is tolerated until the pinned format
+#: reaches this. Moving ``_OMNIGRAPH_INTERNAL_SCHEMA`` is what turns the
+#: requirement on.
+_CONTRACT_STAMPED_FROM_SCHEMA = 14
+RESPONSE_CONTRACT_REQUIRED = _OMNIGRAPH_INTERNAL_SCHEMA >= _CONTRACT_STAMPED_FROM_SCHEMA
 
 # A pooled connection idle longer than this is closed and reopened rather than
 # reused. It is not a performance knob — it is what keeps the connect-failure
@@ -372,6 +402,33 @@ def error_message(status: int, body: str) -> str:
     return f"HTTP {status}{f': {stripped}' if stripped else ''}"
 
 
+def contract_violation(values: list[str]) -> str | None:
+    """Why a response's contract header is unacceptable, or None if it is fine.
+
+    Upstream's rule (``docs/user/operations/server.md`` § HTTP contract): check
+    the header before decoding the body, and a missing or incompatible one
+    "means unknown effects, never permission to replay". A response without it
+    came from something other than the omnigraph-server we speak to: a proxy
+    answering in its place, or a server on another contract.
+
+    :param values: Every :data:`HTTP_API_CONTRACT_HEADER` value on the response.
+    :returns: A message naming the violation, or ``None``.
+    :rtype: str | None
+    """
+    if values == [HTTP_API_CONTRACT]:
+        return None
+    if not values:
+        if not RESPONSE_CONTRACT_REQUIRED:
+            return None
+        found = "none"
+    else:
+        found = ", ".join(repr(value) for value in values)
+    return (
+        f"response did not carry exactly one {HTTP_API_CONTRACT_HEADER}: "
+        f"{HTTP_API_CONTRACT} header (found {found})"
+    )
+
+
 class PooledTransport:
     """Keep-alive connections to one omnigraph-server, one per calling thread.
 
@@ -524,7 +581,10 @@ class PooledTransport:
           is the stale-keep-alive case, and it is a fast path, not a different
           safety rule.
         """
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            HTTP_API_CONTRACT_HEADER: HTTP_API_CONTRACT,
+        }
         if body is not None:
             headers["Content-Type"] = "application/json"
             headers["Content-Length"] = str(len(body.encode()))
@@ -596,8 +656,32 @@ class PooledTransport:
             if response.will_close:
                 self._discard()
 
+            succeeded = 200 <= response.status < 300
+            contract_values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
+            violation = contract_violation(contract_values)
+            if violation is not None and (
+                succeeded or not idempotent or contract_values
+            ):
+                # Checked before the body is decoded or the status classified.
+                # Without the server's stamp, a 2xx body is not a result and a
+                # 429/503/409 is not the server saying "nothing was applied",
+                # which is the premise every retryable classification rests on.
+                # So a write is terminal here whatever the status. A read that
+                # failed with no stamp at all falls through to the ordinary
+                # classification below, since repeating a read is safe (a
+                # proxy's 503 while the server restarts). A stamp naming
+                # another contract is terminal for a read too: waiting does not
+                # change which server answers.
+                return Outcome(
+                    kind=CONTRACT_VIOLATION,
+                    error=(
+                        f"{violation}; this request's effects are unknown and "
+                        f"it was not retried (HTTP {response.status})"
+                    ),
+                    status=response.status,
+                )
             text = raw.decode("utf-8", errors="replace")
-            if 200 <= response.status < 300:
+            if succeeded:
                 return Outcome(kind=OK, body=text, status=response.status)
             message = error_message(response.status, text)
             return Outcome(
