@@ -565,6 +565,9 @@ def default_install_path() -> Path:
     return Path.home() / ".local" / "bin" / "omnigraph"
 
 
+_INTERNAL_SCHEMA_LINE = re.compile(r"^\s*internal-schema\s+(\d+)\b", re.MULTILINE)
+
+
 def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     """The on-disk storage format ``binary`` reads, per ``omnigraph version``.
 
@@ -591,9 +594,11 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
         raise RuntimeError(
             f"`{binary} version` failed ({result.returncode}):\n{result.stderr}"
         )
-    for line in (result.stdout + result.stderr).splitlines():
-        if line.strip().startswith("internal-schema"):
-            return int(line.split()[-1])
+    # 0.11 prints `internal-schema 9`. 0.13 adds the range the binary serves:
+    # `internal-schema 14 (serves v14 to v14)`.
+    match = _INTERNAL_SCHEMA_LINE.search(result.stdout + result.stderr)
+    if match is not None:
+        return int(match.group(1))
     raise RuntimeError(
         f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"
         "The storage-format checks depend on it; upstream may have renamed or "

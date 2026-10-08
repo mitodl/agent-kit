@@ -128,6 +128,15 @@ _CONTRACTS: dict[int, dict] = {
         # endpoint pair.
         "keyed_edges": True,
     },
+    # Format 14. Measured on omnigraph 0.13.0 by running this suite
+    # against it; every surface below came out as format 9's.
+    14: {
+        "export_datetime": "iso-string",
+        "keyed_row_cap": 8192,
+        "export_null_optional": "omitted",
+        "export_id": "top-level",
+        "keyed_edges": True,
+    },
 }
 
 # One node type carrying every field shape witan reads back (a @key String, an
@@ -218,7 +227,9 @@ def reader_schema() -> int:
             f"`omnigraph version` no longer reports internal-schema:\n{out}\n"
             "This suite and the format-break detector both depend on that line."
         )
-    return int(line.split()[-1])
+    # `internal-schema 9` on 0.11; `internal-schema 14 (serves v14 to v14)`
+    # on 0.13. The number is the second token on both.
+    return int(line.split()[1])
 
 
 @pytest.fixture(scope="module")

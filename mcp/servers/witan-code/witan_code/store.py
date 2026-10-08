@@ -554,7 +554,7 @@ def discard_store(ref: StoreRef) -> int:
 # these two exception types exist to prevent.
 _NOT_SERVED = "is not served by the omnigraph-server"
 _NOT_FOUND_RE = re.compile(
-    rf"graph '[^']*' not found|{re.escape(_NOT_SERVED)}", re.IGNORECASE
+    rf"graph (?:'[^']*' )?not found|{re.escape(_NOT_SERVED)}", re.IGNORECASE
 )
 
 

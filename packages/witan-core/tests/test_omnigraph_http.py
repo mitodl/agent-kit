@@ -148,6 +148,18 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
 
 # ── classification: HTTP conditions onto the shared vocabulary ───────
 
+_GRAPH_BLOCKED = (
+    "graph is unavailable; an operator must apply an explicit correction or "
+    "restart after fixing startup configuration (HTTP 503, graph_unavailable)"
+)
+_GRAPH_LOADING = (
+    "graph is loading; wait for its startup attempt to complete "
+    "(HTTP 503, graph_unavailable)"
+)
+_GRAPH_TRANSITIONING = (
+    "graph admission is closed for a serving transition (HTTP 503, graph_unavailable)"
+)
+
 
 @pytest.mark.parametrize(
     ("status", "message", "expected"),
@@ -211,6 +223,12 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         (503, "recovery_required", ogh.RECOVERY_REQUIRED),
         # …but a plain 503 still is.
         (503, "service temporarily overloaded", ogh.UNAVAILABLE),
+        # The three 503 graph_unavailable bodies of a 0.13 server. Same status
+        # and code; only the blocked one does not clear by waiting. The first
+        # is verbatim from 0.13.0, the other two from upstream's handlers.rs.
+        (503, _GRAPH_BLOCKED, ogh.FATAL),
+        (503, _GRAPH_LOADING, ogh.UNAVAILABLE),
+        (503, _GRAPH_TRANSITIONING, ogh.UNAVAILABLE),
         # A denial is not a transient condition. Retrying a Cedar denial just
         # burns the budget and reports the same thing 8 attempts later.
         (403, "policy denied action 'change' for unknown actor 'act-x'", ogh.FATAL),
