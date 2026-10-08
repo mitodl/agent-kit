@@ -50,7 +50,7 @@ from pathlib import Path
 #: 0.11.0 (2026-09-15) moves the storage format to 9, which rebuilds every graph.
 #: See ``_OMNIGRAPH_INTERNAL_SCHEMA`` and
 #: docs/internals/design/omnigraph-0-11-upgrade-spec.md.
-_OMNIGRAPH_VERSION = "0.11.0"
+_OMNIGRAPH_VERSION = "0.13.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
