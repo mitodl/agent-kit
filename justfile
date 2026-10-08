@@ -403,9 +403,9 @@ docs-check:
 # one CI checks and Read the Docs publishes — which is the exact drift the CI
 # pin exists to prevent. Renovate bumps all three together.
 docs-build:
-    uvx zensical@0.0.67 build
+    uvx zensical@0.0.69 build
     ./bin/gen_llms.py
 
 # Serve the docs locally with incremental rebuilds.
 docs-serve:
-    uvx zensical@0.0.67 serve
+    uvx zensical@0.0.69 serve
