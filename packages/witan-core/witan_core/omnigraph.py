@@ -1946,10 +1946,13 @@ class OmnigraphClient:
         """Reclaim disk by removing old Lance versions (**destructive**).
 
         ``optimize`` compacts fragments but leaves old versions behind, so disk
-        stays large until they are GC'd. ``cleanup`` removes them, keeping the
-        most recent ``keep`` versions per table and/or those newer than
-        ``older_than`` (a Go-style duration like ``7d``). At least one bound must
-        be given (omnigraph requires it). ``--confirm`` is passed so it runs.
+        stays large until they are GC'd. ``cleanup`` removes the versions no
+        retained graph commit pins. From omnigraph 0.12 ``keep`` retains the
+        newest N graph commits of every live branch (0.11 counted versions per
+        table), and ``older_than`` retains every commit newer than a Go-style
+        duration like ``7d``. A commit survives when either retains it. At
+        least one bound must be given (omnigraph requires it). ``--confirm``
+        is passed so it runs.
         """
         if keep is None and older_than is None:
             raise ValueError("cleanup requires keep and/or older_than")

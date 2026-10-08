@@ -329,10 +329,13 @@ witan cleanup [OPTIONS]
 Remove old Lance versions to reclaim disk (**destructive**).
 
 ``optimize`` compacts fragments but leaves old versions behind; this GCs
-them, keeping the most recent ``keep`` versions per table (and/or those
-newer than ``older_than``). From omnigraph 0.11 it is also the only thing
-that reclaims the storage of deleted branches. Irreversible, so it requires
+the ones no retained graph commit pins. A commit is retained when either
+bound keeps it. From omnigraph 0.11 it is also the only thing that
+reclaims the storage of deleted branches. Irreversible, so it requires
 ``--yes``.
+
+With neither bound given it keeps the last 30 days, the same policy the
+Stop hook and the deployed maintenance job use.
 
 **Parameters**:
 
@@ -344,8 +347,9 @@ that reclaims the storage of deleted branches. Irreversible, so it requires
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
 * `--store STR`: Store URI to clean (default: the configured graph store).
-* `--keep INT`: Number of recent versions to keep per table. *[default: 10]*
-* `--older-than STR`: Also keep versions newer than this Go-style duration (e.g. 7d).
+* `--keep INT`: Keep the newest N graph commits of every live branch, whatever
+    their age. (omnigraph 0.11 counted versions per table instead.)
+* `--older-than STR`: Keep every graph commit newer than this Go-style duration (e.g. 7d).
 * `--yes, --no-yes`: Confirm the destructive operation (required to actually run). *[default: False]*
 
 ## witan memory
@@ -1668,17 +1672,21 @@ witan code cleanup [OPTIONS]
 Remove old Lance versions from a code-graph store (**destructive**).
 
 ``optimize`` compacts fragments but leaves old versions behind; this GCs
-them, keeping the most recent ``keep`` versions per table (and/or those
-newer than ``older_than``). From omnigraph 0.11 it is also the only thing
-that reclaims the storage of deleted branches (``branches --prune``,
+the ones no retained graph commit pins. A commit is retained when either
+bound keeps it. From omnigraph 0.11 it is also the only thing that
+reclaims the storage of deleted branches (``branches --prune``,
 ``reap-views --apply``). Irreversible, so it requires ``--yes``.
+
+With neither bound given it keeps the last 30 days, the same policy the
+Stop hook and the deployed maintenance job use.
 
 **Parameters**:
 
 * `--store STR`: Store path to clean (default: the current repo's store).
 * `--bridge, --no-bridge`: Clean the shared cross-repo bridge store instead. *[default: False]*
-* `--keep INT`: Number of recent versions to keep per table. *[default: 10]*
-* `--older-than STR`: Also keep versions newer than this Go-style duration (e.g. 7d).
+* `--keep INT`: Keep the newest N graph commits of every live branch, whatever
+    their age. (omnigraph 0.11 counted versions per table instead.)
+* `--older-than STR`: Keep every graph commit newer than this Go-style duration (e.g. 7d).
 * `--yes, --no-yes`: Confirm the destructive operation (required to actually run). *[default: False]*
 
 ### witan code reap-views
