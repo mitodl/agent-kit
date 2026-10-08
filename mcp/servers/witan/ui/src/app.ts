@@ -193,6 +193,7 @@ export class App {
 	start(): void {
 		window.addEventListener("hashchange", this.onHashChange);
 		document.addEventListener("keydown", this.onKeyDown);
+		document.addEventListener("click", this.onDocumentClick);
 		this.projects.start();
 		this.syncReads();
 		this.draw();
@@ -230,6 +231,7 @@ export class App {
 	stop(): void {
 		window.removeEventListener("hashchange", this.onHashChange);
 		document.removeEventListener("keydown", this.onKeyDown);
+		document.removeEventListener("click", this.onDocumentClick);
 		this.projects.stop();
 		this.rollup.stop();
 		this.board.stop();
@@ -260,6 +262,13 @@ export class App {
 	 * back button and the close link all agree about what is open.
 	 */
 	private readonly onKeyDown = (event: KeyboardEvent): void => {
+		// An open menu is the topmost thing, so Escape closes it before the panel.
+		if (event.key === "Escape" && this.closeAssigneeMenu()) {
+			this.root
+				.querySelector<HTMLElement>("details.assignee-filter summary")
+				?.focus();
+			return;
+		}
 		if (event.key === "Escape" && this.route.slug) {
 			this.navigate({ slug: null });
 		}
@@ -458,6 +467,33 @@ export class App {
 
 		this.moveFocus();
 	}
+
+	/**
+	 * Close the Assignee menu if it is open, and say whether it was.
+	 *
+	 * A `<details>` closes only from its own summary, so a click anywhere else
+	 * left the list covering the view. Closing it sets `open`, which fires the
+	 * `toggle` event the shell already reports through `setAssigneeMenu`, so the
+	 * task read stops through the one path.
+	 */
+	private closeAssigneeMenu(): boolean {
+		const menu = this.root.querySelector<HTMLDetailsElement>(
+			"details.assignee-filter[open]",
+		);
+		if (!menu) {
+			return false;
+		}
+		menu.open = false;
+		return true;
+	}
+
+	/** A click outside the menu closes it; one inside (a checkbox, Clear) does not. */
+	private readonly onDocumentClick = (event: MouseEvent): void => {
+		const menu = this.root.querySelector("details.assignee-filter[open]");
+		if (menu && !menu.contains(event.target as Node)) {
+			this.closeAssigneeMenu();
+		}
+	};
 
 	private setAssigneeMenu(open: boolean): void {
 		if (open === this.assigneeMenuOpen) {

@@ -796,6 +796,36 @@ describe("App", () => {
 			);
 		});
 
+		it("closes the menu on a click outside it, not on one inside", async () => {
+			await open("#projects");
+			openMenu();
+
+			menu()
+				?.querySelector("input")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			expect(menu()?.open).toBe(true);
+
+			document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			expect(menu()?.open).toBe(false);
+		});
+
+		it("closes the menu on Escape before the open panel", async () => {
+			await open("#projects?slug=tk-fixture-000");
+			await vi.waitFor(() =>
+				expect(root.querySelector(".task-detail")).not.toBeNull(),
+			);
+			openMenu();
+
+			document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+			expect(menu()?.open).toBe(false);
+			expect(root.querySelector(".detail-panel")).not.toBeNull();
+
+			document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+			await vi.waitFor(() =>
+				expect(root.querySelector(".detail-panel")).toBeNull(),
+			);
+		});
+
 		it("stops reading them when the menu closes with no filter on", async () => {
 			await open("#projects");
 			openMenu();
