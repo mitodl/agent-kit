@@ -636,6 +636,8 @@ class _NotFoundConnection:
         class _Response:
             status = 404
             will_close = False
+            # Unstamped, as a 0.11.0 server's responses are.
+            headers = http_module.http.client.HTTPMessage()
 
             def read(self):
                 return json.dumps(

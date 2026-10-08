@@ -58,17 +58,28 @@ class FakeResponse:
         body: str = "",
         will_close: bool = False,
         headers: dict | None = None,
+        stamped: bool = True,
     ):
+        """``stamped`` adds the contract header an omnigraph-server 0.13
+        puts on every response. Pass ``False`` for a 0.11 server or a proxy
+        answering in the server's place."""
         self.status = status
         self.will_close = will_close
         self._body = body.encode()
-        self._headers = headers or {}
+        # A real HTTPMessage, so repeated headers and case-insensitive lookup
+        # behave as they do on a live response. A list value repeats the header.
+        self.headers = http.client.HTTPMessage()
+        if stamped:
+            self.headers.add_header(ogh.HTTP_API_CONTRACT_HEADER, ogh.HTTP_API_CONTRACT)
+        for name, value in (headers or {}).items():
+            for item in value if isinstance(value, list) else [value]:
+                self.headers.add_header(name, item)
 
     def read(self) -> bytes:
         return self._body
 
     def getheader(self, name: str, default=None):
-        return self._headers.get(name, default)
+        return self.headers.get(name, default)
 
 
 class FakeConnection:
@@ -634,6 +645,119 @@ def test_no_token_sends_no_authorization_header(_fake_http):
     assert "Authorization" not in _fake_http.created[0].requests[0]["headers"]
 
 
+# ── the HTTP API contract header (omnigraph 0.12+) ───────────────────
+
+
+@pytest.fixture
+def contract_required(monkeypatch):
+    """The state after the pin reaches format 14: an unstamped response is a
+    violation. Until then a 0.11 server legitimately sends none."""
+    monkeypatch.setattr(ogh, "RESPONSE_CONTRACT_REQUIRED", True)
+
+
+def test_every_request_carries_the_contract_header(_fake_http):
+    _fake_http.script = [ok({"rows": []}), ok({}), ok({"graphs": []})]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport.query("council", "q", {}, "t")
+    transport.mutate("council", "q", {}, "t")
+    transport.graphs("t")
+
+    sent = [r["headers"] for r in _fake_http.created[0].requests]
+    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.13"] * 3
+
+
+def test_an_unstamped_response_is_accepted_from_a_0_11_server(_fake_http, monkeypatch):
+    monkeypatch.setattr(ogh, "RESPONSE_CONTRACT_REQUIRED", False)
+    _fake_http.script = [ok({"rows": []}, stamped=False)]
+
+    outcome = ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
+
+    assert outcome.kind == ogh.OK
+
+
+@pytest.mark.parametrize("values", ["0.12", ["0.13", "0.13"], "0.13, 0.13"])
+def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, values):
+    """Present but wrong, which no pin gates: the body is not decoded."""
+    _fake_http.script = [
+        ok(
+            {"rows": [{"m.slug": "x"}]},
+            stamped=False,
+            headers={ogh.HTTP_API_CONTRACT_HEADER: values},
+        )
+    ]
+
+    outcome = ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+    assert outcome.body == ""
+    assert "effects are unknown" in outcome.error
+
+
+@pytest.mark.parametrize("idempotent", [True, False])
+def test_a_refusal_on_another_contract_is_not_classified_by_its_status(
+    _fake_http, idempotent
+):
+    """A 503 stamped 0.14 is not our server asking us to wait."""
+    _fake_http.script = [
+        FakeResponse(
+            503,
+            "loading",
+            stamped=False,
+            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.14"},
+        )
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    outcome = transport.post("/graphs/council/query", {}, None, idempotent=idempotent)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+
+
+def test_an_unstamped_success_is_not_a_result(_fake_http, contract_required):
+    _fake_http.script = [ok({"rows": []}, stamped=False)]
+
+    outcome = ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+    assert "found none" in outcome.error
+
+
+@pytest.mark.parametrize("status", [409, 429, 502, 503])
+def test_an_unstamped_refusal_of_a_write_is_never_retryable(
+    _fake_http, contract_required, status
+):
+    """Each of these is retried when the server says it, because the server
+    saying it proves nothing was applied. A proxy saying it proves nothing."""
+    _fake_http.script = [FakeResponse(status, "upstream reset", stamped=False)]
+
+    outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+    assert outcome.status == status
+    assert "effects are unknown" in outcome.error
+
+
+def test_a_stamped_refusal_of_a_write_keeps_its_classification(
+    _fake_http, contract_required
+):
+    _fake_http.script = [err(503, "graph is loading", code="graph_unavailable")]
+
+    outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.UNAVAILABLE
+
+
+def test_an_unstamped_failure_of_a_read_keeps_its_classification(
+    _fake_http, contract_required
+):
+    """A proxy's 503 while the server restarts. Repeating a read is safe."""
+    _fake_http.script = [FakeResponse(503, "no healthy upstream", stamped=False)]
+
+    outcome = ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
+
+    assert outcome.kind == ogh.UNAVAILABLE
+
+
 # ── routing: what must NOT take the HTTP path ────────────────────────
 
 
@@ -1054,6 +1178,35 @@ def test_recovery_required_on_a_write_is_indeterminate_and_terminal(
 
     with pytest.raises(og.WriteIndeterminate, match="INDETERMINATE"):
         client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_an_unstamped_refusal_of_a_write_is_indeterminate_and_terminal(
+    monkeypatch, tmp_path, _fake_http, contract_required
+):
+    """One response scripted: a retry would exhaust the script. Raised as
+    WriteIndeterminate so a caller that re-reads on that does so here too."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [FakeResponse(503, "no healthy upstream", stamped=False)]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="contract stamp"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_an_unstamped_success_of_a_read_is_an_error_not_rows(
+    monkeypatch, queries_dir, _fake_http, contract_required
+):
+    _fake_http.script = [ok({"rows": [{"m.slug": "x"}]}, stamped=False)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(RuntimeError, match="effects are unknown"):
+        client.read("read.gq", "find_memory", {"slug": "x"})
 
     assert len(_fake_http.created[0].requests) == 1
 

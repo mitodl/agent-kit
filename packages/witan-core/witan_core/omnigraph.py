@@ -2581,6 +2581,16 @@ class OmnigraphClient:
                     f"will not clear it:\n{err.strip()}",
                     operation_id,
                 ) from None
+            if kind == _http.CONTRACT_VIOLATION and is_write:
+                # The response was not stamped by the omnigraph-server we
+                # speak to, so it says nothing about whether the write was
+                # applied. A read falls through to the RuntimeError below.
+                raise WriteIndeterminate(
+                    f"omnigraph {label} got a response without the server's "
+                    f"HTTP contract stamp. ITS OUTCOME IS INDETERMINATE: the "
+                    f"write may or may not have been applied. Re-read before "
+                    f"retrying:\n{err.strip()}"
+                ) from None
             if kind == _http.RECOVERY_REQUIRED:
                 # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one
                 # response covers both an effect-free bystander barrier and
