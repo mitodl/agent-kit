@@ -101,7 +101,9 @@ export class App {
 	 * Every task, for the project list: the assignee filter keeps a project by
 	 * the tasks in it, and the dropdown needs people to offer.
 	 */
-	private readonly projectTasks = new KeyedRead<TaskRow[]>(() => this.draw());
+	private readonly projectTasks = new KeyedRead<ProjectTasks>(() =>
+		this.draw(),
+	);
 	/**
 	 * Whether the Assignee menu is open. On the Projects list that is what
 	 * starts the task read (see `syncReads`): the menu needs people to offer,
@@ -531,7 +533,7 @@ export class App {
 		if (route.view === "projects") {
 			return route.project
 				? (this.rollup.snapshot?.data?.tasks ?? [])
-				: (this.projectTasks.snapshot?.data ?? []);
+				: (this.projectTasks.snapshot?.data?.tasks ?? []);
 		}
 		return [];
 	}
@@ -678,8 +680,17 @@ export class App {
 		const waitingTasks = taskSnapshot
 			? placeholderFor(taskSnapshot, "tasks")
 			: emptyBox("Reading tasks…");
+		const read = taskSnapshot?.data;
 		return (
-			waitingTasks ?? projectList(inScope, this.route, taskSnapshot?.data ?? [])
+			waitingTasks ??
+			html`${
+				read?.truncated
+					? html`<p class="note">
+              A task read came back at its ${TASK_LIMIT}-row limit, so this
+              filter may be missing projects.
+            </p>`
+					: nothing
+			}${projectList(inScope, this.route, read?.tasks ?? [])}`
 		);
 	}
 
@@ -836,6 +847,12 @@ async function readRollup(slug: string): Promise<Rollup> {
 	return { detail, status, tasks, sessions };
 }
 
+/** What the project list reads: the tasks, and whether a read hit its limit. */
+interface ProjectTasks {
+	tasks: TaskRow[];
+	truncated: boolean;
+}
+
 /**
  * Every live task in the graph, closed ones too when asked, for the project
  * list. Three status reads rather than one unfiltered one, as the board does,
@@ -843,7 +860,7 @@ async function readRollup(slug: string): Promise<Rollup> {
  */
 async function readProjectTasks(scope: {
 	closed: boolean;
-}): Promise<TaskRow[]> {
+}): Promise<ProjectTasks> {
 	const everywhere = (status: string) =>
 		taskList({ repo: "", status, limit: TASK_LIMIT });
 	const [open, blocked, inProgress, closed] = await Promise.all([
@@ -852,9 +869,15 @@ async function readProjectTasks(scope: {
 		everywhere("in_progress"),
 		scope.closed ? everywhere("closed") : Promise.resolve([]),
 	]);
-	return [
-		...latestBySlug([...open, ...blocked, ...inProgress, ...closed]).values(),
-	];
+	return {
+		tasks: [
+			...latestBySlug([...open, ...blocked, ...inProgress, ...closed]).values(),
+		],
+		// Any read at the limit may have left rows out, as the board's does.
+		truncated: [open, blocked, inProgress, closed].some(
+			(rows) => rows.length >= TASK_LIMIT,
+		),
+	};
 }
 
 /** The route fields that are arguments to the board's reads. */

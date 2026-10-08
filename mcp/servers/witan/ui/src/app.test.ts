@@ -796,6 +796,37 @@ describe("App", () => {
 			);
 		});
 
+		it("says so when a task read hit its limit, since the filter may be missing projects", async () => {
+			const base = tasks[0] as TaskRow;
+			vi.mocked(mcp.taskList).mockImplementation(async (args) =>
+				args.status === "open"
+					? Array.from({ length: TASK_LIMIT }, (_, index) => ({
+							...base,
+							slug: `tk-bulk-${index}`,
+							status: "open" as const,
+							assignee: null,
+						}))
+					: [],
+			);
+
+			await open("#projects?assignee=unassigned");
+
+			await vi.waitFor(() =>
+				expect(root.querySelector(".note")?.textContent).toContain(
+					"may be missing projects",
+				),
+			);
+		});
+
+		it("does not warn when no read hit its limit", async () => {
+			await open("#projects?assignee=unassigned");
+			await vi.waitFor(() =>
+				expect(root.querySelector("table.rows, .empty")).not.toBeNull(),
+			);
+
+			expect(root.querySelector(".note")).toBeNull();
+		});
+
 		it("closes the menu on a click outside it, not on one inside", async () => {
 			await open("#projects");
 			openMenu();

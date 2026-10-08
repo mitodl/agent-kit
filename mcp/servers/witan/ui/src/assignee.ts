@@ -1,7 +1,7 @@
 /**
  * The assignee filter: who holds a task, as one value per person.
  *
- * A claim writes a session qualifier after the owner (`<email>#003625bb`), so
+ * A claim writes a session qualifier after the owner (`<identity>#003625bb`), so
  * one person appears as several raw `assignee` values across tasks. Everything
  * here works on the normalized form, so one person is one checkbox and one
  * selection matches every session of theirs.
@@ -11,15 +11,23 @@
  * The route value that stands for "no assignee".
  *
  * Not an empty string: that is what `URLSearchParams` makes of a bare
- * `assignee=`, and not a plausible owner, because an owner is an email.
+ * `assignee=`, and not a plausible owner: identities are a person's name or a
+ * worker's id, not the word "unassigned".
  */
 export const UNASSIGNED = "unassigned";
 
-/** The owner of an assignee value: everything before the session qualifier. */
+/**
+ * A trailing `#<session>`: the server's own rule (`SESSION_SUFFIX_RE` in
+ * `witan/readiness.py`), anchored at the end and limited to a session id's
+ * charset, so an identity that merely contains a `#` is not cut short.
+ */
+const SESSION_SUFFIX = /#[0-9A-Za-z_-]{1,64}$/;
+
+/** The owner of an assignee value: the identity, without its session qualifier. */
 export function normalizeAssignee(
 	assignee: string | null | undefined,
 ): string | null {
-	const owner = assignee?.split("#", 1)[0]?.trim();
+	const owner = assignee?.replace(SESSION_SUFFIX, "").trim();
 	return owner ? owner : null;
 }
 

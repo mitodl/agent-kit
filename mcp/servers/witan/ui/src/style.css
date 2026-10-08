@@ -717,6 +717,18 @@ ol.wv-labels a:hover,
 	text-decoration: underline;
 }
 
+/* Waves the assignee filter leaves out of focus keep text contrast (--muted is
+   above 4.5:1 on --bg in both themes) and are italic, so the cue is not colour
+   alone. The bar fades; see `.wv-bar.dim`. */
+ol.wv-labels li.dim a {
+	color: var(--muted);
+	font-style: italic;
+}
+
+ol.wv-labels li.dim a:hover {
+	color: var(--accent);
+}
+
 .tl-label {
 	font-size: var(--step--1);
 	overflow: hidden;
@@ -1248,8 +1260,8 @@ ul.bridge-contracts li {
 }
 
 /* Waves the assignee filter leaves out of focus: still drawn, so the chain
-   they sit in stays readable. */
-.wv-labels li.dim,
+   they sit in stays readable. Only the bar fades; the label's treatment is
+   with the other `wv-labels` rules. */
 .wv-bar.dim {
 	opacity: 0.3;
 }

@@ -16,6 +16,17 @@ describe("normalizeAssignee", () => {
 		expect(normalizeAssignee(ME)).toBe(ME);
 	});
 
+	it("strips only a trailing session qualifier, as the server does", () => {
+		// An identity that contains a '#' is not a qualified one.
+		expect(normalizeAssignee("team#blue@example.com")).toBe(
+			"team#blue@example.com",
+		);
+		expect(normalizeAssignee("team#blue@example.com#1ccd2dfd")).toBe(
+			"team#blue@example.com",
+		);
+		expect(normalizeAssignee("Tobias Macey#5e313f6d")).toBe("Tobias Macey");
+	});
+
 	it("reads nobody as null", () => {
 		expect(normalizeAssignee(null)).toBeNull();
 		expect(normalizeAssignee(undefined)).toBeNull();
