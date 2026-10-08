@@ -283,6 +283,21 @@ def is_store_quarantined(message: str) -> bool:
     return all(marker in lowered for marker in QUARANTINE_MARKERS)
 
 
+#: The 503 ``graph_unavailable`` a 0.13 server gives for a graph that failed
+#: to open at startup. Verbatim on 0.13.0: "graph is unavailable; an operator
+#: must apply an explicit correction or restart after fixing startup
+#: configuration". The server does not retry a blocked graph until its next
+#: restart, so waiting out the restart budget on every call only delays this
+#: message. A loading graph and one mid-transition answer with the same status
+#: and code and different prose, and those do clear, so the prose is the only
+#: discriminator there is.
+GRAPH_BLOCKED_MARKER = "graph is unavailable; an operator must"
+
+
+def is_graph_blocked(message: str) -> bool:
+    return GRAPH_BLOCKED_MARKER in message.lower()
+
+
 def classify_status(status: int, message: str) -> str:
     """Map an HTTP status + error message onto the shared classification names.
 
@@ -327,6 +342,10 @@ def classify_status(status: int, message: str) -> str:
         # terminal for a write, retried for a read. See RECOVERY_REQUIRED.
         if "recovery required" in lowered or "recovery_required" in lowered:
             return RECOVERY_REQUIRED
+        # A blocked graph stays blocked until an operator acts. See
+        # GRAPH_BLOCKED_MARKER.
+        if is_graph_blocked(lowered):
+            return FATAL
         # The server is up enough to answer but not to serve. Same remedy as an
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.

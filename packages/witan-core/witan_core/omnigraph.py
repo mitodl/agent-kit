@@ -196,7 +196,17 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # immediately rather than slept through, since a sleep past the caller's
 # cut-off can only end as a torn-down connection. Quoting the server's number
 # in the error is worth more than obeying it into a wall.
-_ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
+#
+# `too_many_requests` is the 429's wire code. A 0.13 read reports its failure
+# as the JSON error object, code included, so the code covers whatever the
+# server words the cap as (upstream has at least two more spellings than the
+# pair here). A write does not print the code and exits 75 instead; see
+# `_EXIT_RETRY`.
+_ADMISSION_CAP_MARKERS = (
+    "in-flight count cap",
+    "byte budget exceeded",
+    "too_many_requests",
+)
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
@@ -342,7 +352,63 @@ _REMOTE_WRITE_QUEUE_WAIT = 10.0
 # half is going to get dramatically faster, so the deadline is set well above
 # the observed worst case rather than hugged to it: a slower node, a cold
 # image pull, or a larger graph all push the real number up.
-_UNAVAILABLE_MARKERS = ("tcp connect error", "dns error")
+#
+# 0.13 says something else when the CLI cannot reach the server. It sends
+# `HEAD /healthz` before every data request, and when that fails it reports,
+# verbatim on 0.13.0 for a refused connection and for an unresolvable host
+# alike:
+#
+#   server discovery connection failed (DNS, TCP, proxy, or TLS); could not
+#   establish omnigraph-http-api: 0.13; this data request was not sent
+#
+# "this data request was not sent" is the property the old markers were
+# standing in for, stated outright, so it is safe for a write too. The
+# timed-out spelling is from upstream's `graph_http.rs` and was not provoked
+# here. Deliberately NOT matched: "could not establish … through successful
+# server discovery", which is something that ANSWERED the probe without the
+# 0.13 contract. A server on another contract will keep doing so however long
+# we wait. A proxy answering 502/503 in a restarting server's place lands
+# here too and would clear, but nothing sits between witan and
+# omnigraph-server today, and telling the two apart means reading the status
+# out of wording that was not provoked here.
+#
+# The old markers stay: a marker list is matched against whatever binary is
+# installed, and that is 0.11 until the pin moves.
+_UNAVAILABLE_MARKERS = (
+    "tcp connect error",
+    "dns error",
+    "server discovery connection failed",
+    "server discovery timed out",
+)
+
+# The 0.13 CLI makes the same check on a data response that
+# `_http.contract_violation` makes for the pooled transport, and reports a
+# failure of it as (upstream `graph_http.rs`, not provoked here):
+#
+#   server response did not carry exactly one omnigraph-http-api: 0.13 header;
+#   this request's effects are unknown; do not retry automatically
+#
+# Classified the same way, so a write over the CLI raises WriteIndeterminate
+# as one over HTTP does. The discovery refusals say "this data request was not
+# sent" instead and do not match.
+_CLI_CONTRACT_VIOLATION = "this request's effects are unknown"
+
+# What a 0.13 server answers, with 503 `graph_unavailable`, for a graph it
+# knows but is not serving YET (upstream `handlers.rs`). Both clear on their
+# own, so they get the same wait as an unreachable server, which is what
+# `classify_status` already gives them over HTTP by status. The third 503 with
+# that code, a graph that failed to open, does not clear until an operator
+# acts; see `_http.is_graph_blocked`.
+_GRAPH_NOT_YET_SERVING = (
+    "graph is loading",
+    "graph admission is closed for a serving transition",
+)
+
+# The 0.13 CLI exits with this (EX_TEMPFAIL) for exactly one condition: a
+# single effectful request the server refused with 429 `too_many_requests`
+# before doing anything (upstream `command_outcome.rs`). That is the admission
+# cap, identified without reading prose.
+_EXIT_RETRY = 75
 _UNAVAILABLE_MAX_WAIT = 150.0
 _UNAVAILABLE_BASE_DELAY = 0.5
 _UNAVAILABLE_MAX_DELAY = 10.0
@@ -625,12 +691,70 @@ class _AttemptResult(NamedTuple):
     retry_after: float | None = None
 
 
-def _classify_cli_error(stderr: str) -> str:
-    """Map an omnigraph CLI failure's stderr onto the shared kinds."""
+class _CliFailure(NamedTuple):
+    #: What to show: stderr, or a rendering of the error object on stdout.
+    message: str
+    #: What to match the marker tables against: stderr, or the error object
+    #: verbatim, so its structured keys (``precondition_failure``,
+    #: ``recovery_required``, ``code``) are matched as well as its prose.
+    classify: str
+
+
+def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
+    """The text of a failed CLI call, wherever the binary put it.
+
+    On 0.11 every failure is on stderr. On 0.13 a read made with
+    ``--format json`` against a server reports its failure as a JSON object on
+    STDOUT and leaves stderr empty (measured on 0.13.0: an unknown graph, a
+    blocked graph and an unreachable server all do). Classifying stderr alone
+    would see nothing, call every one of those FATAL, and raise an error with
+    no message in it.
+
+    Stdout is used ONLY when it is such an error object. Anything else there
+    is the command's own output (rows a read printed before it was killed,
+    say), and matching that against the marker tables would let the text of a
+    stored memory decide whether a call is retried or sent to repair.
+
+    The object is rendered the way
+    :func:`witan_core.omnigraph_http.error_message` renders the same body off
+    the wire, so one condition reads the same on either transport.
+    """
+    if stderr.strip():
+        return _CliFailure(stderr, stderr)
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        return _CliFailure(stderr, stderr)
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), str):
+        return _CliFailure(stderr, stderr)
+    status = parsed.get("http_status")
+    if isinstance(status, int):
+        return _CliFailure(_http.error_message(status, stdout), stdout)
+    code = parsed.get("code")
+    message = f"{parsed['error']} ({code})" if code else parsed["error"]
+    return _CliFailure(message, stdout)
+
+
+def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
+    """Map an omnigraph CLI failure's text and exit code onto the shared kinds.
+
+    ``stderr`` is :func:`_cli_failure`'s ``classify`` text, which on 0.13 can
+    be the JSON error object the binary printed on stdout.
+    """
     lowered = stderr.lower()
+    # First, because nothing else in a response the CLI itself distrusts
+    # should be believed either. See _CLI_CONTRACT_VIOLATION.
+    if _CLI_CONTRACT_VIOLATION in lowered:
+        return _http.CONTRACT_VIOLATION
     if any(m in lowered for m in _UNAVAILABLE_MARKERS):
         return _http.UNAVAILABLE
-    if any(m in lowered for m in _ADMISSION_CAP_MARKERS):
+    # Ahead of the retryable 503 wordings below: all three are the same status
+    # and code, and only this one does not clear by waiting.
+    if _http.is_graph_blocked(lowered):
+        return _http.FATAL
+    if any(m in lowered for m in _GRAPH_NOT_YET_SERVING):
+        return _http.UNAVAILABLE
+    if returncode == _EXIT_RETRY or any(m in lowered for m in _ADMISSION_CAP_MARKERS):
         return _http.ADMISSION_CAP
     # Ahead of _RETRYABLE deliberately — see _PRECONDITION_FAILED. Terminal
     # beats retryable when a message could be read as either.
@@ -1784,10 +1908,12 @@ class OmnigraphClient:
         # `_classify_cli_error`'s `_PRECONDITION_FAILED` markers are tuned
         # against. WITH --json, that same failure moves ENTIRELY to a JSON
         # body on STDOUT and STDERR COMES BACK EMPTY. `_execute`'s `attempt()`
-        # classifies from `result.stderr` only, so adding --json here would
-        # silently starve that classifier on every CLI-path precondition
-        # failure — the exact 412 handling shipped in agent-kit#245/#246 this
-        # morning. The CLI path stays without a returned commit id rather than
+        # classified from `result.stderr` only at the time, so adding --json
+        # here would have starved that classifier on every CLI-path
+        # precondition failure. It reads an error object off stdout now
+        # (`_cli_failure`), but only the read shapes were measured that way on
+        # 0.13, not a `mutate --json`. The CLI path stays without a returned
+        # commit id rather than
         # risk that; a caller degrades to an unconstrained verification read,
         # same as it already does when `if_commit` itself is unavailable.
         extra = ["--if-commit", if_commit] if if_commit is not None else []
@@ -2245,7 +2371,7 @@ class OmnigraphClient:
             if result.returncode == 0:
                 return _AttemptResult(_http.OK, returncode=0)
             return _AttemptResult(
-                _classify_cli_error(result.stderr),
+                _classify_cli_error(result.stderr, result.returncode),
                 error=result.stderr,
                 returncode=result.returncode,
             )
@@ -2337,9 +2463,10 @@ class OmnigraphClient:
                 raise RuntimeError(f"omnigraph {label} could not run: {exc}") from exc
             if result.returncode == 0:
                 return _AttemptResult(_http.OK, body=result.stdout, returncode=0)
+            failure = _cli_failure(result.stdout, result.stderr)
             return _AttemptResult(
-                _classify_cli_error(result.stderr),
-                error=result.stderr,
+                _classify_cli_error(failure.classify, result.returncode),
+                error=failure.message,
                 returncode=result.returncode,
             )
 

@@ -588,12 +588,14 @@ def _client(monkeypatch):
     return OmnigraphClient("https://graph.example", Path("/queries"), graph_id="g")
 
 
-def _stub_run(monkeypatch, *, returncode, stderr):
+def _stub_run(monkeypatch, *, returncode, stderr, stdout=""):
     calls = {"n": 0}
 
     def fake_run(cmd, **kwargs):
         calls["n"] += 1
-        return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+        return subprocess.CompletedProcess(
+            cmd, returncode, stdout=stdout, stderr=stderr
+        )
 
     monkeypatch.setattr(og.subprocess, "run", fake_run)
     monkeypatch.setattr(og.time, "sleep", lambda *_: None)
@@ -1151,6 +1153,253 @@ def test_connect_retry_off_fails_immediately(monkeypatch):
     with pytest.raises(RuntimeError, match="failed"):
         client._execute(["omnigraph", "branch"], "branch", is_write=False)
     assert calls["n"] == 1
+
+
+# ── omnigraph 0.13: where the CLI prints a failure, and what it says ──
+#
+# Every string below is verbatim from the 0.13.0 binary against a scratch
+# `omnigraph-server --cluster`, in the argument shapes this client uses:
+# reads with `--format json`, writes with `--quiet`.
+
+# A read's failure is a JSON object on STDOUT, with stderr empty.
+_013_READ_SERVER_DOWN_STDOUT = """{
+  "error": "server discovery connection failed (DNS, TCP, proxy, or TLS); could not establish omnigraph-http-api: 0.13; this data request was not sent",
+  "code": "api_contract_mismatch",
+  "http_status": null,
+  "request_dispatched": false
+}
+"""
+_013_READ_UNKNOWN_GRAPH_STDOUT = """{
+  "error": "graph not found",
+  "code": "not_found"
+}
+"""
+_013_READ_BLOCKED_GRAPH_STDOUT = """{
+  "error": "graph is unavailable; an operator must apply an explicit correction or restart after fixing startup configuration",
+  "code": "graph_unavailable"
+}
+"""
+# A write's failure is still text on stderr, now followed by `command_outcome`.
+_013_WRITE_SERVER_DOWN_STDERR = (
+    "server discovery connection failed (DNS, TCP, proxy, or TLS); could not "
+    "establish omnigraph-http-api: 0.13; this data request was not sent\n"
+    'command_outcome: {"execution":"not_started","effects":"none","action":"refresh"}\n'
+)
+_013_WRITE_BLOCKED_GRAPH_STDERR = (
+    "graph is unavailable; an operator must apply an explicit correction or "
+    "restart after fixing startup configuration\n"
+    "HTTP 503\n"
+    'command_outcome: {"execution":"unknown","effects":"unknown","action":"reconcile"}\n'
+)
+_013_WRITE_PRECONDITION_STDERR = (
+    "precondition failed on branch 'main': expected head "
+    "'01M4E9AVZWQCRFW6THFQCDCJJ5' but current is "
+    "hb1.01M4EBE1KGH7GZP3TV9A32MK7E.2.01M4EBE1RM4008TZQ7W64SX5FJ\n"
+    "HTTP 412\n"
+    'command_outcome: {"execution":"not_started","effects":"none","action":"refresh"}\n'
+)
+
+
+def test_a_failure_printed_on_stdout_is_still_the_error_text():
+    """0.13 moved a server-backed read's failure off stderr. Read from stderr
+    alone, each of these is an empty string: FATAL, with no message."""
+    failure = og._cli_failure(_013_READ_UNKNOWN_GRAPH_STDOUT, "")
+    assert failure.message == "graph not found (not_found)"
+    assert failure.classify == _013_READ_UNKNOWN_GRAPH_STDOUT
+    assert "this data request was not sent" in (
+        og._cli_failure(_013_READ_SERVER_DOWN_STDOUT, "").message
+    )
+
+
+def test_an_error_object_with_a_status_renders_as_the_http_path_does():
+    body = '{"error": "nope", "code": "bad_request", "http_status": 400}'
+    assert og._cli_failure(body, "").message == "nope (HTTP 400, bad_request)"
+
+
+def test_stderr_wins_when_the_binary_wrote_both():
+    failure = og._cli_failure('{"error": "from stdout"}', "from stderr\n")
+    assert failure == ("from stderr\n", "from stderr\n")
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "plain text\n",
+        # Rows a read printed before it died. Their text is user content, and
+        # this one would otherwise classify as NEEDS_REPAIR and run a repair.
+        '{"rows": [{"m.content": "run omnigraph repair, then stale view"}]}',
+        '["not", "an", "object"]',
+        '{"error": {"not": "a string"}}',
+    ],
+)
+def test_stdout_that_is_not_an_error_object_never_reaches_the_classifier(stdout):
+    failure = og._cli_failure(stdout, "")
+    assert failure == ("", "")
+    assert og._classify_cli_error(failure.classify, 1) == _http.FATAL
+
+
+def test_a_structured_key_classifies_without_its_prose():
+    """The classifier sees the object verbatim, so a key upstream documents
+    still decides when the sentence beside it is reworded."""
+    body = '{"error": "reworded", "precondition_failure": {"expected": "a"}}'
+    failure = og._cli_failure(body, "")
+    assert og._classify_cli_error(failure.classify, 1) == _http.PRECONDITION_FAILED
+
+
+def test_a_429_on_a_0_13_read_is_the_admission_cap_by_its_code():
+    """Wording from upstream's operations.rs, not provoked; the code is what
+    is matched, so the wording does not matter."""
+    body = (
+        '{"error": "server read observer cap 8 exceeded", '
+        '"code": "too_many_requests", "http_status": 429}'
+    )
+    failure = og._cli_failure(body, "")
+    assert og._classify_cli_error(failure.classify, 1) == _http.ADMISSION_CAP
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "expected"),
+    [
+        (_013_READ_SERVER_DOWN_STDOUT, "", _http.UNAVAILABLE),
+        ("", _013_WRITE_SERVER_DOWN_STDERR, _http.UNAVAILABLE),
+        # Blocked until an operator acts: waiting out the restart budget on
+        # every call would only delay the message that says so.
+        (_013_READ_BLOCKED_GRAPH_STDOUT, "", _http.FATAL),
+        ("", _013_WRITE_BLOCKED_GRAPH_STDERR, _http.FATAL),
+        (_013_READ_UNKNOWN_GRAPH_STDOUT, "", _http.FATAL),
+        ("", _013_WRITE_PRECONDITION_STDERR, _http.PRECONDITION_FAILED),
+        # The two 503 graph_unavailable wordings that do clear on their own
+        # (upstream handlers.rs; not provoked against the binary).
+        (
+            "",
+            "graph is loading; wait for its startup attempt to complete\nHTTP 503\n",
+            _http.UNAVAILABLE,
+        ),
+        (
+            "",
+            "graph admission is closed for a serving transition\nHTTP 503\n",
+            _http.UNAVAILABLE,
+        ),
+    ],
+)
+def test_0_13_cli_failures_classify(stdout, stderr, expected):
+    failure = og._cli_failure(stdout, stderr)
+    assert og._classify_cli_error(failure.classify, 1) == expected
+
+
+def test_a_server_on_another_contract_is_not_waited_for():
+    """Discovery reached a server and it is not ours. Upstream's wording, from
+    graph_http.rs; it shares "this data request was not sent" with the
+    connection failure, which is why that phrase is not the marker."""
+    text = (
+        "could not establish omnigraph-http-api: 0.13 through successful server "
+        "discovery; this data request was not sent; configure the server root "
+        "and select the graph separately"
+    )
+    assert og._classify_cli_error(text, 1) == _http.FATAL
+
+
+# Upstream's graph_http.rs wording for a data response the 0.13 CLI itself
+# found unstamped. Not provoked against the binary.
+_013_CLI_UNSTAMPED_RESPONSE_STDERR = (
+    "server response did not carry exactly one omnigraph-http-api: 0.13 "
+    "header; this request's effects are unknown; do not retry automatically\n"
+    "HTTP 503\n"
+    'command_outcome: {"execution":"unknown","effects":"unknown","action":"reconcile"}\n'
+)
+
+
+def test_a_response_the_cli_found_unstamped_is_a_contract_violation():
+    assert (
+        og._classify_cli_error(_013_CLI_UNSTAMPED_RESPONSE_STDERR, 1)
+        == _http.CONTRACT_VIOLATION
+    )
+
+
+def test_an_unstamped_response_to_a_cli_write_is_indeterminate(monkeypatch):
+    """The same outcome the pooled transport gives it, so a caller that
+    re-reads on WriteIndeterminate does so whichever transport carried the
+    write. One call: it is never retried."""
+    client = _client(monkeypatch)
+    calls = _stub_run(
+        monkeypatch, returncode=1, stderr=_013_CLI_UNSTAMPED_RESPONSE_STDERR
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="contract stamp"):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] == 1
+
+
+def test_exit_75_is_the_admission_cap_whatever_the_text_says():
+    """The 0.13 CLI exits 75 only for a 429 the server refused before doing
+    anything, so the exit code identifies it without matching prose."""
+    assert og._classify_cli_error("anything at all", 75) == _http.ADMISSION_CAP
+    assert og._classify_cli_error("anything at all", 1) == _http.FATAL
+
+
+def test_a_0_13_read_rides_out_a_restart_over_the_cli(monkeypatch):
+    """End to end through `_execute`: the failure is on stdout, and it still
+    reaches the unavailable budget instead of failing on the first attempt."""
+    client = _client(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout=_013_READ_SERVER_DOWN_STDOUT, stderr=""
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    _fake_clock(monkeypatch)
+
+    assert client._execute(["omnigraph", "query"], "query", is_write=False) == "ok"
+    assert calls["n"] == 3
+
+
+def test_a_0_13_write_rides_out_a_restart_over_the_cli(monkeypatch):
+    """ "this data request was not sent", so repeating the write is safe."""
+    client = _client(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr=_013_WRITE_SERVER_DOWN_STDERR
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    _fake_clock(monkeypatch)
+
+    assert client._execute(["omnigraph", "mutate"], "mutate", is_write=True) == "ok"
+    assert calls["n"] == 3
+
+
+def test_the_0_13_wording_from_a_local_store_is_not_waited_for(monkeypatch):
+    """The unavailable budget is for a restarting server. A local store has
+    none, whatever its error says."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("/var/lib/witan/graph.omni", Path("/queries"))
+    calls = _stub_run(
+        monkeypatch, returncode=1, stdout=_013_READ_SERVER_DOWN_STDOUT, stderr=""
+    )
+
+    with pytest.raises(RuntimeError, match="failed"):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert calls["n"] == 1
+
+
+def test_a_0_13_read_failure_carries_its_message(monkeypatch):
+    client = _client(monkeypatch)
+    _stub_run(
+        monkeypatch, returncode=1, stdout=_013_READ_UNKNOWN_GRAPH_STDOUT, stderr=""
+    )
+
+    with pytest.raises(RuntimeError, match=r"graph not found \(not_found\)"):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
 
 
 def test_local_store_does_not_take_the_unavailable_path(monkeypatch):

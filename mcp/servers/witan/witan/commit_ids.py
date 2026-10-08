@@ -26,6 +26,9 @@ _HISTORY_BLOCK_PREFIX = "hb1."
 # three bits, so it stops at 7.
 _ULID = r"[0-7][0-9A-HJKMNP-TV-Z]{25}"
 _ULID_RE = re.compile(_ULID)
+# Upstream's `HISTORY_BLOCK_SLOTS` (16 * 1024). Its parser refuses a slot at
+# or above this, so an id carrying one did not come from omnigraph.
+_HISTORY_BLOCK_SLOTS = 16384
 _HISTORY_BLOCK_RE = re.compile(
     rf"hb1\.(?P<block>{_ULID})\.(?P<slot>0|[1-9][0-9]*)\.(?P<nonce>{_ULID})"
 )
@@ -42,7 +45,7 @@ class _CommitId(NamedTuple):
 def _parse(commit_id: str) -> _CommitId:
     if commit_id.startswith(_HISTORY_BLOCK_PREFIX):
         match = _HISTORY_BLOCK_RE.fullmatch(commit_id)
-        if match is None:
+        if match is None or int(match["slot"]) >= _HISTORY_BLOCK_SLOTS:
             raise ValueError(f"malformed history-block commit id: {commit_id!r}")
         return _CommitId(match["block"], int(match["slot"]), match["nonce"])
     if _ULID_RE.fullmatch(commit_id) is None:

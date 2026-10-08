@@ -632,7 +632,13 @@ class _NotFoundConnection:
     def request(self, method, path, body=None, headers=None):
         pass
 
+    #: 0.13.0 dropped the quoted id: `{"error": "graph not found", "code":
+    #: "not_found"}`, measured the same way on 2026-10-08.
+    error = "graph 'nosuch' not found"
+
     def getresponse(self):
+        _error = self.error
+
         class _Response:
             status = 404
             will_close = False
@@ -640,9 +646,7 @@ class _NotFoundConnection:
             headers = http_module.http.client.HTTPMessage()
 
             def read(self):
-                return json.dumps(
-                    {"error": "graph 'nosuch' not found", "code": "not_found"}
-                ).encode()
+                return json.dumps({"error": _error, "code": "not_found"}).encode()
 
             def getheader(self, _name, default=None):
                 return default
@@ -653,18 +657,20 @@ class _NotFoundConnection:
         pass
 
 
-def test_a_missing_cluster_graph_is_still_recognised_over_http(monkeypatch):
+@pytest.mark.parametrize("error", ["graph 'nosuch' not found", "graph not found"])
+def test_a_missing_cluster_graph_is_still_recognised_over_http(monkeypatch, error):
     """★ THE WORDING `_NOT_FOUND_RE` KEYS ON NOW ARRIVES FROM THE SERVER.
 
     `list_branches` was unconditionally a subprocess, so `_NOT_FOUND_RE` was
     tuned against what the CLI printed (see the comment above it). It is a
     `branch list` statement now, so a remote client takes the pooled transport
     and this discrimination runs on the HTTP body instead. If the server ever
-    stops quoting the id, every missing graph files as `ClusterUnreachable`
-    rather than `ClusterGraphMissing`, which is the exact confusion those two
-    types exist to prevent — and nothing else in the suite would notice,
+    stops quoting the id (0.13.0 did), every missing graph files as
+    `ClusterUnreachable` rather than `ClusterGraphMissing`, which is the exact
+    confusion those two types exist to prevent — and nothing else in the suite would notice,
     because every other probe test fakes the client.
     """
+    monkeypatch.setattr(_NotFoundConnection, "error", error)
     monkeypatch.setattr(http_module.http.client, "HTTPSConnection", _NotFoundConnection)
     monkeypatch.setattr(http_module.http.client, "HTTPConnection", _NotFoundConnection)
     monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")

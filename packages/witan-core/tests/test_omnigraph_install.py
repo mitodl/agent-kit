@@ -262,6 +262,17 @@ def test_reported_internal_schema_reads_the_version_line(tmp_path):
     assert oi.reported_internal_schema(binary) == 6
 
 
+def test_reported_internal_schema_reads_the_0_13_version_line(tmp_path):
+    """Verbatim from omnigraph 0.13.0. The line gained the range the binary
+    serves, so the number is no longer its last token."""
+    binary = _fake_version_binary(
+        tmp_path / "og",
+        "echo 'omnigraph 0.13.0'\necho 'internal-schema 14 (serves v14 to v14)'",
+    )
+
+    assert oi.reported_internal_schema(binary) == 14
+
+
 def test_reported_internal_schema_raises_when_the_line_is_gone(tmp_path):
     """Never a sentinel. Every caller compares the result against a declared
     format, and a comparison against "unknown" that quietly passes is the

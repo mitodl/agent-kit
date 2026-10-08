@@ -68,6 +68,7 @@ def test_bare_ulids_order_as_text():
         f"hb1.{_BLOCK}.1",
         f"hb1.{_BLOCK}.01.{_NONCE}",
         f"hb1.{_BLOCK}.-1.{_NONCE}",
+        f"hb1.{_BLOCK}.16384.{_NONCE}",
         f"hb1.{_BLOCK}.1.{_NONCE}.extra",
         f"hb2.{_BLOCK}.1.{_NONCE}",
     ],
