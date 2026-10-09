@@ -291,13 +291,21 @@ Push only now. A branch pushed before Step 4 puts unreviewed code,
 unaudited claims, and possibly secrets in public. If it was already
 pushed, run Step 4 anyway and push corrections as new commits.
 
+Write the body to a file and pass it with `--body-file`. Do not inline it into
+the command with `--body` — a real body has newlines, backticks, `$`, and
+quotes in it, and the shell will mangle or execute them.
+
 ```bash
+cat > /tmp/pr-body.md << 'PRBODY'
+<filled-in body>
+PRBODY
+
 git push -u origin <branch>
 gh pr create \
   --repo mitodl/<repo> \
   --base <base-branch> \
   --title "<title>" \
-  --body "<filled-in body>" \
+  --body-file /tmp/pr-body.md \
   [--draft]
 ```
 
