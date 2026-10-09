@@ -295,8 +295,14 @@ Write the body to a file and pass it with `--body-file`. Do not inline it into
 the command with `--body` — a real body has newlines, backticks, `$`, and
 quotes in it, and the shell will mangle or execute them.
 
+Name the file with `mktemp`, not a fixed path like `/tmp/pr-body.md`. Several
+agents run this skill at once across different checkouts on the same machine,
+and a shared name means they overwrite each other's drafts — the failure mode
+is one agent publishing another's body under its own title.
+
 ```bash
-cat > /tmp/pr-body.md << 'PRBODY'
+PR_BODY="$(mktemp -t pr-body.XXXXXXXX)"
+cat > "$PR_BODY" << 'PRBODY'
 <filled-in body>
 PRBODY
 
@@ -305,9 +311,12 @@ gh pr create \
   --repo mitodl/<repo> \
   --base <base-branch> \
   --title "<title>" \
-  --body-file /tmp/pr-body.md \
+  --body-file "$PR_BODY" \
   [--draft]
 ```
+
+Keep the write and the `gh pr create` in one shell invocation so `$PR_BODY` is
+still set, or capture the path and reuse it literally.
 
 Confirm the PR URL returned by `gh pr create` and share it with the user.
 
