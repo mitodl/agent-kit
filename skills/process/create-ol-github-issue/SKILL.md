@@ -59,15 +59,28 @@ Present these four options and apply the matching template body:
 
 ## Step 3 — Create the issue
 
-Show the filled-in body and confirm before creating it. Use the GitHub CLI:
+Show the filled-in body and confirm before creating it. Write the body to a
+file and pass it with `--body-file` — never inline it with `--body`. An issue
+body holds pasted errors and code snippets, and the backticks and `$` in those
+are expanded by the shell before `gh` sees them, silently dropping the
+identifiers from what gets posted. Name the file with `mktemp` rather than a
+fixed path, so concurrent agents can't overwrite each other's drafts.
 
 ```bash
+ISSUE_BODY="$(mktemp -t issue-body.XXXXXXXX)"
+cat > "$ISSUE_BODY" << 'ISSUEBODY'
+<filled-in template body>
+ISSUEBODY
+
 gh issue create \
   --repo mitodl/<repo> \
   --title "<title>" \
-  --body "<filled-in template body>" \
+  --body-file "$ISSUE_BODY" \
   --label "<label>"   # omit if no label for this template type
 ```
+
+Keep the write and the `gh issue create` in one shell invocation so
+`$ISSUE_BODY` is still set.
 
 Confirm the URL returned by `gh issue create` and share it with the user.
 

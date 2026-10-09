@@ -60,7 +60,7 @@ Rough per-section budget:
 Before posting, check it:
 
 ```bash
-wc -w /tmp/rfc-body.md
+wc -w "$RFC_BODY"
 ```
 
 If it is over 2,000, cut — do not rationalise. The usual offenders, in order:
@@ -168,15 +168,24 @@ post, not to this file.
 ## Step 4 — Write the RFC body to a file
 
 Write the finished RFC markdown to a temporary file. Do not attempt to inline
-it into a shell command — newlines and quotes will break the invocation.
+it into a shell command — newlines and quotes will break the invocation, and
+backticks and `$` are expanded by the shell before the script sees them.
+
+Name the file with `mktemp`, not a fixed path like `/tmp/rfc-body.md`. Several
+agents can run this skill at once across different checkouts on one machine,
+and a shared name means one of them broadcasts another's draft under its own
+title.
 
 ```bash
-cat > /tmp/rfc-body.md << 'RFCEOF'
+RFC_BODY="$(mktemp -t rfc-body.XXXXXXXX)"
+cat > "$RFC_BODY" << 'RFCEOF'
 <RFC content here>
 RFCEOF
 ```
 
 Then run the word count from the length budget section above before posting.
+Keep Steps 4 and 5 in one shell invocation so `$RFC_BODY` is still set, or
+capture the path and reuse it literally.
 
 ---
 
@@ -192,18 +201,20 @@ API call manually.
 ```bash
 SCRIPT="skills/process/create-ol-rfc-discussion/scripts/post-rfc-discussion.sh"
 
-bash "$SCRIPT" -t "<RFC title>" -f /tmp/rfc-body.md
+bash "$SCRIPT" -t "<RFC title>" -f "$RFC_BODY"
 ```
 
-Alternative invocations:
+Piping via stdin works too:
 
 ```bash
-# Pipe body via stdin
-cat /tmp/rfc-body.md | bash "$SCRIPT" -t "<RFC title>"
-
-# Pass body as a string (for short RFCs)
-bash "$SCRIPT" -t "<RFC title>" -b "$(cat /tmp/rfc-body.md)"
+bash "$SCRIPT" -t "<RFC title>" < "$RFC_BODY"
 ```
+
+The script also accepts `-b BODY`. Don't reach for it. Typing the RFC text
+into it directly reintroduces the expansion the file avoids, and the
+`-b "$(cat …)"` spelling — which is expansion-safe, since a command
+substitution's output is not re-expanded — just routes a 2,000-word body
+through the argument list for no gain.
 
 The script outputs the discussion URL on success. Confirm it and share
 with the user.
@@ -215,8 +226,8 @@ with the user.
 | Flag | Required | Description |
 |------|----------|-------------|
 | `-t TITLE` | ✅ | Discussion title. `RFC: ` prefix is added automatically if absent. |
-| `-f FILE` | one of `-f`/`-b`/stdin | Read body from a file path. |
-| `-b BODY` | one of `-f`/`-b`/stdin | Body text passed directly. |
+| `-f FILE` | one of `-f`/`-b`/stdin | Read body from a file path. Use this. |
+| `-b BODY` | one of `-f`/`-b`/stdin | Body text passed directly. Avoid — typed literally, the shell expands its backticks and `$` first. |
 | _(stdin)_ | one of `-f`/`-b`/stdin | Body read from stdin if neither flag is given. |
 
 ---

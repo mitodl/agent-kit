@@ -11,7 +11,12 @@
 #   printf "1749\n822\n407\n" | ./close-issues.sh --close  <owner/repo>
 #
 # The closing comment explains why the issue is being closed so that
-# future readers have context.  Edit CLOSE_REASON below to customise.
+# future readers have context.  Override it with ISSUE_TRIAGE_REASON (a
+# one-liner) or ISSUE_TRIAGE_REASON_FILE (a path).  Prefer the file for
+# anything containing backticks, $, or quotes: a reason set inline on the
+# command line is expanded by the caller's shell first, which silently drops
+# backticked identifiers from the comment that gets posted.  There is no
+# stdin option for the reason -- stdin is the issue-number list.
 #
 # Requires: gh (GitHub CLI)
 
@@ -20,7 +25,23 @@ set -euo pipefail
 MODE="${1:?Usage: $0 --dry-run|--close|--comment <owner/repo>}"
 REPO="${2:?Usage: $0 --dry-run|--close|--comment <owner/repo>}"
 
-CLOSE_REASON="${ISSUE_TRIAGE_REASON:-"Closed during automated issue triage: the work described in this issue has been completed, the approach has been superseded, or a newer issue now tracks this scope. See the triage report for details."}"
+DEFAULT_REASON="Closed during automated issue triage: the work described in this issue has been completed, the approach has been superseded, or a newer issue now tracks this scope. See the triage report for details."
+
+if [[ -n "${ISSUE_TRIAGE_REASON_FILE:-}" ]]; then
+  if [[ -n "${ISSUE_TRIAGE_REASON:-}" ]]; then
+    echo "Error: set ISSUE_TRIAGE_REASON or ISSUE_TRIAGE_REASON_FILE, not both" >&2
+    exit 1
+  fi
+  if [[ -r "${ISSUE_TRIAGE_REASON_FILE}" ]]; then
+    CLOSE_REASON="$(cat "${ISSUE_TRIAGE_REASON_FILE}")"
+  else
+    echo "Error: cannot read ISSUE_TRIAGE_REASON_FILE: ${ISSUE_TRIAGE_REASON_FILE}" >&2
+    exit 1
+  fi
+  [[ -z "${CLOSE_REASON}" ]] && { echo "Error: ISSUE_TRIAGE_REASON_FILE is empty" >&2; exit 1; }
+else
+  CLOSE_REASON="${ISSUE_TRIAGE_REASON:-${DEFAULT_REASON}}"
+fi
 
 while IFS= read -r line; do
   ISSUE_NUM=$(echo "${line}" | tr -d '\r' | xargs)

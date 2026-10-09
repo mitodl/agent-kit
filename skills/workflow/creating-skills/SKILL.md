@@ -101,6 +101,28 @@ has none of these tools; see
 for the optional Pi extensions that add them. `just check-skills` flags a
 Claude-only mention with no fallback beside it.
 
+## 4c. Never put body text on a command line
+
+If the skill posts text to GitHub — an issue, a PR, a comment, a discussion,
+a review reply — write that text to a file and pass the path. Both halves
+matter:
+
+- **Use the file flag, not the string flag.** `gh` takes `--body-file`; the
+  scripts in `skills/process/` take `--comment-file` / `--body-file`, and `-`
+  reads stdin. A body inlined as `--body "..."` has its backticks and `$`
+  expanded by the shell before the command runs, so a reply citing
+  `some_function` posts with the identifier silently missing. Bodies routinely
+  carry pasted errors, shell snippets, and backticked identifiers, so this is
+  the common case rather than the edge one.
+- **Name the file with `mktemp`, never a fixed path.** Several agents run the
+  same skill at once across different checkouts on one machine. A shared
+  `/tmp/<skill>-body.md` means one of them publishes another's draft under its
+  own title.
+
+Writing a new script that posts text? Give it a file or stdin input from the
+start, and build any JSON payload with `jq --arg` / `--rawfile` rather than
+interpolating the text into the jq program.
+
 ## 5. Update the indexes
 
 After creating the skill, update two places:
