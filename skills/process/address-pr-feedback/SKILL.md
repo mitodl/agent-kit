@@ -303,22 +303,37 @@ your own paraphrase — ask for the wording if you don't already have it. Those
 replies are read as the author's position, not the tool's.
 
 For each thread you touched, reply with what changed (cite the commit) and
-resolve in one call:
+resolve in one call. Pipe the reply in rather than passing it as an argument:
+a reply naming `a_function` in backticks is command-substituted by your shell
+before the script sees it, and the identifier silently vanishes from what gets
+posted.
 
 ```bash
 ./skills/process/address-pr-feedback/scripts/resolve-thread.sh \
   --thread-id PRRT_kwDORsi4Ac6PsuPQ \
-  --comment "Fixed in a1b2c3d: switched transport to streamable-http per the schema."
+  --comment-file - <<'REPLY'
+Fixed in a1b2c3d: switched transport to streamable-http per the schema.
+REPLY
 ```
 
-For a batch, build the JSON and pipe it once:
+`--comment "..."` still works for a reply with no backticks, `$`, or quotes in
+it. When in doubt use `--comment-file`; there is no case where it is wrong.
+
+For a batch, build the JSON with `jq --arg` — never by interpolating the reply
+text into the jq program — and pipe it once:
 
 ```bash
-jq -n '[
-  {thread_id: "PRRT_...", comment: "Fixed in a1b2c3d: ..."},
-  {thread_id: "PRRT_...", comment: "Verified — false positive, see reply. No change needed."}
-]' | ./skills/process/address-pr-feedback/scripts/resolve-threads.sh
+jq -n \
+  --arg c1 "$(cat reply-1.md)" \
+  --arg c2 "$(cat reply-2.md)" \
+  '[
+    {thread_id: "PRRT_...", comment: $c1},
+    {thread_id: "PRRT_...", comment: $c2}
+  ]' | ./skills/process/address-pr-feedback/scripts/resolve-threads.sh
 ```
+
+`--rawfile c1 reply-1.md` reads the file directly if you'd rather skip the
+`$(cat ...)`.
 
 Checks have no resolution state either — like discussion comments, there's
 no thread to mark resolved. A code fix and push is the resolution; the check
@@ -332,7 +347,9 @@ post one consolidated summary of the whole pass) with `reply-comment.sh`:
 
 ```bash
 ./skills/process/address-pr-feedback/scripts/reply-comment.sh mitodl/agent-kit 116 \
-  "Addressed all review feedback: 4 threads fixed and resolved, 1 declined (see reply) with reasoning."
+  --body-file - <<'SUMMARY'
+Addressed all review feedback: 4 threads fixed and resolved, 1 declined (see reply) with reasoning.
+SUMMARY
 ```
 
 Always dry-run (`--dry-run` on both resolve scripts) first when acting on a

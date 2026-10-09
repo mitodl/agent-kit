@@ -348,6 +348,14 @@ printf '1749\n822\n407\n' | \
 printf '1749\n' | \
   ISSUE_TRIAGE_REASON="Closed: superseded by #4828 (Grafana Alerting → Pulumi migration)." \
   ./scripts/close-issues.sh --close mitodl/ol-infrastructure
+
+# If the reason names an identifier in backticks or contains `$`, put it in a
+# file — inline, the shell expands it away before the script sees it.
+REASON="$(mktemp -t triage-reason.XXXXXXXX)"
+printf '%s\n' 'Closed: `check_pingdom` was removed in #4828.' > "$REASON"
+printf '1749\n' | \
+  ISSUE_TRIAGE_REASON_FILE="$REASON" \
+  ./scripts/close-issues.sh --close mitodl/ol-infrastructure
 ```
 
 For tracker repos, the `--repo` argument is the tracker repo (where the issues
@@ -355,8 +363,9 @@ live), not the product repo. The closing comment is posted to the tracker issue.
 
 **The closing comment is read by whoever filed the issue.** The script's
 default reason is a generic catch-all — prefer a specific one via
-`ISSUE_TRIAGE_REASON`, one sentence naming the actual cause and the superseding
-issue or commit: `Closed: superseded by #4828 (Pingdom → Grafana migration).`
+`ISSUE_TRIAGE_REASON` (or `ISSUE_TRIAGE_REASON_FILE`), one sentence naming the
+actual cause and the superseding issue or commit:
+`Closed: superseded by #4828 (Pingdom → Grafana migration).`
 Ask the user to supply or approve the wording per group before closing; a batch
 close is visible to the whole team and hard to walk back.
 
