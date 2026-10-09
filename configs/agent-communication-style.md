@@ -10,8 +10,10 @@ replies, discussion comments. It is not about interactive chat replies to the
 operator, which usually already have their own terser convention (see the
 skills in this repo's `skills/process/` category for format-level rules
 specific to PRs, issues, and RFCs — required sections, length budgets, when to
-link vs. inline). This fragment is about *voice*: the thing that makes agent
-output read as generated even when the structure is correct.
+link vs. inline). This fragment is mostly about *voice*: the thing that makes
+agent output read as generated even when the structure is correct. The one
+exception is the hard-wrap rule at the end of the list, which is about how
+GitHub renders what you post rather than how it reads.
 
 ```markdown
 ## Communication Style — PRs, Issues, RFCs, Reviews
@@ -52,6 +54,13 @@ like a report generated about the work.
 - **Write for someone who has to act on it.** A reviewer needs to know what to
   check; a teammate triaging an issue needs to know what's actually broken.
   Optimize for that, not for looking exhaustive.
+- **Don't hard-wrap the body.** Write each paragraph as one long line and let
+  GitHub wrap it. GitHub's comment renderer turns a single newline inside a
+  paragraph into a line break, so an 80-column wrap that looks tidy in your
+  editor renders as a column of ragged short lines. Newlines belong between
+  blocks, between list items, and inside code fences — nowhere else. This
+  applies to the text you post, not to the `.md` files you commit, where the
+  repo's own wrapping convention still holds.
 
 Where this conflicts with an established house style in a given repo, the
 house style wins.
@@ -67,6 +76,16 @@ inflated adjectives, restating context the reader already has, and
 enthusiasm standing in for specifics. Centralizing that guidance here means
 one place to update instead of re-deriving it per skill or per repo.
 
+The hard-wrap rule rides along because it has the same failure mode from the
+reader's side and the same fix from ours. An agent writing markdown wraps at
+80 columns out of habit, which is right for a committed `.md` file and wrong
+for a GitHub comment field, where the renderer treats a newline inside a
+paragraph as a line break. The result is a body that renders as a column of
+ragged short lines — visibly machine-produced before anyone reads a word of
+it. It is a rendering bug rather than a voice problem, but it lands in the
+same place, and this is the one fragment every GitHub-facing agent already
+loads.
+
 ## Related
 
 - [`create-ol-pull-request`](../skills/process/create-ol-pull-request/SKILL.md),
@@ -79,3 +98,6 @@ one place to update instead of re-deriving it per skill or per repo.
   reply style for review threads ("one or two sentences... never resolve a
   thread by silently ignoring it, and never reply with a content-free
   'noted'").
+- [`generate-standup`](../skills/process/generate-standup/SKILL.md) — bullet
+  format for the daily standup comment, including the one-bullet-one-line
+  rule the hard-wrap bullet above generalizes.

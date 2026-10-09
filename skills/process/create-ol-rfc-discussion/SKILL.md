@@ -112,6 +112,10 @@ padding it.
 Every section is required; delete only **Open Questions** if there are
 genuinely none.
 
+Note the line discipline in the template: every paragraph and every bullet is
+a single long line. Keep it that way as you fill it in — see
+[Line breaks](#line-breaks) below for why.
+
 ```markdown
 # RFC: <title>
 
@@ -119,31 +123,22 @@ genuinely none.
 <Draft | Accepted | Superseded by #N | Withdrawn>
 
 ## Problem
-What problem are we solving, and why does it matter now? Two or three short
-paragraphs. Lead with the consequence of not acting. Say what changed to make
-this worth doing at this moment.
+What problem are we solving, and why does it matter now? Two or three short paragraphs. Lead with the consequence of not acting. Say what changed to make this worth doing at this moment.
 
 ## Options Considered
 
 ### Option N: <name>
-Two to four sentences describing the approach in terms of its *shape* — what
-moves, what stays, who owns it. Not how it is built.
+Two to four sentences describing the approach in terms of its *shape* — what moves, what stays, who owns it. Not how it is built.
 
-**Tradeoff:** one or two sentences on what this option buys and what it costs.
-Use a short bullet pair only if the tradeoff genuinely has multiple axes.
+**Tradeoff:** one or two sentences on what this option buys and what it costs. Use a short bullet pair only if the tradeoff genuinely has multiple axes.
 
-(Repeat for each option. Two or three options; more than three means the space
-was not narrowed before writing.)
+(Repeat for each option. Two or three options; more than three means the space was not narrowed before writing.)
 
 ## Decision
-Which option we're going with and *why that tradeoff is the right one to
-accept*. Do not restate the option's pros — explain the weighting. If this is
-a stepping-stone toward a fuller option, say so.
+Which option we're going with and *why that tradeoff is the right one to accept*. Do not restate the option's pros — explain the weighting. If this is a stepping-stone toward a fuller option, say so.
 
 ## Approach
-The shape of the work in three to six bullets — the major pieces, roughly in
-order, at the altitude of "what changes where". Name the systems and repos
-touched, not the files. The detailed breakdown lands in the spec.
+The shape of the work in three to six bullets — the major pieces, roughly in order, at the altitude of "what changes where". Name the systems and repos touched, not the files. The detailed breakdown lands in the spec.
 
 - **<Piece of work>** — one sentence on what changes and where.
 
@@ -153,14 +148,20 @@ touched, not the files. The detailed breakdown lands in the spec.
 
 **What we give up / risks:** two or three bullets.
 
-**Who is affected:** teams, services, or repos that inherit work or change
-behaviour as a result.
+**Who is affected:** teams, services, or repos that inherit work or change behaviour as a result.
 
 ## Open Questions
-- **Question label:** one sentence. Mark blocking vs. non-blocking.
-  Only list questions whose answers could change the decision or the approach —
-  unresolved implementation detail goes in the spec.
+- **Question label:** one sentence. Mark blocking vs. non-blocking. Only list questions whose answers could change the decision or the approach — unresolved implementation detail goes in the spec.
 ```
+
+### Line breaks
+
+Write each paragraph and each bullet as one long line and let GitHub wrap it.
+GitHub's discussion renderer turns a single newline inside a paragraph into a
+line break, so an 80-column wrap that looks tidy in the heredoc renders as a
+column of ragged short lines. Newlines belong between blocks, between list
+items, and inside code fences — nowhere else. This applies to the RFC body you
+post, not to this file.
 
 ---
 

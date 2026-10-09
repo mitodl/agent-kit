@@ -291,15 +291,32 @@ Push only now. A branch pushed before Step 4 puts unreviewed code,
 unaudited claims, and possibly secrets in public. If it was already
 pushed, run Step 4 anyway and push corrections as new commits.
 
+Write the body to a file and pass it with `--body-file`. Do not inline it into
+the command with `--body` — a real body has newlines, backticks, `$`, and
+quotes in it, and the shell will mangle or execute them.
+
+Name the file with `mktemp`, not a fixed path like `/tmp/pr-body.md`. Several
+agents run this skill at once across different checkouts on the same machine,
+and a shared name means they overwrite each other's drafts — the failure mode
+is one agent publishing another's body under its own title.
+
 ```bash
+PR_BODY="$(mktemp -t pr-body.XXXXXXXX)"
+cat > "$PR_BODY" << 'PRBODY'
+<filled-in body>
+PRBODY
+
 git push -u origin <branch>
 gh pr create \
   --repo mitodl/<repo> \
   --base <base-branch> \
   --title "<title>" \
-  --body "<filled-in body>" \
+  --body-file "$PR_BODY" \
   [--draft]
 ```
+
+Keep the write and the `gh pr create` in one shell invocation so `$PR_BODY` is
+still set, or capture the path and reuse it literally.
 
 Confirm the PR URL returned by `gh pr create` and share it with the user.
 
@@ -311,6 +328,10 @@ The PR body exists to get a reviewer oriented in under a minute:
 
 - Lead with what changed and why. No preamble, no closing summary.
 - Bullets over paragraphs; one change per bullet.
+- Don't hard-wrap. Each paragraph and each bullet is one long line; GitHub
+  wraps it for the reader. A single newline inside a paragraph renders as a
+  line break there, so an 80-column wrap comes out as ragged short lines.
+  Newlines separate blocks, bullets, and code-fence lines — nothing else.
 - Say it once. The description should not restate the title, and the testing
   section should not re-describe the change.
 - No filler adjectives ("comprehensive", "robust", "significant"), no emoji.
