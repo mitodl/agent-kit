@@ -15,14 +15,112 @@ function frame(overrides: Partial<ShellProps> = {}): ShellProps {
 		route: DEFAULT_ROUTE,
 		repos: [],
 		projects: [],
+		assignees: [],
 		status: html`<span>status</span>`,
 		body: html`<p>body</p>`,
 		panel: nothing,
 		onNavigate: () => {},
+		onAssigneeMenu: () => {},
 		codeGraph: true,
 		...overrides,
 	};
 }
+
+describe("assignee filter", () => {
+	const checkboxes = () => [
+		...root.querySelectorAll<HTMLInputElement>(".assignee-filter input"),
+	];
+
+	it("lists Unassigned first, then each person once", () => {
+		render(shell(frame({ assignees: ["ada@mit.edu", "me@mit.edu"] })), root);
+
+		expect(
+			[...root.querySelectorAll(".assignee-options label")].map((label) =>
+				label.textContent?.trim(),
+			),
+		).toEqual(["Unassigned", "ada@mit.edu", "me@mit.edu"]);
+	});
+
+	it("ticks what the route selects and counts it", () => {
+		const route: Route = { ...DEFAULT_ROUTE, assignees: ["unassigned"] };
+		render(shell(frame({ route, assignees: ["ada@mit.edu"] })), root);
+
+		expect(checkboxes().map((box) => box.checked)).toEqual([true, false]);
+		expect(
+			root.querySelector(".assignee-filter summary .count")?.textContent,
+		).toBe("1");
+	});
+
+	it("adds a person to the selection and closes the panel", () => {
+		const onNavigate = vi.fn();
+		const route: Route = {
+			...DEFAULT_ROUTE,
+			assignees: ["unassigned"],
+			slug: "tk-y",
+		};
+		render(
+			shell(frame({ route, assignees: ["ada@mit.edu"], onNavigate })),
+			root,
+		);
+
+		const box = checkboxes()[1] as HTMLInputElement;
+		box.checked = true;
+		box.dispatchEvent(new Event("change"));
+
+		expect(onNavigate).toHaveBeenCalledWith({
+			assignees: ["unassigned", "ada@mit.edu"],
+			slug: null,
+		});
+	});
+
+	it("removes a person from the selection", () => {
+		const onNavigate = vi.fn();
+		const route: Route = {
+			...DEFAULT_ROUTE,
+			assignees: ["ada@mit.edu", "me@mit.edu"],
+		};
+		render(
+			shell(
+				frame({ route, assignees: ["ada@mit.edu", "me@mit.edu"], onNavigate }),
+			),
+			root,
+		);
+
+		const box = checkboxes()[1] as HTMLInputElement;
+		box.checked = false;
+		box.dispatchEvent(new Event("change"));
+
+		expect(onNavigate).toHaveBeenCalledWith({
+			assignees: ["me@mit.edu"],
+			slug: null,
+		});
+	});
+
+	it("reports the menu opening and closing", () => {
+		const onAssigneeMenu = vi.fn();
+		render(shell(frame({ onAssigneeMenu })), root);
+		const details = root.querySelector<HTMLDetailsElement>(
+			"details.assignee-filter",
+		) as HTMLDetailsElement;
+
+		details.open = true;
+		details.dispatchEvent(new Event("toggle"));
+		details.open = false;
+		details.dispatchEvent(new Event("toggle"));
+
+		expect(onAssigneeMenu.mock.calls).toEqual([[true], [false]]);
+	});
+
+	it("clears the selection", () => {
+		const onNavigate = vi.fn();
+		const route: Route = { ...DEFAULT_ROUTE, assignees: ["unassigned"] };
+		render(shell(frame({ route, onNavigate })), root);
+
+		root.querySelector<HTMLButtonElement>(".assignee-options button")?.click();
+
+		expect(onNavigate).toHaveBeenCalledWith({ assignees: [], slug: null });
+	});
+});
 
 describe("shell", () => {
 	it("renders a link per view except Search", () => {

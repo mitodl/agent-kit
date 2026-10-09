@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit-html";
+import { matchesAssignee } from "../assignee.js";
 import { emptyBox } from "../chrome.js";
 import { absolute, ago, repoLabel } from "../format.js";
 import { type Route, routeHref } from "../route.js";
@@ -88,7 +89,9 @@ export function searchView(
 	// Inside a project the read has every status, so the Closed toggle filters
 	// here without a re-read. Outside one the read already left them out.
 	const tasks = results.tasks.filter(
-		(task) => route.closed || task.status !== "closed",
+		(task) =>
+			(route.closed || task.status !== "closed") &&
+			matchesAssignee(task, route.assignees),
 	);
 	return html`
     <div class="search-view">

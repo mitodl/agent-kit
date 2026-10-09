@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit-html";
+import { filterByAssignee, matchesAssignee } from "../assignee.js";
 import { emptyBox } from "../chrome.js";
 import { absolute, ago, repoLabel } from "../format.js";
 import { type Route, routeHref } from "../route.js";
@@ -29,10 +30,39 @@ export interface Rollup {
 	sessions: WorkflowSession[];
 }
 
-export function projectList(
+/**
+ * The projects holding at least one of `tasks` the assignee filter keeps.
+ *
+ * A project has no assignee of its own, so it is in or out by its tasks.
+ * `tasks` is whatever the caller read: closed ones are in it only when the
+ * Closed toggle is on, so a project whose only match is a closed task is
+ * left out until then, as its task table would be.
+ */
+export function projectsWithAssignee(
 	projects: WorkflowProjectSummary[],
+	tasks: readonly TaskRow[],
+	selected: readonly string[],
+): WorkflowProjectSummary[] {
+	if (selected.length === 0) {
+		return projects;
+	}
+	const held = new Set(
+		tasks
+			.filter((task) => task.project_slug && matchesAssignee(task, selected))
+			.map((task) => task.project_slug),
+	);
+	return projects.filter((project) => held.has(project.slug));
+}
+
+export function projectList(
+	allProjects: WorkflowProjectSummary[],
 	route: Route,
+	tasks: readonly TaskRow[] = [],
 ): TemplateResult {
+	const projects = projectsWithAssignee(allProjects, tasks, route.assignees);
+	if (projects.length === 0 && allProjects.length > 0) {
+		return emptyBox("No projects have a task held by the selected assignees.");
+	}
 	if (projects.length === 0) {
 		return emptyBox(
 			route.repo
@@ -108,7 +138,9 @@ export function projectRollup(
 	}
 
 	const tasks = rollup.tasks.filter(
-		(task) => route.closed || task.status !== "closed",
+		(task) =>
+			(route.closed || task.status !== "closed") &&
+			matchesAssignee(task, route.assignees),
 	);
 
 	return html`
@@ -265,15 +297,21 @@ function readyTasks(
 	if (!status) {
 		return nothing;
 	}
+	const ready = filterByAssignee(status.ready_tasks, route.assignees);
 	return html`
     <section>
-      <h3>Ready <span class="count">${status.counts.ready}</span></h3>
+      <h3>
+        Ready
+        <span class="count"
+          >${route.assignees.length > 0 ? ready.length : status.counts.ready}</span
+        >
+      </h3>
       ${
-				status.ready_tasks.length === 0
+				ready.length === 0
 					? emptyBox("Nothing is ready to pick up.")
 					: html`
             <ul class="ready">
-              ${status.ready_tasks.map(
+              ${ready.map(
 								(task) => html`
                   <li>
                     <span class="badge priority">${task.priority}</span>

@@ -210,3 +210,43 @@ describe("searchView", () => {
 		]);
 	});
 });
+
+describe("searchView with an assignee filter", () => {
+	const ME = "dfrapp@mit.edu";
+	const base = tasks[0] as TaskRow;
+	const rows: TaskRow[] = [
+		{ ...base, slug: "tk-mine", title: "Mine", assignee: `${ME}#abc123` },
+		{ ...base, slug: "tk-theirs", title: "Theirs", assignee: "ada@mit.edu" },
+		{ ...base, slug: "tk-nobody", title: "Nobody", assignee: null },
+	].map((task) => ({ ...task, status: "open" }) as TaskRow);
+
+	function shown(assignees: string[]): string[] {
+		render(
+			searchView(
+				{ tasks: rows, capped: false },
+				projects,
+				search("x", { assignees }),
+			),
+			root,
+		);
+		return [...root.querySelectorAll<HTMLAnchorElement>("a[href*='slug=']")]
+			.map((link) => new URLSearchParams(link.hash.split("?")[1]).get("slug"))
+			.filter((slug): slug is string => slug !== null);
+	}
+
+	it("keeps only the person's tasks, whatever their session", () => {
+		expect(shown([ME])).toEqual(["tk-mine"]);
+	});
+
+	it("keeps only unassigned tasks for Unassigned", () => {
+		expect(shown(["unassigned"])).toEqual(["tk-nobody"]);
+	});
+
+	it("leaves the project half alone", () => {
+		shown([ME]);
+
+		expect(
+			root.querySelector(`a[href*="project=${project.slug}"]`),
+		).not.toBeNull();
+	});
+});

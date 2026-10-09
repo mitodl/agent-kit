@@ -717,6 +717,195 @@ describe("App", () => {
 		);
 	});
 
+	it("narrows the project list to projects holding a matching task", async () => {
+		const [kept, dropped] = projects;
+		const base = tasks[0] as TaskRow;
+		vi.mocked(mcp.taskList).mockImplementation(async (args) =>
+			args.status === "in_progress"
+				? [
+						{
+							...base,
+							status: "in_progress",
+							project_slug: kept?.slug ?? null,
+							assignee: "dfrapp@mit.edu#abc123",
+						},
+					]
+				: [],
+		);
+
+		await open("#projects?assignee=dfrapp%40mit.edu");
+		await vi.waitFor(() =>
+			expect(root.querySelector("table.rows")).not.toBeNull(),
+		);
+
+		const hrefs = [
+			...root.querySelectorAll<HTMLAnchorElement>("table.rows a"),
+		].map((link) => link.getAttribute("href") ?? "");
+		expect(hrefs).toHaveLength(1);
+		expect(hrefs[0]).toContain(`project=${kept?.slug}`);
+		expect(text()).not.toContain(dropped?.title ?? "never");
+		// The dropdown offers the person the read found, once.
+		expect(
+			[...root.querySelectorAll(".assignee-options label")].map((label) =>
+				label.textContent?.trim(),
+			),
+		).toEqual(["Unassigned", "dfrapp@mit.edu"]);
+	});
+
+	describe("the project list's task read", () => {
+		const menu = () =>
+			root.querySelector<HTMLDetailsElement>("details.assignee-filter");
+
+		function openMenu(): void {
+			const details = menu();
+			if (!details) {
+				throw new Error("the assignee menu is missing");
+			}
+			details.open = true;
+			details.dispatchEvent(new Event("toggle"));
+		}
+
+		it("does not read tasks on the landing tab when nothing needs them", async () => {
+			await open("#projects");
+			await vi.waitFor(() =>
+				expect(root.querySelector("table.rows")).not.toBeNull(),
+			);
+
+			expect(mcp.taskList).not.toHaveBeenCalled();
+		});
+
+		it("reads them once the menu opens, and offers the people they name", async () => {
+			await open("#projects");
+			await vi.waitFor(() =>
+				expect(root.querySelector("table.rows")).not.toBeNull(),
+			);
+			vi.mocked(mcp.taskList).mockImplementation(async (args) =>
+				args.status === "in_progress"
+					? [{ ...(tasks[0] as TaskRow), assignee: "ada@example.edu#9f" }]
+					: [],
+			);
+
+			openMenu();
+
+			await vi.waitFor(() =>
+				expect(
+					[...root.querySelectorAll(".assignee-options label")].map((label) =>
+						label.textContent?.trim(),
+					),
+				).toEqual(["Unassigned", "ada@example.edu"]),
+			);
+		});
+
+		it("says so when a task read hit its limit, since the filter may be missing projects", async () => {
+			const base = tasks[0] as TaskRow;
+			vi.mocked(mcp.taskList).mockImplementation(async (args) =>
+				args.status === "open"
+					? Array.from({ length: TASK_LIMIT }, (_, index) => ({
+							...base,
+							slug: `tk-bulk-${index}`,
+							status: "open" as const,
+							assignee: null,
+						}))
+					: [],
+			);
+
+			await open("#projects?assignee=unassigned");
+
+			await vi.waitFor(() =>
+				expect(root.querySelector(".note")?.textContent).toContain(
+					"may be missing projects",
+				),
+			);
+		});
+
+		it("does not warn when no read hit its limit", async () => {
+			await open("#projects?assignee=unassigned");
+			await vi.waitFor(() =>
+				expect(root.querySelector("table.rows, .empty")).not.toBeNull(),
+			);
+
+			expect(root.querySelector(".note")).toBeNull();
+		});
+
+		it("closes the menu on a click outside it, not on one inside", async () => {
+			await open("#projects");
+			openMenu();
+
+			menu()
+				?.querySelector("input")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			expect(menu()?.open).toBe(true);
+
+			document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			expect(menu()?.open).toBe(false);
+		});
+
+		it("closes the menu on Escape before the open panel", async () => {
+			await open("#projects?slug=tk-fixture-000");
+			await vi.waitFor(() =>
+				expect(root.querySelector(".task-detail")).not.toBeNull(),
+			);
+			openMenu();
+
+			document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+			expect(menu()?.open).toBe(false);
+			expect(root.querySelector(".detail-panel")).not.toBeNull();
+
+			document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+			await vi.waitFor(() =>
+				expect(root.querySelector(".detail-panel")).toBeNull(),
+			);
+		});
+
+		it("stops reading them when the menu closes with no filter on", async () => {
+			await open("#projects");
+			openMenu();
+			await vi.waitFor(() => expect(mcp.taskList).toHaveBeenCalled());
+			const details = menu() as HTMLDetailsElement;
+			details.open = false;
+			details.dispatchEvent(new Event("toggle"));
+			vi.mocked(mcp.taskList).mockClear();
+
+			window.dispatchEvent(new Event("focus"));
+
+			expect(mcp.taskList).not.toHaveBeenCalled();
+		});
+
+		it("marks the list stale when the task read it is narrowed by fails", async () => {
+			await open("#projects?assignee=unassigned");
+			await vi.waitFor(() =>
+				expect(root.querySelector("table.rows, .empty")).not.toBeNull(),
+			);
+
+			vi.mocked(mcp.taskList).mockRejectedValue(new Error("server went away"));
+			window.dispatchEvent(new Event("focus"));
+
+			await vi.waitFor(() =>
+				expect(root.querySelector(".read-status .stale")).not.toBeNull(),
+			);
+		});
+
+		it("refreshes the tasks along with the projects", async () => {
+			await open("#projects?assignee=unassigned");
+			await vi.waitFor(() =>
+				expect(root.querySelector(".read-status button")).not.toBeNull(),
+			);
+			const projectReads = vi.mocked(mcp.workflowProjectList).mock.calls.length;
+			const taskReads = vi.mocked(mcp.taskList).mock.calls.length;
+
+			root.querySelector<HTMLButtonElement>(".read-status button")?.click();
+
+			await vi.waitFor(() =>
+				expect(vi.mocked(mcp.workflowProjectList).mock.calls.length).toBe(
+					projectReads + 1,
+				),
+			);
+			expect(vi.mocked(mcp.taskList).mock.calls.length).toBeGreaterThan(
+				taskReads,
+			);
+		});
+	});
+
 	it("does not poll the timeline on an interval", async () => {
 		// Spec §6.6: it plots elapsed time, so it re-reads on focus and Refresh.
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
