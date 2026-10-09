@@ -180,6 +180,10 @@ short and factual:
 
 - Plain sentences. No preamble, no scene-setting, no closing summary.
 - Bullets and code blocks over paragraphs. One idea per bullet.
+- Don't hard-wrap. Each paragraph and each bullet is one long line; GitHub
+  wraps it for the reader. A single newline inside a paragraph renders as a
+  line break there, so an 80-column wrap comes out as ragged short lines.
+  Newlines separate blocks, bullets, and code-fence lines — nothing else.
 - Say it once. Don't restate the title in the body or repeat a section's
   content in another section.
 - No filler adjectives ("comprehensive", "robust", "critical") and no emoji.

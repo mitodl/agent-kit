@@ -288,12 +288,13 @@ changes.
 the evidence and the conclusion. Nothing else — no thanks-for-the-review
 opener, no restating the reviewer's comment back at them, no closing offer to
 discuss further, no emoji. A reviewer reading twelve replies wants twelve
-facts.
+facts. Write the reply as one unbroken line: GitHub turns a newline inside a
+paragraph into a line break, so a hard-wrapped reply renders as ragged
+half-lines in the thread.
 
 ```text
 Fixed in a1b2c3d: transport is now streamable-http.
-Verified — ensure_bridge_store runs at every call site, so this path is
-unreachable. Not adding the guard.
+Verified — ensure_bridge_store runs at every call site, so this path is unreachable. Not adding the guard.
 ```
 
 Where the reply carries a judgment the user made (a decline they decided on, a

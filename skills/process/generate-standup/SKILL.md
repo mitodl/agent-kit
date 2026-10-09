@@ -380,9 +380,14 @@ sentence; it does not compress what they wrote.
 
 - **Every entry is a bullet.** Each top-level item starts with a hyphen bullet
   marker at column 0 — never a bare prose line, never a numbered list.
-  Sub-bullets are indented exactly two spaces, and a bullet's own continuation
-  lines are indented two spaces as well so they stay inside the bullet instead
-  of ending the list.
+  Sub-bullets are indented exactly two spaces.
+- **One bullet, one line — never hard-wrap.** A bullet runs as long as it needs
+  to on a single line and GitHub wraps it for the reader. GitHub's comment
+  renderer turns a single newline inside a bullet into a line break, so wrapping
+  a long bullet at 80 columns renders it as two ragged half-lines. The examples
+  below are written this way; match them. (If a bullet genuinely needs a second
+  paragraph, make it a sub-bullet indented two spaces, not a wrapped
+  continuation line.)
 - **Lead with the GitHub reference.** Any entry about a PR or issue *begins*
   with its full `https://github.com/<org>/<repo>/(pull|issues)/<number>` URL,
   followed by an em dash and the description — not the URL buried mid-sentence.
@@ -568,8 +573,7 @@ Anna G
 > What did I work on today?
 
 - https://github.com/mitodl/mitxonline/pull/3600 — worked on it
-- https://github.com/mitodl/mit-learn/pull/3346 — updated UI and fixed tests,
-  received review
+- https://github.com/mitodl/mit-learn/pull/3346 — updated UI and fixed tests, received review
 
 > What am I working on tomorrow?
 
@@ -593,9 +597,7 @@ Tobias Macey
 
 - Worked on addressing the hanging open issue for Dagster assets using Polars to read Iceberg tables
 - https://github.com/mitodl/ol-infrastructure/pull/4659 — opened for S3 cost optimization
-- https://github.com/mitodl/hq/discussions/12488#discussioncomment-17801234 — laid out the two
-  options for Iceberg table maintenance scheduling; leaning toward a single Dagster schedule
-  over per-table sensors
+- https://github.com/mitodl/hq/discussions/12488#discussioncomment-17801234 — laid out the two options for Iceberg table maintenance scheduling; leaning toward a single Dagster schedule over per-table sensors
 
 > What am I working on today?
 
@@ -619,10 +621,7 @@ _Chris Patti_
 - Reviewed a bunch of PRs:
   - https://github.com/mitodl/ol-infrastructure/pull/4715
   - https://github.com/mitodl/ol-infrastructure/pull/4713 — and a couple more I forgot :)
-- Engaged in a wrestling match with Rootly's post incident retrospective creation tools.
-  Lost, then after getting support from them won - kind of? It's not as clean as I'd like
-  but details from yesterday's incident are documented at
-  https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/
+- Engaged in a wrestling match with Rootly's post incident retrospective creation tools. Lost, then after getting support from them won - kind of? It's not as clean as I'd like but details from yesterday's incident are documented at https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/
 
 > What am I working on tomorrow?
 
@@ -643,9 +642,7 @@ Sar
 > What did I work on yesterday/today?
 
 - https://github.com/mitodl/ol-infrastructure/pull/4658 — wrote and deployed
-- Continued investigating SCIM sync failures — updates are reaching Keycloak
-  logs but not propagating to Learn/MITx Online; restarting Keycloak temporarily
-  restores sync, root cause still unknown
+- Continued investigating SCIM sync failures — updates are reaching Keycloak logs but not propagating to Learn/MITx Online; restarting Keycloak temporarily restores sync, root cause still unknown
 
 > What am I working on today/tomorrow?
 

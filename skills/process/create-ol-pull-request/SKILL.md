@@ -311,6 +311,10 @@ The PR body exists to get a reviewer oriented in under a minute:
 
 - Lead with what changed and why. No preamble, no closing summary.
 - Bullets over paragraphs; one change per bullet.
+- Don't hard-wrap. Each paragraph and each bullet is one long line; GitHub
+  wraps it for the reader. A single newline inside a paragraph renders as a
+  line break there, so an 80-column wrap comes out as ragged short lines.
+  Newlines separate blocks, bullets, and code-fence lines — nothing else.
 - Say it once. The description should not restate the title, and the testing
   section should not re-describe the change.
 - No filler adjectives ("comprehensive", "robust", "significant"), no emoji.
