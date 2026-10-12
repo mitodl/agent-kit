@@ -55,6 +55,7 @@ the sequence runs as written.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import secrets
@@ -178,7 +179,7 @@ class KubernetesApi:
             raise KubernetesError(
                 exc.code, f"{method} {path}: HTTP {exc.code}: {detail}"
             ) from exc
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             raise KubernetesError(None, f"{method} {path}: {exc}") from exc
 
     def _lease_path(self, name: str) -> str:
@@ -291,9 +292,17 @@ class UnlockLease:
             try:
                 self._lease = self._put_renewal(self._lease)
             except KubernetesError as exc:
-                if exc.status == HTTP_CONFLICT and not self._adopt_current():
+                if exc.status != HTTP_CONFLICT:
+                    return False
+                if not self._adopt_current():
                     self._deposed = True
-                return False
+                    return False
+                # Still the holder, on a newer resourceVersion: one more try,
+                # so a metadata-only change does not fail a confirm().
+                try:
+                    self._lease = self._put_renewal(self._lease)
+                except KubernetesError:
+                    return False
             self._renewed_at = started
             return True
 
@@ -690,6 +699,9 @@ def cluster_argument(argv: list[str], env: dict[str, str]) -> str:
     Read from the server's own arguments so this stays in lockstep with the
     Deployment's `args`.
     """
+    for argument in argv:
+        if argument.startswith("--cluster="):
+            return argument.removeprefix("--cluster=")
     for flag, value in pairwise(argv):
         if flag == "--cluster":
             return value

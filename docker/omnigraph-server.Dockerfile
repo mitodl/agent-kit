@@ -118,8 +118,8 @@ LABEL org.opencontainers.image.title="omnigraph-server" \
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.
 # python3: the entrypoint (omnigraph_server_entrypoint.py) is Python and uses
-# the standard library's json, ssl and urllib for the Kubernetes API, which
-# python3-minimal does not carry.
+# the standard library's urllib.request (for the Kubernetes API) and secrets,
+# neither of which imports under python3-minimal.
 # python3-yaml: the entrypoint renders the Cedar bundles' group membership from
 # the mounted actor-token map before converging (see policy/render_groups.py).
 # Deliberately a real YAML parser rather than a sed/awk rewrite of a file that

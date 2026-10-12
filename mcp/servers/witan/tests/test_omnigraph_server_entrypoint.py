@@ -200,9 +200,8 @@ def test_a_metadata_only_change_is_not_a_loss(kube, lease):
     """Pulumi relabelling the Lease moves resourceVersion, not the holder."""
     lease.acquire()
     kube.version += 1
-    assert not lease._renew()
-    assert not lease.lost()
     lease.confirm(entrypoint.UNLOCK_BUDGET_SECONDS)
+    assert not lease.lost()
     assert kube.spec["holderIdentity"] == lease.identity
 
 
@@ -532,6 +531,7 @@ def test_bundles_without_an_apply_actor_refuse(cli, tmp_path, monkeypatch):
 def test_the_cluster_dir_comes_from_the_servers_own_arguments():
     argv = ["--cluster", "/srv/cluster", "--bind", "0.0.0.0:8080"]
     assert entrypoint.cluster_argument(argv, {}) == "/srv/cluster"
+    assert entrypoint.cluster_argument(["--cluster=s3://b/root"], {}) == "s3://b/root"
     assert (
         entrypoint.cluster_argument(["--bind", "x"], {"OMNIGRAPH_CLUSTER_DIR": "/e"})
         == "/e"
