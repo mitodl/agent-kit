@@ -48,9 +48,11 @@ BOOT SEQUENCE
 Design and the binary-verified facts behind each step:
 docs/internals/design/omnigraph-0-13-upgrade-spec.md (D3, D4).
 
-Outside Kubernetes (a local `docker run`) there is no peer to coordinate with
-and no API to ask, so the Lease and the pod check are skipped and the rest of
-the sequence runs as written.
+Outside Kubernetes (a local `docker run`) there is no API to ask, so the Lease
+and the pod check are skipped. Nothing then shows that a lock's owner has
+exited, so the entrypoint unlocks only when OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1
+says the operator knows this container is the root's only writer. Without it
+a `docker run` pointed at a served root would unlock the live server.
 """
 
 from __future__ import annotations
@@ -382,13 +384,27 @@ def _lease_expiry(spec: dict) -> datetime | None:
 
 
 class NoPeers:
-    """The lock handoff outside Kubernetes: nobody to exclude."""
+    """The lock handoff outside Kubernetes: no Lease and no pod list.
+
+    :param may_unlock: whether the operator has vouched, with
+        ``OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1``, that nothing else writes this
+        root.
+    """
+
+    def __init__(self, *, may_unlock: bool) -> None:
+        self._may_unlock = may_unlock
 
     def lost(self) -> bool:
         return False
 
     def confirm(self, budget_seconds: float) -> None:
-        pass
+        if not self._may_unlock:
+            msg = (
+                "not running in Kubernetes, so nothing shows that the lock's "
+                "owner has exited; set OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1 if this "
+                "container is the only writer of the cluster root"
+            )
+            raise BootRefused(msg)
 
     def hand_over(self) -> None:
         pass
@@ -678,7 +694,7 @@ def take_over(env: dict[str, str]) -> UnlockLease | NoPeers:
     """Establish that this process may unlock: the Lease, then the pod check."""
     if "KUBERNETES_SERVICE_HOST" not in env:
         log("not running in Kubernetes; skipping the unlock Lease and pod check")
-        return NoPeers()
+        return NoPeers(may_unlock=env.get("OMNIGRAPH_UNLOCK_WITHOUT_PEERS") == "1")
     api = KubernetesApi.in_cluster()
     pod_name = env.get("POD_NAME") or env["HOSTNAME"]
     lease = UnlockLease(api, env["OMNIGRAPH_UNLOCK_LEASE"], pod_name)

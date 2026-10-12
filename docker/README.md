@@ -155,9 +155,13 @@ The entrypoint reads these from the environment:
 | `POD_NAME` | no | This pod's name. Defaults to `HOSTNAME`. |
 | `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default 50). |
 | `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
+| `OMNIGRAPH_UNLOCK_WITHOUT_PEERS` | outside Kubernetes | `1` allows force-unlock with no Lease or pod check. Ignored in Kubernetes. |
 
 Outside Kubernetes (no `KUBERNETES_SERVICE_HOST`) the Lease and the pod check
-are skipped.
+are skipped, and the entrypoint refuses to force-unlock unless
+`OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1` is set. `cluster apply` always leaves a lock,
+so a local `docker run` needs it even on an empty root. Set it only when this
+container is the only writer of the cluster root.
 
 ## Base image / glibc
 

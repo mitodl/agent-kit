@@ -429,7 +429,7 @@ class LostLease(entrypoint.NoPeers):
 
 
 def converge(config_dir: Path, lease=None, **env: str) -> None:
-    entrypoint.converge(config_dir, env, lease or entrypoint.NoPeers())
+    entrypoint.converge(config_dir, env, lease or entrypoint.NoPeers(may_unlock=True))
 
 
 def test_a_fresh_root_is_applied_and_left_unlocked(cli, tmp_path):
@@ -484,7 +484,7 @@ def test_an_allow_listed_graph_removal_is_applied(cli, tmp_path):
 def test_nothing_is_unlocked_once_the_lease_is_lost(cli, tmp_path):
     fake = cli(lock={"id": "01PREVIOUS", "operation": "serve"})
     with pytest.raises(BootRefused, match="not unlocking"):
-        converge(tmp_path, lease=LostLease())
+        converge(tmp_path, lease=LostLease(may_unlock=True))
     assert fake.unlocked == []
     assert "apply" not in fake.commands
     assert fake.lock == {"id": "01PREVIOUS", "operation": "serve"}
@@ -543,6 +543,21 @@ def test_take_over_outside_kubernetes_skips_the_lease():
     assert isinstance(entrypoint.take_over({}), entrypoint.NoPeers)
 
 
+def test_outside_kubernetes_nothing_is_unlocked_without_the_opt_in(cli, tmp_path):
+    fake = cli(lock={"id": "01PREVIOUS", "operation": "serve"})
+    with pytest.raises(BootRefused, match="OMNIGRAPH_UNLOCK_WITHOUT_PEERS"):
+        converge(tmp_path, lease=entrypoint.take_over({}))
+    assert "force-unlock" not in fake.commands
+    assert "apply" not in fake.commands
+
+
+def test_outside_kubernetes_the_opt_in_allows_the_unlock(cli, tmp_path):
+    fake = cli(lock={"id": "01PREVIOUS", "operation": "serve"})
+    lease = entrypoint.take_over({"OMNIGRAPH_UNLOCK_WITHOUT_PEERS": "1"})
+    converge(tmp_path, lease=lease)
+    assert "force-unlock" in fake.commands
+
+
 def test_take_over_in_kubernetes_requires_the_lease_and_selector(monkeypatch, kube):
     monkeypatch.setattr(entrypoint.KubernetesApi, "in_cluster", lambda: kube)
     env = {"KUBERNETES_SERVICE_HOST": "10.0.0.1", "HOSTNAME": POD}
@@ -575,7 +590,7 @@ def test_a_running_command_is_stopped_when_the_lease_is_lost(tmp_path, monkeypat
 
     started = time.monotonic()
     with pytest.raises(BootRefused, match="lost the unlock Lease"):
-        entrypoint.run_omnigraph(["cluster", "apply"], Lost())
+        entrypoint.run_omnigraph(["cluster", "apply"], Lost(may_unlock=True))
     assert stopped.exists()
     assert time.monotonic() - started < 10
 
@@ -630,7 +645,7 @@ def real_env(config: Path, **extra: str) -> dict[str, str]:
 
 
 def real_lock(config: Path) -> dict:
-    return entrypoint.Cluster(config, None, entrypoint.NoPeers()).lock()
+    return entrypoint.Cluster(config, None, entrypoint.NoPeers(may_unlock=True)).lock()
 
 
 def graph_stores(config: Path) -> set[str]:
@@ -639,7 +654,9 @@ def graph_stores(config: Path) -> set[str]:
 
 @requires_persisted_locks
 def test_real_first_boot_creates_the_graphs_and_leaves_no_lock(cluster_dir):
-    entrypoint.converge(cluster_dir, real_env(cluster_dir), entrypoint.NoPeers())
+    entrypoint.converge(
+        cluster_dir, real_env(cluster_dir), entrypoint.NoPeers(may_unlock=True)
+    )
     assert graph_stores(cluster_dir) == {
         "memory.omni",
         "code-example.omni",
@@ -652,7 +669,7 @@ def test_real_first_boot_creates_the_graphs_and_leaves_no_lock(cluster_dir):
 def test_real_restart_takes_over_the_serve_lock(cluster_dir):
     """Boot, serve, SIGTERM, boot again: the lock handoff this file exists for."""
     env = real_env(cluster_dir)
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers())
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -680,19 +697,19 @@ def test_real_restart_takes_over_the_serve_lock(cluster_dir):
     held = real_lock(cluster_dir)
     assert (held["locked"], held["lock_operation"]) == (True, "serve")
 
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers())
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     assert real_lock(cluster_dir)["locked"] is False
 
 
 @requires_persisted_locks
 def test_real_schema_change_is_applied_as_the_admin_actor(cluster_dir):
     env = real_env(cluster_dir)
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers())
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     schema = cluster_dir / "schema" / "stub.pg"
     schema.write_text("node Node {\n  slug: String @key\n  note: String?\n}\n")
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers())
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     plan = entrypoint.Cluster(
-        cluster_dir, "svc-witan-admin", entrypoint.NoPeers()
+        cluster_dir, "svc-witan-admin", entrypoint.NoPeers(may_unlock=True)
     ).plan()
     assert plan["ok"] is True
     assert plan["changes"] == []
@@ -702,7 +719,7 @@ def test_real_schema_change_is_applied_as_the_admin_actor(cluster_dir):
 @requires_persisted_locks
 def test_real_dropped_graph_is_refused_and_its_storage_kept(cluster_dir):
     env = real_env(cluster_dir)
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers())
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     manifest = cluster_dir / "cluster.yaml"
     config = yaml.safe_load(manifest.read_text())
     del config["graphs"]["bridge"]
@@ -710,14 +727,14 @@ def test_real_dropped_graph_is_refused_and_its_storage_kept(cluster_dir):
     manifest.write_text(yaml.safe_dump(config))
 
     with pytest.raises(BootRefused, match=r"no longer declares \['bridge'\]"):
-        entrypoint.converge(cluster_dir, env, entrypoint.NoPeers())
+        entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     assert "bridge.omni" in graph_stores(cluster_dir)
     assert real_lock(cluster_dir)["locked"] is False
 
     entrypoint.converge(
         cluster_dir,
         {**env, "OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST": "bridge"},
-        entrypoint.NoPeers(),
+        entrypoint.NoPeers(may_unlock=True),
     )
     assert "bridge.omni" not in graph_stores(cluster_dir)
     assert real_lock(cluster_dir)["locked"] is False
@@ -739,7 +756,9 @@ def test_real_interrupted_apply_is_reported_as_outstanding(cluster_dir):
         time.sleep(0.02 + 0.005 * attempt)
         apply.kill()
         apply.wait()
-        plan = entrypoint.Cluster(cluster_dir, None, entrypoint.NoPeers()).plan()
+        plan = entrypoint.Cluster(
+            cluster_dir, None, entrypoint.NoPeers(may_unlock=True)
+        ).plan()
         if not plan["ok"]:
             break
     else:
@@ -751,5 +770,7 @@ def test_real_interrupted_apply_is_reported_as_outstanding(cluster_dir):
     held = real_lock(cluster_dir)
     assert (held["locked"], held["lock_operation"]) == (True, "deployment")
     with pytest.raises(BootRefused, match="still outstanding"):
-        entrypoint.converge(cluster_dir, real_env(cluster_dir), entrypoint.NoPeers())
+        entrypoint.converge(
+            cluster_dir, real_env(cluster_dir), entrypoint.NoPeers(may_unlock=True)
+        )
     assert real_lock(cluster_dir)["lock_id"] == held["lock_id"]
