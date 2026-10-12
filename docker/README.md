@@ -119,21 +119,45 @@ stub in tests). See `witan_code/github_app.py`.
   stack mounts its generated `cluster.yaml` alongside it via a ConfigMap
   `subPath` (single-file overlay) so it does not shadow the baked-in schema.
 - **Auto-bootstraps the cluster on start**
-  ([`omnigraph-server-entrypoint.sh`](./omnigraph-server-entrypoint.sh)):
-  `omnigraph cluster import` (first boot) or `cluster refresh` (state already
-  exists in the storage backend) followed by `cluster apply`, then `exec`s the
-  server. This is the remote analogue of witan's local `_ensure_graph`
-  auto-bootstrap — it is what creates the cluster's declared graph(s) under the
-  S3 storage root and applies their schemas, so `Pulumi up` alone produces a
-  *queryable* graph with no manual runbook step. (Graph names are set in the
-  deployment's `cluster.yaml`, not in this image; the convention is to name
-  them after the owning package — `council`, `code` — overridable per env.) The sequence is idempotent: `apply` is a
-  no-op once converged, and the import→refresh split keeps pod restarts (whose
-  local `__cluster/` working state is ephemeral) reconciling with the existing
-  storage-backed ledger instead of erroring.
+  ([`omnigraph_server_entrypoint.py`](./omnigraph_server_entrypoint.py)):
+  renders policy group membership, runs `omnigraph cluster apply`, then
+  `exec`s the server. This is the remote analogue of witan's local
+  `_ensure_graph` auto-bootstrap — it is what creates the cluster's declared
+  graph(s) under the S3 storage root and applies their schemas, so `Pulumi up`
+  alone produces a *queryable* graph with no manual runbook step. (Graph names
+  are set in the deployment's `cluster.yaml`, not in this image; the
+  convention is to name them after the owning package — `council`, `code` —
+  overridable per env.) A direct apply on an empty root creates the ledger,
+  and on a converged root it is a no-op.
+- **Hands the cluster lock over on every restart.** From omnigraph 0.12 on,
+  the server, `cluster apply`, `optimize` and `cleanup` each leave an
+  exclusive lock in the storage root when they exit, and the next writer is
+  refused until it is force-unlocked. The entrypoint unlocks the previous
+  server's `serve` lock and its own apply's `deployment` lock, and only after
+  it holds the unlock Lease and the Kubernetes API shows no other live server
+  pod. It refuses to start (exit 1) on a `graph_operation` lock, on an
+  interrupted apply, and on a `cluster.yaml` that drops a graph (0.13 deletes
+  a dropped graph's storage). The module docstring has the sequence;
+  [the 0.13 upgrade spec](../docs/internals/design/omnigraph-0-13-upgrade-spec.md)
+  (D3, D4) has the reasoning.
 - `ENTRYPOINT` is the bootstrap wrapper; the default `CMD`
   (`--cluster /etc/omnigraph/cluster --bind 0.0.0.0:8080`) matches the stack's
   `args`.
+
+The entrypoint reads these from the environment:
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE` | with policy bundles | Actor-token map the group membership is rendered from (also read by the server). |
+| `OMNIGRAPH_APPLY_ACTOR` | with policy bundles | Actor passed to `cluster plan`/`apply` as `--as`. With policy installed, omnigraph refuses a schema change that names no actor. |
+| `OMNIGRAPH_UNLOCK_LEASE` | in Kubernetes | Name of the pre-created `coordination.k8s.io` Lease every force-unlocker takes. The ServiceAccount needs `get` and `update` on it. |
+| `OMNIGRAPH_POD_SELECTOR` | in Kubernetes | Label selector of the server Deployment's pods. The ServiceAccount needs `list` on pods. |
+| `POD_NAME` | no | This pod's name. Defaults to `HOSTNAME`. |
+| `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default 50). |
+| `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
+
+Outside Kubernetes (no `KUBERNETES_SERVICE_HOST`) the Lease and the pod check
+are skipped.
 
 ## Base image / glibc
 

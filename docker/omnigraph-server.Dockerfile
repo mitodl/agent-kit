@@ -117,30 +117,33 @@ LABEL org.opencontainers.image.title="omnigraph-server" \
       edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.
-# python3-minimal + python3-yaml: the entrypoint renders the Cedar bundles'
-# group membership from the mounted actor-token map before converging (see
-# policy/render_groups.py). Deliberately a real YAML parser rather than a
-# sed/awk rewrite of a file that decides who can write the graph — a silent
-# mis-render here denies every user at once.
+# python3: the entrypoint (omnigraph_server_entrypoint.py) is Python and uses
+# the standard library's json, ssl and urllib for the Kubernetes API, which
+# python3-minimal does not carry.
+# python3-yaml: the entrypoint renders the Cedar bundles' group membership from
+# the mounted actor-token map before converging (see policy/render_groups.py).
+# Deliberately a real YAML parser rather than a sed/awk rewrite of a file that
+# decides who can write the graph — a silent mis-render here denies every user
+# at once.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates python3-minimal python3-yaml \
+        ca-certificates python3 python3-yaml \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --create-home omnigraph
 
 COPY --from=fetch /out/omnigraph /usr/local/bin/omnigraph
 COPY --from=fetch /out/omnigraph-server /usr/local/bin/omnigraph-server
-COPY docker/omnigraph-server-entrypoint.sh /usr/local/bin/omnigraph-server-entrypoint.sh
+COPY docker/omnigraph_server_entrypoint.py /usr/local/bin/omnigraph-server-entrypoint.py
 COPY mcp/servers/witan/policy/render_groups.py /usr/local/bin/render-policy-groups.py
 
 # The cluster config dir holds the baked-in schema.pg, the ConfigMap-mounted
-# cluster.yaml (added at deploy time), and the ephemeral `__cluster/` state the
-# entrypoint's `cluster import`/`apply` writes — so it must be owned by the
-# non-root runtime user. Keep this path in lockstep with CLUSTER_CONFIG_DIR in
+# cluster.yaml (added at deploy time), and the policy bundles the entrypoint
+# re-renders in place on every boot — so it must be owned by the non-root
+# runtime user. Keep this path in lockstep with CLUSTER_CONFIG_DIR in
 # ol-infrastructure src/ol_infrastructure/applications/omnigraph/data_tier.py.
 ENV OMNIGRAPH_CLUSTER_DIR=/etc/omnigraph/cluster
 RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
-    && chmod +x /usr/local/bin/omnigraph-server-entrypoint.sh \
+    && chmod +x /usr/local/bin/omnigraph-server-entrypoint.py \
     && chmod +x /usr/local/bin/render-policy-groups.py
 # All three cluster schemas are baked in: schema.pg (witan memory/work graph →
 # the `council` graph), code-schema.pg (per-repo `code-<repo>` graphs), and
@@ -165,7 +168,7 @@ RUN chown -R omnigraph:omnigraph /etc/omnigraph
 
 USER omnigraph
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/omnigraph-server-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/omnigraph-server-entrypoint.py"]
 # Overridden by the `omnigraph` stack's Deployment `args`
 # (--cluster /etc/omnigraph/cluster --bind 0.0.0.0:8080); this default keeps the
 # image runnable standalone and documents the expected invocation.

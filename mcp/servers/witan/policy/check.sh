@@ -30,18 +30,21 @@ fi
 # every run is hermetic.
 rm -rf __cluster graphs
 
+# A direct apply on an empty root creates the ledger and the graphs. It leaves
+# a `deployment` lock behind (it prints the id on stderr), which nothing below
+# is refused by: `policy validate` and `policy test` take no writer admission,
+# and the root is thrown away on the next run.
 echo "==> converging fixture cluster"
-omnigraph cluster import --config . >/dev/null
 omnigraph cluster apply --config . >/dev/null
 
 echo "==> validating per-graph bundles"
-for g in memory code_example bridge; do
+for g in memory code-example bridge; do
   omnigraph policy validate --cluster . --graph "$g"
 done
 
 echo "==> running declarative policy tests"
 omnigraph policy test --cluster . --graph memory       --tests tests/memory.tests.yaml
-omnigraph policy test --cluster . --graph code_example --tests tests/code-graph.tests.yaml
+omnigraph policy test --cluster . --graph code-example --tests tests/code-graph.tests.yaml
 omnigraph policy test --cluster . --graph bridge       --tests tests/bridge.tests.yaml
 
 # Everything above validates the COMMITTED bundles, whose fixture groups are all
@@ -68,9 +71,8 @@ uv run python render_groups.py \
   --tokens "${rendered}/tokens.json" "${rendered}"/*.policy.yaml
 (
   cd "${rendered}"
-  omnigraph cluster import --config . >/dev/null
   omnigraph cluster apply --config . >/dev/null
-  for g in memory code_example bridge; do
+  for g in memory code-example bridge; do
     omnigraph policy validate --cluster . --graph "$g"
   done
 )

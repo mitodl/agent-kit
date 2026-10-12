@@ -26,7 +26,7 @@ build/
 *.egg-info/
 # omnigraph binary downloaded by hatch_build.py — not committed
 _bin/
-# omnigraph cluster state (populated by `omnigraph cluster import`)
+# omnigraph cluster state (populated by `omnigraph cluster apply`)
 __cluster/
 # The witan UI bundle, written by `npm run build` in mcp/servers/witan/ui/.
 # A build output, so not committed — hatch's `artifacts` setting in that

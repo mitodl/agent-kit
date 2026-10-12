@@ -21,6 +21,9 @@ on:
       # agreement — so a Dockerfile-only bump has to trigger this workflow.
       - "docker/omnigraph-server.Dockerfile"
       - "docker/witan.Dockerfile"
+      # The data-tier entrypoint lives beside its Dockerfile, and its tests
+      # (tests/test_omnigraph_server_entrypoint.py) run in test-witan.
+      - "docker/omnigraph_server_entrypoint.py"
       - "justfile"
       - "bin/**"
   pull_request:
@@ -37,6 +40,9 @@ on:
       # agreement — so a Dockerfile-only bump has to trigger this workflow.
       - "docker/omnigraph-server.Dockerfile"
       - "docker/witan.Dockerfile"
+      # The data-tier entrypoint lives beside its Dockerfile, and its tests
+      # (tests/test_omnigraph_server_entrypoint.py) run in test-witan.
+      - "docker/omnigraph_server_entrypoint.py"
       - "justfile"
       - "bin/**"
 
