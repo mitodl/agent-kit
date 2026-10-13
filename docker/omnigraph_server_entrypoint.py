@@ -69,6 +69,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -90,6 +91,9 @@ LEASE_RENEW_DEADLINE_SECONDS = 20
 CHILD_STOP_SECONDS = 30
 # A force-unlock must finish inside the Lease it was confirmed under.
 UNLOCK_BUDGET_SECONDS = 15
+# `cluster status` and `force-unlock` read and write two small objects. One
+# still running after this is a stalled storage call, not slow progress.
+LOCK_COMMAND_TIMEOUT_SECONDS = 60
 # Other holders write renewTime from their own clock.
 LEASE_CLOCK_SKEW_SECONDS = 5
 # terminationGracePeriodSeconds (35) plus a margin for the kubelet to remove
@@ -545,6 +549,7 @@ def run_omnigraph(
     args: list[str],
     lease: UnlockLease | NoPeers,
     timeout_seconds: float | None = None,
+    interrupt: Callable[[], None] | None = None,
 ) -> CommandResult:
     """Run one omnigraph CLI command, stopping it if the Lease is lost.
 
@@ -552,10 +557,11 @@ def run_omnigraph(
     diagnostics, lock ids and deployment ids.
 
     The command never outlives this call. Whatever ends the wait (the Lease,
-    the timeout, a signal handler raising in this thread), the child is
-    stopped first, so its I/O is over before anything acts on the lock it
-    held.
+    the timeout, ``interrupt``), the child is stopped first, so its I/O is
+    over before anything acts on the lock it held.
 
+    :param interrupt: called about once a second while the command runs. It
+        raises to stop the command, and that exception propagates.
     :raises BootRefused: if the Lease was lost while the command ran. Nothing
         is unlocked.
     :raises CommandTimedOut: if the command ran longer than ``timeout_seconds``.
@@ -578,6 +584,8 @@ def run_omnigraph(
                     if deadline is not None and time.monotonic() >= deadline:
                         msg = f"{command} did not finish in {timeout_seconds:.0f}s"
                         raise CommandTimedOut(msg) from None
+                    if interrupt is not None:
+                        interrupt()
                 else:
                     return CommandResult(child.returncode, stdout)
         except BaseException:
@@ -603,13 +611,32 @@ class Cluster:
     def _run(self, *args: str) -> CommandResult:
         return run_omnigraph(["cluster", *args], self._lease)
 
+    def _run_lock_command(self, *args: str) -> CommandResult:
+        try:
+            return run_omnigraph(
+                ["cluster", *args],
+                self._lease,
+                timeout_seconds=LOCK_COMMAND_TIMEOUT_SECONDS,
+            )
+        except CommandTimedOut as exc:
+            raise BootRefused(str(exc)) from exc
+
     def lock(self) -> dict[str, Any]:
-        """The ``state_observations`` of `cluster status`."""
-        result = self._run("status", "--config", self._config_dir, "--json")
+        """The ``state_observations`` of `cluster status`.
+
+        :raises BootRefused: if the lock's state cannot be read.
+        """
+        result = self._run_lock_command(
+            "status", "--config", self._config_dir, "--json"
+        )
         if result.returncode != 0:
             msg = f"`cluster status` failed (exit {result.returncode})"
             raise BootRefused(msg)
-        return result.json()["state_observations"]
+        try:
+            return result.json()["state_observations"]
+        except (ValueError, KeyError) as exc:
+            msg = f"`cluster status` printed no lock state: {result.stdout[:200]!r}"
+            raise BootRefused(msg) from exc
 
     def plan(self) -> dict[str, Any]:
         """The plan, which reads the root without taking the writer lock.
@@ -632,7 +659,9 @@ class Cluster:
 
     def force_unlock(self, lock_id: str) -> None:
         self._lease.confirm(UNLOCK_BUDGET_SECONDS)
-        result = self._run("force-unlock", "--config", self._config_dir, lock_id)
+        result = self._run_lock_command(
+            "force-unlock", "--config", self._config_dir, lock_id
+        )
         if result.returncode != 0:
             msg = f"`cluster force-unlock {lock_id}` failed (exit {result.returncode})"
             raise BootRefused(msg)

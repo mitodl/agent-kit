@@ -171,8 +171,9 @@ The entrypoint reads these from the environment:
 | `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
 | `OMNIGRAPH_UNLOCK_WITHOUT_PEERS` | outside Kubernetes | `1` allows force-unlock with no Lease or pod check. Ignored in Kubernetes. |
 
-The maintenance window reads `OMNIGRAPH_UNLOCK_LEASE`, `OMNIGRAPH_POD_SELECTOR`
-and `POD_NAME` as above, and these:
+The maintenance window reads `OMNIGRAPH_UNLOCK_LEASE` and `POD_NAME` as above,
+and these. It takes the pod selector from the Deployment itself, and its
+ServiceAccount needs `list` on pods too.
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -182,6 +183,12 @@ and `POD_NAME` as above, and these:
 | `OMNIGRAPH_CLEANUP_ISO_WEEKDAY` | no | UTC day `cleanup` also runs on (1 is Monday, 7 is Sunday). Unset, it never runs. |
 | `OMNIGRAPH_COMMAND_TIMEOUT_SECONDS` | no | Longest one `optimize` or `cleanup` may run before it is stopped (default 600). |
 | `OMNIGRAPH_SERVER_STOP_SECONDS` | no | How long to wait for the server pods to exit after the scale-down (default 90). |
+
+Its pod needs `terminationGracePeriodSeconds: 120`. After SIGTERM it stops the
+running command (up to 30s), removes that command's lock and scales the server
+back up, and on the default 30s it is killed before the scale-up. It exits 0
+only when every graph was maintained and the server is back (or left down for
+a migration).
 
 The Deployment carries the annotation `ol.mit.edu/migration-armed` while a
 storage-format migration is armed. The window skips its run when it sees it,

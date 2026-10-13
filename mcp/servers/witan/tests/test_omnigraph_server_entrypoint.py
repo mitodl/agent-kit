@@ -374,7 +374,7 @@ class FakeOmnigraph:
         self.calls: list[list[str]] = []
         self._ids = iter(f"01APPLY{n}" for n in range(1, 10))
 
-    def __call__(self, args: list[str], lease) -> object:
+    def __call__(self, args: list[str], lease, timeout_seconds=None) -> object:
         assert args[0] == "cluster"
         self.calls.append(args[1:])
         command = args[1]

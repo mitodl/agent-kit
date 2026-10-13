@@ -12,6 +12,8 @@ the pinned omnigraph has persisted locks (storage format 14).
 from __future__ import annotations
 
 import importlib.util
+import os
+import signal
 import sys
 import time
 from datetime import UTC, datetime
@@ -22,7 +24,6 @@ import yaml
 from .test_omnigraph_server_entrypoint import (
     LEASE,
     REPO_ROOT,
-    SELECTOR,
     FakeKubernetes,
     FakeOmnigraph,
     cluster_dir,  # noqa: F401  (fixture)
@@ -74,6 +75,8 @@ class FakeCluster(FakeKubernetes):
         self.scaled: list[int] = []
         self.pods_stop = True
         self.before_scale = None
+        self.after_scale = None
+        self.match_labels = {"app.kubernetes.io/name": "omnigraph-server"}
 
     def get_deployment(self, name: str) -> dict:
         assert name == DEPLOYMENT
@@ -83,7 +86,10 @@ class FakeCluster(FakeKubernetes):
                 "resourceVersion": str(self.deployment_version),
                 "annotations": dict(self.annotations),
             },
-            "spec": {"replicas": self.replicas},
+            "spec": {
+                "replicas": self.replicas,
+                "selector": {"matchLabels": dict(self.match_labels)},
+            },
         }
 
     def replace_scale(self, name: str, replicas: int, resource_version: str) -> dict:
@@ -98,6 +104,9 @@ class FakeCluster(FakeKubernetes):
         self.scaled.append(replicas)
         if replicas == 0 and self.pods_stop:
             self.pods = []
+        if self.after_scale:
+            hook, self.after_scale = self.after_scale, None
+            hook()
         return {}
 
     def arm_migration(self) -> None:
@@ -115,10 +124,16 @@ class FakeCli(FakeOmnigraph):
         self.maintained: list[list[str]] = []
         self.fails: set[str] = set()
         self.during: dict[str, object] = {}
+        self.status_output: str | None = None
         self._op_ids = iter(f"01GRAPHOP{n}" for n in range(1, 50))
 
-    def __call__(self, args: list[str], lease, timeout_seconds=None) -> object:
+    def __call__(
+        self, args: list[str], lease, timeout_seconds=None, interrupt=None
+    ) -> object:
         if args[0] not in ("optimize", "cleanup"):
+            if self.status_output is not None and args[1] == "status":
+                self.calls.append(args[1:])
+                return entrypoint.CommandResult(0, self.status_output)
             return super().__call__(args, lease)
         graph = args[args.index("--graph") + 1]
         assert args[args.index("--cluster") + 1] == ROOT
@@ -129,6 +144,9 @@ class FakeCli(FakeOmnigraph):
         hook = self.during.pop(graph, None)
         if hook:
             hook()
+        if interrupt:
+            # The real one polls this about once a second while the command runs.
+            interrupt()
         return self._result(1 if graph in self.fails else 0, {})
 
 
@@ -137,6 +155,8 @@ def kube(monkeypatch) -> FakeCluster:
     fake = FakeCluster()
     monkeypatch.setattr(entrypoint.KubernetesApi, "in_cluster", lambda: fake)
     monkeypatch.setattr(entrypoint, "PEER_POLL_SECONDS", 0)
+    monkeypatch.setattr(maintenance, "LEASE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(maintenance, "LEASE_RETRY_SECONDS", 0)
     return fake
 
 
@@ -159,7 +179,6 @@ def env(tmp_path) -> dict[str, str]:
         "OMNIGRAPH_CLUSTER_DIR": str(tmp_path),
         "OMNIGRAPH_SERVER_DEPLOYMENT": DEPLOYMENT,
         "OMNIGRAPH_UNLOCK_LEASE": LEASE,
-        "OMNIGRAPH_POD_SELECTOR": SELECTOR,
         "POD_NAME": JOB_POD,
         "OMNIGRAPH_CLEANUP_OLDER_THAN": "30d",
         "OMNIGRAPH_WINDOW_SECONDS": "1500",
@@ -222,12 +241,30 @@ def test_a_deployment_already_at_zero_skips_the_window(kube, cli, env):
     assert kube.spec == {}
 
 
-def test_a_held_lease_fails_the_run_without_stopping_the_server(kube, cli, env):
-    """A server pod that has just restarted still holds the Lease for a minute."""
+def test_a_lease_still_held_after_the_wait_fails_the_run(kube, cli, env):
     kube.hold_as(f"{SERVER_POD}#1f", renewed_ago=5)
     assert maintenance.main(env) == 1
     assert kube.scaled == []
     assert kube.spec["holderIdentity"] == f"{SERVER_POD}#1f"
+    assert cli.calls == []
+
+
+def test_the_window_waits_out_the_lease_of_a_server_that_just_booted(
+    kube, cli, env, monkeypatch
+):
+    """The entrypoint does not release the Lease at exec; it expires."""
+    monkeypatch.setattr(maintenance, "LEASE_WAIT_SECONDS", 30)
+    kube.hold_as(f"{SERVER_POD}#1f", renewed_ago=64.9)
+    assert maintenance.main(env) == 0
+    assert kube.scaled == [0, 1]
+
+
+def test_a_selector_this_cannot_render_exactly_opens_no_window(kube, cli, env):
+    """A selector that missed the pods would show a running server as stopped."""
+    kube.match_labels = {}
+    assert maintenance.main(env) == 1
+    assert kube.scaled == []
+    assert kube.spec == {}
     assert cli.calls == []
 
 
@@ -259,16 +296,23 @@ def test_a_server_that_does_not_stop_keeps_its_lock_and_is_scaled_back(kube, cli
 
 
 @pytest.mark.parametrize("operation", ["deployment", "graph_operation"])
-def test_a_lock_the_server_did_not_leave_stops_the_window(kube, cli, env, operation):
+def test_a_lock_the_server_did_not_leave_is_never_removed(kube, cli, env, operation):
+    """Not on the way in, and not by the close either."""
     cli.lock = {"id": "01OTHER", "operation": operation}
-    kube.pods = []
-    with pytest.raises(BootRefused, match="not by the server that just stopped"):
-        maintenance.Window(
-            kube,
-            entrypoint.NoPeers(may_unlock=True),
-            maintenance.Settings.from_env(env),
-            replicas=1,
-        ).open("10")
+    assert maintenance.main(env) == 1
+    assert cli.unlocked == []
+    assert cli.maintained == []
+    assert cli.lock == {"id": "01OTHER", "operation": operation}
+    assert kube.scaled == [0, 1]
+
+
+def test_a_scale_down_whose_response_was_lost_is_still_restored(kube, cli, env):
+    def lose_response() -> None:
+        raise KubernetesError(None, "timed out")
+
+    kube.after_scale = lose_response
+    assert maintenance.main(env) == 1
+    assert kube.scaled == [0, 1]
     assert cli.unlocked == []
 
 
@@ -280,10 +324,7 @@ def test_a_window_past_its_deadline_starts_nothing_and_restores(kube, cli, env):
 
 
 def test_sigterm_mid_command_releases_that_commands_lock_and_restores(kube, cli, env):
-    def terminate() -> None:
-        raise maintenance.WindowTerminated
-
-    cli.during["council"] = terminate
+    cli.during["council"] = lambda: os.kill(os.getpid(), signal.SIGTERM)
     assert maintenance.main(env) == 1
     assert cli.maintained == [["optimize", "council"]]
     assert cli.unlocked == ["01SERVE", "01GRAPHOP1"]
@@ -300,6 +341,33 @@ def test_a_lost_lease_leaves_the_lock_and_the_server_down(kube, cli, env):
     assert cli.lock == {"id": "01GRAPHOP1", "operation": "graph_operation"}
     assert kube.scaled == [0]
     assert kube.spec["holderIdentity"] == "operator#aa"
+
+
+def test_sigterm_before_the_scale_down_stops_nothing(kube, cli, env, monkeypatch):
+    acquire = entrypoint.UnlockLease.acquire
+
+    def acquire_then_sigterm(self) -> None:
+        acquire(self)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(entrypoint.UnlockLease, "acquire", acquire_then_sigterm)
+    assert maintenance.main(env) == 1
+    assert kube.scaled == []
+    assert cli.calls == []
+    assert kube.spec["holderIdentity"] == ""
+
+
+def test_an_unreadable_lock_state_at_close_leaves_the_server_down(kube, cli, env):
+    """Logged and exited 1, with the Lease released, not a traceback."""
+
+    def break_status() -> None:
+        cli.status_output = "<html>503</html>"
+        raise maintenance.WindowTerminated
+
+    cli.during["council"] = break_status
+    assert maintenance.main(env) == 1
+    assert kube.scaled == [0]
+    assert kube.spec["holderIdentity"] == ""
 
 
 # ── The restore ──────────────────────────────────────────────────────────────
@@ -342,7 +410,45 @@ def test_the_restore_retries_an_unreachable_api(kube, cli, env):
     assert kube.scaled == [0, 1]
 
 
+def test_a_restore_that_never_succeeds_fails_the_run(kube, cli, env, monkeypatch):
+    """The Job must not report success with the server still down."""
+    monkeypatch.setattr(maintenance, "RESTORE_ATTEMPTS", 3)
+    real_scale = kube.replace_scale
+
+    def refuse_scale_up(name: str, replicas: int, resource_version: str) -> dict:
+        if replicas:
+            raise KubernetesError(None, "connection refused")
+        return real_scale(name, replicas, resource_version)
+
+    kube.replace_scale = refuse_scale_up
+    assert maintenance.main(env) == 1
+    assert kube.scaled == [0]
+    assert cli.lock is None
+
+
 # ── Running a command ────────────────────────────────────────────────────────
+
+
+def test_a_command_is_stopped_when_its_interrupt_raises(tmp_path, monkeypatch):
+    """What SIGTERM does to a running optimize: the child exits first."""
+    stopped = tmp_path / "stopped"
+    fake = tmp_path / "omnigraph"
+    fake.write_text(
+        f"#!/bin/sh\ntrap 'touch {stopped}; exit 143' TERM\nsleep 60 &\nwait\n"
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+
+    def interrupt() -> None:
+        raise maintenance.WindowTerminated
+
+    started = time.monotonic()
+    with pytest.raises(maintenance.WindowTerminated):
+        entrypoint.run_omnigraph(
+            ["optimize"], entrypoint.NoPeers(may_unlock=True), interrupt=interrupt
+        )
+    assert stopped.exists()
+    assert time.monotonic() - started < 10
 
 
 def test_a_command_past_its_timeout_is_stopped(tmp_path, monkeypatch):
@@ -420,7 +526,6 @@ def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
             "OMNIGRAPH_CLUSTER_DIR": str(cluster_dir),
             "OMNIGRAPH_SERVER_DEPLOYMENT": DEPLOYMENT,
             "OMNIGRAPH_UNLOCK_LEASE": LEASE,
-            "OMNIGRAPH_POD_SELECTOR": SELECTOR,
             "POD_NAME": JOB_POD,
             "OMNIGRAPH_CLEANUP_OLDER_THAN": "30d",
             "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": str(datetime.now(UTC).isoweekday()),
