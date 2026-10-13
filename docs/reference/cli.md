@@ -1307,16 +1307,22 @@ apply regardless of the mtime stamp.
 witan migrate storage [OPTIONS] [ARGS]
 ```
 
-Rebuild a local store stuck on an old, incompatible omnigraph format.
+Move a local store stuck on an old, incompatible omnigraph format.
 
 omnigraph uses strict single-version storage: a release that bumps the
 internal on-disk schema (e.g. 0.7 → 0.8) refuses to open graphs an older
-binary wrote. This detects that refusal against your configured store
-and, using a still-installed pre-upgrade ``omnigraph`` binary, replays
-the documented rebuild — export with the old binary, then ``init`` +
-``load`` with the new one. Node/edge data, vectors, and blobs are
-preserved; commit history and branches are not. The original store is
-renamed ``<store>.pre-migrate`` rather than deleted.
+binary wrote. This detects that refusal against your configured store.
+
+If the current binary can convert the store in place (``omnigraph
+upgrade``; from omnigraph 0.13, a format-9 store written by 0.11), it
+does, and commit history and branches are kept. No old binary is needed.
+
+Otherwise, using a still-installed pre-upgrade ``omnigraph`` binary, it
+replays the documented rebuild — export with the old binary, then
+``init`` + ``load`` with the new one. Node/edge data, vectors, and blobs
+are preserved; commit history and branches are not.
+
+Either way the original store is kept as ``<store>.pre-migrate``.
 
 No-op if the store already opens fine with the current binary. Only
 handles local on-disk stores — s3:// and http(s):// stores are managed
@@ -1324,9 +1330,9 @@ externally and must be rebuilt by hand per omnigraph's upgrade docs.
 
 **Parameters**:
 
-* `OLD-BINARY, --old-binary`: Path to the omnigraph binary that last wrote this store. Auto-detected
-    as the first ``omnigraph`` on PATH that isn't the one witan is
-    currently using, if omitted.
+* `OLD-BINARY, --old-binary`: Path to the omnigraph binary that last wrote this store, for the
+    rebuild. Auto-detected as the first ``omnigraph`` on PATH that isn't
+    the one witan is currently using, if omitted.
 * `--yes, --no-yes`: Skip the confirmation prompt. *[default: False]*
 
 ### witan migrate merge

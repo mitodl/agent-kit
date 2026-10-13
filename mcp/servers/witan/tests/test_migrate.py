@@ -143,6 +143,106 @@ def _fake_binary(path: Path) -> Path:
     return path
 
 
+_UPGRADING_BINARY = """#!/bin/sh
+# Stands in for an omnigraph that refuses the store until `upgrade` has run.
+store=""
+for arg in "$@"; do store="$arg"; done
+case "$1" in
+snapshot)
+    if [ -f "$store/upgraded" ]; then
+        echo "internal_schema_version: 14"
+    else
+        echo "__manifest is stamped at internal schema v9, but this omnigraph reads only v14 to v14." >&2
+        exit 1
+    fi
+    ;;
+upgrade)
+    if [ "$2" = "--check" ]; then
+        echo '{"mode": "check", "outcome": "%(outcome)s"}'
+        exit %(check_exit)s
+    fi
+    touch "$store/upgraded"
+    ;;
+esac
+"""
+
+
+def _upgrading_binary(path: Path, *, outcome: str, check_exit: int) -> Path:
+    path.write_text(_UPGRADING_BINARY % {"outcome": outcome, "check_exit": check_exit})
+    path.chmod(0o755)
+    return path
+
+
+def _client_on(monkeypatch, binary: Path, store: Path):
+    from witan import server as srv
+
+    class _FakeClient:
+        graph_uri = str(store)
+        _binary = str(binary)
+
+    monkeypatch.setattr(srv, "client", _FakeClient())
+    return srv
+
+
+def test_migrate_storage_format_upgrades_in_place_when_the_check_passes(
+    tmp_path, monkeypatch
+):
+    """The in-place route needs no old binary, and the copy it leaves behind
+    is the store as it was before ``upgrade`` touched it."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    (store / "data").write_text("rows")
+    binary = _upgrading_binary(
+        tmp_path / "omnigraph", outcome="check_passed", check_exit=0
+    )
+    srv = _client_on(monkeypatch, binary, store)
+    monkeypatch.setattr(srv, "_pre_upgrade_binary_candidates", lambda _new: [])
+
+    result = srv.migrate_storage_format()
+
+    backup = tmp_path / "graph.omni.pre-migrate"
+    assert result["method"] == "upgrade"
+    assert result["backup"] == str(backup)
+    assert result["old_binary"] is None
+    assert (store / "upgraded").exists()
+    assert (store / "data").read_text() == "rows"
+    assert (backup / "data").read_text() == "rows"
+    assert not (backup / "upgraded").exists()
+
+
+def test_migrate_storage_format_rebuilds_when_the_check_fails(tmp_path, monkeypatch):
+    """A store too old for ``upgrade`` falls through to the rebuild, which is
+    where a missing old binary is reported. The store is left alone."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    binary = _upgrading_binary(
+        tmp_path / "omnigraph", outcome="check_failed", check_exit=1
+    )
+    srv = _client_on(monkeypatch, binary, store)
+    monkeypatch.setattr(srv, "_pre_upgrade_binary_candidates", lambda _new: [])
+
+    with pytest.raises(RuntimeError, match="no other binary was found"):
+        srv.migrate_storage_format()
+
+    assert not (store / "upgraded").exists()
+    assert not (tmp_path / "graph.omni.pre-migrate").exists()
+
+
+def test_migrate_storage_format_keeps_an_earlier_backup(tmp_path, monkeypatch):
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    (tmp_path / "graph.omni.pre-migrate").mkdir()
+    binary = _upgrading_binary(
+        tmp_path / "omnigraph", outcome="check_passed", check_exit=0
+    )
+    srv = _client_on(monkeypatch, binary, store)
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        srv.migrate_storage_format()
+
+    assert not (store / "upgraded").exists()
+
+
 @requires_omnigraph
 def test_pre_upgrade_candidates_exclude_the_current_binary(monkeypatch):
     import shutil

@@ -1752,6 +1752,67 @@ def _acquire_store_lock(store: str):
     return acquire_store_flock(store)
 
 
+def _upgrade_check_passes(binary: str, store: str) -> bool:
+    """Whether ``<binary> upgrade`` can convert ``store`` in place.
+
+    ``upgrade --check`` writes nothing. omnigraph 0.13 converts a standalone
+    format 8, 9 or 13 store to 14 and reports ``check_failed`` (exit 1) for
+    anything older, which still has to be rebuilt by export and load.
+    """
+    result = subprocess.run(
+        [binary, "upgrade", "--check", "--json", store],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    return json.loads(result.stdout)["outcome"] == "check_passed"
+
+
+def _upgrade_in_place(binary: str, store: str) -> dict:
+    """Convert ``store`` to ``binary``'s format with ``omnigraph upgrade``.
+
+    The conversion rewrites the store where it stands, so the copy is taken
+    first: it is the only way back if the upgrade stops part-way.
+    """
+    store_path = Path(store)
+    backup_path = store_path.with_name(store_path.name + ".pre-migrate")
+    lock_fh = _acquire_store_lock(store)
+    try:
+        if backup_path.exists():
+            raise RuntimeError(
+                f"Backup path {backup_path} already exists from a previous "
+                "migration attempt; remove or rename it before retrying."
+            )
+        shutil.copytree(store_path, backup_path, symlinks=True)
+        try:
+            _run_omnigraph([binary, "upgrade", store], label="upgrade")
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{exc}\n\nThe store as it was before the upgrade is at {backup_path}."
+            ) from exc
+        verify_ok, verify_out = _snapshot(binary, store)
+        if not verify_ok:
+            raise RuntimeError(
+                f"Upgraded store failed verification:\n{verify_out.strip()}\n\n"
+                f"The store as it was before the upgrade is at {backup_path}."
+            )
+    finally:
+        release_store_flock(store, lock_fh)
+
+    return {
+        "migrated": True,
+        "method": "upgrade",
+        "store": str(store_path),
+        "backup": str(backup_path),
+        "old_binary": None,
+        "new_binary": binary,
+        "edges_collapsed": 0,
+        "verify": verify_out.strip(),
+    }
+
+
 def _rewrite_export_for_load(exported: Path, data_file: Path) -> int:
     """Write ``exported`` to ``data_file`` in the shape a keyed format-9 load
     accepts, returning how many duplicate edge rows were collapsed.
@@ -1770,11 +1831,16 @@ def _rewrite_export_for_load(exported: Path, data_file: Path) -> int:
 
 
 def migrate_storage_format(old_binary: str | None = None) -> dict:
-    """Rebuild the configured local store when the current omnigraph binary
-    refuses to open it because it was written by an older, incompatible
-    on-disk format (a strict single-version storage bump, e.g. 0.7 → 0.8).
+    """Move the configured local store onto the current omnigraph binary's
+    on-disk format when that binary refuses to open it (a strict
+    single-version storage bump, e.g. 0.7 → 0.8).
 
-    Replays the rebuild omnigraph's upgrade docs prescribe: ``export`` with the
+    When the current binary can convert the store where it stands
+    (``omnigraph upgrade``, from 0.13: format 9 to 14), that is what runs. It
+    needs no old binary and keeps commit history and branches. A copy of the
+    store is taken first as ``<store>.pre-migrate``.
+
+    Otherwise this replays the rebuild omnigraph's upgrade docs prescribe: ``export`` with the
     *old* binary, ``init`` + ``load --mode overwrite`` with the *new* one, into
     a scratch store. The rebuilt store is initialised from the bundled
     ``schema.pg``, not the old binary's ``schema show``: from format 9 every
@@ -1786,6 +1852,8 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
     opens, then swaps it in and renames the original aside as
     ``<store>.pre-migrate`` rather than deleting it. Node/edge rows, vectors,
     and blobs survive; commit history and branches do not.
+
+    ``method`` in the result says which ran: ``upgrade`` or ``rebuild``.
 
     Returns ``{"migrated": False, "reason": ...}`` when the current binary
     already opens the store fine (nothing to do). Raises ``RuntimeError`` for
@@ -1812,6 +1880,9 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
         raise RuntimeError(
             f"omnigraph snapshot failed for an unrelated reason:\n{out.strip()}"
         )
+
+    if _upgrade_check_passes(new_binary, store):
+        return _upgrade_in_place(new_binary, store)
 
     # An explicit --old-binary is taken at its word and not probed against the
     # alternatives: the caller is asserting which release wrote this store, and
@@ -1917,6 +1988,7 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
 
     return {
         "migrated": True,
+        "method": "rebuild",
         "store": str(store_path),
         "backup": str(backup_path),
         "old_binary": old,
