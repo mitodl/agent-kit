@@ -1752,8 +1752,16 @@ def _acquire_store_lock(store: str):
     return acquire_store_flock(store)
 
 
+#: The first storage format whose stores we wrote under the keyed-edge schema.
+#: An in-place upgrade keeps the store's own schema, and an edge key can only
+#: be declared when the type is created, so an older store has to be rebuilt
+#: from the bundled schema however willing the binary is to convert it:
+#: 0.11's ``upgrade --check`` passes on a format-6 store.
+_KEYED_EDGE_FORMAT = 9
+
+
 def _upgrade_check_passes(binary: str, store: str) -> bool:
-    """Whether ``<binary> upgrade`` can convert ``store`` in place.
+    """Whether ``<binary> upgrade`` should convert ``store`` in place.
 
     ``upgrade --check`` writes nothing. omnigraph 0.13 converts a standalone
     format 8, 9 or 13 store to 14 and reports ``check_failed`` (exit 1) for
@@ -1767,7 +1775,11 @@ def _upgrade_check_passes(binary: str, store: str) -> bool:
     )
     if result.returncode != 0:
         return False
-    return json.loads(result.stdout)["outcome"] == "check_passed"
+    check = json.loads(result.stdout)
+    return (
+        check["outcome"] == "check_passed"
+        and check["observed_format"] >= _KEYED_EDGE_FORMAT
+    )
 
 
 def _upgrade_in_place(binary: str, store: str) -> dict:
@@ -1836,8 +1848,9 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
     single-version storage bump, e.g. 0.7 → 0.8).
 
     When the current binary can convert the store where it stands
-    (``omnigraph upgrade``, from 0.13: format 9 to 14), that is what runs. It
-    needs no old binary and keeps commit history and branches. A copy of the
+    (``omnigraph upgrade``, from 0.13: format 9 to 14) and the store already
+    has the keyed-edge schema, that is what runs. It needs no old binary and
+    keeps commit history and branches. A copy of the
     store is taken first as ``<store>.pre-migrate``.
 
     Otherwise this replays the rebuild omnigraph's upgrade docs prescribe: ``export`` with the

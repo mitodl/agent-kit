@@ -158,7 +158,7 @@ snapshot)
     ;;
 upgrade)
     if [ "$2" = "--check" ]; then
-        echo '{"mode": "check", "outcome": "%(outcome)s"}'
+        echo '{"mode": "check", "outcome": "%(outcome)s", "observed_format": %(observed_format)s}'
         exit %(check_exit)s
     fi
     touch "$store/upgraded"
@@ -167,8 +167,17 @@ esac
 """
 
 
-def _upgrading_binary(path: Path, *, outcome: str, check_exit: int) -> Path:
-    path.write_text(_UPGRADING_BINARY % {"outcome": outcome, "check_exit": check_exit})
+def _upgrading_binary(
+    path: Path, *, outcome: str, check_exit: int, observed_format: int = 9
+) -> Path:
+    path.write_text(
+        _UPGRADING_BINARY
+        % {
+            "outcome": outcome,
+            "check_exit": check_exit,
+            "observed_format": observed_format,
+        }
+    )
     path.chmod(0o755)
     return path
 
@@ -226,6 +235,25 @@ def test_migrate_storage_format_rebuilds_when_the_check_fails(tmp_path, monkeypa
 
     assert not (store / "upgraded").exists()
     assert not (tmp_path / "graph.omni.pre-migrate").exists()
+
+
+def test_migrate_storage_format_rebuilds_a_store_older_than_keyed_edges(
+    tmp_path, monkeypatch
+):
+    """omnigraph 0.11 offers to upgrade a format-6 store in place. Taking the
+    offer would carry its unkeyed edge types into the new format."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    binary = _upgrading_binary(
+        tmp_path / "omnigraph", outcome="check_passed", check_exit=0, observed_format=6
+    )
+    srv = _client_on(monkeypatch, binary, store)
+    monkeypatch.setattr(srv, "_pre_upgrade_binary_candidates", lambda _new: [])
+
+    with pytest.raises(RuntimeError, match="no other binary was found"):
+        srv.migrate_storage_format()
+
+    assert not (store / "upgraded").exists()
 
 
 def test_migrate_storage_format_keeps_an_earlier_backup(tmp_path, monkeypatch):
