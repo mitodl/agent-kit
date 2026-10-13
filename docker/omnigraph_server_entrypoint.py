@@ -69,6 +69,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -90,6 +91,9 @@ LEASE_RENEW_DEADLINE_SECONDS = 20
 CHILD_STOP_SECONDS = 30
 # A force-unlock must finish inside the Lease it was confirmed under.
 UNLOCK_BUDGET_SECONDS = 15
+# `cluster status` and `force-unlock` read and write two small objects. One
+# still running after this is a stalled storage call, not slow progress.
+LOCK_COMMAND_TIMEOUT_SECONDS = 60
 # Other holders write renewTime from their own clock.
 LEASE_CLOCK_SKEW_SECONDS = 5
 # terminationGracePeriodSeconds (35) plus a margin for the kubelet to remove
@@ -116,8 +120,12 @@ class BootRefused(Exception):
     """The boot cannot continue safely. The message is the operator's reason."""
 
 
+# The maintenance command logs through this module under its own name.
+LOG_PREFIX = "omnigraph-server"
+
+
 def log(message: str) -> None:
-    print(f"omnigraph-server: {message}", flush=True)
+    print(f"{LOG_PREFIX}: {message}", flush=True)
 
 
 # ── Kubernetes ───────────────────────────────────────────────────────────────
@@ -135,7 +143,7 @@ class KubernetesError(Exception):
 
 
 class KubernetesApi:
-    """The three Kubernetes API calls the lock handoff needs.
+    """The Kubernetes API calls the lock handoff and the maintenance window need.
 
     The ServiceAccount token is read on every request because the kubelet
     rotates the projected file in place.
@@ -202,6 +210,37 @@ class KubernetesApi:
         return self._request(
             "GET", f"/api/v1/namespaces/{self._namespace}/pods?{query}"
         )["items"]
+
+    def _deployment_path(self, name: str) -> str:
+        return (
+            f"/apis/apps/v1/namespaces/{self._namespace}"
+            f"/deployments/{urllib.parse.quote(name)}"
+        )
+
+    def get_deployment(self, name: str) -> dict:
+        return self._request("GET", self._deployment_path(name))
+
+    def replace_scale(self, name: str, replicas: int, resource_version: str) -> dict:
+        """Set the Deployment's replica count, conditional on its version.
+
+        The scale subresource carries the Deployment's own
+        ``resourceVersion``, so the write fails with 409 if anything about
+        the Deployment has changed since ``resource_version`` was read.
+        """
+        return self._request(
+            "PUT",
+            f"{self._deployment_path(name)}/scale",
+            {
+                "apiVersion": "autoscaling/v1",
+                "kind": "Scale",
+                "metadata": {
+                    "name": name,
+                    "namespace": self._namespace,
+                    "resourceVersion": resource_version,
+                },
+                "spec": {"replicas": replicas},
+            },
+        )
 
 
 HTTP_CONFLICT = 409
@@ -366,10 +405,33 @@ class UnlockLease:
         server has taken its `serve` lock, and until then nobody else may
         unlock.
         """
+        self._stop_renewing()
+        self._renew()
+
+    def release(self) -> None:
+        """Stop renewing and clear the holder, so the next taker need not wait.
+
+        For a holder that has finished with the root and left it unlocked. If
+        the write fails the Lease expires on its own.
+        """
+        self._stop_renewing()
+        with self._mutex:
+            if self._deposed or not self._lease:
+                return
+            released = {
+                **self._lease,
+                "spec": {**self._lease["spec"], "holderIdentity": ""},
+            }
+            try:
+                self._api.replace_lease(self._name, released)
+            except KubernetesError as exc:
+                log(f"could not release the {self._name} Lease: {exc}")
+            self._deposed = True
+
+    def _stop_renewing(self) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
-        self._renew()
 
 
 def _lease_expiry(spec: dict) -> datetime | None:
@@ -409,6 +471,23 @@ class NoPeers:
     def hand_over(self) -> None:
         pass
 
+    def release(self) -> None:
+        pass
+
+
+def live_pod_names(pods: list[dict], excluding: str | None = None) -> list[str]:
+    """The pods whose containers may still be running, other than ``excluding``.
+
+    Unknown (a lost node) counts as live, as it does for Kubernetes' own
+    Recreate rollout.
+    """
+    return [
+        pod["metadata"]["name"]
+        for pod in pods
+        if pod["metadata"]["name"] != excluding
+        and (pod.get("status") or {}).get("phase") not in EXITED_POD_PHASES
+    ]
+
 
 def wait_for_peers_to_exit(
     api: KubernetesApi,
@@ -440,14 +519,7 @@ def wait_for_peers_to_exit(
                 f"({pod_name}); it cannot show whether the previous server exited"
             )
             raise BootRefused(msg)
-        live = [
-            pod["metadata"]["name"]
-            for pod in pods
-            if pod["metadata"]["name"] != pod_name
-            # Unknown (a lost node) counts as live, as it does for Kubernetes'
-            # own Recreate rollout.
-            and (pod.get("status") or {}).get("phase") not in EXITED_POD_PHASES
-        ]
+        live = live_pod_names(pods, excluding=pod_name)
         if not live:
             return
         if time.monotonic() >= deadline:
@@ -469,36 +541,61 @@ class CommandResult:
         return json.loads(self.stdout)
 
 
-def run_omnigraph(args: list[str], lease: UnlockLease | NoPeers) -> CommandResult:
+class CommandTimedOut(Exception):
+    """An omnigraph command outlived its timeout and was stopped."""
+
+
+def run_omnigraph(
+    args: list[str],
+    lease: UnlockLease | NoPeers,
+    timeout_seconds: float | None = None,
+    interrupt: Callable[[], None] | None = None,
+) -> CommandResult:
     """Run one omnigraph CLI command, stopping it if the Lease is lost.
 
     stderr goes straight to the pod log: it carries upstream's own
     diagnostics, lock ids and deployment ids.
 
-    :raises BootRefused: if the Lease was lost while the command ran. The
-        command is stopped first, so its I/O is over before the Lease can
-        expire, and nothing is unlocked.
+    The command never outlives this call. Whatever ends the wait (the Lease,
+    the timeout, ``interrupt``), the child is stopped first, so its I/O is
+    over before anything acts on the lock it held.
+
+    :param interrupt: called about once a second while the command runs. It
+        raises to stop the command, and that exception propagates.
+    :raises BootRefused: if the Lease was lost while the command ran. Nothing
+        is unlocked.
+    :raises CommandTimedOut: if the command ran longer than ``timeout_seconds``.
     """
+    command = f"`omnigraph {' '.join(args)}`"
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     with subprocess.Popen(
         ["omnigraph", *args],
         stdout=subprocess.PIPE,
         text=True,
     ) as child:
-        while True:
+        try:
+            while True:
+                try:
+                    stdout, _ = child.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    if lease.lost():
+                        msg = f"lost the unlock Lease during {command}"
+                        raise BootRefused(msg) from None
+                    if deadline is not None and time.monotonic() >= deadline:
+                        msg = f"{command} did not finish in {timeout_seconds:.0f}s"
+                        raise CommandTimedOut(msg) from None
+                    if interrupt is not None:
+                        interrupt()
+                else:
+                    return CommandResult(child.returncode, stdout)
+        except BaseException:
+            child.terminate()
             try:
-                stdout, _ = child.communicate(timeout=1)
+                child.wait(timeout=CHILD_STOP_SECONDS)
             except subprocess.TimeoutExpired:
-                if lease.lost():
-                    child.terminate()
-                    try:
-                        child.wait(timeout=CHILD_STOP_SECONDS)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait()
-                    msg = f"lost the unlock Lease during `omnigraph {' '.join(args)}`"
-                    raise BootRefused(msg) from None
-            else:
-                return CommandResult(child.returncode, stdout)
+                child.kill()
+                child.wait()
+            raise
 
 
 class Cluster:
@@ -514,13 +611,32 @@ class Cluster:
     def _run(self, *args: str) -> CommandResult:
         return run_omnigraph(["cluster", *args], self._lease)
 
+    def _run_lock_command(self, *args: str) -> CommandResult:
+        try:
+            return run_omnigraph(
+                ["cluster", *args],
+                self._lease,
+                timeout_seconds=LOCK_COMMAND_TIMEOUT_SECONDS,
+            )
+        except CommandTimedOut as exc:
+            raise BootRefused(str(exc)) from exc
+
     def lock(self) -> dict[str, Any]:
-        """The ``state_observations`` of `cluster status`."""
-        result = self._run("status", "--config", self._config_dir, "--json")
+        """The ``state_observations`` of `cluster status`.
+
+        :raises BootRefused: if the lock's state cannot be read.
+        """
+        result = self._run_lock_command(
+            "status", "--config", self._config_dir, "--json"
+        )
         if result.returncode != 0:
             msg = f"`cluster status` failed (exit {result.returncode})"
             raise BootRefused(msg)
-        return result.json()["state_observations"]
+        try:
+            return result.json()["state_observations"]
+        except (ValueError, KeyError) as exc:
+            msg = f"`cluster status` printed no lock state: {result.stdout[:200]!r}"
+            raise BootRefused(msg) from exc
 
     def plan(self) -> dict[str, Any]:
         """The plan, which reads the root without taking the writer lock.
@@ -543,7 +659,9 @@ class Cluster:
 
     def force_unlock(self, lock_id: str) -> None:
         self._lease.confirm(UNLOCK_BUDGET_SECONDS)
-        result = self._run("force-unlock", "--config", self._config_dir, lock_id)
+        result = self._run_lock_command(
+            "force-unlock", "--config", self._config_dir, lock_id
+        )
         if result.returncode != 0:
             msg = f"`cluster force-unlock {lock_id}` failed (exit {result.returncode})"
             raise BootRefused(msg)
@@ -661,10 +779,17 @@ def release_apply_lock(cluster: Cluster) -> None:
     cluster.force_unlock(lock["lock_id"])
 
 
-def converge(
+def checked_plan(
     config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
-) -> None:
-    """Bring the cluster root to the baked configuration, unlocked."""
+) -> Cluster:
+    """Plan the baked configuration against the root, refusing a bad plan.
+
+    Reads the root and changes nothing in it, so the pre-deploy gate
+    (omnigraph_plan_gate.py) runs exactly this beside a serving pod.
+
+    :returns: the cluster the plan was made for, ready to apply.
+    :raises BootRefused: see ``check_plan`` and ``render_policy_groups``.
+    """
     has_policy = render_policy_groups(
         config_dir, env.get("OMNIGRAPH_SERVER_BEARER_TOKENS_FILE")
     )
@@ -684,6 +809,14 @@ def converge(
     )
     cluster = Cluster(config_dir, actor, lease)
     check_plan(cluster.plan(), removable)
+    return cluster
+
+
+def converge(
+    config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
+) -> None:
+    """Bring the cluster root to the baked configuration, unlocked."""
+    cluster = checked_plan(config_dir, env, lease)
     release_previous_lock(cluster)
     log(f"converging cluster catalog at {config_dir}")
     cluster.apply()

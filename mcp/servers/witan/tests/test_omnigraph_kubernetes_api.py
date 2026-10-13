@@ -193,6 +193,26 @@ def test_list_pods_encodes_the_selector_and_returns_the_items(api, server):
 
 
 @requires_openssl
+def test_the_scale_write_carries_the_deployments_resource_version(api, server):
+    api.get_deployment("omnigraph-server")
+    api.replace_scale("omnigraph-server", 0, "4242")
+    read, write = server.requests
+    path = f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/omnigraph-server"
+    assert (read["method"], read["path"]) == ("GET", path)
+    assert (write["method"], write["path"]) == ("PUT", f"{path}/scale")
+    assert write["body"] == {
+        "apiVersion": "autoscaling/v1",
+        "kind": "Scale",
+        "metadata": {
+            "name": "omnigraph-server",
+            "namespace": NAMESPACE,
+            "resourceVersion": "4242",
+        },
+        "spec": {"replicas": 0},
+    }
+
+
+@requires_openssl
 @pytest.mark.parametrize("status", [403, 404, 409, 500])
 def test_an_http_error_keeps_its_status(api, server, status):
     """The Lease code tells a lost write (409) from an unreachable API by it."""
@@ -319,7 +339,7 @@ class ApplyHook(FakeOmnigraph):
 
     after_apply = None
 
-    def __call__(self, args: list[str], lease) -> object:
+    def __call__(self, args: list[str], lease, timeout_seconds=None) -> object:
         result = super().__call__(args, lease)
         if args[1] == "apply" and self.after_apply:
             self.after_apply()
