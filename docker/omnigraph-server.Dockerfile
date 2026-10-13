@@ -30,15 +30,15 @@
 # exists because this file went a full release cycle claiming the manager
 # covered it when it did not, and a partial bump is silent until deploy.
 
-ARG OMNIGRAPH_VERSION=0.11.0
+ARG OMNIGRAPH_VERSION=0.13.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.11.0
-ARG OMNIGRAPH_SHA256_X86_64=da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
-ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
+ARG OMNIGRAPH_RELEASE_TAG=v0.13.0
+ARG OMNIGRAPH_SHA256_X86_64=0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
+ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
 # The on-disk storage format the pinned binary reads, mirrored from witan_core's
 # declaration (packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image below as
@@ -59,7 +59,7 @@ ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca
 # runtime stage's re-declaration of it, and the LABEL line that emits it — an
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=9
+ARG OMNIGRAPH_INTERNAL_SCHEMA=14
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS fetch
