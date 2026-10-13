@@ -134,6 +134,10 @@ RUN apt-get update \
 COPY --from=fetch /out/omnigraph /usr/local/bin/omnigraph
 COPY --from=fetch /out/omnigraph-server /usr/local/bin/omnigraph-server
 COPY docker/omnigraph_server_entrypoint.py /usr/local/bin/omnigraph-server-entrypoint.py
+# The maintenance window and the pre-deploy plan gate, which the `omnigraph`
+# stack's CronJob and Job run as `command`. Both import the entrypoint for its
+# Lease, pod check and CLI wrappers, hence the importable name beside them.
+COPY docker/omnigraph_maintenance.py docker/omnigraph_plan_gate.py /usr/local/bin/
 COPY mcp/servers/witan/policy/render_groups.py /usr/local/bin/render-policy-groups.py
 
 # The cluster config dir holds the baked-in schema.pg, the ConfigMap-mounted
@@ -144,6 +148,8 @@ COPY mcp/servers/witan/policy/render_groups.py /usr/local/bin/render-policy-grou
 ENV OMNIGRAPH_CLUSTER_DIR=/etc/omnigraph/cluster
 RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
     && chmod +x /usr/local/bin/omnigraph-server-entrypoint.py \
+    && ln -s omnigraph-server-entrypoint.py /usr/local/bin/omnigraph_server_entrypoint.py \
+    && chmod +x /usr/local/bin/omnigraph_maintenance.py /usr/local/bin/omnigraph_plan_gate.py \
     && chmod +x /usr/local/bin/render-policy-groups.py
 # All three cluster schemas are baked in: schema.pg (witan memory/work graph →
 # the `council` graph), code-schema.pg (per-repo `code-<repo>` graphs), and

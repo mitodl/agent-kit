@@ -652,6 +652,34 @@ def graph_stores(config: Path) -> set[str]:
     return {path.name for path in (config / "graphs").iterdir()}
 
 
+def serve_until_locked_then_stop(config: Path, env: dict[str, str]) -> None:
+    """Run omnigraph-server until it holds its lock, then SIGTERM it."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = subprocess.Popen(
+        [
+            "omnigraph-server",
+            "--cluster",
+            str(config),
+            "--bind",
+            f"127.0.0.1:{port}",
+        ],
+        env={**env, "PATH": os.environ["PATH"]},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while not real_lock(config)["locked"]:
+            assert server.poll() is None, "omnigraph-server exited during startup"
+            assert time.monotonic() < deadline
+            time.sleep(0.2)
+    finally:
+        server.terminate()
+        server.wait(timeout=60)
+
+
 @requires_persisted_locks
 def test_real_first_boot_creates_the_graphs_and_leaves_no_lock(cluster_dir):
     entrypoint.converge(
@@ -670,30 +698,7 @@ def test_real_restart_takes_over_the_serve_lock(cluster_dir):
     """Boot, serve, SIGTERM, boot again: the lock handoff this file exists for."""
     env = real_env(cluster_dir)
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    server = subprocess.Popen(
-        [
-            "omnigraph-server",
-            "--cluster",
-            str(cluster_dir),
-            "--bind",
-            f"127.0.0.1:{port}",
-        ],
-        env={**env, "PATH": os.environ["PATH"]},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        deadline = time.monotonic() + 30
-        while not real_lock(cluster_dir)["locked"]:
-            assert server.poll() is None, "omnigraph-server exited during startup"
-            assert time.monotonic() < deadline
-            time.sleep(0.2)
-    finally:
-        server.terminate()
-        server.wait(timeout=60)
+    serve_until_locked_then_stop(cluster_dir, env)
     held = real_lock(cluster_dir)
     assert (held["locked"], held["lock_operation"]) == (True, "serve")
 
