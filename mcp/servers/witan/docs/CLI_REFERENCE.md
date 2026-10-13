@@ -511,18 +511,20 @@ witan migrate schema
 
 ### `migrate storage [OLD_BINARY]`
 
-Rebuild a local store stuck on an old, incompatible omnigraph on-disk format
+Move a local store stuck on an old, incompatible omnigraph on-disk format
 (omnigraph refuses to open a store written by a newer/older binary's
-internal schema version). Exports with the old binary, then `init` + `load`
-with the current one. Preserves nodes/edges/vectors/blobs; commit history
-and branches are not preserved. Original store is renamed
-`<store>.pre-migrate`, not deleted. No-op if the store already opens fine.
-Only handles local on-disk stores — `s3://`/`http(s)://` stores must be
-rebuilt by hand.
+internal schema version) onto the current one. If the current binary can
+convert the store in place (`omnigraph upgrade`; omnigraph 0.13 can for a
+store written by 0.11), it does, and commit history and branches are kept.
+Otherwise it exports with the old binary, then `init` + `load` with the
+current one, which preserves nodes/edges/vectors/blobs but not commit
+history or branches. Either way the original store is kept as
+`<store>.pre-migrate`. No-op if the store already opens fine. Only handles
+local on-disk stores — `s3://`/`http(s)://` stores must be rebuilt by hand.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `OLD_BINARY` (positional) | str \| None | auto-detected | Path to the omnigraph binary that last wrote this store (first `omnigraph` on `PATH` that isn't the current one, if omitted) |
+| `OLD_BINARY` (positional) | str \| None | auto-detected | Path to the omnigraph binary that last wrote this store, for the rebuild (first `omnigraph` on `PATH` that isn't the current one, if omitted). Passing it forces the rebuild |
 | `--yes` | bool | `False` | Skip the confirmation prompt |
 
 ```bash

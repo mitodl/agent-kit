@@ -579,9 +579,11 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
     store = s.client.graph_uri
     if not yes:
         console.print(
-            f"[yellow]About to rebuild {store} onto the current omnigraph "
-            "on-disk format. Commit history and branches are dropped; the "
-            "original is kept as a `.pre-migrate` backup, not deleted.[/yellow]"
+            f"[yellow]About to move {store} onto the current omnigraph "
+            "on-disk format. A store the current binary can upgrade in place "
+            "keeps its commit history and branches; an older one is rebuilt "
+            "and loses them. Either way the original is kept as a "
+            "`.pre-migrate` backup, not deleted.[/yellow]"
         )
         try:
             response = input("Continue? [y/N] ").strip().lower()
@@ -601,9 +603,14 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
     if not result["migrated"]:
         console.print(esc(result["reason"]))
         return
+    how = (
+        "upgraded in place, history kept"
+        if result["method"] == "upgrade"
+        else f"rebuilt, old binary: {result['old_binary']}"
+    )
     console.print(
         f"[green]Migrated[/green] {result['store']} "
-        f"(old binary: {result['old_binary']}, backup: {result['backup']})."
+        f"({how}, backup: {result['backup']})."
     )
     console.print(esc(result["verify"]))
 
@@ -625,16 +632,22 @@ def storage(
     *,
     yes: bool = False,
 ) -> None:
-    """Rebuild a local store stuck on an old, incompatible omnigraph format.
+    """Move a local store stuck on an old, incompatible omnigraph format.
 
     omnigraph uses strict single-version storage: a release that bumps the
     internal on-disk schema (e.g. 0.7 → 0.8) refuses to open graphs an older
-    binary wrote. This detects that refusal against your configured store
-    and, using a still-installed pre-upgrade ``omnigraph`` binary, replays
-    the documented rebuild — export with the old binary, then ``init`` +
-    ``load`` with the new one. Node/edge data, vectors, and blobs are
-    preserved; commit history and branches are not. The original store is
-    renamed ``<store>.pre-migrate`` rather than deleted.
+    binary wrote. This detects that refusal against your configured store.
+
+    If the current binary can convert the store in place (``omnigraph
+    upgrade``; from omnigraph 0.13, a format-9 store written by 0.11), it
+    does, and commit history and branches are kept. No old binary is needed.
+
+    Otherwise, using a still-installed pre-upgrade ``omnigraph`` binary, it
+    replays the documented rebuild — export with the old binary, then
+    ``init`` + ``load`` with the new one. Node/edge data, vectors, and blobs
+    are preserved; commit history and branches are not.
+
+    Either way the original store is kept as ``<store>.pre-migrate``.
 
     No-op if the store already opens fine with the current binary. Only
     handles local on-disk stores — s3:// and http(s):// stores are managed
@@ -643,9 +656,10 @@ def storage(
     Parameters
     ----------
     old_binary:
-        Path to the omnigraph binary that last wrote this store. Auto-detected
-        as the first ``omnigraph`` on PATH that isn't the one witan is
-        currently using, if omitted.
+        Path to the omnigraph binary that last wrote this store, for the
+        rebuild. Passing it forces the rebuild even when the store could be
+        upgraded in place. Auto-detected as the first ``omnigraph`` on PATH
+        that isn't the one witan is currently using, if omitted.
     yes:
         Skip the confirmation prompt.
     """

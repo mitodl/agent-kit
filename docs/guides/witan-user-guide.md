@@ -279,10 +279,12 @@ different repos/orgs at different stores (e.g. work vs. personal) — see the
 - **`witan migrate storage` needed after an omnigraph upgrade.** omnigraph
   uses strict single-version on-disk storage — a release that bumps the
   internal schema refuses to open a store an older binary wrote. If your
-  local graph suddenly won't open, run `witan migrate storage`; it detects
-  the old binary, exports with it, and reloads into the new format,
-  preserving nodes/edges/vectors (commit history and branches are not
-  preserved; the original is kept as `<store>.pre-migrate`).
+  local graph suddenly won't open, run `witan migrate storage`. If the new
+  binary can convert the store in place (omnigraph 0.13 can for a store
+  written by 0.11), it does, and commit history and branches are kept.
+  Otherwise it detects the old binary, exports with it, and reloads into the
+  new format, preserving nodes/edges/vectors but not commit history or
+  branches. Either way the original is kept as `<store>.pre-migrate`.
 - **No tasks/projects showing up for this repo.** Repo scoping is detected
   from the `origin` remote in `.git/config` (or `WITAN_REPO` if set). Work
   created without repo context, or from a different remote URL form (SSH vs.
