@@ -31,6 +31,7 @@ from .test_omnigraph_server_entrypoint import (
     pod,
     real_env,
     real_lock,
+    requires_omnigraph_server,
     requires_persisted_locks,
     serve_until_locked_then_stop,
 )
@@ -533,6 +534,7 @@ def test_the_gate_fails_on_a_graph_removal_that_is_not_allow_listed(gate_cli, tm
 
 
 @requires_persisted_locks
+@requires_omnigraph_server
 def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
     cluster_dir,  # noqa: F811
     monkeypatch,
@@ -564,6 +566,7 @@ def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
 
 
 @requires_persisted_locks
+@requires_omnigraph_server
 def test_real_gate_reads_a_served_root_without_touching_its_lock(
     cluster_dir,  # noqa: F811
 ):
