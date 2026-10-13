@@ -1,5 +1,6 @@
 """Tests for the schema/data migration commands."""
 
+import fcntl
 import json
 import shutil
 import subprocess
@@ -227,6 +228,47 @@ def test_migrate_storage_format_upgrades_in_place_when_the_check_passes(
     assert (store / "data").read_text() == "rows"
     assert (backup / "data").read_text() == "rows"
     assert not (backup / "upgraded").exists()
+
+
+def _store_lock_is_held(store: Path) -> bool:
+    """Whether another holder has ``<store>.lock``. flock belongs to the open
+    file description, so a second ``open()`` is refused even in this process."""
+    with open(f"{store}.lock", "w") as probe:
+        try:
+            fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+        return False
+
+
+def test_the_store_lock_covers_the_copy_and_the_upgrade(tmp_path, monkeypatch):
+    """A writer that got in between the copy and the upgrade would leave the
+    copy short of what the upgrade then rewrites."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    binary = _upgrading_binary(
+        tmp_path / "omnigraph", outcome="check_passed", check_exit=0
+    )
+    srv = _client_on(monkeypatch, binary, store)
+    held: dict[str, bool] = {}
+    copytree, run_omnigraph = srv.shutil.copytree, srv._run_omnigraph
+
+    def _copytree(src, dst):
+        held["copy"] = _store_lock_is_held(store)
+        return copytree(src, dst)
+
+    def _run(cmd, *, label):
+        held[label] = _store_lock_is_held(store)
+        return run_omnigraph(cmd, label=label)
+
+    monkeypatch.setattr(srv.shutil, "copytree", _copytree)
+    monkeypatch.setattr(srv, "_run_omnigraph", _run)
+
+    srv.migrate_storage_format()
+
+    assert held == {"copy": True, "upgrade": True}
+    assert not _store_lock_is_held(store)
 
 
 def test_migrate_storage_format_rebuilds_when_the_check_fails(tmp_path, monkeypatch):
