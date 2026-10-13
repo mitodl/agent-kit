@@ -527,7 +527,7 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     three markers. `manifest table version` is 0 at both tags, assembled at
 #:     runtime as recorded above. Everything else is unchanged or grew.
 #:
-#: ★★ 2026-10-13, v0.11.0 -> v0.13.0, AND THIS ONE MOVES THE FORMAT TOO.
+#: 2026-10-13, v0.11.0 -> v0.13.0. This one moves the format too.
 #: `omnigraph version` on this binary reads 0.13.0 and "internal-schema 14
 #: (serves v14 to v14)", so `_OMNIGRAPH_INTERNAL_SCHEMA` moves 9 -> 14 in the
 #: same commit. 0.12.0 was skipped. The cutover, the cluster lock every writer

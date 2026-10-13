@@ -5,7 +5,8 @@
   written by 0.11 has to go through `witan migrate storage` after
   `witan setup` installs the new binary, and every deployed graph is rebuilt
   in the cutover.
-- With the format at 14, `omnigraph_http.RESPONSE_CONTRACT_REQUIRED` is on: a
-  response without `Omnigraph-Http-Api: 0.13` is a contract violation. A
-  client on this release pointed at a 0.11 server has its writes applied and
-  reported as indeterminate, so the server moves first.
+- With the format at 14, `omnigraph_http.RESPONSE_CONTRACT_REQUIRED` is on.
+  A successful response, or any refusal of a write, that carries no
+  `Omnigraph-Http-Api: 0.13` stamp is a contract violation. Against a 0.11
+  server a client on this release cannot decode reads, and its writes are
+  applied and reported as indeterminate, so the server moves first.
