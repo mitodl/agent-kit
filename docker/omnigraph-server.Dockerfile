@@ -30,15 +30,15 @@
 # exists because this file went a full release cycle claiming the manager
 # covered it when it did not, and a partial bump is silent until deploy.
 
-ARG OMNIGRAPH_VERSION=0.11.0
+ARG OMNIGRAPH_VERSION=0.13.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.11.0
-ARG OMNIGRAPH_SHA256_X86_64=da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
-ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
+ARG OMNIGRAPH_RELEASE_TAG=v0.13.0
+ARG OMNIGRAPH_SHA256_X86_64=0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
+ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
 # The on-disk storage format the pinned binary reads, mirrored from witan_core's
 # declaration (packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image below as
@@ -59,7 +59,7 @@ ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca
 # runtime stage's re-declaration of it, and the LABEL line that emits it — an
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=9
+ARG OMNIGRAPH_INTERNAL_SCHEMA=14
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS fetch
@@ -117,30 +117,39 @@ LABEL org.opencontainers.image.title="omnigraph-server" \
       edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.
-# python3-minimal + python3-yaml: the entrypoint renders the Cedar bundles'
-# group membership from the mounted actor-token map before converging (see
-# policy/render_groups.py). Deliberately a real YAML parser rather than a
-# sed/awk rewrite of a file that decides who can write the graph — a silent
-# mis-render here denies every user at once.
+# python3: the entrypoint (omnigraph_server_entrypoint.py) is Python and uses
+# the standard library's urllib.request (for the Kubernetes API) and secrets,
+# neither of which imports under python3-minimal.
+# python3-yaml: the entrypoint renders the Cedar bundles' group membership from
+# the mounted actor-token map before converging (see policy/render_groups.py).
+# Deliberately a real YAML parser rather than a sed/awk rewrite of a file that
+# decides who can write the graph — a silent mis-render here denies every user
+# at once.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates python3-minimal python3-yaml \
+        ca-certificates python3 python3-yaml \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --create-home omnigraph
 
 COPY --from=fetch /out/omnigraph /usr/local/bin/omnigraph
 COPY --from=fetch /out/omnigraph-server /usr/local/bin/omnigraph-server
-COPY docker/omnigraph-server-entrypoint.sh /usr/local/bin/omnigraph-server-entrypoint.sh
+COPY docker/omnigraph_server_entrypoint.py /usr/local/bin/omnigraph-server-entrypoint.py
+# The maintenance window and the pre-deploy plan gate, which the `omnigraph`
+# stack's CronJob and Job run as `command`. Both import the entrypoint for its
+# Lease, pod check and CLI wrappers, hence the importable name beside them.
+COPY docker/omnigraph_maintenance.py docker/omnigraph_plan_gate.py /usr/local/bin/
 COPY mcp/servers/witan/policy/render_groups.py /usr/local/bin/render-policy-groups.py
 
 # The cluster config dir holds the baked-in schema.pg, the ConfigMap-mounted
-# cluster.yaml (added at deploy time), and the ephemeral `__cluster/` state the
-# entrypoint's `cluster import`/`apply` writes — so it must be owned by the
-# non-root runtime user. Keep this path in lockstep with CLUSTER_CONFIG_DIR in
+# cluster.yaml (added at deploy time), and the policy bundles the entrypoint
+# re-renders in place on every boot — so it must be owned by the non-root
+# runtime user. Keep this path in lockstep with CLUSTER_CONFIG_DIR in
 # ol-infrastructure src/ol_infrastructure/applications/omnigraph/data_tier.py.
 ENV OMNIGRAPH_CLUSTER_DIR=/etc/omnigraph/cluster
 RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
-    && chmod +x /usr/local/bin/omnigraph-server-entrypoint.sh \
+    && chmod +x /usr/local/bin/omnigraph-server-entrypoint.py \
+    && ln -s omnigraph-server-entrypoint.py /usr/local/bin/omnigraph_server_entrypoint.py \
+    && chmod +x /usr/local/bin/omnigraph_maintenance.py /usr/local/bin/omnigraph_plan_gate.py \
     && chmod +x /usr/local/bin/render-policy-groups.py
 # All three cluster schemas are baked in: schema.pg (witan memory/work graph →
 # the `council` graph), code-schema.pg (per-repo `code-<repo>` graphs), and
@@ -165,7 +174,7 @@ RUN chown -R omnigraph:omnigraph /etc/omnigraph
 
 USER omnigraph
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/omnigraph-server-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/omnigraph-server-entrypoint.py"]
 # Overridden by the `omnigraph` stack's Deployment `args`
 # (--cluster /etc/omnigraph/cluster --bind 0.0.0.0:8080); this default keeps the
 # image runnable standalone and documents the expected invocation.

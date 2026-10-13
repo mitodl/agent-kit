@@ -8,7 +8,7 @@
 # graphs (the server bundle is deploy-time only — see the policies: note below):
 #
 #   memory        — Layer-1 shared work/knowledge graph
-#   code_example  — one representative Layer-2 per-repo code graph
+#   code-example  — one representative Layer-2 per-repo code graph
 #   bridge        — Layer-2.5 cross-repo bridge graph
 #
 # The bundle *.policy.yaml files ARE the deliverable consumed by
@@ -28,7 +28,7 @@ graphs:
     queries:
       find_node:
         file: ./find.gq
-  code_example:
+  code-example:
     schema: ./schema/stub.pg
     queries:
       find_node:
@@ -58,7 +58,7 @@ policies:
   # fixture's single representative graph.
   code_rules:
     file: ./code-graph.policy.yaml
-    applies_to: [code_example]
+    applies_to: [code-example]
   bridge_rules:
     file: ./bridge.policy.yaml
     applies_to: [bridge]

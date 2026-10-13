@@ -163,7 +163,7 @@ validate` on the three per-graph bundles; (3) `policy test` — 80 declarative
 allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs
-(`memory`, `code_example`, `bridge`) so `policy validate`/`policy test` have
+(`memory`, `code-example`, `bridge`) so `policy validate`/`policy test` have
 concrete graph ids without real stores. `tests/*.tests.yaml` are declarative
 allow/deny assertions.
 
@@ -243,7 +243,7 @@ here) must:
 `groups:` is **not** templated by Pulumi. `policy/render_groups.py` rewrites
 every bundle's membership from the mounted actor-token map
 (`OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`), and
-`docker/omnigraph-server-entrypoint.sh` runs it immediately before
+`docker/omnigraph_server_entrypoint.py` runs it immediately before
 `omnigraph cluster apply`.
 
 The reason is that `witan-users` has to track the actor set the hourly

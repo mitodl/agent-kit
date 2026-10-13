@@ -1,7 +1,7 @@
 # witan v1 Cedar policy — Layer-2 per-repo code graphs.
 #
 # applies_to: EVERY per-repo code-graph id served by the cluster. In the fixture
-# below (policy/cluster.yaml) that is [code_example]; in the deployed cluster,
+# below (policy/cluster.yaml) that is [code-example]; in the deployed cluster,
 # ol-infrastructure templates the full list of `<sanitize_slug(repo)>` graph ids
 # (one per indexed repository) into this bundle's applies_to. All per-repo code
 # graphs share the SAME rule set, so one bundle governs all of them.

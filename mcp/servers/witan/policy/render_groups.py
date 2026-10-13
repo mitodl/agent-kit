@@ -5,7 +5,7 @@ The committed bundles carry ILLUSTRATIVE membership (`act-alice`, `act-bob`,
 `act-svc-witan-ci`). Those ids are fixtures for `policy test`; none of them
 exists in a deployed cluster. This script replaces every bundle's `groups:`
 with the actors that actually hold a bearer token, and is run by
-`docker/omnigraph-server-entrypoint.sh` immediately before `omnigraph cluster
+`docker/omnigraph_server_entrypoint.py` immediately before `omnigraph cluster
 apply` — see policy/README.md § "Deploying (ol-infrastructure)".
 
 WHY AT BOOT, RATHER THAN AT DEPLOY TIME
