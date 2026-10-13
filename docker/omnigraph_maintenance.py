@@ -11,7 +11,8 @@ maintenance needs the server stopped. This command owns that window:
     scale the server Deployment to 0
     wait until no live pod matches the Deployment's own selector
     status  -> force-unlock the `serve` lock; any other lock: stop
-    per graph: optimize, force-unlock; on the cleanup day: cleanup, force-unlock
+    per graph: optimize, force-unlock
+    on the cleanup day, per graph: cleanup, force-unlock
     restore the replica count, release the Lease
 
 The last line also runs when the window is cut short: by SIGTERM (the Job's
@@ -291,20 +292,28 @@ class Window:
 
         One unopenable graph would otherwise cost every graph after it its
         maintenance. The failures are collected in ``failed``.
+
+        Every graph is optimized before any is cleaned, and the cleanup pass
+        starts one graph further along each ISO week. A window that runs out
+        then delays a graph's cleanup to a later week, where a fixed order
+        would skip the same graphs at the end of the list every time.
         """
         for graph in self._graphs:
             self._maintain(graph, "optimize")
-            if cleanup:
-                # `--yes` because an s3:// root is a non-local scope, and a
-                # destructive write there refuses without a TTY.
-                self._maintain(
-                    graph,
-                    "cleanup",
-                    "--older-than",
-                    self._settings.cleanup_older_than,
-                    "--confirm",
-                    "--yes",
-                )
+        if not cleanup:
+            return
+        first = datetime.now(UTC).isocalendar().week % len(self._graphs)
+        for graph in self._graphs[first:] + self._graphs[:first]:
+            # `--yes` because an s3:// root is a non-local scope, and a
+            # destructive write there refuses without a TTY.
+            self._maintain(
+                graph,
+                "cleanup",
+                "--older-than",
+                self._settings.cleanup_older_than,
+                "--confirm",
+                "--yes",
+            )
 
     def _maintain(self, graph: str, command: str, *args: str) -> None:
         step = f"{command} {graph}"

@@ -151,7 +151,9 @@ stub in tests). See `witan_code/github_app.py`.
   - [`omnigraph_maintenance.py`](./omnigraph_maintenance.py) is the nightly
     maintenance window. `optimize` and `cleanup` are refused while the server
     holds its lock, so it scales the server Deployment to 0, takes over the
-    `serve` lock, maintains each graph in `cluster.yaml`, and restores the
+    `serve` lock, maintains each graph in `cluster.yaml` (every `optimize`
+    before any `cleanup`, whose pass starts at a different graph each week),
+    and restores the
     replica count. It also restores on SIGTERM. The module docstring has the
     cases where it leaves the server down on purpose.
 - `ENTRYPOINT` is the bootstrap wrapper; the default `CMD`

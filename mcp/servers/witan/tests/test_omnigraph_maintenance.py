@@ -208,13 +208,36 @@ def test_cleanup_follows_optimize_on_its_day(kube, cli, env):
     today = str(datetime.now(UTC).isoweekday())
     assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": today}) == 0
     retention = ["--older-than", "30d", "--confirm", "--yes"]
-    assert cli.maintained == [
-        ["optimize", "council"],
-        ["cleanup", "council", *retention],
-        ["optimize", "code-bridge"],
+    assert cli.maintained[:2] == [["optimize", "council"], ["optimize", "code-bridge"]]
+    assert sorted(cli.maintained[2:]) == [
         ["cleanup", "code-bridge", *retention],
+        ["cleanup", "council", *retention],
     ]
     assert cli.lock is None
+
+
+def test_the_cleanup_pass_starts_one_graph_further_each_week(
+    kube, cli, env, monkeypatch
+):
+    """A window that keeps running out must not skip the same graphs weekly."""
+
+    class Week(datetime):
+        week = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            # 2026-01-05 is the Monday of ISO week 2.
+            return datetime(2026, 1, 5 + 7 * cls.week, tzinfo=tz)
+
+    monkeypatch.setattr(maintenance, "datetime", Week)
+    first_cleaned = []
+    for Week.week in range(2):
+        cli.maintained.clear()
+        cli.lock = {"id": f"01SERVE{Week.week}", "operation": "serve"}
+        kube.pods = [pod(SERVER_POD)]
+        assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": "1"}) == 0
+        first_cleaned.append(cli.maintained[2][1])
+    assert sorted(first_cleaned) == sorted(GRAPHS)
 
 
 def test_cleanup_does_not_run_on_another_day(kube, cli, env):
