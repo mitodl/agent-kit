@@ -1331,8 +1331,9 @@ externally and must be rebuilt by hand per omnigraph's upgrade docs.
 **Parameters**:
 
 * `OLD-BINARY, --old-binary`: Path to the omnigraph binary that last wrote this store, for the
-    rebuild. Auto-detected as the first ``omnigraph`` on PATH that isn't
-    the one witan is currently using, if omitted.
+    rebuild. Passing it forces the rebuild even when the store could be
+    upgraded in place. Auto-detected as the first ``omnigraph`` on PATH
+    that isn't the one witan is currently using, if omitted.
 * `--yes, --no-yes`: Skip the confirmation prompt. *[default: False]*
 
 ### witan migrate merge

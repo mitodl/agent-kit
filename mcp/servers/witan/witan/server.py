@@ -1732,9 +1732,12 @@ def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"omnigraph {label} failed:\n{(result.stderr or '').strip()}"
+        # Both streams: `upgrade` reports its outcome, and what to do after a
+        # failed one, on stdout.
+        detail = "\n".join(
+            part.strip() for part in (result.stderr, result.stdout) if part
         )
+        raise RuntimeError(f"omnigraph {label} failed:\n{detail}")
     return result.stdout or ""
 
 
@@ -1752,11 +1755,16 @@ def _acquire_store_lock(store: str):
     return acquire_store_flock(store)
 
 
-#: The first storage format whose stores we wrote under the keyed-edge schema.
-#: An in-place upgrade keeps the store's own schema, and an edge key can only
-#: be declared when the type is created, so an older store has to be rebuilt
-#: from the bundled schema however willing the binary is to convert it:
-#: 0.11's ``upgrade --check`` passes on a format-6 store.
+#: The first storage format witan wrote under the keyed-edge schema. An
+#: in-place upgrade keeps the store's own schema, and an edge key can only be
+#: declared when the type is created, so an older store has to be rebuilt from
+#: the bundled schema however willing the binary is to convert it: 0.11's
+#: ``upgrade --check`` passes on a format-6 store.
+#:
+#: This is the format number standing in for the schema. A format-6 store that
+#: someone converted by hand with 0.11's ``omnigraph upgrade`` is at format 9
+#: with unkeyed edges, and passes. An explicit ``old_binary`` forces the
+#: rebuild for that case.
 _KEYED_EDGE_FORMAT = 9
 
 
@@ -1795,20 +1803,34 @@ def _upgrade_in_place(binary: str, store: str) -> dict:
         if backup_path.exists():
             raise RuntimeError(
                 f"Backup path {backup_path} already exists from a previous "
-                "migration attempt; remove or rename it before retrying."
+                "migration attempt. If that attempt was an upgrade that "
+                "failed, it is the only copy of the store from before it: do "
+                "not delete it. Rename it aside before retrying."
             )
-        shutil.copytree(store_path, backup_path, symlinks=True)
+        try:
+            # Follows symlinks: a link kept as a link would leave the copy
+            # sharing whatever the upgrade is about to rewrite.
+            shutil.copytree(store_path, backup_path)
+        except OSError as exc:
+            shutil.rmtree(backup_path, ignore_errors=True)
+            raise RuntimeError(
+                f"Could not copy {store_path} to {backup_path} before the "
+                f"upgrade, so nothing was changed: {exc}"
+            ) from exc
+        restore = (
+            f"The store as it was before the upgrade is at {backup_path}. Keep "
+            f"it. To go back, move {store_path} aside and rename the copy to "
+            f"{store_path}; a store reads its branches by that path."
+        )
         try:
             _run_omnigraph([binary, "upgrade", store], label="upgrade")
         except RuntimeError as exc:
-            raise RuntimeError(
-                f"{exc}\n\nThe store as it was before the upgrade is at {backup_path}."
-            ) from exc
+            raise RuntimeError(f"{exc}\n\n{restore}") from exc
         verify_ok, verify_out = _snapshot(binary, store)
         if not verify_ok:
             raise RuntimeError(
                 f"Upgraded store failed verification:\n{verify_out.strip()}\n\n"
-                f"The store as it was before the upgrade is at {backup_path}."
+                f"{restore}"
             )
     finally:
         release_store_flock(store, lock_fh)
@@ -1849,8 +1871,8 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
 
     When the current binary can convert the store where it stands
     (``omnigraph upgrade``, from 0.13: format 9 to 14) and the store already
-    has the keyed-edge schema, that is what runs. It needs no old binary and
-    keeps commit history and branches. A copy of the
+    has the keyed-edge schema, that is what runs, unless ``old_binary`` is
+    given. It needs no old binary and keeps commit history and branches. A copy of the
     store is taken first as ``<store>.pre-migrate``.
 
     Otherwise this replays the rebuild omnigraph's upgrade docs prescribe: ``export`` with the
@@ -1894,7 +1916,8 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
             f"omnigraph snapshot failed for an unrelated reason:\n{out.strip()}"
         )
 
-    if _upgrade_check_passes(new_binary, store):
+    # Naming the old binary asks for the rebuild.
+    if old_binary is None and _upgrade_check_passes(new_binary, store):
         return _upgrade_in_place(new_binary, store)
 
     # An explicit --old-binary is taken at its word and not probed against the
