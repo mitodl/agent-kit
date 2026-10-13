@@ -752,6 +752,46 @@ describe("App", () => {
 		).toEqual(["Unassigned", "dfrapp@mit.edu"]);
 	});
 
+	it("offers only the people in a scoped board's repo", async () => {
+		const base = tasks[0] as TaskRow;
+		vi.mocked(mcp.taskReady).mockResolvedValue([]);
+		vi.mocked(mcp.taskList).mockImplementation(async (args) =>
+			args.status === "in_progress"
+				? [
+						{
+							...base,
+							slug: "tk-here",
+							status: "in_progress",
+							repo: "https://github.com/mitodl/agent-kit",
+							project_slug: null,
+							assignee: "ada@example.edu#1",
+						},
+						{
+							...base,
+							slug: "tk-elsewhere",
+							status: "in_progress",
+							repo: "https://github.com/mitodl/hq",
+							project_slug: null,
+							assignee: "bob@example.edu#2",
+						},
+					]
+				: [],
+		);
+
+		await open("#board?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit");
+		await vi.waitFor(() => expect(text()).toContain("In progress"));
+
+		// ★ The live rows are read across every repo, so bob's hq task is
+		// loaded; offering bob would empty this board with no hint why.
+		await vi.waitFor(() =>
+			expect(
+				[...root.querySelectorAll(".assignee-options label")].map((label) =>
+					label.textContent?.trim(),
+				),
+			).toEqual(["Unassigned", "ada@example.edu"]),
+		);
+	});
+
 	describe("the project list's task read", () => {
 		const menu = () =>
 			root.querySelector<HTMLDetailsElement>("details.assignee-filter");

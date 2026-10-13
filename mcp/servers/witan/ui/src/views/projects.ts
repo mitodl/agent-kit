@@ -297,18 +297,21 @@ function readyTasks(
 	if (!status) {
 		return nothing;
 	}
+	const filtered = route.assignees.length > 0;
 	const ready = filterByAssignee(status.ready_tasks, route.assignees);
 	return html`
     <section>
       <h3>
         Ready
-        <span class="count"
-          >${route.assignees.length > 0 ? ready.length : status.counts.ready}</span
-        >
+        <span class="count">${filtered ? ready.length : status.counts.ready}</span>
       </h3>
       ${
 				ready.length === 0
-					? emptyBox("Nothing is ready to pick up.")
+					? emptyBox(
+							filtered
+								? "No ready task in this list matches the filter."
+								: "Nothing is ready to pick up.",
+						)
 					: html`
             <ul class="ready">
               ${ready.map(
@@ -334,15 +337,17 @@ function readyTasks(
                 `,
 							)}
             </ul>
-            ${
-							status.ready_truncated
-								? html`<p class="note">
-                    The tool capped this list; ${status.counts.ready} tasks are
-                    ready.
-                  </p>`
-								: nothing
-						}
           `
+			}
+      ${
+				// Outside the empty check: a filter that matches nothing in the
+				// capped rows is exactly when the rows past the cap matter most.
+				status.ready_truncated
+					? html`<p class="note">
+              The tool capped this list; ${status.counts.ready} tasks are
+              ready${filtered ? ", and the filter only sees the capped rows" : ""}.
+            </p>`
+					: nothing
 			}
     </section>
   `;

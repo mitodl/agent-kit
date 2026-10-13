@@ -296,6 +296,32 @@ describe("projectRollup with an assignee filter", () => {
 
 		expect(root.querySelectorAll(".ready li")).toHaveLength(0);
 	});
+
+	it("says a capped list is capped even when the filter empties it", () => {
+		const capped = {
+			...status,
+			counts: { ...status.counts, ready: 150 },
+			ready_truncated: true,
+			ready_tasks: status.ready_tasks.map((task) => ({
+				...task,
+				assignee: "ada@mit.edu",
+			})),
+		};
+		render(
+			projectRollup(
+				{ ...rollup, status: capped },
+				{ ...DEFAULT_ROUTE, assignees: [ME] },
+			),
+			root,
+		);
+
+		// ★ The person's ready work may sit past the cap, so "nothing is
+		// ready" would be a claim the page cannot back.
+		expect(text()).not.toContain("Nothing is ready to pick up.");
+		expect(text()).toContain("matches the filter");
+		expect(text()).toContain("150 tasks are");
+		expect(text()).toContain("the filter only sees the capped rows");
+	});
 });
 
 describe("projectsWithAssignee", () => {

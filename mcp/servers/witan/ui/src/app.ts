@@ -33,7 +33,13 @@ import type {
 	TaskRow,
 	WorkflowProjectSummary,
 } from "./types.js";
-import { type Board, board, latestBySlug, TASK_LIMIT } from "./views/board.js";
+import {
+	type Board,
+	board,
+	inScope,
+	latestBySlug,
+	TASK_LIMIT,
+} from "./views/board.js";
 import {
 	type BridgeGraph,
 	bindingTable,
@@ -512,16 +518,22 @@ export class App {
 	 * From what is already loaded rather than a read of its own: the filter
 	 * offers the people in the view in front of it, and a view still reading
 	 * offers none yet (a selected person is kept regardless, see
-	 * `assigneeOptions`).
+	 * `assigneeOptions`). Board's live rows and Timeline's tasks are read
+	 * across every repo and narrowed when drawn, so they are narrowed here by
+	 * the same `inScope`, or the menu would offer people the view cannot show.
 	 */
 	private loadedTasks(): { assignee: string | null }[] {
 		const route = this.route;
+		const scoped = (rows: TaskRow[]) =>
+			rows.filter((task) => inScope(task, route));
 		if (route.view === "board") {
 			const data = this.board.snapshot?.data;
-			return data ? [...data.live, ...data.ready, ...(data.closed ?? [])] : [];
+			return data
+				? [...scoped(data.live), ...data.ready, ...(data.closed ?? [])]
+				: [];
 		}
 		if (route.view === "timeline") {
-			return this.timeline.snapshot?.data?.tasks ?? [];
+			return scoped(this.timeline.snapshot?.data?.tasks ?? []);
 		}
 		if (route.view === "waves") {
 			const data = this.waves.snapshot?.data;
