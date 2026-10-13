@@ -34,8 +34,8 @@ class OmnigraphClient(_BaseOmnigraphClient):
 
     _SETUP_HINT = "witan setup"
     _STORAGE_MISMATCH_HINT = (
-        "Run `witan migrate storage` to rebuild this store for the "
-        "currently installed omnigraph version."
+        "Run `witan migrate storage` to move this store to the "
+        "currently installed omnigraph version's format."
     )
 
     def apply_schema(self, schema_path) -> str:

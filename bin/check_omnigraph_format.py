@@ -92,8 +92,10 @@ STORAGE FORMAT BREAK
 This is not a lint failure. Merging this bump as-is means:
 
   * Every developer's local graph stops opening, at once, on their next
-    `witan setup`. Recovery is `witan migrate storage`, which exports with the
-    PREVIOUS binary — kept as `omnigraph-<version>` beside the new one.
+    `witan setup`. Recovery is `witan migrate storage`. It runs `omnigraph
+    upgrade` when the new binary can convert the store in place, and otherwise
+    exports with the PREVIOUS binary — kept as `omnigraph-<version>` beside
+    the new one.
 
   * Every deployed graph must be rebuilt: export with the old binary, `init` a
     DIFFERENT root with the new one, `load --mode overwrite`, repoint
