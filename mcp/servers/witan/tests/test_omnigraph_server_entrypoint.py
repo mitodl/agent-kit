@@ -618,6 +618,13 @@ requires_persisted_locks = pytest.mark.skipif(
     reason="needs an omnigraph with persisted cluster locks (storage format 14)",
 )
 
+# `witan setup` and CI install only the `omnigraph` CLI from the release
+# tarball, so the cases that hold a real `serve` lock skip without the server.
+requires_omnigraph_server = pytest.mark.skipif(
+    shutil.which("omnigraph-server") is None,
+    reason="needs omnigraph-server on PATH",
+)
+
 
 @pytest.fixture
 def cluster_dir(tmp_path, monkeypatch) -> Path:
@@ -694,6 +701,7 @@ def test_real_first_boot_creates_the_graphs_and_leaves_no_lock(cluster_dir):
 
 
 @requires_persisted_locks
+@requires_omnigraph_server
 def test_real_restart_takes_over_the_serve_lock(cluster_dir):
     """Boot, serve, SIGTERM, boot again: the lock handoff this file exists for."""
     env = real_env(cluster_dir)
