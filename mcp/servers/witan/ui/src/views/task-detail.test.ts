@@ -35,6 +35,16 @@ describe("taskDetail", () => {
 		expect(text()).toContain("fixtures");
 	});
 
+	it("renders a recorded description through markdown, not the plain fallback", () => {
+		// A real `task_get` result, so the field the tool returns is the field the
+		// renderer reads.
+		render(taskDetail(task, DEFAULT_ROUTE), root);
+
+		const description = root.querySelector("section.prose p");
+		expect(description?.classList.contains("plain")).toBe(false);
+		expect(description?.textContent).toBe(task.description);
+	});
+
 	it("shows the comment thread, which is where corrections live", () => {
 		render(taskDetail(task, DEFAULT_ROUTE), root);
 
@@ -252,13 +262,21 @@ describe("taskDetail", () => {
 		expect(root.querySelector(".branches a")).toBeNull();
 	});
 
-	it("marks a comment body as prose, which is what preserves its line breaks", () => {
-		// `white-space: pre-wrap` is carried by `.prose`, and a comment body IS
-		// the paragraph rather than containing one. A body rendered without the
-		// class collapses every multi-paragraph correction into a run-on block.
-		render(taskDetail(task, DEFAULT_ROUTE), root);
+	it("renders a comment body as markdown, keeping its paragraphs", () => {
+		// A comment is where a correction to the task's premise lives, often in
+		// several paragraphs; run together, the correction is unreadable.
+		const comment = task.comments[0] as TaskDetail["comments"][number];
+		render(
+			taskDetail(
+				{ ...task, comments: [{ ...comment, body: "premise\n\n**wrong**" }] },
+				DEFAULT_ROUTE,
+			),
+			root,
+		);
 
-		expect(root.querySelector(".comments li p.prose")).not.toBeNull();
+		const body = root.querySelector(".comments li .prose");
+		expect(body?.querySelectorAll("p")).toHaveLength(2);
+		expect(body?.querySelector("strong")?.textContent).toBe("wrong");
 	});
 
 	it("marks a lapsed claim", () => {

@@ -438,14 +438,16 @@ ul.symbols li {
 	padding: 0.2rem 0;
 }
 
-ul.sessions li,
-ul.comments li {
+/* Child selectors: a comment or session summary can hold a markdown list,
+   whose items must not pick up the thread's dividers. */
+ul.sessions > li,
+ul.comments > li {
 	border-top: 1px solid var(--rule);
 	padding: 0.6rem 0;
 }
 
-ul.sessions li:first-child,
-ul.comments li:first-child {
+ul.sessions > li:first-child,
+ul.comments > li:first-child {
 	border-top: none;
 }
 
@@ -487,19 +489,131 @@ dl.facts dd {
 	margin: 0;
 }
 
-/* Agent-written text is rendered as text, never parsed as markup; this is what
-   keeps its paragraph breaks. `p.prose` as well as `.prose p`: a comment body
-   IS the paragraph rather than containing one, so the descendant selector
-   alone collapsed every multi-paragraph comment into a run-on block, which is
-   the exact shape of the corrections the thread exists to carry. */
-.prose p,
-p.prose,
+/* Agent-written text, rendered by `markdown.ts` as a fixed subset of markdown.
+   Its line breaks arrive as `<br>`, so nothing here sets `pre-wrap` except the
+   plain-text fallback: on rendered blocks it would turn the template whitespace
+   between list items and table rows into visible blank lines. */
+.prose,
 .summary {
-	white-space: pre-wrap;
-	margin: 0.25rem 0 0.6rem;
 	/* About 75 characters of Alegreya Sans at the body size. */
 	max-width: 42rem;
 	line-height: 1.55;
+	/* A long URL or path in inline code would run past the panel's edge.
+	   `break-word` breaks only a word that overflows, so unlike `anywhere` it
+	   leaves the table column widths sized to their content. */
+	overflow-wrap: break-word;
+}
+
+p.summary,
+.prose p,
+.prose ul,
+.prose ol,
+.prose blockquote,
+.prose pre,
+.prose .md-table {
+	margin: 0.25rem 0 0.6rem;
+}
+
+.prose .plain {
+	white-space: pre-wrap;
+}
+
+.prose h4 {
+	font-size: var(--step-0);
+	font-weight: 700;
+	margin: 0.9rem 0 0.25rem;
+}
+
+.prose ul,
+.prose ol {
+	padding-left: 1.4rem;
+}
+
+.prose li > ul,
+.prose li > ol {
+	margin: 0.15rem 0;
+}
+
+.prose blockquote {
+	border-left: 3px solid var(--rule);
+	padding-left: 0.75rem;
+	color: var(--muted);
+}
+
+.prose hr {
+	border: none;
+	border-top: 1px solid var(--rule);
+	margin: 0.75rem 0;
+}
+
+.prose pre {
+	overflow-x: auto;
+	background: var(--sunk);
+	border-radius: 4px;
+	padding: 0.5rem 0.65rem;
+	font-size: 0.88em;
+}
+
+.prose pre code {
+	background: none;
+	padding: 0;
+	font-size: inherit;
+}
+
+/* The detail panel is narrow; a wide table scrolls inside its own box rather
+   than widening the panel. */
+.prose .md-table {
+	overflow-x: auto;
+}
+
+.prose table {
+	border-collapse: collapse;
+	font-size: var(--step--1);
+}
+
+.prose table th,
+.prose table td {
+	border: 1px solid var(--rule);
+	padding: 0.3rem 0.5rem;
+	text-align: left;
+	vertical-align: top;
+}
+
+.prose table th {
+	background: var(--sunk);
+	font-weight: 700;
+}
+
+.prose .align-center {
+	text-align: center;
+}
+
+.prose .align-right {
+	text-align: right;
+}
+
+.prose .md-image {
+	display: inline-block;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	border: 1px solid var(--rule);
+	border-radius: 3px;
+	padding: 0 0.3rem;
+	color: var(--muted);
+}
+
+/* A link, and where it really goes, isolated from the text around it: a
+   right-to-left override before a bare URL would otherwise display it reversed,
+   naming one host while the link goes to another. */
+.prose a,
+.prose .md-host {
+	unicode-bidi: isolate;
+	direction: ltr;
+}
+
+.prose .md-host {
+	color: var(--muted);
+	font-size: var(--step--1);
 }
 
 .crumbs {
