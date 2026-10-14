@@ -526,6 +526,9 @@ export class App {
 		const route = this.route;
 		const scoped = (rows: TaskRow[]) =>
 			rows.filter((task) => inScope(task, route));
+		// The views hide closed tasks unless the toggle is on.
+		const open = <T extends { status: string }>(rows: T[]) =>
+			rows.filter((task) => route.closed || task.status !== "closed");
 		if (route.view === "board") {
 			const data = this.board.snapshot?.data;
 			return data
@@ -537,14 +540,15 @@ export class App {
 		}
 		if (route.view === "waves") {
 			const data = this.waves.snapshot?.data;
-			return data ? [...data.tasks, ...data.outside] : [];
+			// Outside blockers are context, never selected (see `dimmed`).
+			return data?.tasks ?? [];
 		}
 		if (route.view === "search") {
-			return this.search.snapshot?.data?.tasks ?? [];
+			return open(this.search.snapshot?.data?.tasks ?? []);
 		}
 		if (route.view === "projects") {
 			return route.project
-				? (this.rollup.snapshot?.data?.tasks ?? [])
+				? open(this.rollup.snapshot?.data?.tasks ?? [])
 				: (this.projectTasks.snapshot?.data?.tasks ?? []);
 		}
 		return [];

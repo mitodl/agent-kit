@@ -152,7 +152,7 @@ export function columns(board: Board, route: Route): Columns {
 					at(b.updated_at) - at(a.updated_at),
 			),
 		closed: board.closed
-			? filterByAssignee(board.closed, route.assignees).sort(
+			? [...filterByAssignee(board.closed, route.assignees)].sort(
 					(a, b) => at(b.closed_at) - at(a.closed_at),
 				)
 			: null,
