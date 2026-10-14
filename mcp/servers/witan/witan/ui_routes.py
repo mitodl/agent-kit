@@ -77,6 +77,13 @@ def _security_headers(issuer: str | None) -> dict[str, str]:
     login talks directly to Keycloak's token endpoint from the page. It is
     omitted entirely when there is no issuer, which is the local case, so a
     loopback page can reach nothing but its own origin.
+
+    ``Referrer-Policy`` and ``X-DNS-Prefetch-Control`` keep a link in
+    agent-written prose from reporting on whoever reads it. ``Referrer-Policy`` stops a clicked link from sending the witan
+    origin, which can be an internal hostname; the route is in the fragment and
+    never sent either way. ``X-DNS-Prefetch-Control`` stops the browser
+    resolving every linked hostname before anyone clicks, which matters most
+    over the plain HTTP a local ``witan ui`` serves.
     """
     connect = "'self'" if not issuer else f"'self' {issuer}"
     return {
@@ -84,6 +91,8 @@ def _security_headers(issuer: str | None) -> dict[str, str]:
             f"default-src 'self'; connect-src {connect}; frame-ancestors 'none'"
         ),
         "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "X-DNS-Prefetch-Control": "off",
     }
 
 

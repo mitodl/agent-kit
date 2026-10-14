@@ -279,6 +279,8 @@ def test_every_ui_response_carries_the_csp_and_nosniff(bundle, monkeypatch):
         assert "default-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
         assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["x-dns-prefetch-control"] == "off"
 
 
 def test_the_local_csp_names_no_third_party_origin(bundle, monkeypatch):
