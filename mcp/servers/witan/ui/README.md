@@ -68,6 +68,7 @@ ui/
     live.ts       Polling with last-good retention and staleness.
     chrome.ts     The loading, empty, error and stale states.
     format.ts     Timestamps, repo labels, linkability.
+    markdown.ts   Agent-written prose, as a fixed markdown subset. Never HTML.
     views/        One module per tab.
     widgets/      One MCP Apps widget per bound tool, plus the shared host.
   widgets/        The widgets' HTML entries, one per tool.
@@ -104,6 +105,20 @@ Two distinctions in there are load-bearing and easy to collapse by accident:
   offset, and `new Date()` reads that form as local time, so `format.ts` parses
   them explicitly. Left to the browser, every stored instant renders shifted
   and a claim lease age with it.
+
+## Prose
+
+Task descriptions, resolutions and comments, project descriptions, session
+summaries and memory content are written by agents, so they are untrusted, and
+the page holds a token that authorizes writes. `markdown.ts` renders them as a
+fixed subset of markdown by walking markdown-it's token stream into lit-html
+templates. **It never builds or parses an HTML string**, and nothing else in
+`src/` may either: `markdown.test.ts` greps the sources for the APIs that turn
+a string into markup and fails on a hit. An `unsafeHTML` added to "fix"
+an escaping quirk is exactly the regression it exists to stop.
+
+Images render as links, never `<img>`. Raw HTML, footnotes and entity
+references render as their source text. See spec §6.9 for the whole rule.
 
 ## The read layer
 
@@ -221,7 +236,12 @@ through `openLink`, the only way a sandboxed iframe can open one.
 each `widgets/*.html` into one self-contained file with
 `vite-plugin-singlefile`. Self-contained because the host's default CSP for a
 widget is `connect-src 'none'`, and no `csp` is declared to widen it. Each is
-about 256 KB (68 KB gzipped), most of it the ext-apps client and zod. The
+about 256 KB (68 KB gzipped), most of it the ext-apps client and zod;
+`workflow_project_status` is about 360 KB (110 KB gzipped), because it renders
+session summaries and so carries markdown-it. `recall` and `task_list` import
+views that use the markdown renderer without calling it, and
+`build-widgets.js` marks markdown-it free of side effects so their builds drop
+it. The
 server binds a tool only when its widget file exists, so a build that skipped
 the frontend leaves the four tools exactly as they were.
 

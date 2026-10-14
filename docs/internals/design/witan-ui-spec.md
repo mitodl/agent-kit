@@ -401,6 +401,9 @@ versioned: it ships inside the witan wheel and moves with the tools it reads.
 - Rendering: lit-html, as beads-ui uses, over Preact or React. Views are
   mostly tables and SVG; there is no component state worth a framework, and
   lit-html has no virtual DOM to reconcile against a vendored vis-network.
+- Prose: markdown-it as a parser only, walked into lit-html templates (§6.9).
+  Chosen over marked, whose emphasis parsing is quadratic on pathological
+  input; markdown-it stayed linear across a 48-case benchmark.
 - Charts: hand-written SVG for the Gantt and the wave chart. vis-network is an
   npm dependency bundled into the graph tab, not the unpkg `<script>` that
   `witan/visualize.py:308` loads today; a CDN script would need a CSP exception
@@ -570,6 +573,33 @@ same two reads and renders it with the bundled vis-network. The CLI keeps its
 Python renderer. The duplication is a presentation transform, not a read, so it
 does not fall under ADR 0011's rule against a second read surface.
 
+### 6.9 Prose
+
+Agent-written prose (task descriptions, resolutions and comments, project
+descriptions, session summaries, memory content) renders as a fixed subset of
+markdown through `src/markdown.ts`. markdown-it parses it, and the module walks
+the token stream into lit-html templates. Its HTML renderer is never called, so
+text reaches the DOM only through lit's text bindings, as it did when these
+fields rendered as plain text.
+
+- Rendered: paragraphs (single line breaks kept), lists, tables (alignment as a
+  class, since the CSP blocks inline styles), code blocks, blockquotes, rules,
+  headings (all one level), bold and italic (`**`/`*` only), strikethrough,
+  inline code, links, and bare URLs that start with `http://`, `https://` or
+  `www.`. Underscores are literal: agent text names Python dunders without
+  backticks, and `__main__.py` read as emphasis loses its underscores.
+- Links are `http(s)` only and carry no credentials. Link text that names
+  somewhere other than the URL is followed by the URL's real hostname. A bare
+  URL shows its normalized form, with any punycode host left in ASCII rather
+  than decoded to a look-alike, and links are isolated from bidi overrides in
+  the text around them.
+- Images render as links with a marker, never `<img>`: loading one is a
+  request nobody clicked, which tells whoever wrote the URL who read the page.
+- Raw HTML, footnotes, reference-style links and entity references render as
+  their source text. Reference definitions are off because a footnote citing a
+  URL is also a valid one, and the parser would swallow the line.
+- Input over 64KB, or nested past markdown-it's limit, renders as plain text.
+
 ## 7. MCP Apps widgets
 
 MCP Apps is an official MCP extension (`io.modelcontextprotocol/ui`), stable as
@@ -727,8 +757,8 @@ only supplies it, through the transport's `authProvider`.
 The `witan`-audience token authorizes every tool, writes included, not only the
 read set the page binds. So an XSS in the page is a write exposure, not a read
 one. The CSP in §5.2 (`default-src 'self'`, no inline script, no third-party
-origins) is the control, and the bundle takes no dependency that injects HTML
-from graph content without escaping it: memory and task text render as text.
+origins) is the control, and nothing in the bundle builds HTML from graph
+content: prose renders through the token walk in §6.9, never as a string.
 
 A reader gets exactly what their agents get: per-actor scoping in
 `_resolve_client()` (`server.py:210-275`) and the Cedar bundle apply unchanged,
