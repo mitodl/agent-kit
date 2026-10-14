@@ -3,6 +3,29 @@ import { build } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
 
 /**
+ * markdown-it declares no `sideEffects` and runs code at module top level, so
+ * rollup keeps it and its dependencies (about 40KB gzipped) in any widget whose
+ * views import `markdown.ts`, including the ones that never render prose
+ * (`recall`, `task_list`). None of them has a
+ * side-effect-only import, so marking them pure drops them only where nothing
+ * calls them; `workflow_project_status` renders a session summary and keeps
+ * the parser.
+ */
+const unusedMarkdownIt = {
+	name: "drop-unused-markdown-it",
+	transform(code, id) {
+		if (
+			/\/node_modules\/(markdown-it|linkify-it|mdurl|uc\.micro|entities|punycode\.js)\//.test(
+				id,
+			)
+		) {
+			return { code, moduleSideEffects: false };
+		}
+		return null;
+	},
+};
+
+/**
  * Build each MCP Apps widget (spec §7) into one self-contained HTML file.
  *
  * One build per widget because `vite-plugin-singlefile` inlines a single
@@ -25,7 +48,7 @@ for (const widget of widgets) {
 	await build({
 		configFile: false,
 		logLevel: "warn",
-		plugins: [viteSingleFile()],
+		plugins: [unusedMarkdownIt, viteSingleFile()],
 		build: {
 			outDir: "../witan/ui_dist",
 			emptyOutDir: false,
