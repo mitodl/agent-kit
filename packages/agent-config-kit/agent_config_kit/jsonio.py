@@ -102,8 +102,12 @@ def json_diff(before: dict, after: dict) -> str:
     # json.dumps can't serialize, e.g. its Bool; unwrap to plain Python.
     before_redacted = redact_sensitive(_unwrap(before))
     after_redacted = redact_sensitive(_unwrap(after))
-    before_lines = json.dumps(before_redacted, indent=2, sort_keys=True).splitlines()
-    after_lines = json.dumps(after_redacted, indent=2, sort_keys=True).splitlines()
+    before_lines = json.dumps(
+        before_redacted, indent=2, sort_keys=True, default=str
+    ).splitlines()
+    after_lines = json.dumps(
+        after_redacted, indent=2, sort_keys=True, default=str
+    ).splitlines()
     diff = "\n".join(
         difflib.unified_diff(
             before_lines, after_lines, fromfile="before", tofile="after", lineterm=""
