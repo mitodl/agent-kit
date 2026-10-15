@@ -26,6 +26,7 @@ from agent_config_kit.plan import (
     platform_hooks,
     skills_shadowed_by,
 )
+from agent_config_kit.prune import PlatformState, apply_with_prune
 
 
 def _bundle(**overrides) -> RegistrationBundle:
@@ -989,6 +990,40 @@ def test_apply_errors_when_a_hooks_skill_is_not_installed_this_run(
     with pytest.raises(HookSkillError, match="'preflight'"):
         apply("codex", bundle)
     assert not (tmp_path / ".codex").exists()
+
+
+def test_apply_raises_for_a_missing_skill_before_writing_mcp_servers(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(hooks=[_skill_hook()])
+
+    with pytest.raises(HookSkillError):
+        apply("codex", bundle)
+    with pytest.raises(HookSkillError):
+        apply_with_prune("claude", bundle, PlatformState())
+
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+    assert not (tmp_path / ".claude.json").exists()
+
+
+def test_skill_hooks_are_not_resolved_where_the_scope_has_no_hooks_target(
+    tmp_path, monkeypatch
+):
+    """Codex has no project-scope hooks file, so a skill hook that would
+    never be written there must not fail an otherwise valid run."""
+    monkeypatch.chdir(tmp_path)
+    bundle = _bundle(hooks=[_skill_hook()])
+
+    assert platform_hooks("codex", bundle, Scope.PROJECT) == []
+    apply("codex", bundle, scope=Scope.PROJECT)
+
+    assert (
+        "witan"
+        in tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())[
+            "mcp_servers"
+        ]
+    )
 
 
 def test_apply_all_checks_skill_hooks_before_writing_any_platform(

@@ -201,7 +201,7 @@ def platform_hooks(
     manifest entry serves every platform. Raises ``HookSkillError`` when
     that skill isn't installed for this platform in this run."""
     platform = registry.get_platform(platform_name)
-    if platform.hooks is None:
+    if platform.hooks is None or _resolve_target(platform.hooks, scope) is None:
         return []
     if platform.hooks_merge is None:
         return [h for h in bundle.hooks if isinstance(h, PluginRegistration)]
@@ -282,6 +282,9 @@ def apply(
     apply-then-prune lifecycle instead of just this merge step."""
     platform = registry.get_platform(platform_name)
     result = InstallResult(platform=platform_name)
+    # Resolved before any write: a missing skill raises HookSkillError here
+    # rather than after the MCP target is already written.
+    hooks = platform_hooks(platform_name, bundle, scope)
 
     mcp_servers = {
         **bundle.mcp_servers,
@@ -315,7 +318,6 @@ def apply(
                 if platform.mcp_conditional_on is not None:
                     result.prerequisites.append(_mcp_prerequisite(platform, scope))
 
-    hooks = platform_hooks(platform_name, bundle, scope)
     if platform.hooks is not None and hooks:
         declarative = [h for h in hooks if isinstance(h, DeclarativeHook)]
         plugins = [h for h in hooks if isinstance(h, PluginRegistration)]
