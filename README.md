@@ -124,6 +124,27 @@ See [`skills/`](./skills/README.md) for the full skill catalog and
 for the full manifest schema, remote skill/hook sources, and profile
 composition.
 
+### Check what's installed
+
+If a skill you expected doesn't trigger, check whether it is installed before
+rewording the request:
+
+```bash
+agent-kit validate agent-config.toml                    # whole catalog
+agent-kit validate agent-config.toml --profile process  # just what that profile installs
+agent-kit profiles agent-config.toml                    # skill counts per profile
+```
+
+`validate` writes nothing. It prints one row per detected platform and exits
+1 when anything has drifted. A skill that isn't installed shows up under
+`missing paths` as its file path, e.g.
+`~/.claude/skills/deploy-verification/SKILL.md`, and a missing MCP server
+shows up under `missing` as `mcp_servers:<name>`. Run it without `--profile`
+to see every catalog skill you don't have; run it with the profile you
+installed to check only that profile. `witan-task`, `witan-memory` and the
+other witan skills are installed by `witan setup`, not this manifest, so
+`validate` doesn't report them.
+
 ### Setting up an MCP server
 
 See [`mcp/`](./mcp/README.md) for per-server install scripts and configuration
