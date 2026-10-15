@@ -147,6 +147,40 @@ def test_a_queued_create_is_skipped_when_that_title_was_created_since(proxy, ser
 
 
 @requires_omnigraph
+def test_a_duplicate_outside_the_search_results_still_skips_the_create(proxy, server):
+    # task_search ranks description matches first and stops at 20, so 21 tasks
+    # that mention the title in their description push the exact-title task
+    # out of it. The duplicate check must not depend on that ranking.
+    title = "rotate the signing keys"
+    for i in range(21):
+        server.task_create(title=f"other {i}", description=f"{title} {title}")
+    _queue(proxy, "task_create", {"title": title, "description": "d"})
+    dup = server.task_create(title=title, description="unrelated")["slug"]
+    assert dup not in [t["slug"] for t in server.task_search(query=title, repo="")]
+
+    proxy.task_get(slug="tk-missing")
+
+    titles = [t["title"] for t in proxy.task_list(repo="", limit=100)]
+    assert titles.count(title) == 1
+    assert not proxy.journal.has_pending()
+
+
+@requires_omnigraph
+def test_a_queued_release_naming_its_assignee_is_compared_as_that_holder(proxy):
+    # task_release releases AS an explicit assignee, so a worker that claimed
+    # under its own name is not "someone else" to its own release.
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee="ci-worker")
+    _queue(proxy, "task_release", {"slug": slug, "assignee": "ci-worker"})
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["status"] == "open"
+    assert task["assignee"] is None
+    assert task["comments"] == []
+
+
+@requires_omnigraph
 def test_a_queued_comment_replays_as_is(proxy):
     slug = _new_task(proxy)
     _queue(proxy, "task_comment", {"slug": slug, "text": "from the outage"})
