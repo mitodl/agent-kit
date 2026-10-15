@@ -52,6 +52,17 @@ def test_current_transports_do_not_warn(transport, recwarn):
     assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
 
 
+@pytest.mark.parametrize("timeout", [-1, float("inf"), float("nan"), 2.0**64])
+def test_declarative_hook_rejects_a_timeout_codex_cannot_parse(timeout):
+    with pytest.raises(ValidationError, match="timeout_seconds"):
+        DeclarativeHook(event=HookEvent.STOP, command="x", timeout_seconds=timeout)
+
+
+def test_declarative_hook_accepts_zero_and_fractional_timeouts():
+    for timeout in (0, 7.5):
+        DeclarativeHook(event=HookEvent.STOP, command="x", timeout_seconds=timeout)
+
+
 def test_hook_union_discriminates_declarative_vs_plugin():
     declarative = DeclarativeHook(
         event=HookEvent.STOP, command="witan session-checkpoint"

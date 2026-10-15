@@ -3,7 +3,9 @@
 - Declarative hooks for Codex CLI, written to `$CODEX_HOME/hooks.json`
   (global scope only) and merged, deduped and pruned the same way as Claude
   Code's. Timeouts are rounded up to whole seconds, since Codex rejects a
-  fractional one. Codex runs a hook only after the user trusts it, and
+  fractional one, and a hook's `timeout_seconds` must now be finite, not
+  negative, and below 2^64, since anything else makes Codex drop the whole
+  file. Codex runs a hook only after the user trusts it, and
   agent-config-kit never writes that trust state, so `agent-kit apply` prints
   one line per Codex hook it adds or changes, telling the user to trust it
   with `/hooks` in the Codex TUI (`InstallResult.notices`). Hooks are on by

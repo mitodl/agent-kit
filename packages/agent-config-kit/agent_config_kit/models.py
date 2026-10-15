@@ -123,7 +123,11 @@ class DeclarativeHook(BaseModel):
     event: HookEvent
     matcher: str | None = None
     command: str
-    timeout_seconds: float | None = None
+    # Codex parses the rounded-up value as a u64 and drops the whole hooks
+    # file (the user's own hooks too) when it can't.
+    timeout_seconds: float | None = Field(
+        default=None, ge=0, lt=2**64, allow_inf_nan=False
+    )
     # A skill whose installed directory ``command`` references as
     # ``{skill_dir}``. Each platform installs skills somewhere different, so
     # ``plan.platform_hooks`` substitutes that platform's path at plan time.

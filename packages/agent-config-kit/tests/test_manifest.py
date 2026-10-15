@@ -220,6 +220,18 @@ def test_load_manifest_requires_skill_and_skill_dir_together(tmp_path, fields, m
         load_manifest(manifest)
 
 
+def test_load_manifest_reports_a_negative_hook_timeout(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        '[[hooks]]\nkind = "declarative"\nevent = "stop"\ncommand = "x"\n'
+        "timeout_seconds = -1\n",
+    )
+
+    with pytest.raises(ManifestError, match="hooks.0.declarative.timeout_seconds"):
+        load_manifest(manifest)
+
+
 def test_load_manifest_rejects_one_command_shared_by_two_skills(tmp_path):
     """A hook's identity is event + command, so without this the second hook
     would silently replace the first."""
