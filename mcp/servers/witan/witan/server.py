@@ -1064,9 +1064,11 @@ def _project_repos(row: dict) -> list[str]:
 
 
 def _envelope_list(items: list[str] | None) -> list[str] | None:
-    """An autonomy-envelope list as stored: stripped, blanks dropped, and
-    ``None`` rather than ``[]`` when nothing is left, matching ``tags``."""
-    return [i.strip() for i in items or [] if i.strip()] or None
+    """An autonomy-envelope list as stored: whitespace collapsed, blanks
+    dropped, and ``None`` rather than ``[]`` when nothing is left, matching
+    ``tags``. Collapsing keeps an item on its one line of the injected context,
+    where an embedded newline could otherwise start a heading of its own."""
+    return [" ".join(i.split()) for i in items or [] if i.strip()] or None
 
 
 def _merge_repos(*sources: list[str] | str | None) -> list[str]:

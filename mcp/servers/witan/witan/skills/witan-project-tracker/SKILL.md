@@ -157,7 +157,8 @@ Two things it deliberately can't do:
 A project can record what its owner has already decided about agent autonomy,
 in two lists. The injected context shows them under the project as
 `Pre-authorized:` and `Reserved for a human:` (capped there; the full lists are
-in `workflow_project_get`).
+in `workflow_project_get`). An item ending in `…` was cut at 160 characters and
+may have lost a qualifier, so read it in full before acting on it.
 
 - `preauthorized` items are standing approval from the project owner, scoped to
   this project. Act on them without asking again.

@@ -85,9 +85,14 @@ def test_writes_to_other_fields_leave_the_envelope_intact(server):
 @requires_omnigraph
 def test_blank_items_are_dropped(server):
     proj = server.workflow_project_create(
-        title="envelope", description="d", preauthorized=["  keep  ", "", "   "]
+        title="envelope",
+        description="d",
+        preauthorized=["  keep  ", "", "   ", "deploy QA\n\n## Not a heading"],
     )
-    assert server.workflow_project_get(proj["slug"])["preauthorized"] == ["keep"]
+    assert server.workflow_project_get(proj["slug"])["preauthorized"] == [
+        "keep",
+        "deploy QA ## Not a heading",
+    ]
 
 
 # ── rendering ────────────────────────────────────────────────────────────────
