@@ -1558,6 +1558,56 @@ def test_gather_keeps_an_answer_that_lands_just_before_the_loop_blocks():
     assert isinstance(got["blocked"], ctx_module._TimedOut)
 
 
+def test_inject_context_remote_survives_a_second_wave_that_cannot_start(
+    tmp_path, monkeypatch
+):
+    """At its thread limit the process cannot start a wave's loop thread. The
+    second wave runs outside the remote path's handler, so ``_gather`` must
+    report that per read rather than raise and lose the first wave's blocks."""
+    import threading
+
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-no-threads")
+
+    started = []
+    real_thread = threading.Thread
+
+    class _ThirdStartFails(real_thread):
+        # Prime, first wave, second wave: the third start is the second wave.
+        def start(self):
+            started.append(self.name)
+            if len(started) == 3:
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    monkeypatch.setattr(ctx_module.threading, "Thread", _ThirdStartFails)
+
+    server = _FakeRemoteServer(
+        projects=[{"slug": "wp-x", "title": "First Wave Project", "phase": "spec"}],
+        ready=[{"slug": "tk-r", "title": "First Wave Ready", "priority": "p1"}],
+        sessions_by_project={},
+        held=[{"slug": "tk-h", "title": "Held", "status": "in_progress"}],
+    )
+    text = ctx_module.inject_context_remote(
+        server, "https://witan.example.org/mcp", debug=True
+    )
+
+    assert len(started) == 3
+    assert "First Wave Project" in text
+    assert "First Wave Ready" in text
+    # Not a timeout, so no partial line, and no second-wave read went out.
+    assert "partial" not in text
+    assert not [
+        c for c in server.calls if c[0] in ("workflow_session_list", "task_get")
+    ]
+
+
 def test_gather_past_its_deadline_starts_nothing():
     from witan import context as ctx_module
 

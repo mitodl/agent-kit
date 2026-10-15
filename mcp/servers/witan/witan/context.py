@@ -361,13 +361,20 @@ def _gather(
     if remaining <= 0:
         return {key: _TimedOut() for key in calls}
     out: dict[str, object] = {}
+    wave = _await_all(calls, deadline, out)
     loop_thread = threading.Thread(
-        target=asyncio.run,
-        args=(_await_all(calls, deadline, out),),
-        name="witan-ctx",
-        daemon=True,
+        target=asyncio.run, args=(wave,), name="witan-ctx", daemon=True
     )
-    loop_thread.start()
+    # NEVER RAISES, even when no thread can be started (a process at its
+    # thread limit): the second wave runs outside the caller's handler, and
+    # the hook's contract is that it degrades quietly. Each read reports the
+    # failure as its value. No in-line fallback, since that could not be held
+    # to the deadline.
+    try:
+        loop_thread.start()
+    except RuntimeError as exc:
+        wave.close()
+        return {key: exc for key in calls}
     loop_thread.join(remaining + _TEARDOWN_GRACE)
     return {key: out[key] if key in out else _TimedOut() for key in calls}
 
