@@ -366,9 +366,16 @@ def _parse_ts(value: str) -> datetime:
 
 
 def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
-    """Why a queued write to ``task`` no longer applies, or None if it does."""
+    """Why a queued write to ``task`` no longer applies, or None if it does.
+
+    Holders are compared as people, ignoring the ``#<session>`` qualifier, the
+    same rule ``task_release`` applies: a close queued from a plain shell on a
+    task one of your agent sessions claimed is still yours to close.
+    """
     assignee = task.get("assignee")
-    if assignee and assignee != entry.holder:
+    if assignee and readiness.holder_identity(assignee) != readiness.holder_identity(
+        entry.holder
+    ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")
     if closed_at and _parse_ts(closed_at) > _parse_ts(entry.ts):
@@ -384,8 +391,12 @@ class RemoteServerProxy(RemoteMCPProxy):
         cfg: RemoteConfig,
         token_provider: Callable[[], str],
         token_refresher: Callable[[], str] | None = None,
+        *,
+        buffer_writes: bool = True,
     ) -> None:
-        super().__init__(cfg.url, token_provider, token_refresher)
+        super().__init__(
+            cfg.url, token_provider, token_refresher, buffer_writes=buffer_writes
+        )
         self._url_source = cfg.url_source
 
     def _is_admin_tool(self, name: str) -> bool:

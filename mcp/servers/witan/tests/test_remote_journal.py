@@ -20,7 +20,9 @@ from witan.remote.proxy import RemoteServerProxy
 
 from .conftest import requires_omnigraph
 
-URL = "http://unused/mcp"
+# Its own URL, so a proxy another test left running in a worker thread (they
+# share "http://unused/mcp") cannot replay this file's journals mid-test.
+URL = "http://journal-tests.invalid/mcp"
 HOLDER = "ada@example.org#0000abcd"
 REMOTE_CFG = RemoteConfig(url=URL, oidc_issuer="https://sso")
 
@@ -89,6 +91,17 @@ def test_a_queued_close_applies_when_the_task_is_still_ours(proxy):
 
     assert task["status"] == "closed"
     assert not proxy.journal.has_pending()
+
+
+@requires_omnigraph
+def test_a_queued_close_applies_when_another_of_our_sessions_holds_it(proxy):
+    # Compared as people, the way task_release compares: a close queued from a
+    # plain shell (or another session) on your own claim is still yours.
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee="ada@example.org#99999999")
+    _queue(proxy, "task_close", {"slug": slug}, holder="ada@example.org")
+
+    assert proxy.task_get(slug=slug)["status"] == "closed"
 
 
 @requires_omnigraph

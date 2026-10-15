@@ -290,7 +290,9 @@ def _srv(target: str, token: str | None = None):
             "something against a deployment (see [targets.*] in witan config)"
         )
     provider = (lambda: token) if token else default_token_provider(remote)
-    return RemoteServerProxy(remote, provider)
+    # The probe measures how writes fail; a queued write would hide that, and
+    # replay would later send its scratch rows into the shared graph.
+    return RemoteServerProxy(remote, provider, buffer_writes=False)
 
 
 def _pinned_token(target: str, needed_s: float) -> tuple[str, float]:
