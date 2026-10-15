@@ -22,16 +22,21 @@ design anything and writes no code. It answers "what are we actually doing, and
 how much process does it deserve?" — then hands off.
 
 ```text
-  scope-work  -->  plan-technical-approach  -->  implement-plan  -->  shipped
-                            |
-                            +-->  write-adr
-                                  one ADR per decision worth recording,
-                                  and zero is a normal outcome
-
-  trivial     plan-technical-approach takes its fast path: no alternatives,
-              no scoring, no ADR.
-  unknowable  spike first, then re-enter scope-work with the findings.
+  scope-work
+  |
+  +-- trivial     ------+
+  |                     |
+  +-- decision(s) ------+--> plan-technical-approach --> implement-plan --> shipped
+  |                              |
+  |                              +--> write-adr
+  |                                   one ADR per decision worth recording,
+  |                                   and zero is a normal outcome
+  |
+  +-- unknowable  --> spike --> re-enter scope-work with the findings
 ```
+
+A **trivial** change still goes through `plan-technical-approach`, but on its
+fast path: one obvious approach, no alternatives, no scoring, and no ADR.
 
 **Planning always comes before the record.** An ADR's `## Options Considered`
 is the output of scoring alternatives, so `write-adr` is entered from
