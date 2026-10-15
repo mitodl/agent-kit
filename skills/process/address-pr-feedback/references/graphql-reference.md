@@ -92,6 +92,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           viewerDidAuthor
           comments(first: 100) {
             totalCount
+            pageInfo { hasNextPage }   # true past 100; the script warns instead of paginating
             nodes { id databaseId path line body }   # id is the PRRC_... node ID
           }
         }

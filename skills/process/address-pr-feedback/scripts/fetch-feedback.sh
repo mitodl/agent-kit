@@ -103,6 +103,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           viewerDidAuthor
           comments(first: 100) {
             totalCount
+            pageInfo { hasNextPage }
             nodes { id databaseId path line body }
           }
         }
@@ -113,7 +114,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 pending_review="$(gh api graphql -f query="$pending_query" -f owner="$owner" -f name="$name" -F number="$pr" \
   | jq '[.data.repository.pullRequest.reviews.nodes[] | select(.viewerDidAuthor)] | .[0]
-        | if . == null then null else {id, comment_count: .comments.totalCount, comments: .comments.nodes} end')"
+        | if . == null then null else {id, comment_count: .comments.totalCount, comments_truncated: .comments.pageInfo.hasNextPage, comments: .comments.nodes} end')"
 
 jq -n \
   --arg repo "$repo" \
@@ -130,4 +131,7 @@ echo "Fetched ${unresolved_count} unresolved review thread(s), $(echo "$discussi
 
 if [[ "$pending_review" != "null" ]]; then
   echo "You have a pending review with $(echo "$pending_review" | jq '.comment_count') comment(s) on ${repo}#${pr}. It is unsubmitted; submitting it is your call." >&2
+  if [[ "$(echo "$pending_review" | jq '.comments_truncated')" == "true" ]]; then
+    echo "Only the first 100 pending comments were fetched; page the rest with comments(after:) before editing any of them." >&2
+  fi
 fi

@@ -103,7 +103,7 @@ an earlier session, or producing a final "here's everything, resolved and
 not" summary).
 
 Output shape: `{repo, pr, review_threads: [...], discussion_comments: [...],
-reviews: [...]}`. Each `review_threads[]` entry carries the GraphQL `id`
+reviews: [...], pending_review: {...} | null}`. Each `review_threads[]` entry carries the GraphQL `id`
 (pass this straight to `resolve-thread.sh`), `isResolved`, `isOutdated`,
 `path`/`line`, and its `comments`. Every comment, discussion comment, and
 review also carries `author_type` alongside `author` — GitHub's own actor
@@ -331,7 +331,7 @@ In draft-only mode:
 ```text
 | Thread | Author | Verdict | Proposed reply | Local commit | Evidence |
 |--------|--------|---------|----------------|--------------|----------|
-| [a.py:42](https://github.com/o/r/pull/7#discussion_r1) | copilot-pull-request-reviewer | fix | Fixed in a1b2c3d: transport is now streamable-http. | a1b2c3d | tests/test_config.py passes (3 tests) |
+| [a.py:42](https://github.com/o/r/pull/7#discussion_r1) | copilot-pull-request-reviewer | fix | Fixed in a1b2c3d: transport is now streamable-http (tests/test_config.py, 3 passed). | a1b2c3d | tests/test_config.py: 3 passed |
 | [b.py:10](https://github.com/o/r/pull/7#discussion_r2) | gemini-code-assist | disagree | Not adding the guard: ensure_bridge_store runs at every call site. | (none) | callers at x.py:12, y.py:40 |
 | [c.py:5](https://github.com/o/r/pull/7#discussion_r3) | tmacey | needs you | (your wording) | (none) | two defensible fixes, see below |
 ```
@@ -341,13 +341,29 @@ proposed reply is the exact text that would be posted, in Phase 4's reply
 style, so approving the row approves the words.
 
 When the user approves (all rows, some rows, or rows with edited wording),
-carry out only the approved rows with the usual scripts: push, then reply
-and resolve, with `--dry-run` first for any batch. Rows that weren't
-approved stay as they are, unpushed commits included; say which ones remain.
+carry out only the approved rows. If every row with a local commit was
+approved, push as usual. Otherwise a plain `git push` would also send the
+unapproved commits sitting between the approved ones, so push only the
+approved ones:
+
+```bash
+git switch -c approved-push @{upstream}
+git cherry-pick <approved sha> <approved sha> ...   # in their original order
+git push origin approved-push:<pr-branch>
+git switch <pr-branch>
+git rebase approved-push   # drops the already-pushed patches, leaves the unapproved commits on top
+git branch -D approved-push
+```
+
+Cherry-picking gives the approved commits new SHAs, so update the SHAs in
+the approved reply text to the pushed ones before posting. Then reply and
+resolve with the usual scripts, `--dry-run` first for any batch. Rows that
+weren't approved stay as they are; say which ones remain and which local
+commits are still unpushed.
 
 ## Phase 4 — Reply & resolve
 
-**Reply style: one or two sentences.** Name the commit and what changed, or
+**Reply style: one or two sentences.** Name the commit, what changed, and the tests that ran, or
 the evidence and the conclusion. Nothing else — no thanks-for-the-review
 opener, no restating the reviewer's comment back at them, no closing offer to
 discuss further, no emoji. A reviewer reading twelve replies wants twelve
@@ -356,7 +372,7 @@ paragraph into a line break, so a hard-wrapped reply renders as ragged
 half-lines in the thread.
 
 ```text
-Fixed in a1b2c3d: transport is now streamable-http.
+Fixed in a1b2c3d: transport is now streamable-http (tests/test_config.py, 3 passed).
 Verified — ensure_bridge_store runs at every call site, so this path is unreachable. Not adding the guard.
 ```
 
@@ -375,7 +391,7 @@ posted.
 ./skills/process/address-pr-feedback/scripts/resolve-thread.sh \
   --thread-id PRRT_kwDORsi4Ac6PsuPQ \
   --comment-file - <<'REPLY'
-Fixed in a1b2c3d: switched transport to streamable-http per the schema.
+Fixed in a1b2c3d: switched transport to streamable-http per the schema (tests/test_config.py, 3 passed).
 REPLY
 ```
 
