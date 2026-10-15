@@ -205,6 +205,27 @@ epic's children). Print a table: slug, title, type, status, priority,
 assignee, blocked_by, external_uri. Group sub-issues under their parent when a
 `parent` filter is used.
 
+## Find a task
+
+Pick the call by what you were asked for:
+
+- **"The next task" in a project** (no keywords): `task_ready(project_slug="wp-...")`
+  for what is workable now, ordered by priority, or
+  `task_list(project_slug="wp-...")` for every task in it. There is nothing to
+  rank by, so this is not a search.
+- **A task about something** (keywords): `task_search(query="<words>")`, narrowed
+  with `project_slug="wp-..."` (searches that project in every repo),
+  `assignee="@me"`, or `status="open"`. These are its only parameters besides
+  `repo`.
+- **CLI fallback**: `witan tasks "<words>" --project wp-...` (also takes
+  `--assignee`, `--status`, `--ready`, `--all-repos`). There is no
+  `witan task search` command.
+
+If the same tool call is rejected twice, stop varying its arguments and run the
+CLI form instead. That includes a call your own client refuses before it is
+sent (e.g. arguments that do not parse as JSON): resending it unchanged gets
+the same refusal.
+
 ## Close a task
 
 Ask which task (slug) and an optional resolution note, then:
