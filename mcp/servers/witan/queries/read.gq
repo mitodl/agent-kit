@@ -440,16 +440,17 @@ query contradicts_out($slug: String) {
     order { $w.created_at desc }
 }
 
-// The Contradicts edges whose endpoints are both in `$slugs`, for `recall`'s
-// contradiction pass over the memories it returns. Aliased for the same reason
-// as `contradicts_pairs`: both endpoints are Memory.
-query contradicts_among($slugs: [String]) {
+// The Contradicts edges out of any memory in `$slugs`, for `recall`'s
+// contradiction pass over the memories it returns. Only the source end is
+// matched: recall reads the list in chunks and filters the target itself, so a
+// pair split across two chunks is not lost. Aliased for the same reason as
+// `contradicts_pairs`: both endpoints are Memory.
+query contradicts_out_of($slugs: [String]) {
     match {
         $a: Memory
         $b: Memory
         $a contradicts $b
         $a.slug in $slugs
-        $b.slug in $slugs
     }
     return { $a.slug as a_slug, $b.slug as b_slug }
 }

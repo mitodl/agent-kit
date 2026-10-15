@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1199,10 +1199,26 @@ def _tag_memory_steps(
 # bounded by how many tags one memory can carry.
 _MIGRATE_BATCH_SIZE = 100
 
-# Memory slugs per `topics_for_memories` read in the topic backfill. The list is
-# an inline query parameter, so the sweep reads in bounded chunks for the same
-# reason it writes in them.
-_MIGRATE_READ_BATCH_SIZE = 200
+# Slugs per read for a query that takes a `$slugs` list. On the local transport
+# the params travel as ONE `--params` argument, and Linux refuses a single
+# argument of 128 KiB or more with E2BIG before the CLI even starts. 200 slugs
+# of about 60 characters is roughly 14 KB.
+_SLUG_LIST_READ_BATCH_SIZE = 200
+
+
+def _read_by_slugs(query: str, slugs: Sequence[str]) -> list[dict]:
+    """Rows of the ``read.gq`` query ``query`` for ``slugs``, read in bounded chunks.
+
+    :param query: A ``read.gq`` query taking a single ``$slugs: [String]`` param.
+    :param slugs: The slugs to match. Duplicates are the caller's to remove.
+    :returns: Every chunk's rows, concatenated in chunk order.
+    :rtype: list[dict]
+    """
+    rows: list[dict] = []
+    for i in range(0, len(slugs), _SLUG_LIST_READ_BATCH_SIZE):
+        chunk = list(slugs[i : i + _SLUG_LIST_READ_BATCH_SIZE])
+        rows.extend(client.read("read.gq", query, {"slugs": chunk}))
+    return rows
 
 
 def migrate_topics() -> dict:
@@ -1233,12 +1249,9 @@ def migrate_topics() -> dict:
             client.change_many(list(steps))
             steps.clear()
 
-    slugs = [row["slug"] for row in rows]
     tagged: dict[str, set[str]] = {}
-    for i in range(0, len(slugs), _MIGRATE_READ_BATCH_SIZE):
-        chunk = slugs[i : i + _MIGRATE_READ_BATCH_SIZE]
-        for edge in client.read("read.gq", "topics_for_memories", {"slugs": chunk}):
-            tagged.setdefault(edge["memory_slug"], set()).add(edge["topic_slug"])
+    for edge in _read_by_slugs("topics_for_memories", [row["slug"] for row in rows]):
+        tagged.setdefault(edge["memory_slug"], set()).add(edge["topic_slug"])
 
     for row in rows:
         slug = row["slug"]
@@ -6286,11 +6299,8 @@ def _with_lease_flag(row: dict) -> dict:
 
 
 def _task_statuses(slugs: Iterable[str]) -> dict[str, str | None]:
-    """Status of each task in ``slugs``, in one read. A slug with no task is absent."""
-    wanted = list(dict.fromkeys(slugs))
-    if not wanted:
-        return {}
-    rows = client.read("read.gq", "task_statuses", {"slugs": wanted})
+    """Status of each task in ``slugs``. A slug with no task is absent."""
+    rows = _read_by_slugs("task_statuses", list(dict.fromkeys(slugs)))
     return {r["slug"]: r.get("status") for r in rows}
 
 
@@ -8432,11 +8442,14 @@ def recall(
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
     position = {slug: i for i, slug in enumerate(returned_by_slug)}
-    edges = (
-        client.read("read.gq", "contradicts_among", {"slugs": list(position)})
-        if position
-        else []
-    )
+    # Matched on the source end only and filtered on the target here, so a
+    # pair whose two ends fall in different chunks is still found. `limit` has
+    # no cap, so the returned set can outgrow one chunk.
+    edges = [
+        e
+        for e in _read_by_slugs("contradicts_out_of", list(position))
+        if e["b_slug"] in position
+    ]
     # Ordered by the returned memories, so the result does not depend on the
     # order the engine yields edges in.
     for edge in sorted(

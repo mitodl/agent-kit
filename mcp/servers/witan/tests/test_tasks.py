@@ -289,6 +289,33 @@ def test_close_keeps_a_dependent_blocked_by_an_open_blocker_in_another_repo(serv
 
 
 @requires_omnigraph
+def test_blocker_statuses_are_read_in_bounded_chunks(server, monkeypatch):
+    """The slug list is one inline argv element on the local transport, which
+    Linux refuses at 128 KiB, so `_task_statuses` never sends it whole."""
+    elsewhere = "https://github.com/test/other"
+    blockers = [
+        server.task_create(title=f"remote {i}", description="x", repo=elsewhere)["slug"]
+        for i in range(5)
+    ]
+    server.task_close(blockers[0])
+    monkeypatch.setattr(server._module, "_SLUG_LIST_READ_BATCH_SIZE", 2)
+    sent: list[list[str]] = []
+    real_read = server.client.read
+
+    def spy(file, query, params):
+        if query == "task_statuses":
+            sent.append(params["slugs"])
+        return real_read(file, query, params)
+
+    monkeypatch.setattr(server.client, "read", spy)
+
+    statuses = server._task_statuses([*blockers, blockers[1], "tk-no-such-task"])
+
+    assert [len(chunk) for chunk in sent] == [2, 2, 2]
+    assert statuses == {blockers[0]: "closed", **dict.fromkeys(blockers[1:], "open")}
+
+
+@requires_omnigraph
 def test_update_to_closed_unblocks_dependents(server):
     a = server.task_create(title="blocker", description="x")
     b = server.task_create(title="dependent", description="x", blocked_by=[a["slug"]])
