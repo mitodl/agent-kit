@@ -19,6 +19,10 @@ witan — agent memory, planning, and collaboration graph.
 - [`graph`](#witan-graph)
 - [`inject-context`](#witan-inject-context)
 - [`session-checkpoint`](#witan-session-checkpoint)
+- [`journal`](#witan-journal)
+    - [`list`](#witan-journal-list)
+    - [`replay`](#witan-journal-replay)
+    - [`drop`](#witan-journal-drop)
 - [`optimize`](#witan-optimize)
 - [`cleanup`](#witan-cleanup)
 - [`memory`](#witan-memory)
@@ -102,6 +106,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`code`](#witan-code): witan-code — tree-sitter code graph + cross-repo bridge.
 * [`graph`](#witan-graph): Visualize the workflow project and task dependency graph.
 * [`inject-context`](#witan-inject-context): Print workflow context for the UserPromptSubmit hook.
+* [`journal`](#witan-journal): Inspect and replay task writes queued while the deployment was unreachable.
 * [`login`](#witan-login): Authenticate to the deployed witan service via the OIDC device grant.
 * [`logout`](#witan-logout): Forget the cached token for the configured deployment.
 * [`memory`](#witan-memory): Search memory (BM25), or with no query list memories (filtered by --kind).
@@ -291,6 +296,48 @@ from the hook's stdin payload instead.
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+
+## witan journal
+
+Inspect and replay task writes queued while the deployment was unreachable.
+
+**Parameters**:
+
+* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+    tasks`, `witan memory` and `witan code index` included, none of which
+    could be pointed at one before. Overrides auto-detection by checkout
+    path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+
+### witan journal list
+
+```console
+witan journal list
+```
+
+List queued writes for the selected deployment, oldest first.
+
+### witan journal replay
+
+```console
+witan journal replay
+```
+
+Replay queued writes now, instead of waiting for the next call.
+
+### witan journal drop
+
+```console
+witan journal drop ENTRY-ID
+```
+
+Remove one queued write without sending it.
+
+**Parameters**:
+
+* `ENTRY-ID, --entry-id`: **[required]**
 
 ## witan optimize
 
