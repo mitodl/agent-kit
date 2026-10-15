@@ -1578,3 +1578,11 @@ def test_apply_refuses_a_skill_hook_whose_skill_this_run_skips(
     assert "'my-skill', which this run does not install" in capsys.readouterr().out
     assert not (tmp_path / ".claude").exists()
     assert not (tmp_path / ".codex").exists()
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(
+            ["validate", str(manifest), "--profile", "hook-only", "--platform", "codex"]
+        )
+
+    assert exc_info.value.code == 2
+    assert "'my-skill', which this run does not install" in capsys.readouterr().out

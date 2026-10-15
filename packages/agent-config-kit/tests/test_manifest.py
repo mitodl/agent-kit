@@ -220,6 +220,35 @@ def test_load_manifest_requires_skill_and_skill_dir_together(tmp_path, fields, m
         load_manifest(manifest)
 
 
+def test_load_manifest_rejects_one_command_shared_by_two_skills(tmp_path):
+    """A hook's identity is event + command, so without this the second hook
+    would silently replace the first."""
+    for name in ("a", "b"):
+        (tmp_path / "skills" / name).mkdir(parents=True)
+        (tmp_path / "skills" / name / "SKILL.md").write_text("stub")
+    hook = 'kind = "declarative"\nevent = "session_start"\ncommand = "sh {skill_dir}/hook.sh"'
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        f"""
+[skills]
+a = "skills/a/SKILL.md"
+b = "skills/b/SKILL.md"
+
+[[hooks]]
+{hook}
+skill = "a"
+
+[[hooks]]
+{hook}
+skill = "b"
+""",
+    )
+
+    with pytest.raises(ManifestError, match="declared for skills 'a' and 'b'"):
+        load_manifest(manifest)
+
+
 def test_load_manifest_accepts_inline_array_of_tables_hooks(tmp_path):
     """F2: `hooks = [ {..}, {..} ]` must parse identically to the
     `[[hooks]]` array-of-tables header form — TOML produces the same

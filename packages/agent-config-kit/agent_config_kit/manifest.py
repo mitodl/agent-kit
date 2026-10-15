@@ -191,11 +191,20 @@ def _raw_hook_identity(hook: dict, path: Path) -> str:
 
 
 def _merge_hooks(base_hooks: list, overlay_hooks: list, path: Path) -> list[dict]:
+    """A hook's identity ignores ``skill``, so two hooks sharing a
+    ``{skill_dir}`` command for different skills would otherwise collapse
+    into one, silently dropping the other."""
     merged: dict[str, dict] = {}
-    for hook in base_hooks:
-        merged[_raw_hook_identity(hook, path)] = hook
-    for hook in overlay_hooks:
-        merged[_raw_hook_identity(hook, path)] = hook
+    for hook in [*base_hooks, *overlay_hooks]:
+        identity = _raw_hook_identity(hook, path)
+        previous = merged.get(identity)
+        if previous is not None and previous.get("skill") != hook.get("skill"):
+            raise ManifestError(
+                f"{path}: hooks[]: {identity!r} is declared for skills "
+                f"{previous.get('skill')!r} and {hook.get('skill')!r}; give "
+                "each hook its own command"
+            )
+        merged[identity] = hook
     return list(merged.values())
 
 

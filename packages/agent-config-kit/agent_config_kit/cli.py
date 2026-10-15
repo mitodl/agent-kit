@@ -47,7 +47,7 @@ from .plan import (
     InstallResult,
     RegistrationBundle,
     bundle_for,
-    platform_hooks,
+    check_hook_skills,
     skills_shadowed_by,
 )
 from .plan import apply as apply_bundle
@@ -700,12 +700,8 @@ def _print_diffs(results: dict[str, InstallResult]) -> None:
 def _check_hook_skills(
     bundle: RegistrationBundle, platforms: list[str], scope: Scope
 ) -> None:
-    """Resolve every platform's ``{skill_dir}`` hooks before anything is
-    written, so a hook naming a skill one platform won't install stops the
-    run instead of leaving the platforms before it half-applied."""
     try:
-        for name in platforms:
-            platform_hooks(name, bundle_for(name, bundle, platforms, scope), scope)
+        check_hook_skills(bundle, platforms, scope)
     except HookSkillError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc

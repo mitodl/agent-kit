@@ -12,7 +12,8 @@
 - An optional `skill` field on a declarative hook. `{skill_dir}` in its
   `command` is replaced with the directory each platform installs that skill
   into, so one manifest entry runs a skill's script on Claude Code and Codex
-  alike. A hook naming a skill that isn't in `[skills]` fails to load, and
+  alike. A hook naming a skill that isn't in `[skills]` fails to load, as do
+  two hooks sharing one command for different skills, and
   `apply`/`validate` exit `2` before writing anything when the run doesn't
   install that skill for a platform the hook goes to (`HookSkillError`).
 

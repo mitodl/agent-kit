@@ -136,7 +136,9 @@ At project scope the path is relative to the project root
 quoting.
 
 `skill` and `{skill_dir}` go together: either one without the other fails to
-load. `skill` must name an entry in the manifest's `[skills]`, and the run
+load. Hooks are keyed by event and command, so two hooks with the same
+command for different skills also fail to load; give each its own command.
+`skill` must name an entry in the manifest's `[skills]`, and the run
 has to install that skill for every platform the hook is written to, so
 `apply` and `validate` exit `2` before writing anything when a `--profile`
 selects the hook without its skill, or a platform installs no skills at the
@@ -337,8 +339,11 @@ Codex runs a hook it didn't ship only after you trust it, and asks again
 whenever the hook changes. `apply` never writes that trust state
 (`trusted_hash`); it prints one line per hook it added or changed, telling
 you to trust it with `/hooks` in the Codex TUI. Until then the hook is
-written but doesn't run. A changed hook has to be trusted again, so keep
-hook commands stable.
+written but doesn't run. Codex hashes the hook's entry (event, matcher,
+command, timeout), so changing any of those means trusting it again; keep
+them stable. It doesn't hash the script the command runs: a `{skill_dir}`
+hook keeps its trust when a later `apply` installs a new version of the
+skill's script.
 
 Hooks are stable and on by default from Codex 0.124.0 (`codex --version`).
 An older Codex needs `[features] codex_hooks = true` in `config.toml`; the

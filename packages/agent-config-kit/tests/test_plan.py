@@ -991,6 +991,23 @@ def test_apply_errors_when_a_hooks_skill_is_not_installed_this_run(
     assert not (tmp_path / ".codex").exists()
 
 
+def test_apply_all_checks_skill_hooks_before_writing_any_platform(
+    tmp_path, monkeypatch
+):
+    """apply() writes MCP servers before it reaches hooks, so without the
+    up-front check Claude's .claude.json would be written before the
+    missing skill raises."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    bundle = _bundle(hooks=[_skill_hook()])
+
+    with pytest.raises(HookSkillError):
+        apply_all(bundle)
+
+    assert not (tmp_path / ".claude.json").exists()
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
 def test_platform_hooks_skips_skill_hooks_where_declarative_hooks_never_go(
     tmp_path, monkeypatch
 ):

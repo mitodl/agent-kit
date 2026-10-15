@@ -36,6 +36,7 @@ from .plan import (
     _resolve_target,
     apply,
     platform_hooks,
+    skill_dest_dirs,
 )
 
 
@@ -377,11 +378,7 @@ def _remove_skills(
     target = _resolve_target(platform.skills, scope)
     if target is None:
         return []
-    dest_dirs = (
-        platform.skill_dest_dirs(target.path)
-        if platform.skill_dest_dirs
-        else [target.path]
-    )
+    dest_dirs = skill_dest_dirs(platform, target.path)
     removed: list[Path] = []
     for entry in sorted(entries):
         skill_name, _, rel = entry.partition("/")

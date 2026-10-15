@@ -155,6 +155,20 @@ def _default_serialize(server: McpServer) -> dict:
     )
 
 
+def skill_dest_dirs(platform: AgentPlatform, target: Path) -> list[Path]:
+    """Where ``platform`` installs skills under its skills ``target``."""
+    return platform.skill_dest_dirs(target) if platform.skill_dest_dirs else [target]
+
+
+def hook_changes(platform: AgentPlatform, cfg: dict, hook: DeclarativeHook) -> bool:
+    """Whether merging ``hook`` would change ``cfg``. ``hooks_merge`` is
+    dedup-based, so an already-present, unchanged hook is a no-op."""
+    assert platform.hooks_merge is not None
+    probe = copy.deepcopy(cfg)
+    platform.hooks_merge(probe, [hook])
+    return probe != cfg
+
+
 def _skill_dir(
     platform_name: str,
     platform: AgentPlatform,
@@ -174,12 +188,7 @@ def _skill_dir(
             f"{hook.skill!r}, but {platform.name} installs no skills at "
             f"{scope.value} scope"
         )
-    dest_dirs = (
-        platform.skill_dest_dirs(target.path)
-        if platform.skill_dest_dirs
-        else [target.path]
-    )
-    return dest_dirs[0] / hook.skill
+    return skill_dest_dirs(platform, target.path)[0] / hook.skill
 
 
 def platform_hooks(
@@ -214,6 +223,16 @@ def platform_hooks(
     return hooks
 
 
+def check_hook_skills(
+    bundle: RegistrationBundle, targets: list[str], scope: Scope
+) -> None:
+    """Resolve every target's ``{skill_dir}`` hooks before anything is
+    written, so a hook naming a skill one platform won't install fails the
+    run instead of leaving the platforms before it half-applied."""
+    for name in targets:
+        platform_hooks(name, bundle_for(name, bundle, targets, scope), scope)
+
+
 def _mcp_prerequisite(platform: AgentPlatform, scope: Scope) -> Prerequisite:
     assert platform.mcp_conditional_on is not None
     if platform.mcp_prerequisite_check is None:
@@ -236,18 +255,13 @@ def _approval_notices(
 ) -> list[str]:
     """One line per hook whose merge changes ``before`` (new, or e.g. a new
     timeout): an unchanged hook was already approved on an earlier run."""
-    assert platform.hooks_merge is not None
     verb = "would be written" if dry_run else "was written"
-    notices = []
-    for hook in hooks:
-        probe = copy.deepcopy(before)
-        platform.hooks_merge(probe, [hook])
-        if probe != before:
-            notices.append(
-                f"{hook.event.value} hook {hook.command!r} {verb} to {path}; "
-                f"{platform.hooks_approval}"
-            )
-    return notices
+    return [
+        f"{hook.event.value} hook {hook.command!r} {verb} to {path}; "
+        f"{platform.hooks_approval}"
+        for hook in hooks
+        if hook_changes(platform, before, hook)
+    ]
 
 
 def apply(
@@ -351,11 +365,7 @@ def apply(
     if platform.skills is not None and bundle.skills:
         target = _resolve_target(platform.skills, scope)
         if target is not None:
-            dest_dirs = (
-                platform.skill_dest_dirs(target.path)
-                if platform.skill_dest_dirs
-                else [target.path]
-            )
+            dest_dirs = skill_dest_dirs(platform, target.path)
             dests = install_skills(bundle.skills, dest_dirs, dry_run, force=force)
             result.planned.extend(dests)
             if not dry_run:
@@ -419,6 +429,7 @@ def apply_all(
     force: bool = False,
 ) -> dict[str, InstallResult]:
     targets = registry.detect_installed_platforms()
+    check_hook_skills(bundle, targets, scope)
     return {
         name: apply(
             name,
