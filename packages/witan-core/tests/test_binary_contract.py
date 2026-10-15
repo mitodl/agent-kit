@@ -47,6 +47,7 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -93,6 +94,7 @@ _CONTRACTS: dict[int, dict] = {
         "export_id": "data",
         # `@key(@src, @dst)` on an edge type does not parse.
         "keyed_edges": False,
+        "upgrade_check": None,
     },
     # omnigraph 0.9.x and 0.10.x
     6: {
@@ -109,6 +111,7 @@ _CONTRACTS: dict[int, dict] = {
         # in `data.id` too. Measured on 0.10.0.
         "export_id": "data",
         "keyed_edges": False,
+        "upgrade_check": None,
     },
     # omnigraph 0.11.x. Measured on 0.11.0.
     9: {
@@ -127,6 +130,12 @@ _CONTRACTS: dict[int, dict] = {
         # `edge E: A -> B { @key(@src, @dst) }` parses, and the edge id is its
         # endpoint pair.
         "keyed_edges": True,
+        # The `outcome` `upgrade --check --json` reports for each committed
+        # store fixture, keyed by the fixture's format. Passing on format 6 is
+        # why `witan.server._upgrade_check_passes` also requires
+        # `observed_format >= 9`: an in-place conversion keeps unkeyed edges.
+        # None on formats 4 and 6: 0.8.1, 0.9.0 and 0.10.0 have no `upgrade`.
+        "upgrade_check": {6: "check_passed", 9: "already_current"},
     },
     # Format 14. Measured on omnigraph 0.13.0 by running this suite
     # against it; every surface below came out as format 9's.
@@ -136,6 +145,9 @@ _CONTRACTS: dict[int, dict] = {
         "export_null_optional": "omitted",
         "export_id": "top-level",
         "keyed_edges": True,
+        # Converts format 9 in place; refuses format 6 with exit 1, which is
+        # what sends `witan migrate storage` to the rebuild.
+        "upgrade_check": {6: "check_failed", 9: "check_passed"},
     },
 }
 
@@ -832,10 +844,8 @@ def test_snapshot_reports_the_stores_internal_schema(store):
     assert int(line.split(":")[-1]) > 0
 
 
-def test_a_freshly_written_store_matches_the_reader(store, reader_schema):
-    """A store this binary just created must be readable by it. Trivially true
-    today, and the canary for a build whose writer and reader disagree."""
-    written = int(
+def _store_format(store: str) -> int:
+    return int(
         next(
             ln
             for ln in _run("snapshot", "--store", store).stdout.splitlines()
@@ -843,7 +853,79 @@ def test_a_freshly_written_store_matches_the_reader(store, reader_schema):
         ).split(":")[-1]
     )
 
-    assert written == reader_schema
+
+def test_a_freshly_written_store_matches_the_reader(store, reader_schema):
+    """A store this binary just created must be readable by it. Trivially true
+    today, and the canary for a build whose writer and reader disagree."""
+    assert _store_format(store) == reader_schema
+
+
+# ── upgrade, as `witan migrate storage` drives it ─────────────────────────
+#
+# `witan.server._upgrade_check_passes` parses `upgrade --check --json` and
+# picks the in-place route or the rebuild from it; `_upgrade_in_place` then
+# runs `upgrade` and trusts the store to snapshot at the new format. Testing
+# that needs a store an OLDER binary wrote, and CI has only the pinned one, so
+# the stores are committed: one `Doc { slug: String @key, title: String }`
+# row, `doc-a`, written with `init` + `load --mode merge` by omnigraph 0.10.0
+# (format-6.omni) and 0.11.0 (format-9.omni). Rebuild them only with those
+# binaries. prek.toml keeps its fixers off them: the manifests sniff as text.
+
+_STORE_FIXTURES = Path(__file__).parent / "fixtures" / "omnigraph-stores"
+
+
+def _fixture_store(tmp_path: Path, source_format: int) -> str:
+    """A writable copy: a check writes nothing, but `upgrade` rewrites in place."""
+    path = tmp_path / f"format-{source_format}.omni"
+    shutil.copytree(_STORE_FIXTURES / f"format-{source_format}.omni", path)
+    return str(path)
+
+
+@pytest.mark.parametrize("source_format", [6, 9])
+def test_upgrade_check_reports_each_fixture_as_this_format_does(
+    tmp_path, contract, source_format
+):
+    """The exit code and the two fields `_upgrade_check_passes` routes on. A
+    refusal only has to exit non-zero: that, not its output, is what sends a
+    store to the rebuild, so nothing is asserted about what it prints."""
+    if contract["upgrade_check"] is None:
+        pytest.skip("this format's binary has no `upgrade` command")
+    expected = contract["upgrade_check"][source_format]
+    store = _fixture_store(tmp_path, source_format)
+
+    result = _run("upgrade", "--check", "--json", store, expect_ok=False)
+
+    if expected == "check_failed":
+        assert result.returncode != 0, result.stdout
+        return
+    assert result.returncode == 0, result.stderr
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        pytest.fail(
+            "`upgrade --check --json` exited 0 without a JSON object on "
+            "stdout, which `_upgrade_check_passes` parses:\n" + result.stdout
+        )
+    assert report["outcome"] == expected, report
+    assert report["observed_format"] == source_format, report
+
+
+def test_upgrade_converts_a_store_its_check_passes(tmp_path, contract, reader_schema):
+    """What the in-place route relies on: `upgrade` exits 0, the store then
+    reads at this binary's format, and its rows are still there."""
+    if contract["upgrade_check"] is None:
+        pytest.skip("this format's binary has no `upgrade` command")
+    (source_format,) = (
+        fmt
+        for fmt, outcome in contract["upgrade_check"].items()
+        if outcome == "check_passed"
+    )
+    store = _fixture_store(tmp_path, source_format)
+
+    _run("upgrade", store)
+
+    assert _store_format(store) == reader_schema
+    assert [r["id"] for r in _export_records(store)] == ["doc-a"]
 
 
 # ── limits and the error text witan pattern-matches ───────────────────────

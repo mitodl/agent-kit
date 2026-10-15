@@ -11,13 +11,17 @@
 [[repos]]
 repo = "builtin"
 
+# The omnigraph store fixtures are binary Lance data whose manifests sniff as
+# text; "fixing" them corrupts the stores the contract suite opens.
 [[repos.hooks]]
 id = "trailing-whitespace"
 priority = 0
+exclude = "^packages/witan-core/tests/fixtures/omnigraph-stores/"
 
 [[repos.hooks]]
 id = "end-of-file-fixer"
 priority = 0
+exclude = "^packages/witan-core/tests/fixtures/omnigraph-stores/"
 
 [[repos.hooks]]
 id = "check-merge-conflict"
@@ -150,12 +154,13 @@ priority = 30
 # The witan UI fixtures are excluded: they are GENERATED
 # (`just ui-fixtures`) and byte-compared by `just ui-fixtures-check`, so
 # letting biome reformat them makes that gate fail on every commit against
-# files nobody edited.
+# files nobody edited. The omnigraph store fixtures are excluded for the same
+# reason the fixer hooks above skip them: they are an omnigraph's own output.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
 rev = "v2.5.14"
 hooks = [
-  { id = "biome-check", priority = 20, exclude = "^mcp/servers/witan/ui/fixtures/" },
+  { id = "biome-check", priority = 20, exclude = "^(mcp/servers/witan/ui/fixtures|packages/witan-core/tests/fixtures/omnigraph-stores)/" },
 ]
 
 # ── Skills: portability check (priority 10, parallel) ─────────────────────────
