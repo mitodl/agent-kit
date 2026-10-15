@@ -12,19 +12,25 @@ ADR-0004 JWT→actor→token mapping.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records, describe_budget
 from witan_core.export_rows import normalize_export
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
+from witan_core.remote.journal import JournalEntry
 from witan_core.remote.proxy import (
     RemoteCredentialRejected,
     RemoteMCPProxy,
+    RemoteNotSent,
     RemotePayloadTooLarge,
     RemoteToolFailed,
     RemoteToolUnavailable,
@@ -32,12 +38,15 @@ from witan_core.remote.proxy import (
     RemoteWriteIndeterminate,
 )
 
-from .. import merge_report, session_state
+from .. import merge_report, readiness, session_state
 from .. import repo as repo_module
 from ..config import RemoteConfig, S3Credentials
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "RemoteCredentialRejected",
+    "RemoteNotSent",
     "RemotePayloadTooLarge",
     "RemoteServerProxy",
     "RemoteToolFailed",
@@ -326,6 +335,47 @@ _BRANCH_IS_CHECKOUT = frozenset({"task_claim", "workflow_session_start"})
 _BRANCH_IS_EXPLICIT = frozenset({"task_for_branch"})
 
 
+# Task writes queued in the journal when the deployment cannot be reached (see
+# `witan_core.remote.journal`). Only when the connection never opened, so the
+# call provably was not sent. `task_claim` is deliberately absent: a claim that
+# is not live when it is made means nothing, and replaying it later would steal
+# a task someone else picked up in the meantime.
+_BUFFERED_WRITES = frozenset(
+    {"task_comment", "task_create", "task_update", "task_close", "task_release"}
+)
+
+# The subset also queued after a gateway cut a DISPATCHED call off, when it may
+# already have landed. Each sets fields to absolute values, so applying it twice
+# leaves the same row. `task_comment` and `task_create` are not here: each call
+# adds a node, so a replay of one that did land writes a duplicate.
+_IDEMPOTENT_WRITES = frozenset({"task_update", "task_close", "task_release"})
+
+# Queued writes that act on a task someone else may have taken in the meantime.
+# Replay re-reads the task first and turns the write into a comment if so.
+_HOLDER_CHECKED = _IDEMPOTENT_WRITES
+
+
+def _parse_ts(value: str) -> datetime:
+    """A graph or journal timestamp, as an aware UTC datetime.
+
+    The graph hands back naive ISO strings (omnigraph drops the offset) while
+    the journal stamps `now_iso()`'s `+00:00`; both are UTC.
+    """
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
+    """Why a queued write to ``task`` no longer applies, or None if it does."""
+    assignee = task.get("assignee")
+    if assignee and assignee != entry.holder:
+        return f"the task is now held by {assignee}"
+    closed_at = task.get("closed_at")
+    if closed_at and _parse_ts(closed_at) > _parse_ts(entry.ts):
+        return f"the task was closed at {closed_at}"
+    return None
+
+
 class RemoteServerProxy(RemoteMCPProxy):
     """Mirrors the ``witan.server`` tool surface, dispatching over MCP."""
 
@@ -349,6 +399,54 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _branch_means_checkout(self, name: str) -> bool:
         return name in _BRANCH_IS_CHECKOUT
+
+    def _buffers(self, name: str, *, dispatched: bool) -> bool:
+        return name in (_IDEMPOTENT_WRITES if dispatched else _BUFFERED_WRITES)
+
+    def _journal_holder(self, token: str) -> str | None:
+        # The holder string `task_claim` records for this caller
+        # (`server._claim_holder`), so replay can compare it to the assignee.
+        identity = super()._journal_holder(token)
+        suffix = readiness.session_suffix(self._resolve_session_id())
+        return f"{identity}#{suffix}" if identity and suffix else identity
+
+    async def _replay_plan(
+        self,
+        entry: JournalEntry,
+        call: Callable[..., Awaitable[Any]],
+    ) -> JournalEntry | None:
+        if entry.tool in _HOLDER_CHECKED:
+            task = await call("task_get", {"slug": entry.args["slug"]})
+            reason = _replay_conflict(task, entry) if task else None
+            if reason is not None:
+                text = (
+                    f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
+                    f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
+                )
+                return dataclasses.replace(
+                    entry,
+                    tool="task_comment",
+                    args={"slug": entry.args["slug"], "text": text},
+                    context=None,
+                )
+        elif entry.tool == "task_create":
+            title = entry.args["title"]
+            hits = await call("task_search", {"query": title, "repo": ""})
+            # Search rows carry no `created_at`, so each exact-title hit is
+            # re-read for it. Usually that is zero or one task.
+            for hit in (h for h in hits if h["title"] == title):
+                task = await call("task_get", {"slug": hit["slug"]})
+                if _parse_ts(task["created_at"]) > _parse_ts(entry.ts):
+                    logger.warning(
+                        "skipped journal entry %s: task_create %r from %s, but %s "
+                        "with that title was created since",
+                        entry.id,
+                        title,
+                        entry.ts,
+                        hit["slug"],
+                    )
+                    return None
+        return entry
 
     @property
     def remote_url(self) -> str:

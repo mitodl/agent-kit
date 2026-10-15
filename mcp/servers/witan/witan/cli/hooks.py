@@ -63,6 +63,8 @@ def inject_context(*, debug: bool = False) -> None:
         text = ctx_module.inject_context_remote(
             remote_proxy(remote), remote.url, debug=debug
         )
+        queued = ctx_module.journal_line(remote.url, debug=debug)
+        text = "\n\n".join(part for part in (queued, text) if part)
         if text:
             print(text)
         return
