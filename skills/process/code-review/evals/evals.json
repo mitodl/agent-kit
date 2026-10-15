@@ -42,6 +42,19 @@
 				"The days query parameter passed to timedelta() as a str is reported in the findings table as a correctness finding with ?days=N producing a TypeError, and is not dropped",
 				"No Dropped entry gives \"could not reproduce\" as its only reason"
 			]
+		},
+		{
+			"id": 4,
+			"prompt": "Is the 429 handling from mitodl/hq#812 addressed in this PR? The issue asks that fetch_course_runs retry on HTTP 429, honoring the Retry-After header, for up to 3 attempts.\n\nDiff to src/sync/client.py:\n+import time\n+\n def fetch_course_runs(session, url):\n-    response = session.get(url, timeout=30)\n-    response.raise_for_status()\n-    return response.json()\n+    for attempt in range(3):\n+        response = session.get(url, timeout=30)\n+        if response.status_code == 429 and attempt < 2:\n+            time.sleep(2 ** attempt)\n+            continue\n+        response.raise_for_status()\n+        return response.json()",
+			"expected_output": "A report that lists the request's goal as the stated goal and answers that it is only partly addressed: a goal-alignment finding that Retry-After is never read, so a 429 carrying Retry-After: 60 is retried after 1s and then 2s and fails on the third attempt about 3s in. The three-attempt limit is met and is not reported as a gap.",
+			"files": [],
+			"expectations": [
+				"The goal from the request (retry on 429, honor Retry-After, up to 3 attempts) is listed as the stated goal, with no extra goals inferred from the diff",
+				"A goal-alignment finding reports that the Retry-After header is never read and names a concrete case where the fixed 1s/2s backoff retries before the server allows it",
+				"The attempt limit is not reported as a gap, since the loop makes at most three requests",
+				"The report answers the question directly: the 429 handling is partly addressed",
+				"No code is edited, because the request did not ask for fixes"
+			]
 		}
 	]
 }
