@@ -29,22 +29,23 @@ agent launched from the other platform inherits its id. A refusal comes back as
 than forcing past a live lease. If planning is abandoned before approval,
 `task_release(slug=...)`.
 
-**Claim timing.** Steps 1–7 make no edits, so the claim sits in Step 8 after
-approval. If a mechanism genuinely cannot be judged without trying it, claim
-first and say that is what you are doing — a spike is an edit, and an unclaimed
-task being edited is indistinguishable from an idle one.
+**Claim timing.** `scope-work` makes no edits at all, and claims the task in
+its Step 5, before handing off. That is deliberate: an unclaimed task being
+actively worked is indistinguishable from an idle one, so the claim happens as
+soon as the work is identified rather than when editing starts. If a spike is
+needed to judge a mechanism, claim first and say so — a spike is an edit.
 
 **Projects: join before creating.** `workflow_project_list()` first, join a
 match with `workflow_session_start`, and create only when nothing matches. A
 single-session fix needs a task, not a project. Use `workflow_project_advance`
 for transitions; the phases map cleanly onto this skill:
 
-| Steps | Phase |
+| Skill | Phase |
 |-------|-------|
-| 1–2 | `discovery` |
-| 3–7 | `spec` |
-| 9 | `implementation` |
-| 10 | `delivery` |
+| `scope-work` | `discovery` |
+| `plan-technical-approach`, `write-adr` | `spec` |
+| `implement-plan`, building chunks | `implementation` |
+| `implement-plan`, close-out | `delivery` |
 
 The session phase is what *this* session is doing and need not equal the
 project's overall phase.

@@ -33,9 +33,10 @@ plan comment is the constant.
   plan → go there first rather than inventing one and building it.
 - The witan `task_*` / `workflow_*` tools, for claiming and closing chunks.
 - The plan-comment scripts, which live in the sibling skill
-  (`../plan-technical-approach/scripts/`). Both ship in the `universal`
-  profile and install side by side; if the sibling is absent, say so rather
-  than hand-rolling a comment update that loses the marker and digest.
+  `plan-technical-approach`. Both ship in the `universal` profile and install
+  side by side — under `~/.claude/skills/` once installed, under
+  `skills/workflow/` in this repo. If the sibling is absent, say so rather than
+  hand-rolling a comment update that loses the marker and digest.
 
 **This skill carries no implementation guidance.** How to write the code
 belongs to the language and domain skills — `drf-api-performance`,
@@ -118,9 +119,22 @@ per commit: a record that churns is one nobody reads.
 Pass `--require-existing` on every update after the first, so a transient read
 failure cannot open a second comment:
 
+The scripts live in the sibling skill, and the two skills install side by side
+— in this repo under `skills/workflow/`, once installed under
+`~/.claude/skills/`. Anchor on whichever root applies rather than using a
+relative path, which resolves under neither when the working directory is the
+product repo:
+
 ```bash
-../plan-technical-approach/scripts/upsert-plan-comment.sh \
-  --repo <owner/repo> --issue <N> --require-existing
+SKILLS=~/.claude/skills            # in-repo development: ./skills/workflow
+PTA="$SKILLS/plan-technical-approach/scripts"
+
+# Not just the first update: read before overwriting a comment this session
+# did not write, or the Revisions log and merged PR URLs are replaced wholesale.
+"$PTA"/fetch-plan-comment.sh --repo <owner/repo> --issue <N>
+
+"$PTA"/upsert-plan-comment.sh \
+  --repo <owner/repo> --issue <N> --require-existing --expect-sha <sha>
 ```
 
 Floor: no more than one phase may land without an update, so close-out is never
@@ -249,7 +263,15 @@ gh stack sync
 ```
 
 `sync` links the stack's open PRs into a GitHub stack object once two or more
-exist, and does it without prompting — which is what makes this split possible.
+exist, which is what makes this split possible.
+
+**One case where it stops instead.** If the local and remote stacks have
+diverged — someone added a PR to the stack on GitHub — `sync` prompts in an
+interactive terminal, and **in a non-interactive one it aborts without pushing
+branches or updating PRs**. That is a silent no-op from an agent's point of
+view, so check the exit status and re-read `gh stack view --short` rather than
+assuming the link happened. A clean "remote is ahead" update applies without
+prompting; only a true divergence stops.
 
 **`gh stack sync` is also how a lower chunk's changes reach the ones above it.**
 It fetches, fast-forwards the trunk, cascade-rebases each branch onto its
@@ -293,10 +315,12 @@ the tool and say so.
      --jq '[.reviews[] | select(.state == "APPROVED") | .author.login] | unique | join(", ")'
    ```
 
-   A human approver → flip `**Status:** Proposed` to `Accepted`, append a
-   Review History row naming them, bump `**Last Updated:**`. No approving
-   review → it stays `Proposed`, and say so rather than leaving it to be
-   discovered. Full rule in
+   A human approver → flip the status to `Accepted` and record who approved
+   it, **in whichever form that ADR's flavor uses**: an ol-infrastructure ADR
+   gets a Review History row and a bumped `**Last Updated:**`; a witan ADR has
+   neither, so the approver goes on the `- Status:` line
+   (`Accepted 2026-10-14 by @handle`). No approving review → it stays
+   `Proposed`, and say so rather than leaving it to be discovered. Full rule in
    [the revision protocol](../write-adr/references/revision-protocol.md).
 
 **When the last chunk merges:**
