@@ -10,10 +10,11 @@ description: >
   resolves nothing until approved, and edits pending review comments without
   clobbering the user's own changes. Use this skill when asked to "address PR
   feedback", "address the comments on <PR>", "resolve the review comments",
-  "fix the failing checks", "the CI is red on <PR>", "draft replies without
-  posting", "don't post anything", "leave it pending", "show me first", or to
-  triage feedback from bots (Copilot, Gemini, CodeQL, Sentry), hook
-  autofixers, or human reviewers on a specific pull request.
+  "check the Copilot comments", "fix the failing checks", "the CI is red on
+  <PR>", "draft replies without posting", "don't post anything", "leave it
+  pending", "show me first", or to triage feedback from bots (Copilot,
+  Gemini, CodeQL, Sentry), hook autofixers, or human reviewers on a specific
+  pull request.
 license: BSD-3-Clause
 metadata:
   category: process
