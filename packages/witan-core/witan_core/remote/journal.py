@@ -89,9 +89,12 @@ class WriteJournal:
         self._file_lock = path.with_name(path.name + ".lock")
         self._replay_lock = path.with_name(path.name + ".replay.lock")
 
+    def _ensure_dir(self) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir()
         with open(self._file_lock, "w") as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
@@ -109,13 +112,22 @@ class WriteJournal:
         if not entries:
             self.path.unlink(missing_ok=True)
             return
+        # 0600 from creation, whatever the umask: entries carry comment text,
+        # task titles and the holder's email.
         tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text("".join(json.dumps(asdict(e)) + "\n" for e in entries))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("".join(json.dumps(asdict(e)) + "\n" for e in entries))
         tmp.replace(self.path)
 
     def has_pending(self) -> bool:
         """Whether anything is queued. A stat, so it is cheap on every call."""
-        return self.path.exists() and self.path.stat().st_size > 0
+        # One stat, not exists() then stat(): another process can unlink the
+        # file between the two when its replay empties the journal.
+        try:
+            return self.path.stat().st_size > 0
+        except FileNotFoundError:
+            return False
 
     def entries(self) -> list[JournalEntry]:
         """Every queued entry, oldest first."""
@@ -155,7 +167,7 @@ class WriteJournal:
     @contextmanager
     def replaying(self) -> Iterator[bool]:
         """Hold the replay lock if nobody else does. Yields whether it was taken."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir()
         with open(self._replay_lock, "w") as fh:
             try:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

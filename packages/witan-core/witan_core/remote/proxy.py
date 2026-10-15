@@ -390,6 +390,15 @@ def _next_cursor(result: Any) -> str | None:
     return result.next_cursor
 
 
+# How a replayed call can fail, split by whether the deployment answered it.
+_REPLAY_REFUSED = (RemoteToolFailed, RemoteToolUnavailable, RemotePayloadTooLarge)
+_REPLAY_UNSENT = (
+    RemoteUnreachable,
+    RemoteCredentialRejected,
+    RemoteWriteIndeterminate,
+)
+
+
 def _outcome(entry: JournalEntry, outcome: str, detail: str) -> dict:
     """One line of a journal replay's report."""
     return {
@@ -409,6 +418,8 @@ class RemoteMCPProxy:
         url: str,
         token_provider: Callable[[], str],
         token_refresher: Callable[[str], str] | None = None,
+        *,
+        buffer_writes: bool = True,
     ) -> None:
         """``token_refresher`` force-mints a credential, bypassing any cache.
 
@@ -427,8 +438,13 @@ class RemoteMCPProxy:
         Distinct from ``token_provider`` because that one is allowed to answer
         from cache — and on a rejected token it necessarily WOULD, handing back
         the same dead credential and turning a retry into a second 401.
+
+        ``buffer_writes=False`` turns off queueing in the write journal for a
+        caller that needs every failure raised, e.g. a probe that measures how
+        writes fail. Replaying what other callers queued is unaffected.
         """
         self._url = url
+        self._buffer_writes = buffer_writes
         self._token_provider = token_provider
         self._token_refresher = token_refresher
         self._param_names: dict[str, list[str]] | None = None
@@ -1040,7 +1056,11 @@ class RemoteMCPProxy:
             return await self._invoke_refreshing(name, args, kwargs, token)
         except (RemoteNotSent, RemoteWriteIndeterminate) as exc:
             dispatched = isinstance(exc, RemoteWriteIndeterminate)
-            if args or not self._buffers(name, dispatched=dispatched):
+            if (
+                args
+                or not self._buffer_writes
+                or not self._buffers(name, dispatched=dispatched)
+            ):
                 raise
             return self._buffer(name, kwargs, token)
 
@@ -1212,11 +1232,21 @@ class RemoteMCPProxy:
     async def _replay_journal(self, client: Client) -> list[dict]:
         """Send queued writes over ``client``, oldest first, before anything else.
 
-        Stops at the first entry the deployment could not take (unreachable,
-        credential refused, or a cut-off), keeping it and everything after it
-        for the next call. An entry the deployment REFUSED is dropped with a
-        warning instead: a refusal is an answer, sending it again gets the same
-        one, and keeping it at the head would wedge every entry behind it.
+        Each entry has two steps, with different failure rules.
+
+        The binding's :meth:`_replay_plan` reads first. A failure there keeps
+        the entry and stops replay: nothing was written, so the entry is as
+        safe to send next time as it was this time.
+
+        Then the write. One that is safe to apply twice (``_buffers(...,
+        dispatched=True)``) stays in the journal until it succeeds, so a failed
+        send keeps it and stops replay. Any other write is removed BEFORE it is
+        sent. Once the request may have left, no failure (a reset, a gateway
+        cut-off, a cancelled replay) proves it did not land, and sending it
+        again writes a second comment or task, so those replay at most once
+        and a failed send is logged as lost. A refused write (a tool error, an
+        unknown tool, a 413) is dropped either way: a refusal is an answer, and
+        leaving it at the head would wedge every entry behind it.
         """
         journal = self.journal
         if not journal.has_pending():
@@ -1234,17 +1264,21 @@ class RemoteMCPProxy:
                     return (await client.call_tool(tool, arguments)).data
 
             for entry in journal.entries():
-                sent = entry
                 try:
                     plan = await self._replay_plan(entry, call)
-                    if plan is not None:
-                        sent = plan
-                        await call(plan.tool, plan.args, plan.context)
-                except (
-                    RemoteToolFailed,
-                    RemoteToolUnavailable,
-                    RemotePayloadTooLarge,
-                ) as exc:
+                except (*_REPLAY_REFUSED, *_REPLAY_UNSENT) as exc:
+                    report.append(_outcome(entry, "kept", str(exc)))
+                    break
+                if plan is None:
+                    journal.remove(entry.id)
+                    report.append(_outcome(entry, "skipped", ""))
+                    continue
+                retryable = self._buffers(plan.tool, dispatched=True)
+                if not retryable:
+                    journal.remove(entry.id)
+                try:
+                    await call(plan.tool, plan.args, plan.context)
+                except _REPLAY_REFUSED as exc:
                     logger.warning(
                         "dropped journal entry %s (%s from %s): refused: %s",
                         entry.id,
@@ -1252,35 +1286,31 @@ class RemoteMCPProxy:
                         entry.ts,
                         exc,
                     )
-                    journal.remove(entry.id)
+                    if retryable:
+                        journal.remove(entry.id)
                     report.append(_outcome(entry, "dropped", str(exc)))
                     continue
-                except RemoteWriteIndeterminate as exc:
-                    if self._buffers(sent.tool, dispatched=True):
+                except _REPLAY_UNSENT as exc:
+                    if retryable:
                         report.append(_outcome(entry, "kept", str(exc)))
                     else:
                         logger.warning(
-                            "dropped journal entry %s (%s from %s): outcome "
-                            "unknown, and replaying it again could apply it "
-                            "twice: %s",
+                            "lost journal entry %s (%s from %s): it may or may "
+                            "not have been applied, and sending it again could "
+                            "apply it twice: %s",
                             entry.id,
                             entry.tool,
                             entry.ts,
                             exc,
                         )
-                        journal.remove(entry.id)
-                        report.append(_outcome(entry, "dropped", str(exc)))
+                        report.append(_outcome(entry, "lost", str(exc)))
                     break
-                except (RemoteUnreachable, RemoteCredentialRejected) as exc:
-                    report.append(_outcome(entry, "kept", str(exc)))
-                    break
-                journal.remove(entry.id)
-                if plan is None:
-                    report.append(_outcome(entry, "skipped", ""))
-                elif plan is entry:
-                    report.append(_outcome(entry, "applied", ""))
-                else:
-                    report.append(_outcome(entry, "substituted", plan.tool))
+                if retryable:
+                    journal.remove(entry.id)
+                outcome = "applied" if plan is entry else "substituted"
+                report.append(
+                    _outcome(entry, outcome, "" if plan is entry else plan.tool)
+                )
         for line in report:
             logger.info("journal replay: %s", line)
         return report

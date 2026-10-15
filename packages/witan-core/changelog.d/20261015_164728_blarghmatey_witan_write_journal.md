@@ -5,7 +5,10 @@
   and returns a `{"buffered": true, ...}` result instead of raising. The
   journal replays oldest first at the start of the next call whose connection
   opens, under an `fcntl` lock so two processes never send the same entry.
-  Which tools queue is a binding's choice (`_buffers`); the base proxy queues
-  nothing. `replay_journal()` replays on demand.
+  A write that is unsafe to apply twice replays at most once: it leaves the
+  journal before it is sent. Which tools queue is a binding's choice
+  (`_buffers`); the base proxy queues nothing, and `buffer_writes=False`
+  turns queueing off for one proxy. `replay_journal()` replays on demand.
+  The journal file is created `0600`.
 - `RemoteNotSent`, a `RemoteUnreachable` raised only when the connection never
   opened, so the call provably did not reach the deployment.

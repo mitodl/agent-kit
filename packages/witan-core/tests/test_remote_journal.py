@@ -228,21 +228,102 @@ def test_replay_sends_the_repo_resolved_when_the_write_was_made():
     )
 
 
-def test_replay_stops_at_the_first_unreachable_entry_and_keeps_the_rest():
+def test_a_retryable_write_that_fails_on_replay_is_kept_with_the_rest():
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="first")
+    proxy.task_close(slug="tk-1")
     proxy.task_comment(slug="tk-1", text="second")
 
     _up(deployment)
-    deployment.fail_tools["task_comment"] = ExceptionGroup(
+    deployment.fail_tools["task_close"] = ExceptionGroup(
         "x", [httpx2.ReadError("reset")]
     )
     report = asyncio.run(proxy.replay_journal())
 
     assert [line["outcome"] for line in report] == ["kept"]
-    assert [e.args["text"] for e in proxy.journal.entries()] == ["first", "second"]
+    assert [e.tool for e in proxy.journal.entries()] == ["task_close", "task_comment"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ExceptionGroup("x", [httpx2.ReadError("reset after send")]),
+        ExceptionGroup("x", [_status_error(504)]),
+    ],
+    ids=["drop", "gateway"],
+)
+def test_a_non_idempotent_write_that_fails_on_replay_is_never_resent(failure):
+    # The request may have landed, so a second send could write a second
+    # comment. It replays at most once, and replay stops behind it.
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_comment(slug="tk-1", text="maybe")
+    proxy.task_comment(slug="tk-1", text="later")
+
+    _up(deployment)
+    deployment.fail_tools["task_comment"] = failure
+    report = asyncio.run(proxy.replay_journal())
+
+    assert [line["outcome"] for line in report] == ["lost"]
+    assert [e.args["text"] for e in proxy.journal.entries()] == ["later"]
+
+
+def test_a_non_idempotent_write_is_off_the_journal_before_it_is_sent():
+    # Covers what no except clause can: a replay cancelled mid-send.
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_comment(slug="tk-1", text="once")
+
+    _up(deployment)
+    deployment.fail_tools["task_comment"] = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(proxy.replay_journal())
+
+    assert not proxy.journal.has_pending()
+
+
+def test_a_failed_pre_read_keeps_the_entry(monkeypatch):
+    # Nothing was written, so the entry is as safe to send next time.
+    from fastmcp.exceptions import ToolError
+
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_comment(slug="tk-1", text="queued")
+
+    async def plan(entry, call):
+        await call("task_get", {"slug": "tk-1"})
+        return entry
+
+    monkeypatch.setattr(proxy, "_replay_plan", plan)
+    _up(deployment)
+    deployment.fail_tools["task_get"] = ToolError("backend warming up")
+    report = asyncio.run(proxy.replay_journal())
+
+    assert [line["outcome"] for line in report] == ["kept"]
+    assert len(proxy.journal.entries()) == 1
+
+
+def test_buffering_can_be_turned_off_for_a_caller_that_needs_the_error():
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy._buffer_writes = False
+    with pytest.raises(RemoteNotSent):
+        proxy.task_comment(slug="tk-1", text="hello")
+    assert not proxy.journal.has_pending()
+
+
+def test_the_journal_is_private_to_its_owner():
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_comment(slug="tk-1", text="secret-ish")
+    assert proxy.journal.path.stat().st_mode & 0o777 == 0o600
+    assert proxy.journal.path.parent.stat().st_mode & 0o077 == 0
 
 
 def test_a_refused_entry_is_dropped_and_replay_continues():
@@ -261,21 +342,6 @@ def test_a_refused_entry_is_dropped_and_replay_continues():
 
     assert [line["outcome"] for line in report] == ["dropped", "applied"]
     assert not proxy.journal.has_pending()
-
-
-def test_an_indeterminate_non_idempotent_replay_is_dropped_not_resent():
-    deployment = _Deployment()
-    _down(deployment)
-    proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="maybe")
-    proxy.task_comment(slug="tk-1", text="later")
-
-    _up(deployment)
-    deployment.fail_tools["task_comment"] = ExceptionGroup("x", [_status_error(504)])
-    report = asyncio.run(proxy.replay_journal())
-
-    assert [line["outcome"] for line in report] == ["dropped"]
-    assert [e.args["text"] for e in proxy.journal.entries()] == ["later"]
 
 
 def test_a_held_replay_lock_means_this_caller_does_not_replay():
