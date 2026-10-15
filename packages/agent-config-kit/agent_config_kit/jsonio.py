@@ -51,7 +51,7 @@ def write_json(path: Path, data: dict, dry_run: bool) -> None:
         path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-_SENSITIVE_KEYS = frozenset({"env", "headers", "oauth"})
+_SENSITIVE_KEYS = frozenset({"env", "headers", "http_headers", "oauth"})
 _REDACTED = "<redacted>"
 
 
@@ -69,7 +69,7 @@ def _redact(value: object) -> object:
 def redact_sensitive(value: object) -> object:
     """Recursively blank known-sensitive fields — MCP/LSP ``env``,
     ``headers``, ``oauth`` (``StdioServer``/``RemoteServer``/``LspServer`` in
-    ``models.py``) — wherever they appear, however deep. These routinely
+    ``models.py``), plus Codex's wire name for headers, ``http_headers`` — wherever they appear, however deep. These routinely
     carry API keys, bearer tokens, and OAuth client secrets, and
     ``json_diff``'s output is printed straight to a terminal or CI log by
     default (``apply --diff``), so it must never include the real values."""

@@ -724,3 +724,36 @@ def test_apply_project_scope_codex_writes_dot_codex_config_toml(tmp_path, monkey
 
     cfg = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
     assert "witan" in cfg["mcp_servers"]
+
+
+def test_apply_codex_diff_redacts_header_values(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = RegistrationBundle(
+        mcp_servers={
+            "tsw": RemoteServer(
+                url="https://example.test/mcp",
+                headers={"Authorization": "Bearer SECRET123"},
+            )
+        }
+    )
+
+    result = apply("codex", bundle, dry_run=True)
+
+    assert result.diffs
+    assert all("SECRET123" not in diff for _, diff in result.diffs)
+
+
+def test_apply_codex_keeps_top_level_keys_after_dotted_mcp_servers(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = tmp_path / ".codex" / "config.toml"
+    config.parent.mkdir()
+    config.write_text('mcp_servers.mine.command = "x"\nmodel = "o3"\n')
+
+    apply("codex", _bundle())
+
+    cfg = tomllib.loads(config.read_text())
+    assert cfg["model"] == "o3"
+    assert cfg["mcp_servers"]["mine"] == {"command": "x"}
+    assert cfg["mcp_servers"]["witan"]["command"] == "uvx"

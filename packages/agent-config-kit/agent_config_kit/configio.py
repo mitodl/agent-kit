@@ -9,6 +9,7 @@ ordering, and formatting intact.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import tomlkit
@@ -40,4 +41,25 @@ def write_config(path: Path, data: dict, dry_run: bool) -> None:
         return
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(tomlkit.dumps(data))
+        path.write_text(_dump_toml(data))
+
+
+def _dump_toml(doc: tomlkit.TOMLDocument) -> str:
+    """tomlkit mis-renders a table added under a top-level dotted key
+    (``mcp_servers.x.command = ...``) that has plain keys after it: those keys
+    get emitted inside the new table, silently moving e.g. ``model`` into
+    ``[mcp_servers.new]``. When the dump doesn't parse back to the same data,
+    rewrite the dotted keys as ordinary tables and dump again; if that still
+    doesn't round-trip, refuse to write rather than corrupt the file."""
+    text = tomlkit.dumps(doc)
+    if tomllib.loads(text) == doc.unwrap():
+        return text
+    dotted = [key.key for key, _ in doc.body if key is not None and key.is_dotted()]
+    for name in dotted:
+        value = doc[name].unwrap()
+        del doc[name]
+        doc[name] = value
+    text = tomlkit.dumps(doc)
+    if tomllib.loads(text) != doc.unwrap():
+        raise ValueError("refusing to write TOML that does not round-trip")
+    return text
