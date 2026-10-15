@@ -881,37 +881,33 @@ def _fixture_store(tmp_path: Path, source_format: int) -> str:
     return str(path)
 
 
-def _upgrade_check(store: str) -> tuple[int, dict]:
-    result = _run("upgrade", "--check", "--json", store, expect_ok=False)
-    try:
-        report = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        pytest.fail(
-            f"`upgrade --check --json` ({result.returncode}) printed no JSON "
-            "object. `_upgrade_check_passes` parses stdout whenever the exit "
-            f"is 0:\n{result.stdout}\n{result.stderr}"
-        )
-    return result.returncode, report
-
-
 @pytest.mark.parametrize("source_format", [6, 9])
 def test_upgrade_check_reports_each_fixture_as_this_format_does(
     tmp_path, contract, source_format
 ):
-    """The two fields and the exit code `_upgrade_check_passes` routes on. A
-    refusal has to exit non-zero: that, not the JSON, is what sends a store
-    to the rebuild."""
+    """The exit code and the two fields `_upgrade_check_passes` routes on. A
+    refusal only has to exit non-zero: that, not its output, is what sends a
+    store to the rebuild, so nothing is asserted about what it prints."""
     if contract["upgrade_check"] is None:
         pytest.skip("this format's binary has no `upgrade` command")
     expected = contract["upgrade_check"][source_format]
+    store = _fixture_store(tmp_path, source_format)
 
-    returncode, report = _upgrade_check(_fixture_store(tmp_path, source_format))
+    result = _run("upgrade", "--check", "--json", store, expect_ok=False)
 
+    if expected == "check_failed":
+        assert result.returncode != 0, result.stdout
+        return
+    assert result.returncode == 0, result.stderr
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        pytest.fail(
+            "`upgrade --check --json` exited 0 without a JSON object on "
+            "stdout, which `_upgrade_check_passes` parses:\n" + result.stdout
+        )
     assert report["outcome"] == expected, report
     assert report["observed_format"] == source_format, report
-    assert (returncode == 0) == (expected != "check_failed"), (
-        f"`upgrade --check` reported {expected!r} with exit {returncode}"
-    )
 
 
 def test_upgrade_converts_a_store_its_check_passes(tmp_path, contract, reader_schema):
