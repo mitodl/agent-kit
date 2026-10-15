@@ -1,0 +1,64 @@
+{
+  "ir_version": 2,
+  "schema_identity_domain": "01M4YGVH87EMWR50KKXYPXQPWM",
+  "next_identity_id": 5,
+  "interfaces": [],
+  "nodes": [
+    {
+      "name": "Doc",
+      "type_id": 1,
+      "table_incarnation_id": 4,
+      "annotations": [],
+      "implements": [],
+      "properties": [
+        {
+          "name": "slug",
+          "property_id": 2,
+          "prop_type": {
+            "scalar": "String",
+            "nullable": false,
+            "list": false,
+            "enum_values": null
+          },
+          "annotations": [],
+          "property_constraints": [
+            "key"
+          ],
+          "embed_source": null,
+          "declared_directly": true,
+          "satisfies_interface_properties": []
+        },
+        {
+          "name": "title",
+          "property_id": 3,
+          "prop_type": {
+            "scalar": "String",
+            "nullable": false,
+            "list": false,
+            "enum_values": null
+          },
+          "annotations": [],
+          "property_constraints": [],
+          "embed_source": null,
+          "declared_directly": true,
+          "satisfies_interface_properties": []
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "key",
+          "fields": [
+            {
+              "kind": "property",
+              "owner_type_id": 1,
+              "owner_type_name": "Doc",
+              "property_id": 2,
+              "property_name": "slug"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": []
+}

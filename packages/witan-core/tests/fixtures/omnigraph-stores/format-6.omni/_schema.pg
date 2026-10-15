@@ -1,0 +1,4 @@
+node Doc {
+    slug: String @key
+    title: String
+}
