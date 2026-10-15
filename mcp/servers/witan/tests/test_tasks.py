@@ -260,6 +260,61 @@ def test_ready_resolves_a_cross_repo_blocker_without_re_reading_it(server, monke
     assert "get_task" not in reads
 
 
+def test_close_keeps_a_dependent_blocked_by_an_open_blocker_in_another_repo(server):
+    """Closing one blocker re-checks the dependent's others, wherever they live.
+
+    `_unblock_dependents` reads only the closed task's repo, so a remaining
+    blocker in another repo is looked up separately (`task_statuses`).
+    """
+    here = "https://github.com/test/repo"
+    elsewhere = "https://github.com/test/other"
+    local = server.task_create(title="local blocker", description="x", repo=here)
+    remote = server.task_create(title="remote blocker", description="x", repo=elsewhere)
+    dependent = server.task_create(
+        title="dependent",
+        description="x",
+        repo=here,
+        blocked_by=[local["slug"], remote["slug"]],
+    )
+    assert server.task_get(dependent["slug"])["status"] == "blocked"
+
+    server.task_close(local["slug"])
+    assert server.task_get(dependent["slug"])["status"] == "blocked"
+
+    # Closing `remote` runs the pass for ITS repo, which does not see the
+    # dependent, so run the local one again as the next local close would.
+    server.task_close(remote["slug"])
+    server._unblock_dependents(here)
+    assert server.task_get(dependent["slug"])["status"] == "open"
+
+
+@requires_omnigraph
+def test_blocker_statuses_are_read_in_bounded_chunks(server, monkeypatch):
+    """The slug list is one inline argv element on the local transport, which
+    Linux refuses at 128 KiB, so `_task_statuses` never sends it whole."""
+    elsewhere = "https://github.com/test/other"
+    blockers = [
+        server.task_create(title=f"remote {i}", description="x", repo=elsewhere)["slug"]
+        for i in range(5)
+    ]
+    server.task_close(blockers[0])
+    monkeypatch.setattr(server._module, "_SLUG_LIST_READ_BATCH_SIZE", 2)
+    sent: list[list[str]] = []
+    real_read = server.client.read
+
+    def spy(file, query, params):
+        if query == "task_statuses":
+            sent.append(params["slugs"])
+        return real_read(file, query, params)
+
+    monkeypatch.setattr(server.client, "read", spy)
+
+    statuses = server._task_statuses([*blockers, blockers[1], "tk-no-such-task"])
+
+    assert [len(chunk) for chunk in sent] == [2, 2, 2]
+    assert statuses == {blockers[0]: "closed", **dict.fromkeys(blockers[1:], "open")}
+
+
 @requires_omnigraph
 def test_update_to_closed_unblocks_dependents(server):
     a = server.task_create(title="blocker", description="x")
@@ -292,12 +347,7 @@ def test_unlink_blocks_clears_field_and_reopens(server):
 
 @requires_omnigraph
 def test_unlink_one_of_several_blockers_keeps_the_rest(server):
-    """Several blockers on the target, one removed.
-
-    `from` has a single outbound edge here, so this takes the delete-by-`from`
-    path with nothing to re-insert. `test_unlink_reinserts_survivors` is the
-    one that exercises re-insertion.
-    """
+    """Several blockers on the target, one removed."""
     a = server.task_create(title="blocker A", description="x")
     b = server.task_create(title="blocker B", description="x")
     c = server.task_create(title="blocker C", description="x")
@@ -331,14 +381,11 @@ def test_unlink_leaves_other_tasks_edges_alone(server):
 
 
 @requires_omnigraph
-def test_unlink_reinserts_survivors(server):
-    """The re-insert branch, which only runs when BOTH endpoints are crowded.
+def test_unlink_with_both_endpoints_crowded(server):
+    """The delete names both endpoints, so it leaves every other edge on each.
 
-    A single-predicate delete takes out every edge on the chosen endpoint, so
-    when that endpoint has more than the target edge the rest must be put back.
-    Shape: `b` blocks two tasks, and the target is blocked by three — so the
-    smaller side (`b`'s two outbound edges) is deleted and one is restored.
-    The other tests all happen to have a side of size one and never reach here.
+    Shape: `b` blocks two tasks, and the target is blocked by three. A delete
+    keyed on either endpoint alone would take out a sibling edge.
     """
     a = server.task_create(title="blocker A", description="x")
     b = server.task_create(title="blocker B", description="x")
@@ -357,10 +404,10 @@ def test_unlink_reinserts_survivors(server):
         a["slug"],
         c["slug"],
     }
-    # And the sibling edge deleted as collateral came back.
+    # And the sibling edge from `b` is untouched.
     assert b["slug"] in (server.task_get(other["slug"])["blocked_by"] or [])
     assert server.task_get(other["slug"])["status"] == "blocked"
-    # Re-running finds nothing, proving the restore did not duplicate it.
+    # Re-running finds nothing; the sibling edge is still there to remove.
     assert (
         server.task_unlink(b["slug"], target["slug"], kind="blocks")["removed"] is False
     )

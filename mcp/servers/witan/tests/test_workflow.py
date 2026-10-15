@@ -403,6 +403,35 @@ def test_get_project_blockers(server):
     assert {blocker1["slug"], blocker2["slug"]} == blocker_slugs
 
 
+def test_get_project_blockers_keeps_blocked_by_order(server, monkeypatch):
+    """The blockers come back in ``blocked_by`` order, duplicates included.
+
+    They are read in one ``in`` query whose row order the engine does not
+    promise, so the order is restored from ``blocked_by``. The stored list is
+    rewritten on read to an order no insert sequence produces, with a repeat.
+    """
+    from witan import server as srv
+
+    blocker1 = server.workflow_project_create(title="blocker one", description="d")
+    blocker2 = server.workflow_project_create(title="blocker two", description="d")
+    blocked = server.workflow_project_create(title="blocked project", description="d")
+    server.workflow_project_block(blocker1["slug"], blocked["slug"])
+    server.workflow_project_block(blocker2["slug"], blocked["slug"])
+
+    wanted = [blocker2["slug"], blocker1["slug"], blocker2["slug"]]
+    real_read = srv.client.read
+
+    def reordering_read(queries, name, params):
+        rows = real_read(queries, name, params)
+        if name == "get_workflow_project" and params == {"slug": blocked["slug"]}:
+            rows = [{**rows[0], "blocked_by": wanted}]
+        return rows
+
+    monkeypatch.setattr(srv.client, "read", reordering_read)
+    blockers = server.workflow_project_get_blockers(blocked["slug"])
+    assert [b["slug"] for b in blockers] == wanted
+
+
 @requires_omnigraph
 def test_blocked_project_not_ready(server):
     """A project whose blocker is still active does not appear in ready list."""

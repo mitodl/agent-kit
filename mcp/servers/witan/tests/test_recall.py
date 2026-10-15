@@ -70,6 +70,27 @@ def test_recall_prunes_superseded_and_flags_contradictions(server):
 
 
 @requires_omnigraph
+def test_recall_finds_a_contradiction_split_across_read_chunks(server, monkeypatch):
+    """With one slug per read, the two ends of a pair are always in different
+    chunks, so the pair is found only if the target end is filtered locally."""
+    x = server.memory_store(
+        kind="lesson", title="x", content="quomble gadget claim one", severity="info"
+    )
+    y = server.memory_store(
+        kind="lesson", title="y", content="quomble gadget claim two", severity="info"
+    )
+    server.memory_link(x["slug"], y["slug"], "contradicts")
+    monkeypatch.setattr(server._module, "_SLUG_LIST_READ_BATCH_SIZE", 1)
+
+    out = server.recall(query="quomble gadget")
+
+    assert {x["slug"], y["slug"]} <= {m["slug"] for m in out["memories"]}
+    assert {tuple(sorted((c["a"], c["b"]))) for c in out["contradictions"]} == {
+        tuple(sorted((x["slug"], y["slug"])))
+    }
+
+
+@requires_omnigraph
 def test_recall_expands_related_neighbor(server):
     seed = server.memory_store(
         kind="pattern", title="seed", content="zylph anchor term"
