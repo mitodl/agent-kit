@@ -933,7 +933,9 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 **Arguments**:
 
 * `QUERY`: Free-text search over title and description, ranked by relevance.
-    The server caps a search at 20 hits before the other filters apply.
+    The server caps a search at 20 hits after ``--status``, ``--project``
+    and ``--assignee`` apply, and before ``--ready`` and the default
+    closed-task elision.
 
 **Parameters**:
 

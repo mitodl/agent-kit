@@ -102,6 +102,69 @@ def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
 
 
 @requires_omnigraph
+def test_task_search_project_slug_spans_repos(server):
+    """A project scope replaces the repo scope: a project's hit in another repo
+    is returned, and a matching task outside the project is not."""
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
+    elsewhere = server.task_create(
+        title="quokka narwhal in repo b",
+        description="quokka narwhal",
+        repo="https://github.com/test/b",
+        project_slug=proj["slug"],
+    )
+    server.task_create(
+        title="quokka narwhal in repo a",
+        description="quokka narwhal",
+        repo="https://github.com/test/a",
+    )
+
+    hits = server.task_search(
+        "quokka narwhal", repo="https://github.com/test/a", project_slug=proj["slug"]
+    )
+    assert [h["slug"] for h in hits] == [elsewhere["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_assignee_at_me(server):
+    mine = server.task_create(title="quokka narwhal mine", description="x", repo="")
+    theirs = server.task_create(title="quokka narwhal theirs", description="x", repo="")
+    server.task_create(title="quokka narwhal nobody", description="x", repo="")
+    server.task_claim(mine["slug"])
+    server.task_claim(theirs["slug"], assignee="someone-else")
+
+    hits = server.task_search("quokka narwhal", repo="", assignee="@me")
+    assert [h["slug"] for h in hits] == [mine["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_filters_reach_past_the_unfiltered_cap(server):
+    """The capped query returns the top 20 of the UNFILTERED search, so a
+    filter applied to those rows drops a match that ranks 21st or lower."""
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
+    for i in range(22):
+        server.task_create(
+            title=f"quokka narwhal {i}", description="quokka narwhal quokka", repo=""
+        )
+    buried = server.task_create(
+        title="unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        repo="",
+        project_slug=proj["slug"],
+    )
+    server.task_claim(buried["slug"], assignee="agentA")
+
+    unfiltered = [h["slug"] for h in server.task_search("quokka", repo="")]
+    assert len(unfiltered) == 20
+    assert buried["slug"] not in unfiltered
+
+    by_project = server.task_search("quokka", project_slug=proj["slug"])
+    assert [h["slug"] for h in by_project] == [buried["slug"]]
+    by_assignee = server.task_search("quokka", repo="", assignee="agentA")
+    assert [h["slug"] for h in by_assignee] == [buried["slug"]]
+
+
+@requires_omnigraph
 def test_task_create_returns_similar_tasks(server):
     existing = server.task_create(
         title="fix the flaky retry test", description="the retry test flakes on CI"

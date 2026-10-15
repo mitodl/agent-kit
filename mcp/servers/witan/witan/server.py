@@ -7044,11 +7044,48 @@ def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[
     return rows
 
 
+def _filtered_task_search_rows(
+    query: str,
+    repo: str | None,
+    status: str | None,
+    project_slug: str | None,
+    assignee: str | None,
+) -> list[dict]:
+    """``_search_task_rows`` narrowed by project and/or assignee, uncapped.
+
+    Reads through the uncapped query pairs, because the capped ones return the
+    top 20 of the UNFILTERED query and filtering those afterwards loses every
+    match ranked below them. A project scope replaces the repo scope, as in
+    ``task_list``: a project spans repos.
+    """
+    if assignee == _ME:
+        assignee = _holder_identity(_current_author())
+    if project_slug:
+        rows = _search_task_bm25(
+            "search_tasks_by_project", {"query": query, "project_slug": project_slug}
+        )
+    else:
+        rows = _search_task_bm25("search_tasks_all_uncapped", {"query": query})
+        detected = repo_module.detect(override=repo)
+        if detected:
+            # This repo's matches, then unscoped ones, as in _search_task_rows.
+            rows = [r for r in rows if r.get("repo") == detected] + [
+                r for r in rows if not r.get("repo")
+            ]
+    if status:
+        rows = [r for r in rows if r.get("status") == status]
+    if assignee:
+        rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
+    return rows
+
+
 @_tool
 def task_search(
     query: str,
     repo: str | None = None,
     status: TaskStatus | None = None,
+    project_slug: str | None = None,
+    assignee: str | None = None,
 ) -> list[dict]:
     """
     Plain BM25 text search over tasks (no graph expansion).
@@ -7060,19 +7097,38 @@ def task_search(
     ``task_create`` also runs it automatically and returns the top matches
     as ``similar`` in its response.
 
+    To find "the next task" in a project there is no query to rank by: use
+    ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
+    every task in it.
+
+    With ``project_slug`` or ``assignee``, the 20-hit cap applies after the
+    filters, so a match that ranks below 20 on the unfiltered query is still
+    returned.
+
     Parameters
     ----------
     query:
         Free-text search query.
     repo:
         Repo scoping — see instructions. Matches against the detected repo
-        plus unscoped tasks (``repo=None``), same as ``task_list``.
+        plus unscoped tasks (``repo=None``), same as ``task_list``. Ignored
+        when ``project_slug`` is given.
     status:
         Optional filter: ``open``, ``in_progress``, ``blocked``, or
         ``closed``. Omit to search all statuses — a closed task is still
         useful to surface (the work may already be done).
+    project_slug:
+        Search only the tasks of this WorkflowProject (``wp-`` slug), in
+        every repo.
+    assignee:
+        Search only tasks held by this owner, matched as ``task_list``
+        matches it; ``"@me"`` is the calling identity.
     """
-    return _search_task_rows(query, repo, status)[:_SEARCH_LIMIT]
+    if project_slug or assignee:
+        rows = _filtered_task_search_rows(query, repo, status, project_slug, assignee)
+    else:
+        rows = _search_task_rows(query, repo, status)
+    return rows[:_SEARCH_LIMIT]
 
 
 @_tool

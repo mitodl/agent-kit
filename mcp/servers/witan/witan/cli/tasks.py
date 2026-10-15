@@ -57,40 +57,26 @@ def _search_tasks(
 ) -> list[dict]:
     """Search hits in relevance order, narrowed by the listing filters.
 
-    Status and project are fields on the hit rows, so they filter directly.
-    Intersecting every hit with ``task_list`` instead drops real matches: with
-    no repo in scope that list is the 50 most recently updated tasks.
-    Readiness and assignee identity (e.g. ``@me``) only resolve server-side,
-    so those two still intersect with the server's own answer.
+    Status, project and assignee are ``task_search``'s own filters. Readiness
+    only resolves through ``task_ready``, so it still intersects with that.
     """
-    # A project spans repos, so don't let the search narrow it to this one.
     hits = _fn(s.task_search)(
-        query=query, repo="" if project else repo_arg, status=status
+        query=query,
+        repo=repo_arg,
+        status=status,
+        project_slug=project,
+        assignee=assignee,
     )
     if status is None:
         hits = [h for h in hits if h.get("status") != "closed"]
-    if project:
-        hits = [h for h in hits if h.get("project_slug") == project]
-    if ready:
-        allowed = _fn(s.task_ready)(
+    if not ready:
+        return hits
+    allowed_slugs = {
+        r["slug"]
+        for r in _fn(s.task_ready)(
             repo=repo_arg, project_slug=project, assignee=assignee, limit=_ALL_READY
         )
-    elif assignee:
-        # The limit matters for the same reason the docstring gives above: an
-        # unscoped `task_list` is capped at 50 IN THE QUERY and `assignee` is
-        # applied in Python after the read, so without it a real search hit
-        # gets intersected away whenever the matching task falls outside the
-        # 50 most recently updated ones.
-        allowed = _fn(s.task_list)(
-            repo=repo_arg,
-            status=status,
-            project_slug=project,
-            assignee=assignee,
-            limit=_MAX_TASK_LIMIT,
-        )
-    else:
-        return hits
-    allowed_slugs = {r["slug"] for r in allowed}
+    }
     return [h for h in hits if h["slug"] in allowed_slugs]
 
 
@@ -116,7 +102,9 @@ def tasks(
     ----------
     query:
         Free-text search over title and description, ranked by relevance.
-        The server caps a search at 20 hits before the other filters apply.
+        The server caps a search at 20 hits after ``--status``, ``--project``
+        and ``--assignee`` apply, and before ``--ready`` and the default
+        closed-task elision.
     repo:
         Scope to a specific repo URI (default: the current git repo).
     status:

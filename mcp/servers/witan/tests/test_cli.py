@@ -543,6 +543,35 @@ def test_tasks_query_with_assignee_finds_matches_older_than_the_window(
 
 
 @requires_omnigraph
+def test_tasks_query_with_project_spans_repos(server, monkeypatch):
+    """`--project` searches the project in every repo, not the current one."""
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    proj = _fn(server.workflow_project_create)(title="P", description="d", phase="spec")
+    hit = _fn(server.task_create)(
+        title="grafana dashboard",
+        description="d",
+        repo="https://github.com/test/b",
+        project_slug=proj["slug"],
+    )
+    _fn(server.task_create)(
+        title="grafana dashboard elsewhere",
+        description="d",
+        repo="https://github.com/test/a",
+    )
+
+    tasks("grafana dashboard", repo="https://github.com/test/a", project=proj["slug"])
+    table = next(c for c in captured if hasattr(c, "columns"))
+    assert _table_column(table, "slug") == [hit["slug"]]
+
+
+@requires_omnigraph
 def test_tasks_ready_honours_status_with_and_without_query(server, monkeypatch):
     """`--ready --status open` drops ready tasks in other statuses either way."""
     from witan.cli import _common
