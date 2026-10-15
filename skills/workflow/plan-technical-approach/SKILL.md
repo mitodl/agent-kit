@@ -252,7 +252,7 @@ heredoc, which drops and splices lines mid-sentence. The path is derived from
 the repo and issue, not fixed, so ask the script for it rather than guessing:
 
 ```bash
-SKILLS=./skills/workflow   # installed: ~/.claude/skills
+SKILLS=~/.claude/skills    # in-repo development: ./skills/workflow
 "$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
   --repo <owner/repo> --issue <N> --print-draft-path
 # -> ~/.cache/ol-plan/<owner>-<repo>-<N>.md

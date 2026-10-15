@@ -42,7 +42,10 @@ emit_table() {
   for f in "$dir"/[0-9]*.md; do
     [[ -e "$f" ]] || continue
     base="${f##*/}"
-    num="${base%%-*}"
+    # Accept NNNN-slug.md and a bare NNNN.md alike -- next-adr-number.sh counts
+    # both, and an index that silently drops one reports itself clean while
+    # missing an ADR.
+    num="${base%%-*}"; num="${num%.md}"
     [[ "$num" =~ ^[0-9]+$ ]] || continue
     # Read the H1 past any YAML frontmatter: this skill mandates an
     # applies_to block, so line 1 is '---', not the heading. Reading line 1

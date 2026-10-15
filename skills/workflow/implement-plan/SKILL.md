@@ -126,7 +126,7 @@ relative path, which resolves under neither when the working directory is the
 product repo:
 
 ```bash
-SKILLS=~/.claude/skills            # in-repo development: ./skills/workflow
+SKILLS=~/.claude/skills    # in-repo development: ./skills/workflow
 PTA="$SKILLS/plan-technical-approach/scripts"
 
 # Not just the first update: read before overwriting a comment this session
