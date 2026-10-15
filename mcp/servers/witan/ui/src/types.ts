@@ -127,10 +127,17 @@ export interface WorkflowProjectCore {
 	phase: WorkflowPhase;
 	status: string;
 	repos: string[] | null;
+	author: string | null;
 	/** The autonomy envelope: actions the owner approved once, for this project. */
 	preauthorized: string[] | null;
 	/** The autonomy envelope: decisions kept for a human. */
 	reserved_decisions: string[] | null;
+	/**
+	 * Who last set `preauthorized`, resolved server-side. The list is the
+	 * owner's approval only when this equals `author`.
+	 */
+	preauthorized_set_by: string | null;
+	reserved_decisions_set_by: string | null;
 }
 
 /** A row from `workflow_project_list`. */
@@ -142,9 +149,9 @@ export interface WorkflowProjectSummary extends WorkflowProjectCore {
 }
 
 /**
- * The rollup's `project`, which is an eight-field projection.
+ * The rollup's `project`, which is an eleven-field projection.
  *
- * NOT what `workflow_project_get` returns: that one carries nine more fields
+ * NOT what `workflow_project_get` returns: that one carries eight more fields
  * (see `WorkflowProjectDetail`). Sharing one interface between them made the
  * detail view unable to reach `description`, `blocked_by` or `blocks`, and
  * widening it instead would have promised the rollup fields it does not send.
@@ -156,7 +163,6 @@ export interface WorkflowProject extends WorkflowProjectCore {
 /** What `workflow_project_get` returns: the whole node. */
 export interface WorkflowProjectDetail extends WorkflowProject {
 	description: string | null;
-	author: string | null;
 	blocked_by: string[] | null;
 	/** Slugs of the projects THIS one holds back. Always present. */
 	blocks: string[];
@@ -517,8 +523,11 @@ const WORKFLOW_PROJECT_CORE: Record<string, Check> = {
 	phase: workflowPhase,
 	status: str,
 	repos: strList,
+	author: nullable(str),
 	preauthorized: strList,
 	reserved_decisions: strList,
+	preauthorized_set_by: nullable(str),
+	reserved_decisions_set_by: nullable(str),
 };
 
 const WORKFLOW_PROJECT: Record<string, Check> = {
@@ -608,7 +617,7 @@ export function isWorkflowProjectCore(
 	return matches(value, WORKFLOW_PROJECT_CORE);
 }
 
-/** The rollup's `project`: eight fields, NOT what `workflow_project_get` sends. */
+/** The rollup's `project`: eleven fields, NOT what `workflow_project_get` sends. */
 export function isWorkflowProject(value: unknown): value is WorkflowProject {
 	return matches(value, WORKFLOW_PROJECT);
 }
@@ -631,7 +640,6 @@ export function isWorkflowProjectDetail(
 	return matches(value, {
 		...WORKFLOW_PROJECT,
 		description: nullable(str),
-		author: nullable(str),
 		blocked_by: strList,
 		blocks: arrayOf(str),
 		github_issue: nullable(str),

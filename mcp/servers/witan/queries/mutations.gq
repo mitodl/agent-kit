@@ -227,6 +227,8 @@ query insert_workflow_project(
     $github_pr: String?,
     $preauthorized: [String]?,
     $reserved_decisions: [String]?,
+    $preauthorized_set_by: String?,
+    $reserved_decisions_set_by: String?,
     $created_at: DateTime,
     $updated_at: DateTime
 ) {
@@ -243,6 +245,8 @@ query insert_workflow_project(
         github_pr: $github_pr,
         preauthorized: $preauthorized,
         reserved_decisions: $reserved_decisions,
+        preauthorized_set_by: $preauthorized_set_by,
+        reserved_decisions_set_by: $reserved_decisions_set_by,
         created_at: $created_at,
         updated_at: $updated_at
     }
@@ -301,20 +305,30 @@ query update_workflow_project_fields(
 query update_workflow_project_preauthorized(
     $slug: String,
     $preauthorized: [String]?,
+    $preauthorized_set_by: String?,
     $updated_at: DateTime
 ) {
     update WorkflowProject
-        set { preauthorized: $preauthorized, updated_at: $updated_at }
+        set {
+            preauthorized: $preauthorized,
+            preauthorized_set_by: $preauthorized_set_by,
+            updated_at: $updated_at
+        }
         where slug = $slug
 }
 
 query update_workflow_project_reserved_decisions(
     $slug: String,
     $reserved_decisions: [String]?,
+    $reserved_decisions_set_by: String?,
     $updated_at: DateTime
 ) {
     update WorkflowProject
-        set { reserved_decisions: $reserved_decisions, updated_at: $updated_at }
+        set {
+            reserved_decisions: $reserved_decisions,
+            reserved_decisions_set_by: $reserved_decisions_set_by,
+            updated_at: $updated_at
+        }
         where slug = $slug
 }
 

@@ -9,6 +9,7 @@ from rich.markup import escape
 from rich.prompt import Prompt
 
 from .. import config as cfg_module
+from .. import envelope
 from ._common import (
     _STATUS_STYLE,
     ProjectStatusFilter,
@@ -107,12 +108,9 @@ def projects(
 
 def _print_envelope(p: dict) -> None:
     """The project's autonomy envelope, in full, one item per line."""
-    for key, label in (
-        ("preauthorized", "pre-authorized"),
-        ("reserved_decisions", "reserved for a human"),
-    ):
+    for key in envelope.KEYS:
         if p.get(key):
-            console.print(f"  {label}:")
+            console.print(f"  {esc(envelope.describe(p, key))}:")
             for item in p[key]:
                 console.print(f"    - {esc(item)}")
 

@@ -89,6 +89,8 @@ e.g. wp-add-vault-k8s-auth-a3f912
 | `blocked_by` | `[String]?` | denormalized blocker project slugs (drives ready-work) |
 | `preauthorized` | `[String]?` | actions an agent may take on this project without asking |
 | `reserved_decisions` | `[String]?` | decisions kept for a human; agents batch these into one list |
+| `preauthorized_set_by` | `String?` | server-resolved actor who last set preauthorized (every item in it) |
+| `reserved_decisions_set_by` | `String?` | server-resolved actor who last set reserved_decisions |
 
 ### `WorkflowSession`
 
