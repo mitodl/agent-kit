@@ -15,9 +15,8 @@ fetched 2026-10-15) and what ``codex mcp add`` itself writes (codex-cli
 - ``callback_port`` alone only sets the listener port: Codex still sends a
   redirect URI with a random path (``http://127.0.0.1:8080/callback/<id>``),
   which a client registered with a fixed loopback redirect rejects. So a
-  ``callbackPort`` without a ``callbackUrl`` also gets the
-  ``http://localhost:<port>/callback`` that Claude Code sends for the same
-  config.
+  ``callbackPort`` without a ``callbackUrl`` also gets a fixed
+  ``http://localhost:<port>/callback``.
 """
 
 from __future__ import annotations
