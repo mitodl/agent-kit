@@ -320,8 +320,10 @@ none of those words appear.
 In draft-only mode:
 
 - Fetch, check, and categorize as usual (Phases 1, 1b, 2).
-- Make fixes as local commits, one per thread or logical group, verified as
-  in Phase 3.
+- Make fixes as local commits, one per row, verified as in Phase 3, so each
+  row can be approved on its own. When one fix genuinely covers several
+  rows, give them the same commit in the table and treat them as one unit:
+  that commit goes up only when every row sharing it is approved.
 - Push nothing, post nothing, resolve nothing, and don't re-run checks. That
   covers `git push`, `resolve-thread.sh`, `resolve-threads.sh`,
   `reply-comment.sh`, `gh run rerun`, the pre-commit.ci autofix comment, and
@@ -342,25 +344,46 @@ proposed reply is the exact text that would be posted, in Phase 4's reply
 style, so approving the row approves the words.
 
 When the user approves (all rows, some rows, or rows with edited wording),
-carry out only the approved rows. If every row with a local commit was
-approved, push as usual. Otherwise a plain `git push` would also send the
-unapproved commits sitting between the approved ones, so push only the
-approved ones:
+carry out only the approved rows.
+
+First confirm where the PR's head lives, since `origin` isn't it on a fork
+PR. `gh pr view <pr> --json headRepository,headRefName,isCrossRepository`
+names the head repo (`headRepository.nameWithOwner`) and branch; find the
+local remote whose URL matches it
+(`git remote -v`) and use that remote and branch below. Stop and ask if
+none matches.
+
+If every row with a local commit was approved, push the branch to that
+remote and branch as usual. Otherwise a plain `git push` would also send the
+unapproved commits sitting between the approved ones, so build the approved
+subset on its own:
 
 ```bash
-git switch -c approved-push @{upstream}
+git fetch <head-remote> <head-branch>
+git switch -c approved-push FETCH_HEAD
 git cherry-pick <approved sha> <approved sha> ...   # in their original order
-git push origin approved-push:<pr-branch>
-git switch <pr-branch>
+```
+
+Phase 3 verified the full draft branch, not this subset. An approved commit
+can apply cleanly yet depend on a helper from an unapproved one, so re-run
+the scoped tests on `approved-push` before pushing. If they fail because of
+a dependency on an unapproved commit, stop and tell the user which commit
+the approved fix needs. Then push and put the remaining commits back on
+top:
+
+```bash
+git push <head-remote> approved-push:<head-branch>
+git switch <local-branch>
 git rebase approved-push   # drops the already-pushed patches, leaves the unapproved commits on top
 git branch -D approved-push
 ```
 
-Cherry-picking gives the approved commits new SHAs, so update the SHAs in
-the approved reply text to the pushed ones before posting. Then reply and
-resolve with the usual scripts, `--dry-run` first for any batch. Rows that
-weren't approved stay as they are; say which ones remain and which local
-commits are still unpushed.
+Reply and resolve only after the push succeeds. Cherry-picking gives the
+approved commits new SHAs, so update the SHAs and the test evidence in the
+approved reply text to the pushed commits and the subset's test run before
+posting. Then reply and resolve with the usual scripts, `--dry-run` first
+for any batch. Rows that weren't approved stay as they are; say which ones
+remain and which local commits are still unpushed.
 
 ## Phase 4 — Reply & resolve
 
