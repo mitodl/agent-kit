@@ -857,12 +857,9 @@ query list_all_projects() {
     limit 1000000
 }
 
-// get_project_blockers: returns all WorkflowProject nodes whose slug appears in
-// the blocked_by list of the project identified by $slug.
-// Since blocked_by is a list and list membership isn't a graph match-filter,
-// the server fetches the target project's blocked_by list then resolves each
-// blocker slug individually in Python (see workflow_project_get_blockers).
-// This query is the single-slug resolver used in that loop.
+// One project's status and blockers, for `_project_blocker_status`'s cached
+// per-blocker lookup. `workflow_project_get_blockers` reads all of a project's
+// blockers at once with `get_workflow_projects_by_slugs` below.
 query get_workflow_project_by_slug($slug: String) {
     match {
         $p: WorkflowProject { slug: $slug }
