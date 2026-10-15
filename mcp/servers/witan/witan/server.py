@@ -868,6 +868,7 @@ _ME = "@me"
 # same way ``_lease_expired`` is above.
 _SESSION_SUFFIX_RE = readiness.SESSION_SUFFIX_RE
 _holder_identity = readiness.holder_identity
+_same_person = readiness.same_person
 _session_suffix = readiness.session_suffix
 
 
@@ -948,18 +949,6 @@ def _holder_matches(recorded: str | None, wanted: str | None) -> bool:
     if _is_qualified(wanted):
         return False
     return _holder_identity(recorded) == wanted
-
-
-def _same_person(a: str | None, b: str | None) -> bool:
-    """Whether two holder strings name the same person, whatever the session.
-
-    Deliberately *not* ``_holder_matches``: this asks about two holders rather
-    than matching a row against a filter, and the answer must ignore the
-    qualifier on both sides. ``task_release`` is the caller — releasing a claim
-    that another of your own sessions took is a handover, not a steal, so it
-    should not need ``force``, while another person's still should.
-    """
-    return _holder_identity(a) == _holder_identity(b)
 
 
 def _lease_expiry(lease_started_at: str | None) -> str | None:
@@ -6806,8 +6795,10 @@ def task_comment(slug: str, text: str) -> dict:
     context. Flat and permanent: no threading, no editing, no deleting.
 
     NOT for your own execution notes on your own task (that is the task's
-    ``description`` or ``resolution``), and not for reusable repo knowledge
-    (that is ``memory_store`` — a comment is read once by one executor).
+    ``description`` or ``resolution``), except the one-line ``checkpoint``
+    the witan-task skill has a holder leave after each durable step so a
+    cut-off run can resume. And not for reusable repo knowledge (that is
+    ``memory_store`` — a comment is read once by one executor).
 
     Parameters
     ----------

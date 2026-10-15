@@ -82,6 +82,69 @@ next to — a task that says "add a check that fails during `pulumi preview`" an
 carries a comment saying that preview never runs on those pipelines is not a
 task to execute as written.
 
+## Checkpoint as you go
+
+A long run can be cut off at any step (spend limit, network error, machine
+sleep, OOM kill), and the next session to claim the task has to work out how
+far the last one got. Leave it a trail. After each durable step, post one
+`task_comment` on the task you hold, as a single line:
+
+```text
+checkpoint <step>: <ref or exact command> | next: <action>
+```
+
+`<step>` is one of:
+
+- `branch`: the branch exists (its name).
+- `change`: the change is committed (branch @ short sha).
+- `validated`: tests and hooks passed (the command you ran).
+- `pushed`: the branch is on the remote (branch @ short sha).
+- `pr-opened`: the PR exists (its URL).
+- `review-requested`: reviewers are asked (who).
+- `blocked`: you cannot go on (what is missing, and who can unblock it).
+
+e.g.
+
+```text
+checkpoint pushed: tm/task-search-filters @ 3f2a1c9 | next: gh pr create --base main --fill-first
+```
+
+Durable steps only, not every edit. A checkpoint names state that outlives
+your session (a branch, a pushed commit, a PR), which is the only state a
+successor can check. Give the exact ref or command, so the next session can
+run it instead of reconstructing it. Checkpoints are the one kind of execution
+note that belongs in a comment rather than the description: comments are
+append-only and attributed, so the trail survives a rewrite.
+
+Your own checkpoints do not come back to you as new comments in the injected
+session context. The hook skips `checkpoint ` comments whose author is the
+task's holder, matched by person across all of your sessions. A teammate's
+checkpoint on a task you hold still shows.
+
+### Resuming from a checkpoint
+
+When a task you claim already has comments:
+
+1. Find the last `checkpoint` comment.
+2. Check it against live state before acting on it. Fetch first: you may be
+   in a different clone from the session that pushed, and a stale
+   remote-tracking ref would read as "never pushed".
+
+   ```bash
+   git fetch origin <branch>    # fails if the branch was never pushed
+   git branch -a --list '<branch>' 'origin/<branch>'
+   git log origin/<branch> -1 --format='%h %s'
+   gh pr view <branch> --json state,isDraft,url
+   ```
+
+3. Resume from the first step that live state does not confirm. Where the
+   comment and live state disagree (the push never landed, the PR was closed),
+   live state wins. Post a new checkpoint saying what you found before going
+   on.
+
+Any comment after the last checkpoint still outranks the description, as
+above, and can change what `next` should be.
+
 ## Comment on someone else's task
 
 When you find a problem with a task you are not executing, say it on the task:

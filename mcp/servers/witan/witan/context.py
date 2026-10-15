@@ -488,6 +488,9 @@ _HELD_TASK_LIMIT = 3
 _COMMENT_RENDER_LIMIT = 5
 _COMMENT_PREVIEW_CHARS = 400
 
+# The witan-task skill's checkpoint line: `checkpoint <step>: <ref> | next: <action>`.
+_CHECKPOINT_PREFIX = "checkpoint "
+
 
 def _held_by(rows: list[dict], author: str | None) -> list[dict]:
     """The ``in_progress`` tasks among ``rows`` that ``author`` holds.
@@ -509,6 +512,22 @@ def _held_by(rows: list[dict], author: str | None) -> list[dict]:
         if r.get("status") == "in_progress"
         and readiness.holder_identity(r.get("assignee")) == author
     ]
+
+
+def _is_own_checkpoint(comment: dict, holder: str | None) -> bool:
+    """Whether ``comment`` is a ``checkpoint`` note the task's holder left.
+
+    The witan-task skill has the holder leave one after each durable step so a
+    cut-off run can resume. Surfaced here, each would come straight back on the
+    holder's next prompt as a "new comment" to act on. The skill reads them at
+    claim time instead, so only the holder's own are skipped: a teammate's
+    checkpoint on work you now hold is still news. Matched by person, not
+    session, because the comment records the bare identity while the holder
+    carries a ``#session`` qualifier.
+    """
+    return (comment.get("body") or "").startswith(
+        _CHECKPOINT_PREFIX
+    ) and readiness.same_person(comment.get("author"), holder)
 
 
 def _held_task_comments(
@@ -541,7 +560,12 @@ def _held_task_comments(
             _dbg_exc(debug, f"comment read failed for {task['slug']!r}")
             continue
         delivered = set(seen.get(task["slug"]) or ())
-        unread = [c for c in comments if c.get("slug") not in delivered]
+        unread = [
+            c
+            for c in comments
+            if c.get("slug") not in delivered
+            and not _is_own_checkpoint(c, task.get("assignee"))
+        ]
         if unread:
             out.append((task, unread))
     _dbg(debug, f"held={len(held)} task(s) with unread comments={len(out)}")

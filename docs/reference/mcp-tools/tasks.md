@@ -248,8 +248,10 @@ and, for a task the holder's session is actively working, in their injected
 context. Flat and permanent: no threading, no editing, no deleting.
 
 NOT for your own execution notes on your own task (that is the task's
-``description`` or ``resolution``), and not for reusable repo knowledge
-(that is ``memory_store`` — a comment is read once by one executor).
+``description`` or ``resolution``), except the one-line ``checkpoint``
+the witan-task skill has a holder leave after each durable step so a
+cut-off run can resume. And not for reusable repo knowledge (that is
+``memory_store`` — a comment is read once by one executor).
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
