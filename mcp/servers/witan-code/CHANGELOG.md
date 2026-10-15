@@ -8,6 +8,32 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.25.0] - 2026-10-15
+
+### Changed
+
+- `witan-code cleanup` no longer defaults to `--keep 10`. From omnigraph 0.12
+  `--keep` counts graph commits per live branch, not versions per table, so
+  that default would cut a store to its last ten writes. With neither bound
+  it now keeps the last 30 days, as the Stop hook does. The help text
+  describes both bounds in graph commits. `--older-than` on its own
+  no longer adds an implicit `--keep 10`.
+- The refusal for a shared cluster graph notes that from omnigraph 0.12
+  compaction is also refused while the server holds the cluster's `serve`
+  lock.
+
+- Requires witan-core 0.41 or later, the first release on omnigraph 0.13.
+  Every deployed omnigraph server is on 0.13 and refuses a client that does
+  not send `Omnigraph-Http-Api: 0.13`.
+
+### Fixed
+
+- `reap-views` ages a graph's views concurrently, `WITAN_CODE_VIEW_SURVEY_WORKERS` at a time (default 8; `1` is serial). Ageing a view is one `commit list --branch` that returns its whole reachable history, and serially production's 309-view bridge graph took 327s on its own, pushing the reaper CronJob past its 600s deadline; 8 workers take it to 50s. Each graph now also prints a `surveying views` line before its survey, so a job killed mid-sweep shows which graph it was on.
+
+- A cluster graph that is not served is recognised on omnigraph 0.13, whose
+  404 says `graph not found` without the quoted id. It was reported as an
+  unreachable cluster.
+
 ## [0.24.0] - 2026-10-02
 
 ### Added

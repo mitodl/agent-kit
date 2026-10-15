@@ -8,6 +8,56 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.41.0] - 2026-10-15
+
+### Added
+
+- The witan UI has an Assignee filter beside Repo and Project: a checkbox per person plus Unassigned, with Clear. It narrows the Board, Timeline, Search results and a project's task table to the selected people, and the Projects list to projects that contain at least one of their tasks. Waves dims the other tasks instead of dropping them, because removing one would renumber the waves behind it. A claim's session qualifier (`<email>#<session>`) is stripped, so one person is one checkbox, and a task whose claim has lapsed still counts as held by its assignee. The selection is carried in the URL as repeated `assignee=` parameters, so a filtered view is linkable.
+- While an Assignee filter is on, or its menu is open, the Projects tab also reads every task (three `task_list` calls per poll, four with Closed on), so the menu has people to offer and the list has tasks to narrow by. With neither, the landing tab reads no tasks. The status bar reports that read when it fails, and Refresh re-runs it with the project list.
+
+### Changed
+
+- `witan cleanup` no longer defaults to `--keep 10`. From omnigraph 0.12
+  `--keep` counts graph commits per live branch, not versions per table, so
+  that default would cut a store to its last ten writes. With neither bound
+  it now keeps the last 30 days, as the Stop hook does. The help text
+  describes both bounds in graph commits. `--older-than` on its own
+  no longer adds an implicit `--keep 10`.
+- `witan optimize` and `witan cleanup` say why they do nothing for a deployed
+  (`http(s)`) graph: they are direct-storage commands, and from omnigraph 0.12
+  they are refused while the server holds the cluster's `serve` lock.
+
+- `witan migrate storage` converts the store in place with `omnigraph upgrade`
+  when the current binary offers that route, which omnigraph 0.13 does for a
+  format-9 store written by 0.11. Commit history and branches are kept and no
+  old binary is needed. A copy of the store is taken first as
+  `<store>.pre-migrate`. Older stores are still rebuilt by export and load.
+  Passing `OLD_BINARY` forces the rebuild. The result carries `method`:
+  `upgrade` or `rebuild`.
+
+- Requires witan-core 0.41 or later, the first release on omnigraph 0.13.
+  Every deployed omnigraph server is on 0.13 and refuses a client that does
+  not send `Omnigraph-Http-Api: 0.13`.
+
+### Removed
+
+- The web UI no longer keeps oidc-spa's `crypto.subtle` polyfill alive under
+  vite 8, so login over plain http on a non-loopback host no longer works.
+  https and loopback (`localhost`, `127.0.0.1`) are unaffected: browsers give
+  them `crypto.subtle` natively, and the polyfill is never loaded there.
+
+### Fixed
+
+- `task_claim`'s post-write verification no longer compares graph commit ids
+  as strings. From omnigraph 0.12 an id is `hb1.<block>.<slot>.<nonce>` with a
+  decimal slot, so from the tenth write in a block a newer commit sorted as
+  older and the catch-up check retried to its cap, or trusted a stale read.
+  The ids are parsed: slot order within a block, the commits' own ULIDs
+  otherwise.
+
+- The commit id parser refuses a history-block slot of 16384 or more, which
+  omnigraph cannot emit. It was accepted and ordered as a real commit.
+
 ## [0.40.1] - 2026-10-02
 
 ### Changed

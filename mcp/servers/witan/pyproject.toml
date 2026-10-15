@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.40.1"
+version = "0.41.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -216,7 +216,14 @@ dependencies = [
   # warning when Pi cannot load MCP servers, and `witan_core.cli.report_install`
   # only prints `InstallResult.prerequisites` from 0.40.0. It reads the field
   # with getattr, so 0.39 imports and runs — and silently drops the warning.
-  "witan-core[cli,remote,observability,sentry]>=0.40,<1",
+  #
+  # ★ >=0.41 IS A COMPATIBILITY FLOOR: 0.41.0 pins omnigraph 0.13 (storage
+  # format 14) and sends `Omnigraph-Http-Api: 0.13`. Every deployed server is
+  # on 0.13, which answers a request without that header with `400
+  # api_contract_mismatch`, and `witan migrate storage`'s in-place upgrade
+  # needs the 0.13 binary. 0.40 imports and runs, then fails on the first
+  # request to the deployed graph.
+  "witan-core[cli,remote,observability,sentry]>=0.41,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -283,7 +290,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.40.1"
+current_version = "0.41.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

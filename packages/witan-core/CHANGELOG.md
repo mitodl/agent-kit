@@ -8,6 +8,62 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.41.0] - 2026-10-15
+
+### Added
+
+- The pooled HTTP transport sends `Omnigraph-Http-Api: 0.13` on every request.
+  omnigraph-server 0.13 answers `400 api_contract_mismatch` without it; 0.11
+  ignores it.
+- The transport checks the same header on responses before decoding the body.
+  A response stamped with another contract is terminal. Once the pinned
+  storage format reaches 14, a response with no stamp is too (a successful
+  one, or any refusal of a write), because without the server's stamp a
+  429/503/409 no longer proves nothing was applied. A read that failed
+  unstamped keeps its ordinary classification, since repeating a read is safe.
+
+### Changed
+
+- `OmnigraphClient.cleanup`'s documentation describes `keep` as omnigraph
+  0.12+ does: the newest N graph commits of every live branch, where 0.11
+  counted versions per table. The arguments passed to the CLI are unchanged.
+
+- The pinned omnigraph binary moves from 0.11.0 to 0.13.0, and the declared
+  storage format from 9 to 14. 0.13 reads only format 14, so a local store
+  written by 0.11 has to go through `witan migrate storage` after
+  `witan setup` installs the new binary, and every deployed graph is rebuilt
+  in the cutover.
+- With the format at 14, `omnigraph_http.RESPONSE_CONTRACT_REQUIRED` is on.
+  A successful response, or any refusal of a write, that carries no
+  `Omnigraph-Http-Api: 0.13` stamp is a contract violation. Against a 0.11
+  server a client on this release cannot decode reads, and its writes are
+  applied and reported as indeterminate, so the server moves first.
+
+### Fixed
+
+- `now_iso()` emits millisecond precision. omnigraph 0.12 and later refuse a
+  `DateTime` with non-zero fractional digits past the third, which every
+  timestamp witan wrote carried. 0.11 already truncated them on write, so
+  stored values do not change.
+
+- `reported_internal_schema()` reads omnigraph 0.13's version line,
+  `internal-schema 14 (serves v14 to v14)`. It took the last token as the
+  number and raised `ValueError` on it.
+- A failed CLI call's error is read from stdout when stderr is empty. On
+  omnigraph 0.13 a server-backed read made with `--format json` prints its
+  failure as JSON on stdout, so those failures were classified as fatal and
+  raised with no message.
+- The 0.13 CLI's "server discovery connection failed … this data request was
+  not sent" is recognised as an unreachable server and waited out, as
+  `tcp connect error` was.
+- A `503 graph_unavailable` for a blocked graph ("an operator must apply an
+  explicit correction or restart") fails at once. Over HTTP it was retried
+  for the whole restart budget, and a blocked graph stays blocked until the
+  next restart. The loading and transitioning 503s are still waited for, now
+  over the CLI as well.
+- CLI exit code 75, and a read that fails with the `too_many_requests` code,
+  are classified as the admission cap.
+
 ## [0.40.1] - 2026-09-28
 
 ### Changed
