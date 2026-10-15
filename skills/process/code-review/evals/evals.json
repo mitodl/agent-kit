@@ -24,6 +24,24 @@
 				"The failure scenario names the delete/replace of the existing bucket",
 				"The fix offers keeping the original name or ResourceOptions(aliases=...)"
 			]
+		},
+		{
+			"id": 3,
+			"prompt": "Deep review of mitodl/example-reports PR #42. The PR body is in evals/files/gateway-auth/pr-description.md and the diff is evals/files/gateway-auth/export.diff. The app's gateway and service config from mitodl/ol-infrastructure is in evals/files/gateway-auth/ol-infrastructure/applications/example_reports/__main__.py; treat that directory as the local checkout of the companion repo.",
+			"expected_output": "The skeptic pass runs. A candidate that export_enrollments has no authentication check appears under Dropped, refuted by the APISIX route that applies openid-connect with unauth_action=\"deny\" and bearer_only to /api/v1/reports/* in front of a ClusterIP-only service, not by the PR description's word alone. The days query parameter reaching timedelta() as a str (TypeError, a 500 on ?days=30) stays in the findings table as upheld.",
+			"files": [
+				"evals/files/gateway-auth/pr-description.md",
+				"evals/files/gateway-auth/export.diff",
+				"evals/files/gateway-auth/ol-infrastructure/applications/example_reports/__main__.py"
+			],
+			"expectations": [
+				"The skeptic pass runs, either in fresh-context subagents or with the report noting \"skeptic pass ran inline\"",
+				"The report has a Dropped section placed after the findings table",
+				"The missing-authentication candidate for export_enrollments appears under Dropped and not in the findings table",
+				"The Dropped entry cites the ol-infrastructure route config (openid-connect with unauth_action=\"deny\" on /api/v1/reports/*) as evidence, not only the PR description",
+				"The days query parameter passed to timedelta() as a str is reported in the findings table as a correctness finding with ?days=N producing a TypeError, and is not dropped",
+				"No Dropped entry gives \"could not reproduce\" as its only reason"
+			]
 		}
 	]
 }

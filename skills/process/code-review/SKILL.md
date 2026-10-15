@@ -9,7 +9,7 @@ description: >
   Copilot, OpenCode) — needs only `git diff` and a rubric, no MCP or witan
   dependency. Use this skill when asked to "review this diff", "review my
   branch", "code review PR #N", "review the changes", "check this for
-  bugs", "security review this", "does this actually do what the ticket
+  bugs", "security review this", "deep review", "does this actually do what the ticket
   asks", or to review staged/unstaged changes before opening a PR.
   Report-only by default; only edits code when the request explicitly says
   to fix the findings too.
@@ -125,6 +125,8 @@ lower-confidence and its `Failure scenario` states plainly what's
 unconfirmed and why (see the lower-confidence row in
 [references/findings-format.md](references/findings-format.md#worked-example)).
 The drop-if-unreproduced rule is a default-depth rule, not a universal one.
+A widened pass also runs the [skeptic pass](#skeptic-pass-optional), which
+challenges every kept finding before the report ships.
 
 Effort follows the diff, not the reviewer's curiosity. Look for findings in
 the diff and one hop out from it; reach further (another repo, upstream
@@ -217,6 +219,68 @@ number and the specific case the diff fails, then confirming that case
 isn't handled elsewhere: an unchanged file, config, or a follow-up commit
 on the branch.
 
+## Skeptic pass (optional)
+
+Off by default, so a quick review costs what it always has. It runs when
+the request widens [Depth](#depth) ("deep review", "be thorough", "don't
+hold back") or asks for the findings to be challenged ("double-check the
+findings", "have someone try to poke holes in these").
+
+The reviewer who drafted a finding is badly placed to see why it's wrong.
+Findings withdrawn after human review are mostly cross-repo: an API status
+the backend never returns, auth enforced at the gateway, a documented QA
+identifier taken for a secret, or a behavior the PR chose on purpose. The
+skeptic pass puts each finding in front of a fresh reader whose only job
+is to refute it.
+
+It runs after the verification pass, on every candidate that survived it.
+Each skeptic is briefed with
+[references/skeptic-brief.md](references/skeptic-brief.md) and gets only:
+
+- the finding (summary, file:line, severity, failure scenario) and the
+  diff hunk it points at
+- the PR description and linked issue bodies collected under [Stated
+  goals](#stated-goals), so intentional-design claims can be checked
+  against what the author wrote
+- the path to the checkout, and the companion repos the claim depends on
+
+Not the other findings, and not the reasoning that produced this one.
+
+Companion repos matter when the claim turns on another service: the status
+codes an API returns, auth applied at a gateway route, a config default set
+by infrastructure. Name the repo in the brief. The skeptic looks for a
+local checkout first (a sibling of this repo's root, e.g. under `~/code`),
+otherwise shallow-clones it into a scratch directory (`git clone --depth
+1`) and deletes the clone when done. Where cross-repo code-graph tools are
+available (witan-code's `code_interface_*`), it may use them; otherwise it
+greps the checkout. Neither is required.
+
+Fan-out: with a subagent facility, run one subagent per group of
+candidates, at most 6 at once, grouping candidates on the same file or
+function into one subagent so cost tracks the number of places touched,
+not the number of findings. Without one, run the skeptic inline: once all
+findings are drafted, take each group in turn under the same brief as a
+separate pass, and say "skeptic pass ran inline" in the report. The inline
+pass still has the drafting reasoning in view, so hold it to the brief's
+refutation rules strictly.
+
+Each skeptic returns `upheld`, `refuted`, or `uncertain` per finding, with
+evidence (a file:line or a command and its output). Before applying a
+verdict, re-read the evidence it cites; a refutation whose evidence doesn't
+say what the skeptic claims counts as `uncertain`. Then:
+
+- `upheld`: the finding stays as drafted.
+- `refuted`: the finding moves to the Dropped section with the reason and
+  the evidence.
+- `uncertain`: the finding stays, its severity tagged `(contested)` and
+  the skeptic's argument added to its failure scenario.
+
+When the skeptic pass runs, the report always has a Dropped section, after
+the findings table. It also lists candidates the verification pass removed,
+so a deep review shows everything it considered. If nothing was dropped, it
+says "nothing dropped". Format:
+[references/findings-format.md](references/findings-format.md#dropped-and-contested-findings).
+
 ## Findings format
 
 Flat, severity-ordered markdown table:
@@ -258,3 +322,7 @@ Needs `git` (always) and, for PR-number targets or fetching goals from
 linked issues, `gh` authenticated against those repos. No MCP server, no witan dependency, no repo-specific
 tooling beyond that — the scope-resolution rules above work from any
 checkout.
+
+A subagent tool is optional. The skeptic pass uses one where the platform
+provides it and otherwise runs inline, as described under [Skeptic
+pass](#skeptic-pass-optional).

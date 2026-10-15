@@ -54,3 +54,34 @@ a thorough pass), a lower-confidence row still gets `Failure scenario`
 filled in, just noted as uncertain in the summary:
 
 | 5 | low (uncertain) | `importers/batch.py:34` | Possible race if two imports for the same account run concurrently | Not confirmed — no lock or transaction observed around the account balance update; would need a concurrent-request test to verify, flagging for awareness rather than asserting as confirmed |
+
+## Dropped and contested findings
+
+When the [skeptic pass](../SKILL.md#skeptic-pass-optional) runs, its
+verdicts change the report in two ways.
+
+A finding the skeptic left `uncertain` stays in the table, its severity
+tagged `(contested)` and the skeptic's argument appended to the failure
+scenario:
+
+| 6 | medium (contested) | `importers/views.py:41` | Import reports success when the ledger API accepts only part of a batch | `ledger.post_batch()` returning `207` passes the `status < 300` check, so a partial write returns 200 to the caller. Skeptic: the ledger service's handlers return only 200, 400 and 500, and no 207 path was found there, but the proxy in front of it wasn't in any checkout, so a 207 from that layer can't be ruled out |
+
+A finding the skeptic refuted moves to a Dropped section after the table,
+one line each: the finding, which pass dropped it, why, and the evidence.
+The section also lists candidates the verification pass removed. It is
+always present when the skeptic pass ran; if nothing was dropped, it says
+"nothing dropped".
+
+### Dropped
+
+- `importers/views.py:18` _Import endpoint has no authentication check_
+  (skeptic). Auth is enforced at the gateway: the route in
+  `ol-infrastructure/src/ol_infrastructure/applications/importer/__main__.py:88`
+  applies `openid-connect` with `unauth_action="deny"` to
+  `/api/v1/import*`, the only route to the service, and the PR description
+  says so.
+- `importers/batch.py:71` _Retry loop can run forever_ (verification).
+  `max_attempts` is enforced by the only caller, `importers/tasks.py:19`.
+
+If the skeptic ran inline (the fallback when the platform has no subagent
+tool), the report says "skeptic pass ran inline" above the table.
