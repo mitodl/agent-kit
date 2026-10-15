@@ -968,6 +968,14 @@ def _mirror_adrs(mapping: dict[str, str]) -> None:
         source_rel = str(path.relative_to(REPO_ROOT))
         dest_rel = f"explanation/decisions/{path.name}"
         body = rewrite_links(path.read_text(), source_rel, dest_rel, mapping)
+        # Strip YAML frontmatter. ADRs carry machine metadata (`applies_to`
+        # globs, read by the write-adr/implement-plan skills) that is for
+        # agents working in the repo, not for site readers -- and the banner is
+        # PREPENDED, so leaving it would render the block as a horizontal rule,
+        # raw `applies_to:` text, and another rule partway down the page.
+        if body.startswith("---\n"):
+            _, _, body = body.partition("\n---\n")
+            body = body.lstrip("\n")
         emit(DOCS / dest_rel, MIRROR_BANNER.format(source=source_rel) + body)
 
     if dupes := {n: f for n, f in by_number.items() if len(f) > 1}:

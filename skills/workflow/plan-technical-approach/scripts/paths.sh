@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Shared file locations for the plan-comment scripts.
 #
-# Sourced by the scripts here, and by implement-spec, which updates the same
+# Sourced by the scripts here, and by implement-plan, which updates the same
 # comment at every phase and chunk boundary. The cache directory is named for
 # the artifact rather than for either skill, so renaming a skill does not
 # orphan in-flight drafts.

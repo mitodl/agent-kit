@@ -66,5 +66,5 @@ phase is what *this* session is doing and need not equal the project's.
 Two more things happen in the graph later, and are documented where they
 happen, not here: [`plan-technical-approach`](../../plan-technical-approach/SKILL.md)
 writes the epic and per-chunk child tasks when a plan is recorded, and
-[`implement-spec`](../../implement-spec/SKILL.md) closes them as each chunk
+[`implement-plan`](../../implement-plan/SKILL.md) closes them as each chunk
 merges and ends the session.

@@ -23,9 +23,9 @@ Typical: a copy or color fix, an off-by-one, a missing null guard, a version
 bump with no API change, adding a log line.
 
 **Route:** [`plan-technical-approach`](../../plan-technical-approach/SKILL.md),
-fast path. No spec.
+fast path. No ADR.
 
-## Tier 2 — Needs a spec
+## Tier 2 — Has a decision worth recording
 
 Any one of these is enough:
 
@@ -40,7 +40,15 @@ Any one of these is enough:
 - It touches auth, permissions, payments or PII at all.
 - It involves pulling in new dependencies
 
-**Route:** [`write-spec`](../../write-spec/SKILL.md).
+**Route:** [`plan-technical-approach`](../../plan-technical-approach/SKILL.md),
+full path — alternatives generated and scored first, then
+[`write-adr`](../../write-adr/SKILL.md) records what was decided. The order
+matters: an ADR's `## Options Considered` is the *output* of scoring, so a
+record written before the scoring documents a preference rather than a
+decision.
+
+This tier means the work contains at least one decision a future reader will
+ask *why* about. It may produce one ADR, or several — one per decision.
 
 ## Tier 3 — Unknowable
 
@@ -118,8 +126,8 @@ tier you assumed before. The findings change the grounding the triage rests on,
 and all three outcomes are live:
 
 - The answer made it straightforward → **trivial**, take the fast path, and do
-  not write a spec nobody needs.
+  not write an ADR nobody needs.
 - The answer settled the unknown but the work is still substantial → **needs a
-  spec**, now with a fact in it instead of a hole.
+  decision worth recording**, now with a fact in it instead of a hole.
 - The answer revealed the premise was wrong → the off-ramp. Report it and stop;
   a spike that kills a bad plan has paid for itself.

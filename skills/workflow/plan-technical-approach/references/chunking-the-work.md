@@ -189,10 +189,9 @@ cannot infer it from the diff.
 
 ## Recording it
 
-**Where the plan lives**: a Delivery section in `TECHNICAL.md` for spec'd work,
-or in the plan comment for fast-path work — see
-[`plan-comment-format.md`](plan-comment-format.md). One or the other, never
-both; two chunk tables drift.
+**Where the plan lives**: a Delivery section in the plan comment — see
+[`plan-comment-format.md`](plan-comment-format.md). One chunk table, in one
+place; two drift.
 
 **In witan**, when there is more than one chunk, mirror the shape:
 

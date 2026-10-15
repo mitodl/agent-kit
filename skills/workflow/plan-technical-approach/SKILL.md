@@ -22,14 +22,14 @@ metadata:
 
 **Planning only. This skill writes no code** — it ends when an approach is
 approved and recorded, which is what
-[`implement-spec`](../implement-spec/SKILL.md) then reads.
+[`implement-plan`](../implement-plan/SKILL.md) then reads.
 
 | File | Purpose |
 |------|---------|
 | [`references/ranking-rubric.md`](references/ranking-rubric.md) | Six criteria, the tradeoff ledger, the workaround follow-up issue |
 | [`references/analyst-brief.md`](references/analyst-brief.md) | The verbatim brief handed to the scoring context |
 | [`references/chunking-the-work.md`](references/chunking-the-work.md) | One PR or several: size budget, split axes, stacked vs independent |
-| [`references/plan-comment-format.md`](references/plan-comment-format.md) | The issue comment, its marker contract, and the short form for spec'd work |
+| [`references/plan-comment-format.md`](references/plan-comment-format.md) | The issue comment, which is the work record, and its marker contract |
 | `scripts/fetch-plan-comment.sh` | Read-only: find the plan comment on an issue |
 | `scripts/upsert-plan-comment.sh` | Create or update it in place |
 
@@ -47,12 +47,12 @@ approved and recorded, which is what
 | Entry | Behavior |
 |---|---|
 | **Fast path** — scoping called the work trivial | Skip Steps 1–3. One obvious approach, short plan comment, no spec, no ledger. Go to Step 4. |
-| **Full path** — there is a spec from [`write-spec`](../write-spec/SKILL.md) | All steps. The output fills that spec's `TECHNICAL.md`. |
+| **Full path** — scoping found a decision worth recording | All steps. The chosen approach and its alternatives feed the ADR(s) written by [`write-adr`](../write-adr/SKILL.md); delivery stays in the plan comment. |
 
-Arriving with non-trivial work and no spec, go to
-[`write-spec`](../write-spec/SKILL.md) first rather than proceeding — the
-product question has to be settled before the technical answer is worth
-anything.
+Scoring comes first, then the record: run Steps 1–4, then hand the chosen
+approach and the rejected alternatives to [`write-adr`](../write-adr/SKILL.md),
+which turns them into `## Decision` and `## Options Considered`. An ADR written
+before the alternatives were scored records a preference, not a decision.
 
 ---
 
@@ -241,11 +241,13 @@ discovered_from=["<this work's task slug>"])`.
 
 **Where the plan lands depends on the route:**
 
-- **Spec'd work** → fill `TECHNICAL.md` from the spec directory. That is the
-  source of truth. The issue comment becomes a pointer plus status.
-- **Fast-path work** → the issue comment is the plan, in its short form.
+- **The plan comment is the work record** — chunks, phases, status, the
+  tradeoff ledger. Always, on both paths.
+- **Decisions worth recording go to [`write-adr`](../write-adr/SKILL.md)**, one
+  ADR per decision, zero on the fast path. The comment links to any that were
+  written; it does not restate them.
 
-Either way, write the comment body to the draft path with your file-writing
+Write the comment body to the draft path with your file-writing
 tool — never a heredoc, which drops and splices lines mid-sentence — then:
 
 ```bash
@@ -272,4 +274,4 @@ Note that `task_update` cannot set `blocked_by` after creation — `task_link` i
 the only way to add the dependency later. A single chunk needs no epic.
 
 Advance the project to `implementation` with `workflow_project_advance`, then
-hand off to [`implement-spec`](../implement-spec/SKILL.md).
+hand off to [`implement-plan`](../implement-plan/SKILL.md).

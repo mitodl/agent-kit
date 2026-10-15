@@ -86,18 +86,18 @@ extract-style-profile           = "skills/workflow/extract-style-profile/SKILL.m
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
-implement-spec                  = "skills/workflow/implement-spec/SKILL.md"
+implement-plan                  = "skills/workflow/implement-plan/SKILL.md"
 plan-technical-approach         = "skills/workflow/plan-technical-approach/SKILL.md"
 pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
 renovate-security-triage        = "skills/process/renovate-security-triage/SKILL.md"
 run-canary-locally              = "skills/process/run-canary-locally/SKILL.md"
-screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
 scope-work                      = "skills/workflow/scope-work/SKILL.md"
+screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
 uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
 validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.md"
 vault-k8s-auth                  = "skills/infrastructure/vault-k8s-auth/SKILL.md"
 verify-before-claiming          = "skills/workflow/verify-before-claiming/SKILL.md"
-write-spec                      = "skills/workflow/write-spec/SKILL.md"
+write-adr                       = "skills/workflow/write-adr/SKILL.md"
 
 # Puts verify-before-claiming's rules in context at session start, where a
 # skill alone only loads when a request matches its description. Codex runs
@@ -124,9 +124,9 @@ skills = [
     "generate-standup",
     "verify-before-claiming",
     "scope-work",
-    "write-spec",
+    "write-adr",
     "plan-technical-approach",
-    "implement-spec",
+    "implement-plan",
 ]
 hooks = [
     "declarative:session_start:cat \"{skill_dir}/SKILL.md\"",
