@@ -8,7 +8,7 @@ description: >
   <ticket>", "what's involved in", "how big is this" — or whenever work is
   about to begin without an agreed scope. Routes to one of three outcomes: a
   trivial change goes straight to planning, work that needs a design record
-  goes to write-spec, and work that cannot be sized yet gets a time-boxed
+  gets the full treatment, and work that cannot be sized yet gets a time-boxed
   spike first. Tracks the work as a witan task. Requires the witan MCP server.
 license: BSD-3-Clause
 metadata:
@@ -22,10 +22,20 @@ design anything and writes no code. It answers "what are we actually doing, and
 how much process does it deserve?" — then hands off.
 
 ```text
-scope-work ──┬─ trivial ──────────────→ plan-technical-approach (fast path)
-             ├─ needs a spec ─────────→ write-spec
-             └─ unknowable ──→ spike ──→ (re-enter here with findings)
+scope-work ──→ plan-technical-approach ──→ implement-plan ──→ shipped
+                        │
+                        └──→ write-adr        one ADR per decision worth
+                                              recording; zero is normal
+
+  trivial     plan-technical-approach takes its fast path: no alternatives,
+              no scoring, no ADR.
+  unknowable  spike first, then re-enter scope-work with the findings.
 ```
+
+**Planning always comes before the record.** An ADR's `## Options Considered`
+is the output of scoring alternatives, so `write-adr` is entered from
+`plan-technical-approach`, never directly from here. What this skill decides is
+*how much* planning the work deserves — not which artifact gets written.
 
 | File | Purpose |
 |------|---------|
@@ -73,6 +83,12 @@ what this session already knows — the repo from the git remote, and Technical
 Issue as the default template for engineering work — so the engineer is not
 re-asked three things. Come back at Step 3.
 
+**Acceptance criteria belong in the issue body.** If the issue has none, add
+them there — not to the plan comment later. The independent review in
+[`create-ol-pull-request`](../../process/create-ol-pull-request/SKILL.md) takes
+goals only from sources the authoring session did not write; criteria that live
+in the agent's own plan comment are self-review with extra steps.
+
 Read the whole issue, not the title:
 
 ```bash
@@ -85,7 +101,7 @@ Comments routinely carry the constraint that invalidates the obvious approach.
 lives in a product repo;
 [`github-issue-triage`](../../process/github-issue-triage/SKILL.md) explains
 how to resolve which. Record both — they are used differently downstream: the
-plan comment goes on the repo holding the **issue**, the code and any spec live
+plan comment goes on the repo holding the **issue**, the code and any ADRs live
 in the **product** repo, and the task lookup is scoped to the product repo
 while matching on the issue URL.
 
@@ -121,8 +137,8 @@ anti-abuse framing are in
 
 | Tier | Route |
 |---|---|
-| **Trivial** — one obvious mechanism, contained, tens of lines, plain revert undoes it, not auth/payments/PII | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), fast path. No spec. |
-| **Needs a spec** — anything else that is knowable | [`write-spec`](../write-spec/SKILL.md) |
+| **Trivial** — one obvious mechanism, contained, tens of lines, plain revert undoes it, not auth/payments/PII | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **fast path**: one approach, no scoring, no ADR |
+| **Has a decision worth recording** — anything else that is knowable | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **full path**: alternatives scored, then [`write-adr`](../write-adr/SKILL.md) records what was decided |
 | **Unknowable** — a load-bearing fact is missing, so it cannot be sized | Spike first, then re-enter here |
 
 **When in doubt, it is not trivial.** Running the full process on a simple

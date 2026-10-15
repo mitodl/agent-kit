@@ -2,13 +2,14 @@
 
 The shape of the plan comment created by
 [`plan-technical-approach`](../SKILL.md) and maintained by
-[`implement-spec`](../../implement-spec/SKILL.md), and the marker contract that
+[`implement-plan`](../../implement-plan/SKILL.md), and the marker contract that
 lets it be updated in place instead of re-posted.
 
-**Which form you write depends on the route.** Work with a spec puts the plan
-in `TECHNICAL.md` and the comment becomes a pointer — see
-[Short form](#short-form-when-there-is-a-spec). Fast-path work has no spec, so
-the comment *is* the plan, in the full form below.
+**This comment is the work record** — chunks, phases, status, the tradeoff
+ledger — on every route. Decisions worth recording live in ADRs written by
+[`write-adr`](../../write-adr/SKILL.md); the comment **links** to them and does
+not restate their reasoning. Two copies of a decision drift, and the issue copy
+is the one that goes stale, because the ADR sits next to the code.
 
 ## The marker contract
 
@@ -103,38 +104,27 @@ legitimate outcome — it means nothing was given up — and is more honest than
 row invented to fill it. Fast-path work legitimately has no **Tradeoffs**, no
 **Not chosen** and no scores; see the trivial-change example below.
 
-## Short form: when there is a spec
+## Linking the ADRs
 
-For spec'd work the spec is the source of truth and the comment is a pointer.
-Approach, tradeoffs and the chunk table live in `TECHNICAL.md` **only** —
-recording them in both gives you two copies that drift, and the issue copy is
-the one that goes stale, because the spec sits next to the code and moves with
-it in the same pull request.
+When decisions were recorded, name them under the approach. One line each, with
+the title — a bare number tells a reader nothing.
 
 ```markdown
-## Plan
-
-**Spec:** [`specs/saved-search-notifications/`](https://github.com/mitodl/mit-learn/tree/main/specs/saved-search-notifications) — [PRODUCT.md](https://github.com/mitodl/mit-learn/blob/main/specs/saved-search-notifications/PRODUCT.md) · [TECHNICAL.md](https://github.com/mitodl/mit-learn/blob/main/specs/saved-search-notifications/TECHNICAL.md)
-
-Three chunks, independent PRs. The approach, tradeoffs and delivery plan are in TECHNICAL.md; this comment tracks status only.
-
-**Status:** Chunk 1 merged (#4821), chunk 2 in review (#4834). Chunk 3 waits on chunk 2 reaching production.
-
-**Revisions**
-
-- 2026-10-28 — Chunk 1 merged; opened chunk 2.
-- 2026-10-21 — Spec approved, plan recorded.
+**Decisions:** [ADR-0014 — APISIX leaves bearer tokens to the applications](https://github.com/mitodl/ol-infrastructure/blob/main/docs/adr/0014-apisix-leaves-bearer-tokens.md)
 ```
 
-Link the spec by **full GitHub URL**, not a repo-relative path: the comment may
-be on a tracker issue in a different repo, where a relative path resolves to
-nothing. Until the first PR merges those links 404 — that is expected, since
-the spec lands with the first implementation PR. Say so in the comment if the
-work will sit unmerged for a while.
+Link by **full GitHub URL**, not a repo-relative path: the comment may sit on a
+tracker issue in a different repo, where a relative path resolves to nothing.
+Until the first PR merges those links 404, which is expected — ADRs land with
+the first implementation PR. Say so in the comment if the work will sit
+unmerged for a while.
 
-A deviation approved during implementation is recorded in `TECHNICAL.md`'s
-Deviations table, not here. The comment's Revisions log notes that a deviation
-happened and points at the PR; the reasoning lives with the design.
+A decision that changes during implementation is recorded as a dated addendum
+on its ADR, not here. The Revisions log notes that it happened and points at
+the PR; the reasoning lives with the decision.
+
+Work with no ADRs — the fast path, or work whose choices were all obvious —
+simply omits this line.
 
 ## Worked example — competing approaches
 
@@ -144,6 +134,8 @@ happened and points at the PR; the reasoning lives with the design.
 **Approach:** Move retry handling into the shared client wrapper.
 
 Both copies of the retry logic are reachable from the scheduler, and they have already drifted — one honours `max_attempts` and the other ignores it, which is the bug in this issue. Consolidating into the wrapper in `clients/` fixes both call paths at once and puts the behavior where every other cross-service read already looks for it. Architectural fitness decided it: the alternative works, but leaves this the only read path in the repo that does its own retrying.
+
+**Decisions:** [ADR-0014 — retry policy belongs to the shared client wrapper](https://github.com/mitodl/mit-learn/blob/main/docs/adr/0014-retry-policy-in-client-wrapper.md)
 
 **Phases**
 
@@ -218,7 +210,7 @@ _None._ The guard is local to one function and reverts cleanly.
 
 ## Worked example — trivial change (fast path)
 
-A change that scoping classified as trivial skips the alternatives and the ledger
+A change that scoping classified as trivial skips the alternatives, the ledger and any ADR
 entirely. The comment is four lines plus a revision log, and padding it out
 would add nothing a reader wants.
 

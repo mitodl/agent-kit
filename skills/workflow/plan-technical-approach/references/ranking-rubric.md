@@ -187,7 +187,7 @@ Shipped deliberately as a short-term measure in <originating issue URL>. The tra
 - The code carries a comment at the workaround pointing at the follow-up issue,
   so someone reading the code finds the ticket without knowing it exists. This
   is the link that matters most and the one most often skipped;
-  [`implement-spec`](../../implement-spec/SKILL.md) lands it in the same pull
+  [`implement-plan`](../../implement-plan/SKILL.md) lands it in the same pull
   request as the workaround.
 
 A fourth lands later: when the workaround's pull request merges, add its URL to
