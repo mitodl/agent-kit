@@ -387,6 +387,10 @@ desc = "Minimum seconds between repeats of the warning that a target's memory gr
 default = "30.0"
 desc = "How long the rendered session-context block is cached on disk, in seconds. Only the first prompt in the window pays to build it; the rest read one small file. `0` disables the cache. The content is advisory, so a few seconds of staleness is fine."
 
+[section.vars.WITAN_CONTEXT_DEADLINE]
+default = "30.0"
+desc = "Time budget, in seconds, for all of the session-context hook's reads against a deployed target, measured from when the hook starts. A read still unanswered at the deadline is cancelled and its block left out, with one line naming what is missing; that partial block is not cached. Keep it under the hook's own 45s timeout, past which the client kills the hook and discards its output."
+
 [section.vars.WITAN_LOG_LEVEL]
 default = "INFO"
 desc = "Log level. Takes precedence over the bare `LOG_LEVEL`, which is also honoured for deployments that set it org-wide."

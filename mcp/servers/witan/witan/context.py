@@ -9,12 +9,12 @@ work regardless of whether witan was installed from a checkout or via uvx.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import time
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from witan_core.observability import get_logger
@@ -41,10 +41,10 @@ _REPO_CACHE_TTL = 5.0
 _OUTPUT_CACHE_TTL = 30.0
 
 
-def _output_cache_ttl() -> float:
-    raw = os.environ.get("WITAN_CONTEXT_TTL")
+def _env_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name)
     if raw is None:
-        return _OUTPUT_CACHE_TTL
+        return default
     try:
         return max(0.0, float(raw))
     except ValueError:
@@ -52,9 +52,27 @@ def _output_cache_ttl() -> float:
         # it can only fire for someone who set the variable to a non-number, so
         # it cannot become per-prompt noise.
         logger.warning(
-            "witan.context.bad_ttl", value=raw, falling_back_to=_OUTPUT_CACHE_TTL
+            "witan.context.bad_seconds", var=name, value=raw, falling_back_to=default
         )
-        return _OUTPUT_CACHE_TTL
+        return default
+
+
+def _output_cache_ttl() -> float:
+    return _env_seconds("WITAN_CONTEXT_TTL", _OUTPUT_CACHE_TTL)
+
+
+# The remote path's budget for ALL of its network reads, measured from entry.
+# One shared deadline rather than a timeout per read: N reads with their own
+# timeouts can cost N times the timeout, while a shared budget bounds what the
+# user waits however many reads a graph needs. 30s leaves the rest of the
+# hook's 45s timeout (``setup.INJECT_CONTEXT_TIMEOUT_SECONDS``) for CLI import,
+# the cache check and rendering; past that Claude Code kills the hook and
+# discards whatever it had. Override with WITAN_CONTEXT_DEADLINE (seconds).
+_CONTEXT_DEADLINE = 30.0
+
+
+def _context_deadline() -> float:
+    return _env_seconds("WITAN_CONTEXT_DEADLINE", _CONTEXT_DEADLINE)
 
 
 def _atomic_write_private(path: Path, text: str) -> None:
@@ -253,7 +271,7 @@ def _dbg_exc(enabled: bool, msg: str) -> None:
 def _dbg_exc_from(enabled: bool, exc: BaseException, msg: str) -> None:
     """:func:`_dbg_exc` for an exception that is not the *active* one.
 
-    A read that failed inside a worker thread is caught and carried back as a
+    A read that failed in a concurrent wave is caught and carried back as a
     value, so by the time its block is skipped there is no live exception for
     ``exc_info=True`` to resolve. Passing the object keeps the traceback in the
     record instead of losing it to an empty ``sys.exc_info()``.
@@ -265,58 +283,76 @@ def _dbg_exc_from(enabled: bool, exc: BaseException, msg: str) -> None:
 # The hook's reads are network-bound against a deployment and mostly
 # independent of one another, so issuing them one at a time made the cold path
 # the SUM of ten round trips (~11s measured) rather than the slowest of two
-# waves. Threads rather than asyncio: ``server`` is duck-typed on plain
-# attribute-style methods (``RemoteMCPProxy.__getattr__`` wraps each call in
-# its own ``asyncio.run``), and every call is I/O-bound, so a pool parallelises
-# them without changing that interface.
-_HOOK_READ_WORKERS = 6
+# waves. They run as coroutines on the proxy's async ``dispatch`` rather than
+# on a thread pool because only a coroutine can be cancelled: a pool's exit
+# waits for every RUNNING call (``cancel_futures`` drops only unstarted ones),
+# so one read a deployment accepted and never answered held the hook for the
+# MCP client's 300s read timeout, long after Claude Code had killed it at the
+# hook timeout and thrown its output away (agent-kit#349).
 
 
-def _sequentially(calls: dict[str, Callable[[], object]]) -> dict[str, object]:
-    """:func:`_gather`'s contract, one call at a time."""
-    out: dict[str, object] = {}
-    for key, fn in calls.items():
-        try:
-            out[key] = fn()
-        except Exception as exc:  # noqa: BLE001 — reported to the caller as a value
-            out[key] = exc
+class _TimedOut(TimeoutError):
+    """A read still pending at the deadline, cancelled without an answer.
+
+    Its own type because the caller treats it differently from a read that
+    FAILED: a failed projects or ready read still blanks the block, while a
+    timed-out one renders what did come back and says what is missing.
+    """
+
+
+async def _await_all(
+    calls: dict[str, Callable[[], Awaitable[object]]], deadline: float
+) -> dict[str, object]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return {key: _TimedOut() for key in calls}
+    tasks = {asyncio.ensure_future(fn()): key for key, fn in calls.items()}
+    done, pending = await asyncio.wait(tasks, timeout=remaining)
+    for task in pending:
+        task.cancel()
+    out: dict[str, object] = {tasks[task]: _TimedOut() for task in pending}
+    for task in done:
+        exc = task.exception()
+        out[tasks[task]] = exc if exc is not None else task.result()
     return out
 
 
-def _gather(calls: dict[str, Callable[[], object]]) -> dict[str, object]:
-    """Run every thunk concurrently; map each key to its result OR its exception.
+def _gather(
+    calls: dict[str, Callable[[], Awaitable[object]]], deadline: float
+) -> dict[str, object]:
+    """Run every call concurrently until ``deadline``; map each key to its
+    result, its exception, or a :class:`_TimedOut`.
 
     Returning failures as values rather than raising is what lets each caller
     keep the per-read isolation the hook depends on: one read failing must cost
     its own block and nothing else, and a shared ``gather`` that propagated the
     first exception would take the whole prompt's context with it.
 
-    NEVER RAISES, including when the pool itself cannot be built — a machine at
-    its thread limit falls back to running the calls in line rather than taking
-    down a hook whose whole contract is that it degrades quietly. Only the
-    speed-up is optional; the answers are not.
+    ``asyncio.wait`` rather than ``asyncio.gather`` under an outer timeout,
+    because cancelling a ``gather`` discards the answers that already came
+    back. ``deadline`` is a :func:`time.monotonic` value shared by every wave
+    of one hook call, so a later wave gets only what the earlier ones left.
     """
-    if len(calls) <= 1:
-        return _sequentially(calls)
-    out: dict[str, object] = {}
-    try:
-        with ThreadPoolExecutor(
-            max_workers=min(len(calls), _HOOK_READ_WORKERS),
-            thread_name_prefix="witan-ctx",
-        ) as pool:
-            futures = {pool.submit(fn): key for key, fn in calls.items()}
-            for future in as_completed(futures):
-                key = futures[future]
-                try:
-                    out[key] = future.result()
-                except Exception as exc:  # noqa: BLE001 — see docstring
-                    out[key] = exc
-    except Exception:  # pool/thread failure, not a read failure
-        logger.debug("witan.context.gather_fell_back_to_serial", exc_info=True)
-        # Keep whatever already came back; only re-run what never answered.
-        pending = {k: fn for k, fn in calls.items() if k not in out}
-        return {**out, **_sequentially(pending)}
-    return out
+    if not calls:
+        return {}
+    return asyncio.run(_await_all(calls, deadline))
+
+
+def _answered(value: object) -> list:
+    """A read's rows, or none for a read that timed out."""
+    return [] if isinstance(value, _TimedOut) else (value or [])
+
+
+# What each read feeds, for the line a partial render carries. Wave-two keys
+# are ``<kind>:<slug>``, so they are looked up by the part before the colon.
+_READ_BLOCKS = {
+    "projects": "projects",
+    "ready": "ready tasks",
+    "branch": "in-flight branch",
+    "held": "held-task comments",
+    "sessions": "project sessions",
+    "comments": "held-task comments",
+}
 
 
 def inject_context(
@@ -560,6 +596,7 @@ def _render_context_block(
     commented: list[tuple[dict, list[dict]]],
     stale_repo_case: bool,
     debug: bool,
+    partial: str | None = None,
 ) -> str:
     """Render the markdown block both the local and remote data paths share.
 
@@ -703,6 +740,9 @@ def _render_context_block(
             "",
         ]
 
+    if partial:
+        lines += [partial, ""]
+
     if not lines:
         output = ""
     else:
@@ -726,8 +766,13 @@ def _render_context_block(
     # calls delivered, turning "interrupts once" into "interrupts for 30
     # seconds". Skipping the write costs one extra round of graph reads on the
     # next prompt, which then renders without the block and caches that.
+    #
+    # Nor a partial render: caching it would serve the missing blocks as
+    # missing for the whole TTL, when the next prompt might well get them.
     if commented:
         _dbg(debug, "not caching a render carrying comments (one-time delivery)")
+    elif partial:
+        _dbg(debug, "not caching a partial render (next prompt retries the reads)")
     else:
         _write_output_cache(cache_key, repo, branch, output)
     _dbg(
@@ -766,7 +811,14 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
     (tk-the-in-flight-branch-anti-duplicate-work-signal--073f96), because on a
     shared graph that block is the signal keeping two actors off the same
     branch — the case where dropping it costs the most, not the least.
+
+    Every read shares one deadline (:func:`_context_deadline`). A read still
+    unanswered at it is cancelled and its block rendered empty, with one line
+    naming what is missing. That render is never cached, so the next prompt
+    retries the full read.
     """
+    budget = _context_deadline()
+    deadline = time.monotonic() + budget
     try:
         repo, branch = _cached_repo_and_branch()
         _dbg(debug, f"detected repo={repo!r} branch={branch!r} (remote)")
@@ -795,60 +847,57 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         # answers from an all-repos `list_unscoped_tasks` scan. The sentinel
         # makes both transports answer the same question: which tasks do I
         # hold, anywhere.
-        first: dict[str, Callable[[], object]] = {
-            "ready": lambda: server.task_ready(repo=(repo or ""), limit=10000),
+        first: dict[str, Callable[[], Awaitable[object]]] = {
+            "ready": lambda: server.dispatch(
+                "task_ready", repo=(repo or ""), limit=10000
+            ),
             # The limit matters as much as `repo=""` does: `assignee` is
             # applied in Python AFTER the read, and an unscoped read is capped
             # at 50 rows in the query. So on a busy graph your own held tasks
             # can fall entirely outside the 50 most recently updated
             # in_progress rows, and the comment block comes back empty for a
             # reason that has nothing to do with you.
-            "held": lambda: server.task_list(
-                assignee="@me", status="in_progress", repo="", limit=10000
+            "held": lambda: server.dispatch(
+                "task_list", assignee="@me", status="in_progress", repo="", limit=10000
             ),
         }
         if repo:
-            first["projects"] = lambda: server.workflow_project_list(
-                repo=repo, status="active"
+            first["projects"] = lambda: server.dispatch(
+                "workflow_project_list", repo=repo, status="active"
             )
         if repo and branch:
-            first["branch"] = lambda: server.task_for_branch(branch=branch, repo=repo)
+            first["branch"] = lambda: server.dispatch(
+                "task_for_branch", branch=branch, repo=repo
+            )
 
         # Resolve the deployment's tool surface ONCE before fanning out. Each
-        # worker otherwise finds the proxy's param-name cache unset (none of
+        # concurrent read otherwise finds the proxy's param-name cache unset (none of
         # them has finished listing yet) and lists it itself: measured at four
         # `tools/list` sequences on a cold process where the sequential path
         # issued one. The listings overlap, so this is server load rather than
         # latency, and it is load every agent session repeats.
         #
-        # Feature-detected ON THE CLASS, not the instance. `RemoteMCPProxy`
-        # has a catch-all `__getattr__` that turns any unknown attribute into
-        # a TOOL CALL, so an instance-level `getattr(server, ..., None)` never
-        # returns None — against a witan-core predating this method it would
-        # hand back a closure that tries to invoke a `prime_tool_schema` tool
-        # on the deployment. A class lookup is not intercepted (`__getattr__`
-        # is an instance hook), so this is absent exactly when the method is.
-        # That keeps the `witan-core>=0.37` floor honest: older cores simply
-        # skip priming and behave as they did before.
-        #
         # Best-effort: a failure here is not worth losing the block over,
-        # since each worker resolves the schema itself anyway.
-        if getattr(type(server), "prime_tool_schema", None) is not None:
-            try:
-                server.prime_tool_schema()
-            except Exception:  # noqa: BLE001 — the workers still resolve it
-                _dbg_exc(debug, "tool-schema prime failed (workers will resolve it)")
+        # since each read resolves the schema itself anyway. It spends the
+        # same deadline as the reads; a listing that hangs leaves them none.
+        primed = _gather({"schema": server.ensure_tool_schema}, deadline)["schema"]
+        if isinstance(primed, Exception):
+            _dbg_exc_from(
+                debug, primed, "tool-schema prime failed (each read will resolve it)"
+            )
 
-        done = _gather(first)
+        done = _gather(first, deadline)
 
         # The projects/ready pair is what the block exists to show, so a
         # failure in either still returns "" — same contract as before, just
-        # re-raised out of the worker that hit it rather than raised inline.
+        # re-raised out of the wave that hit it rather than raised inline. A
+        # TIMEOUT in either does not: what did answer is still worth showing.
         for key in ("projects", "ready"):
-            if isinstance(done.get(key), Exception):
-                raise done[key]
-        projects: list[dict] = done.get("projects") or []
-        ready: list[dict] = done["ready"]
+            value = done.get(key)
+            if isinstance(value, Exception) and not isinstance(value, _TimedOut):
+                raise value
+        projects: list[dict] = _answered(done.get("projects"))
+        ready: list[dict] = _answered(done["ready"])
         _dbg(debug, f"remote reads OK: projects={len(projects)} ready={len(ready)}")
     except Exception:  # noqa: BLE001
         _dbg_exc(debug, "FAILED building remote context (returning empty block)")
@@ -893,19 +942,37 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
     # The comment prefetch slices `held` exactly as `_held_task_comments` does,
     # so every fetched thread is one that function will look at and no task is
     # read speculatively.
-    second: dict[str, Callable[[], object]] = {
+    second: dict[str, Callable[[], Awaitable[object]]] = {
         f"sessions:{p['slug']}": (
-            lambda slug=p["slug"]: server.workflow_session_list(project_slug=slug)
+            lambda slug=p["slug"]: server.dispatch(
+                "workflow_session_list", project_slug=slug
+            )
         )
         for p in projects[:3]
     }
     second.update(
         {
-            f"comments:{t['slug']}": (lambda slug=t["slug"]: server.task_get(slug=slug))
+            f"comments:{t['slug']}": (
+                lambda slug=t["slug"]: server.dispatch("task_get", slug=slug)
+            )
             for t in held[:_HELD_TASK_LIMIT]
         }
     )
-    fetched = _gather(second)
+    fetched = _gather(second, deadline)
+
+    timed_out = sorted(
+        key
+        for key, value in {**done, **fetched}.items()
+        if isinstance(value, _TimedOut)
+    )
+    partial = None
+    if timed_out:
+        _dbg(debug, f"reads cut off at the {budget:g}s deadline: {timed_out}")
+        cut = {_READ_BLOCKS[key.split(":")[0]] for key in timed_out}
+        blocks = [b for b in dict.fromkeys(_READ_BLOCKS.values()) if b in cut]
+        partial = (
+            f"witan context partial: {', '.join(blocks)} timed out after {budget:g}s"
+        )
 
     sessions_by_project: dict[str, list[dict]] = {}
     for p in projects[:3]:
@@ -943,6 +1010,7 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         open_branch_tasks=open_branch_tasks,
         commented=commented,
         stale_repo_case=False,
+        partial=partial,
         debug=debug,
     )
 

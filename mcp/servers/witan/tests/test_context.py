@@ -2,11 +2,13 @@
 focused on the CodeBranch "In-Flight Branch" section, and on the
 `witan inject-context` command never failing the hook."""
 
+import asyncio
 import logging
 import os
 import subprocess
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -856,10 +858,10 @@ def test_inject_context_cli_survives_an_unreachable_deployment(
 class _FakeRemoteServer:
     """Records every call it receives and answers with fixed, known data.
 
-    Stands in for the tool-calling proxy ``_srv()``/``remote_proxy()`` build —
-    ``inject_context_remote`` only ever calls attribute-style methods on it, the
-    same shape ``RemoteServerProxy.__getattr__`` returns, so a plain class with
-    matching method names is a faithful substitute without dialling out.
+    Stands in for the tool-calling proxy ``_srv()``/``remote_proxy()`` build.
+    ``inject_context_remote`` awaits ``dispatch(name, **kwargs)`` and
+    ``ensure_tool_schema()`` on it, the proxy's async entry points, so this
+    routes each dispatched name to a plain method of the same name.
     """
 
     def __init__(
@@ -871,8 +873,13 @@ class _FakeRemoteServer:
         raises=(),
         held=None,
         comments=None,
+        hangs=(),
     ):
         self.calls: list[tuple[str, dict]] = []
+        self.primed = 0
+        # Tool names this fake accepts and never answers, standing in for a
+        # deployment that holds the response stream open.
+        self._hangs = set(hangs)
         self._projects = projects
         self._ready = ready
         self._sessions_by_project = sessions_by_project
@@ -887,6 +894,15 @@ class _FakeRemoteServer:
     def _guard(self, name):
         if name in self._raises:
             raise RuntimeError(f"Unknown tool: {name}")
+
+    async def dispatch(self, name, /, **kwargs):
+        result = getattr(self, name)(**kwargs)
+        if name in self._hangs:
+            await asyncio.sleep(3600)
+        return result
+
+    async def ensure_tool_schema(self):
+        self.primed += 1
 
     def workflow_project_list(self, **kwargs):
         self.calls.append(("workflow_project_list", kwargs))
@@ -1353,11 +1369,9 @@ def test_inject_context_remote_issues_its_independent_reads_concurrently(
     Issued one at a time, the hook's ten round trips against a deployment took
     ~11s measured and blew the 15s timeout it installs (agent-kit#349). Each
     read here blocks on a barrier that only releases once every first-wave
-    call has arrived, so a sequential implementation deadlocks and times out
-    rather than quietly passing slower.
+    call has arrived, so a sequential implementation times out on the first
+    read rather than quietly passing slower.
     """
-    import threading
-
     from witan import context as ctx_module
 
     monkeypatch.setenv("TMPDIR", str(tmp_path))
@@ -1377,13 +1391,13 @@ def test_inject_context_remote_issues_its_independent_reads_concurrently(
         "task_for_branch",
         "task_list",
     }
-    barrier = threading.Barrier(len(first_wave), timeout=10)
+    barrier = asyncio.Barrier(len(first_wave))
 
     class _Barriered(_FakeRemoteServer):
-        def _guard(self, name):
+        async def dispatch(self, name, /, **kwargs):
             if name in first_wave:
-                barrier.wait()
-            super()._guard(name)
+                await asyncio.wait_for(barrier.wait(), timeout=10)
+            return await super().dispatch(name, **kwargs)
 
     server = _Barriered(
         projects=[{"slug": "wp-x", "title": "X", "phase": "spec"}],
@@ -1396,20 +1410,18 @@ def test_inject_context_remote_issues_its_independent_reads_concurrently(
         server, "https://witan.example.org/mcp", debug=True
     )
 
-    assert barrier.broken is False
     assert "## Active Workflow Projects" in text
+    assert "partial" not in text
 
 
 def test_inject_context_remote_primes_the_tool_schema_once_before_fanning_out(
     tmp_path, monkeypatch
 ):
-    """One schema resolution per wave, and only when the proxy offers one.
+    """One schema resolution per hook call, ahead of the first wave.
 
-    Without it each worker finds the param-name cache unset and lists the
-    surface itself (measured: 4 `tools/list` cold, where the sequential path
-    issued 1). The catch-all `__getattr__` case is the trap: a proxy predating
-    `prime_tool_schema` must be detected as NOT having it, rather than having
-    a bogus tool of that name called on the deployment.
+    Without it each concurrent read finds the param-name cache unset and lists
+    the surface itself (measured: 4 `tools/list` cold, where the sequential
+    path issued 1).
     """
     from witan import context as ctx_module
 
@@ -1420,74 +1432,226 @@ def test_inject_context_remote_primes_the_tool_schema_once_before_fanning_out(
     monkeypatch.setattr(tempfile, "tempdir", None)
     monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-prime")
 
-    class _Priming(_FakeRemoteServer):
-        primed = 0
+    class _Ordered(_FakeRemoteServer):
+        async def ensure_tool_schema(self):
+            assert not self.calls, "primed after a read went out"
+            await super().ensure_tool_schema()
 
-        def prime_tool_schema(self):
-            type(self).primed += 1
-
-    server = _Priming(projects=[], ready=[], sessions_by_project={})
+    server = _Ordered(projects=[], ready=[], sessions_by_project={})
     ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
-    assert _Priming.primed == 1
-    assert not [c for c in server.calls if c[0] == "prime_tool_schema"]
-
-    # A proxy-shaped object whose __getattr__ answers for ANY name, i.e. one
-    # from a witan-core that predates the method.
-    class _CatchAll(_FakeRemoteServer):
-        def __getattr__(self, name):
-            def _tool_call(**kwargs):
-                self.calls.append((name, kwargs))
-                raise RuntimeError(f"no such tool: {name}")
-
-            return _tool_call
-
-    legacy = _CatchAll(projects=[], ready=[], sessions_by_project={})
-    ctx_module.inject_context_remote(legacy, "https://witan.example.org/mcp")
-    assert not [c for c in legacy.calls if c[0] == "prime_tool_schema"]
+    assert server.primed == 1
 
 
-def test_gather_falls_back_to_serial_when_the_pool_cannot_start(monkeypatch):
-    """A machine at its thread limit still gets its answers, just slower.
-
-    ``_gather`` is called outside the remote path's own try/except, so raising
-    here would crash a hook whose entire contract is that it degrades quietly.
-    """
+def test_inject_context_remote_survives_a_failed_prime(tmp_path, monkeypatch):
+    """Priming is an optimisation; each read resolves the schema itself."""
     from witan import context as ctx_module
 
-    def _no_threads(*_args, **_kwargs):
-        raise RuntimeError("can't start new thread")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
 
-    monkeypatch.setattr(ctx_module, "ThreadPoolExecutor", _no_threads)
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-prime-fail")
 
-    def _boom():
-        raise ValueError("read failed")
+    class _BadPrime(_FakeRemoteServer):
+        async def ensure_tool_schema(self):
+            raise RuntimeError("tools/list failed")
 
-    got = ctx_module._gather({"a": lambda: 1, "b": lambda: 2, "c": _boom})
+    server = _BadPrime(
+        projects=[],
+        ready=[{"slug": "tk-r", "title": "Still ready", "priority": "p1"}],
+        sessions_by_project={},
+    )
+    text = ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
 
-    assert got["a"] == 1
-    assert got["b"] == 2
-    # And a genuine read failure is still reported as a value, not raised.
-    assert isinstance(got["c"], ValueError)
+    assert "Still ready" in text
 
 
 def test_gather_reports_each_failure_against_its_own_key():
     from witan import context as ctx_module
 
-    def _boom():
+    async def _fine():
+        return "fine"
+
+    async def _boom():
         raise ValueError("nope")
 
-    got = ctx_module._gather({"ok": lambda: "fine", "bad": _boom})
+    got = ctx_module._gather(
+        {"ok": _fine, "bad": _boom}, deadline=time.monotonic() + 10
+    )
 
     assert got["ok"] == "fine"
     assert isinstance(got["bad"], ValueError)
+    assert not isinstance(got["bad"], ctx_module._TimedOut)
+
+
+def test_gather_keeps_what_answered_and_cancels_the_rest():
+    """The reason for ``asyncio.wait`` over a timed-out ``gather``: the reads
+    that came back before the deadline are kept, not thrown away with it."""
+    from witan import context as ctx_module
+
+    cancelled = []
+
+    async def _fast():
+        return "fast"
+
+    async def _hung():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    started = time.monotonic()
+    got = ctx_module._gather(
+        {"fast": _fast, "hung": _hung}, deadline=time.monotonic() + 0.5
+    )
+
+    assert time.monotonic() - started < 1.5
+    assert got["fast"] == "fast"
+    assert isinstance(got["hung"], ctx_module._TimedOut)
+    assert cancelled == [True]
+
+
+def test_gather_past_its_deadline_starts_nothing():
+    from witan import context as ctx_module
+
+    started = []
+
+    async def _read():
+        started.append(True)
+        return "late"
+
+    got = ctx_module._gather({"late": _read}, deadline=time.monotonic() - 1)
+
+    assert isinstance(got["late"], ctx_module._TimedOut)
+    assert not started
+
+
+def _deadline_env(tmp_path, monkeypatch, repo):
+    """A 1s deadline with the output cache ON, so a test can see it unwritten."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", repo)
+    monkeypatch.setenv("WITAN_CONTEXT_DEADLINE", "1")
+    monkeypatch.setattr(ctx_module, "_current_branch", lambda: "main")
+
+
+def test_inject_context_remote_renders_what_answered_by_the_deadline(
+    tmp_path, monkeypatch
+):
+    """One read the deployment never answers costs its own block, not the hook.
+
+    Before the deadline, a hung read held the hook for the MCP client's 300s
+    read timeout, and Claude Code killed it at 45s with nothing rendered
+    (agent-kit#349). Now the projects read is cancelled at the deadline and the
+    ready tasks that did answer still render, with a line saying what is
+    missing. That render is not cached, so the next prompt retries in full.
+    """
+    from witan import context as ctx_module
+
+    repo = "https://github.com/test/ctx-deadline-first"
+    _deadline_env(tmp_path, monkeypatch, repo)
+    url = "https://witan.example.org/mcp"
+
+    server = _FakeRemoteServer(
+        projects=[{"slug": "wp-x", "title": "Never Shown", "phase": "spec"}],
+        ready=[{"slug": "tk-r", "title": "Ready one", "priority": "p1"}],
+        sessions_by_project={},
+        hangs={"workflow_project_list"},
+    )
+    started = time.monotonic()
+    text = ctx_module.inject_context_remote(server, url, debug=True)
+
+    assert time.monotonic() - started < 2
+    assert "## Ready Tasks" in text
+    assert "Ready one" in text
+    assert "## Active Workflow Projects" not in text
+    assert "witan context partial: projects timed out after 1s" in text
+    assert ctx_module._read_output_cache(url, repo, "main") is None
+
+
+def test_inject_context_remote_second_wave_spends_what_the_first_left(
+    tmp_path, monkeypatch
+):
+    """The deadline covers both waves, not each one: a hung session read in
+    wave two is cut off at the same 1s mark, and the first wave's blocks
+    render without the resume lines it would have fed."""
+    from witan import context as ctx_module
+
+    repo = "https://github.com/test/ctx-deadline-second"
+    _deadline_env(tmp_path, monkeypatch, repo)
+    url = "https://witan.example.org/mcp"
+
+    server = _FakeRemoteServer(
+        projects=[{"slug": "wp-x", "title": "Shown Project", "phase": "spec"}],
+        ready=[{"slug": "tk-r", "title": "Ready one", "priority": "p1"}],
+        sessions_by_project={},
+        hangs={"workflow_session_list"},
+    )
+    started = time.monotonic()
+    text = ctx_module.inject_context_remote(server, url, debug=True)
+
+    assert time.monotonic() - started < 2
+    assert ("workflow_session_list", {"project_slug": "wp-x"}) in server.calls
+    assert "Shown Project" in text
+    assert "Ready one" in text
+    assert "witan context partial: project sessions timed out after 1s" in text
+    assert ctx_module._read_output_cache(url, repo, "main") is None
+
+
+def test_inject_context_remote_failed_ready_read_still_blanks_the_block(
+    tmp_path, monkeypatch
+):
+    """A projects/ready read that FAILS keeps its old contract (empty block);
+    only one that runs out of time renders partially. An error answer is not
+    a slow one, and nothing says the next prompt will fare better."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-ready-fails")
+
+    server = _FakeRemoteServer(
+        projects=[{"slug": "wp-x", "title": "X", "phase": "spec"}],
+        ready=[],
+        sessions_by_project={},
+        raises={"task_ready"},
+    )
+
+    assert (
+        ctx_module.inject_context_remote(server, "https://witan.example.org/mcp") == ""
+    )
+
+
+def test_context_deadline_fits_inside_the_hook_timeout(monkeypatch):
+    """The deadline is only worth having if it fires before the client kills
+    the hook; past ``INJECT_CONTEXT_TIMEOUT_SECONDS`` the output is discarded."""
+    from witan import context as ctx_module
+    from witan.setup import INJECT_CONTEXT_TIMEOUT_SECONDS
+
+    monkeypatch.delenv("WITAN_CONTEXT_DEADLINE", raising=False)
+    assert ctx_module._context_deadline() < INJECT_CONTEXT_TIMEOUT_SECONDS
+
+    monkeypatch.setenv("WITAN_CONTEXT_DEADLINE", "12.5")
+    assert ctx_module._context_deadline() == 12.5
+    monkeypatch.setenv("WITAN_CONTEXT_DEADLINE", "soon")
+    assert ctx_module._context_deadline() == ctx_module._CONTEXT_DEADLINE
 
 
 def test_inject_context_remote_one_failed_read_costs_only_its_own_block(
     tmp_path, monkeypatch
 ):
-    """Per-read isolation must survive the move into worker threads.
+    """Per-read isolation must survive the move to concurrent waves.
 
-    A read that fails inside a worker comes back as a value rather than a live
+    A read that fails inside a wave comes back as a value rather than a live
     exception, so the block it feeds is the only thing that may disappear.
     """
     from witan import context as ctx_module
