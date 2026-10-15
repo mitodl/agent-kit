@@ -72,6 +72,7 @@ from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
+from ..identity import derive_actor_id
 from .journal import JournalEntry, WriteJournal, journal_path
 from .oidc import decode_claims
 
@@ -677,8 +678,10 @@ class RemoteMCPProxy:
     def _journal_holder(self, token: str) -> str | None:
         """Who a queued write is recorded as, for replay's ownership check.
 
-        The token's ``preferred_username`` (else ``email``), the same claims
-        the deployment attributes the call to. A binding that qualifies its
+        The token's ``preferred_username``, else ``email``, else the
+        ``act-<sub>`` id derived from ``sub``: the same order the deployment
+        attributes the call in (``witan.server._current_author``). ``None``
+        when even ``sub`` is missing or unusable. A binding that qualifies its
         claim holders (witan's ``#<session>``) extends this.
         """
         claims = decode_claims(token)
@@ -686,7 +689,10 @@ class RemoteMCPProxy:
             value = claims.get(claim)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-        return None
+        try:
+            return derive_actor_id(claims.get("sub"))
+        except ValueError:
+            return None
 
     async def _replay_plan(
         self,
@@ -1212,15 +1218,39 @@ class RemoteMCPProxy:
 
         What ``witan journal replay`` runs. Every other replay happens as a side
         effect of the next call whose connection opens.
+
+        A credential rejected while connecting is refreshed once, exactly as
+        :meth:`remote_tools` does: nothing has been sent at that point, so the
+        retry cannot apply anything twice.
         """
         token = self._token_provider()
+        try:
+            return await self._replay_journal_once(token)
+        except RemoteCredentialRejected:
+            if self._token_refresher is None:
+                raise
+            return await self._replay_journal_once(
+                self._token_refresher(token), refreshed=True
+            )
+
+    async def _replay_journal_once(
+        self, token: str, *, refreshed: bool = False
+    ) -> list[dict]:
+        """One :meth:`replay_journal` attempt with an already-resolved ``token``."""
         async with (
-            self._reclassifying("replay"),
+            self._reclassifying("replay", refreshed=refreshed),
             AsyncExitStack() as stack,
         ):
             try:
                 client = await stack.enter_async_context(self._new_client(token))
             except Exception as exc:  # see _invoke_once
+                rejected = auth_failure(exc)
+                if rejected is not None:
+                    raise RemoteCredentialRejected(
+                        self._credential_rejected_error(
+                            "replay", rejected.response.status_code, refreshed=refreshed
+                        )
+                    ) from exc
                 raise RemoteNotSent(self._unreachable_error(exc)) from exc
             if (
                 self._param_names is None
@@ -1264,6 +1294,12 @@ class RemoteMCPProxy:
                     return (await client.call_tool(tool, arguments)).data
 
             for entry in journal.entries():
+                # Another binding pointed at the same deployment (witan-code's
+                # proxy shares the URL) has neither the replay checks nor the
+                # retry rules for this entry. Leave it, and everything behind
+                # it, for a binding that queues it.
+                if not self._buffers(entry.tool, dispatched=False):
+                    break
                 try:
                     plan = await self._replay_plan(entry, call)
                 except (*_REPLAY_REFUSED, *_REPLAY_UNSENT) as exc:

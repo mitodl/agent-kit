@@ -326,6 +326,70 @@ def test_the_journal_is_private_to_its_owner():
     assert proxy.journal.path.parent.stat().st_mode & 0o077 == 0
 
 
+def test_a_binding_does_not_replay_entries_it_does_not_queue():
+    # witan-code's proxy shares witan's deployment URL, so it opens the same
+    # journal, but has neither witan's replay checks nor its retry rules.
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_close(slug="tk-1")
+
+    class _OtherBinding(_Proxy):
+        def _buffers(self, name, *, dispatched):
+            return False
+
+    _up(deployment)
+    _OtherBinding(deployment).task_get(slug="tk-2")
+
+    assert [name for name, _ in deployment.calls] == ["task_get"]
+    assert [e.tool for e in proxy.journal.entries()] == ["task_close"]
+
+
+@pytest.mark.parametrize(
+    ("claims", "holder"),
+    [
+        ({"preferred_username": "ada@example.org", "sub": "u-1"}, "ada@example.org"),
+        ({"email": "ada@example.org", "sub": "u-1"}, "ada@example.org"),
+        ({"sub": "U-1"}, "act-u-1"),
+        ({}, None),
+    ],
+)
+def test_the_holder_follows_the_deployment_s_identity_order(claims, holder):
+    # Same order as witan.server._current_author, down to the act-<sub> id.
+    assert _Proxy(_Deployment())._journal_holder(_jwt(**claims)) == holder
+
+
+def test_replay_reports_a_rejected_credential_not_an_unreachable_deployment():
+    deployment = _Deployment()
+    deployment.fail_at = "connect"
+    deployment.exc = _status_error(401)
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        asyncio.run(_Proxy(deployment).replay_journal())
+    assert not isinstance(caught.value, RemoteUnreachable)
+
+
+def test_replay_refreshes_a_credential_rejected_while_connecting():
+    # Nothing has been sent while connecting, so one refresh is safe.
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_comment(slug="tk-1", text="queued")
+
+    deployment.exc = _status_error(401)
+    tokens: list[str] = []
+
+    def _refresh(rejected):
+        tokens.append(rejected)
+        _up(deployment)
+        return "fresh"
+
+    proxy._token_refresher = _refresh
+    report = asyncio.run(proxy.replay_journal())
+
+    assert len(tokens) == 1
+    assert [line["outcome"] for line in report] == ["applied"]
+
+
 def test_a_refused_entry_is_dropped_and_replay_continues():
     # A refusal is an answer; keeping it at the head would wedge the queue.
     from fastmcp.exceptions import ToolError
