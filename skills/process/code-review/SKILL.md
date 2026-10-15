@@ -234,7 +234,11 @@ skeptic pass puts each finding in front of a fresh reader whose only job
 is to refute it.
 
 It runs after the verification pass, on every candidate that survived it.
-Each skeptic is briefed with
+When the skeptic pass is going to run, the verification pass stays inside
+this repo: a candidate whose refutation depends on another repo (a gateway
+route, another service's API) is kept for the skeptic rather than settled
+there, so the cross-repo reading happens once, by a reader without the
+drafting context. Each skeptic is briefed with
 [references/skeptic-brief.md](references/skeptic-brief.md) and gets only:
 
 - the finding (summary, file:line, severity, failure scenario) and the
@@ -244,7 +248,7 @@ Each skeptic is briefed with
   against what the author wrote
 - the path to the checkout, and the companion repos the claim depends on
 
-Not the other findings, and not the reasoning that produced this one.
+Not findings outside its group, and not the reasoning that produced them.
 
 Companion repos matter when the claim turns on another service: the status
 codes an API returns, auth applied at a gateway route, a config default set
