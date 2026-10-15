@@ -37,20 +37,6 @@ def holder_identity(holder: str | None) -> str | None:
     return SESSION_SUFFIX_RE.sub("", holder) if holder else holder
 
 
-def same_person(a: str | None, b: str | None) -> bool:
-    """Whether two holder strings name the same person, whatever the session.
-
-    Deliberately *not* ``server._holder_matches``: this asks about two holders
-    rather than matching a row against a filter, and the answer must ignore the
-    qualifier on both sides. ``task_release`` is one caller — releasing a claim
-    that another of your own sessions took is a handover, not a steal, so it
-    should not need ``force``, while another person's still should. The context
-    hook is the other, deciding whether a comment on a held task is the
-    holder's own.
-    """
-    return holder_identity(a) == holder_identity(b)
-
-
 # Bytes of digest behind the qualifier; hex doubles it, so 4 -> 8 characters.
 SESSION_DIGEST_BYTES = 4
 

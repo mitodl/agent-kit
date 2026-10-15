@@ -509,9 +509,20 @@ def _held_by(rows: list[dict], author: str | None) -> list[dict]:
     return [
         r
         for r in rows
-        if r.get("status") == "in_progress"
-        and readiness.holder_identity(r.get("assignee")) == author
+        if r.get("status") == "in_progress" and _is_holder(author, r.get("assignee"))
     ]
+
+
+def _is_holder(author: str | None, holder: str | None) -> bool:
+    """Whether ``author``, a bare identity, is the person ``holder`` names.
+
+    One-sided on purpose: only the holder can carry a ``#session`` qualifier,
+    and an identity is free-form (``WITAN_AUTHOR``, git ``user.name``, a token's
+    ``preferred_username``), so it may end in something qualifier-shaped
+    itself. Stripping both sides would read author ``alice#ops`` as ``alice``.
+    The unstripped holder covers a claim recorded with no session.
+    """
+    return author in (holder, readiness.holder_identity(holder))
 
 
 def _is_own_checkpoint(comment: dict, holder: str | None) -> bool:
@@ -522,12 +533,11 @@ def _is_own_checkpoint(comment: dict, holder: str | None) -> bool:
     holder's next prompt as a "new comment" to act on. The skill reads them at
     claim time instead, so only the holder's own are skipped: a teammate's
     checkpoint on work you now hold is still news. Matched by person, not
-    session, because the comment records the bare identity while the holder
-    carries a ``#session`` qualifier.
+    session, so a checkpoint from another of your sessions is skipped too.
     """
-    return (comment.get("body") or "").startswith(
-        _CHECKPOINT_PREFIX
-    ) and readiness.same_person(comment.get("author"), holder)
+    return (comment.get("body") or "").startswith(_CHECKPOINT_PREFIX) and _is_holder(
+        comment.get("author"), holder
+    )
 
 
 def _held_task_comments(

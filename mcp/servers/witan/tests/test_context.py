@@ -1354,6 +1354,39 @@ def test_inject_context_skips_your_own_checkpoint_comments(tmp_path, monkeypatch
     assert "checkpoint blocked: waiting on infra" in text
 
 
+@pytest.mark.parametrize(
+    ("author", "holder", "skipped"),
+    [
+        ("alice", "alice#5e313f6d", True),
+        ("alice", "alice", True),
+        ("bob", "alice#5e313f6d", False),
+        # An identity is free-form, so it can end in something qualifier-shaped.
+        # Only the holder side may be stripped.
+        ("alice#ops", "alice#5e313f6d", False),
+        ("alice#ops", "alice#ops#5e313f6d", True),
+        ("alice#ops", "alice#ops", True),
+        (None, "alice#5e313f6d", False),
+    ],
+)
+def test_own_checkpoint_matches_the_author_against_the_holder(author, holder, skipped):
+    from witan import context as ctx_module
+
+    comment = {"author": author, "body": "checkpoint pushed: x @ 3f2a1c9 | next: y"}
+    assert ctx_module._is_own_checkpoint(comment, holder) is skipped
+
+
+def test_held_by_matches_an_unqualified_claim_by_a_hash_identity():
+    from witan import context as ctx_module
+
+    rows = [
+        {"slug": "tk-a", "status": "in_progress", "assignee": "alice#ops"},
+        {"slug": "tk-b", "status": "in_progress", "assignee": "alice#ops#5e313f6d"},
+        {"slug": "tk-c", "status": "in_progress", "assignee": "alice#5e313f6d"},
+    ]
+    held = ctx_module._held_by(rows, "alice#ops")
+    assert [r["slug"] for r in held] == ["tk-a", "tk-b"]
+
+
 def test_inject_context_remote_skips_your_own_checkpoint_comments(
     tmp_path, monkeypatch
 ):
