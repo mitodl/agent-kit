@@ -81,6 +81,14 @@ describe("parseRoute", () => {
 		expect(route.repo).toBe("https://github.com/mitodl/agent-kit");
 	});
 
+	it("reads repeated assignee params, dropping blanks and duplicates", () => {
+		const route = parseRoute(
+			"#board?assignee=dfrapp%40mit.edu&assignee=unassigned&assignee=&assignee=dfrapp%40mit.edu",
+		);
+
+		expect(route.assignees).toEqual(["dfrapp@mit.edu", "unassigned"]);
+	});
+
 	it("treats an empty filter value as absent", () => {
 		expect(parseRoute("#projects?project=&slug=").project).toBeNull();
 		expect(parseRoute("#projects?project=&slug=").slug).toBeNull();
@@ -100,6 +108,7 @@ describe("formatRoute", () => {
 			project: "wp-x",
 			slug: "tk-y",
 			closed: true,
+			assignees: ["unassigned", "dfrapp@mit.edu"],
 			find: "ui search",
 			days: 30,
 			q: "wrap flag",

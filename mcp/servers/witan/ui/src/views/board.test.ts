@@ -368,3 +368,63 @@ it("warns when a read came back at its limit", () => {
 
 	expect(root.querySelector(".note")?.textContent).toContain("row limit");
 });
+
+describe("the assignee filter", () => {
+	const ME = "dfrapp@mit.edu";
+	const mine = row({
+		slug: "tk-mine",
+		status: "in_progress",
+		assignee: `${ME}#003625bb`,
+	});
+	const mineAgain = row({
+		slug: "tk-mine-lapsed",
+		status: "in_progress",
+		assignee: `${ME}#1ccd2dfd`,
+		lease_expired: true,
+	});
+	const theirs = row({
+		slug: "tk-theirs",
+		status: "in_progress",
+		assignee: "ada@mit.edu",
+	});
+	const nobody = row({ slug: "tk-nobody", status: "open", assignee: null });
+	const data = () =>
+		fromFixtures({
+			ready: [nobody],
+			live: [mine, mineAgain, theirs, nobody],
+			closed: [row({ slug: "tk-done", status: "closed", assignee: ME })],
+		});
+	const filtered = (assignees: string[]) => ({ ...DEFAULT_ROUTE, assignees });
+
+	it("shows every session of one person, lapsed claims included", () => {
+		draw(data(), filtered([ME]));
+
+		expect(slugsIn("In progress").sort()).toEqual([
+			"tk-mine",
+			"tk-mine-lapsed",
+		]);
+		expect(slugsIn("Ready")).toEqual([]);
+	});
+
+	it("shows exactly the unassigned tasks for Unassigned", () => {
+		draw(data(), filtered(["unassigned"]));
+
+		expect(slugsIn("Ready")).toEqual(["tk-nobody"]);
+		expect(slugsIn("In progress")).toEqual([]);
+	});
+
+	it("combines Unassigned with people as a union", () => {
+		draw(data(), filtered(["unassigned", "ada@mit.edu"]));
+
+		expect(slugsIn("Ready")).toEqual(["tk-nobody"]);
+		expect(slugsIn("In progress")).toEqual(["tk-theirs"]);
+	});
+
+	it("filters the closed column too, and still resolves blockers held by others", () => {
+		const cols = columns({ ...data(), closed: data().closed }, filtered([ME]));
+
+		expect(cols.closed?.map((task) => task.slug)).toEqual(["tk-done"]);
+		// `live` stays whole: a blocker held by someone else is still a blocker.
+		expect(cols.live.has("tk-theirs")).toBe(true);
+	});
+});

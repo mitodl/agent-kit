@@ -525,3 +525,30 @@ describe("wavesPicker", () => {
 		);
 	});
 });
+
+describe("waves with an assignee filter", () => {
+	it("dims what the selection leaves out instead of dropping it", () => {
+		const root = document.createElement("div");
+		render(
+			waves(
+				data([
+					task("tk-a", { assignee: "dfrapp@mit.edu#1" }),
+					task("tk-b", { blocked_by: ["tk-a"], assignee: "ada@mit.edu" }),
+				]),
+				{ ...route, assignees: ["dfrapp@mit.edu"] },
+			),
+			root,
+		);
+
+		// Both stay: dropping tk-a would renumber tk-b's wave.
+		const labels = [...root.querySelectorAll("ol.wv-labels li")].map((li) => [
+			li.getAttribute("data-slug"),
+			li.classList.contains("dim"),
+		]);
+		expect(labels).toEqual([
+			["tk-a", false],
+			["tk-b", true],
+		]);
+		expect(root.querySelectorAll(".wv-track rect.wv-bar.dim")).toHaveLength(1);
+	});
+});

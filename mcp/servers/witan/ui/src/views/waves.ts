@@ -1,4 +1,5 @@
 import { html, nothing, svg, type TemplateResult } from "lit-html";
+import { matchesAssignee } from "../assignee.js";
 import { emptyBox } from "../chrome.js";
 import { type Route, routeHref } from "../route.js";
 import type {
@@ -656,8 +657,23 @@ function legend(): TemplateResult {
   `;
 }
 
-function barClass(node: WaveNode): string {
+/**
+ * Whether the assignee filter leaves a node out of focus.
+ *
+ * Dimmed rather than dropped, unlike the other views. A wave is depth in the
+ * dependency graph, so removing a task renumbers every wave behind it and
+ * hides the chain that makes a held task matter. Outside blockers belong to
+ * another project and are context, not the selection, so they never dim.
+ */
+function dimmed(node: WaveNode, route: Route): boolean {
+	return !node.outside && !matchesAssignee(node.task, route.assignees);
+}
+
+function barClass(node: WaveNode, dim = false): string {
 	const classes = ["wv-bar"];
+	if (dim) {
+		classes.push("dim");
+	}
 	if (node.outside) {
 		classes.push("outside");
 	} else if (node.task.status === "in_progress" && !node.task.lease_expired) {
@@ -710,7 +726,12 @@ function chart(plan: WaveLayout, route: Route): TemplateResult {
       <ol class="wv-labels">
         ${plan.nodes.map(
 					(node) => html`<li
-            class=${node.outside ? "outside" : ""}
+            class=${[
+							node.outside ? "outside" : "",
+							dimmed(node, route) ? "dim" : "",
+						]
+							.filter(Boolean)
+							.join(" ")}
             data-slug=${node.task.slug}
           >
             ${taskLink(node.task, route)}
@@ -776,7 +797,7 @@ function chart(plan: WaveLayout, route: Route): TemplateResult {
 				})}
         ${plan.nodes.map((node, row) => {
 					const { left, right } = column(node.wave);
-					return svg`<rect class=${barClass(node)} x=${pct(left)} y=${HEAD + row * ROW + 5}
+					return svg`<rect class=${barClass(node, dimmed(node, route))} x=${pct(left)} y=${HEAD + row * ROW + 5}
             width=${pct(right - left)} height=${ROW - 10}
             ><title>${barTitle(node)}</title></rect>`;
 				})}

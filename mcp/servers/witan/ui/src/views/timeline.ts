@@ -1,4 +1,5 @@
 import { html, nothing, svg, type TemplateResult } from "lit-html";
+import { matchesAssignee } from "../assignee.js";
 import { emptyBox } from "../chrome.js";
 import { absolute, DAY, duration, parseTimestamp } from "../format.js";
 import { type Route, routeHref, WINDOW_DAYS } from "../route.js";
@@ -260,7 +261,7 @@ export function layout(data: Timeline, route: Route): Layout {
 	let backlog = 0;
 	let undated = 0;
 	for (const task of data.tasks) {
-		if (!inScope(task, route)) {
+		if (!inScope(task, route) || !matchesAssignee(task, route.assignees)) {
 			continue;
 		}
 		const bar = taskBar(task, data.readAt);

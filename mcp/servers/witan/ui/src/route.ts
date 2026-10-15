@@ -52,6 +52,13 @@ export interface Route {
 	/** Whether closed tasks are listed. Off by default, as the CLI has it. */
 	closed: boolean;
 	/**
+	 * The assignees tasks are narrowed to: normalized owners (see
+	 * `assignee.ts`) and/or `UNASSIGNED`. Empty is no filter. Task lists narrow
+	 * to matching tasks. A project has no assignee, so the Projects list keeps
+	 * the projects that contain a matching task.
+	 */
+	assignees: string[];
+	/**
 	 * The header search's text, over projects and tasks. Empty is no search.
 	 *
 	 * Its own field rather than `q`: `q` is the memory view's query and picks
@@ -122,6 +129,7 @@ export const DEFAULT_ROUTE: Route = {
 	project: null,
 	slug: null,
 	closed: false,
+	assignees: [],
 	find: "",
 	// Spec §6.6: "where the last two weeks went".
 	days: 14,
@@ -172,6 +180,7 @@ export function parseRoute(hash: string): Route {
 		project: params.get("project") || null,
 		slug: params.get("slug") || null,
 		closed: params.get("closed") === "1",
+		assignees: parseAssignees(params.getAll("assignee")),
 		find: params.get("find") ?? DEFAULT_ROUTE.find,
 		days: parseDays(params.get("days")),
 		q: params.get("q") ?? DEFAULT_ROUTE.q,
@@ -192,6 +201,11 @@ export function parseRoute(hash: string): Route {
 		edge: params.get("edge") || null,
 		binding: params.get("binding") || null,
 	};
+}
+
+/** Distinct, non-empty, in the order given, so a link round-trips as written. */
+function parseAssignees(values: string[]): string[] {
+	return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function parseConfidence(value: string | null): number {
@@ -229,6 +243,9 @@ export function formatRoute(route: Route): string {
 	}
 	if (route.closed) {
 		params.set("closed", "1");
+	}
+	for (const assignee of route.assignees) {
+		params.append("assignee", assignee);
 	}
 	if (route.find) {
 		params.set("find", route.find);
