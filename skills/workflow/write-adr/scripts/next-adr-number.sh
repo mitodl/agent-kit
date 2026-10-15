@@ -29,8 +29,15 @@ declare -A seen
 for f in "$dir"/[0-9]*.md; do
   [[ -e "$f" ]] || continue
   base="${f##*/}"
-  num="${base%%-*}"
-  [[ "$num" =~ ^[0-9]+$ ]] || continue
+  # Accept both NNNN-slug.md and a bare NNNN.md. Stripping only at the first
+  # dash leaves "0015.md" non-numeric, which previously skipped the file --
+  # so the number it already occupies got handed out again.
+  num="${base%%-*}"; num="${num%.md}"
+  if [[ ! "$num" =~ ^[0-9]+$ ]]; then
+    echo "Warning: ${base} does not start with a number; not counted" >&2
+    status=2
+    continue
+  fi
   n=$((10#$num))
 
   if [[ -n "${seen[$n]:-}" ]]; then
@@ -40,8 +47,11 @@ for f in "$dir"/[0-9]*.md; do
   seen[$n]="$base"
   (( n > highest )) && highest=$n
 
-  # The H1 carries the number too; the two drift.
-  h1=$(sed -n '1s/^# *0*\([0-9][0-9]*\)\..*/\1/p' "$f")
+  # The H1 carries the number too; the two drift. Read it past any YAML
+  # frontmatter -- this skill mandates one, so line 1 is '---' and a line-1
+  # read makes this check silently never fire.
+  h1=$(awk 'NR==1 && $0=="---" {fm=1; next} fm && $0=="---" {fm=0; next} !fm' "$f" \
+       | sed -n '/^# /{s/^# *0*\([0-9][0-9]*\)\..*/\1/p;q}')
   if [[ -n "$h1" && "$((10#$h1))" -ne "$n" ]]; then
     echo "Warning: ${base} has H1 number ${h1}; filename says ${num}" >&2
     status=2

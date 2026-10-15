@@ -40,6 +40,9 @@
 #   --dry-run              Report what would happen and write nothing. Still
 #                          performs the (read-only) lookup, because
 #                          create-vs-update is the whole question.
+#   --print-draft-path     Print the draft path for this issue and exit. The
+#                          path is derived, not fixed, so this is how a caller
+#                          learns where to write the body.
 #
 # Output: the comment URL on stdout; diagnostics on stderr.
 # Requires: gh (GitHub CLI, authenticated), jq, sha256sum (or shasum)
@@ -65,6 +68,7 @@ expect_sha=""
 on_duplicate="fail"
 require_existing=false
 dry_run=false
+print_path=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --on-duplicate)     on_duplicate="${2:?--on-duplicate needs fail|oldest|newest}"; shift 2 ;;
     --require-existing) require_existing=true; shift ;;
     --dry-run)          dry_run=true; shift ;;
+    --print-draft-path) print_path=true; shift ;;
     -h|--help)          usage ;;
     *) echo "Error: unknown argument: $1" >&2; usage ;;
   esac
@@ -96,6 +101,11 @@ esac
 # ---- resolve the body -------------------------------------------------------
 
 [[ -n "$body_file" ]] || body_file="$(draft_path "$repo" "$issue")"
+
+if [[ "$print_path" == true ]]; then
+  printf '%s\n' "$body_file"
+  exit 0
+fi
 
 raw="$(mktemp)"; payload="$(mktemp)"; all="$(mktemp)"
 trap 'rm -f "$raw" "$payload" "$all"' EXIT
@@ -144,10 +154,16 @@ fi
 # ---- preflight --------------------------------------------------------------
 
 me="$(gh api user --jq '.login')"
-can_push="$(gh api "repos/${repo}" --jq '.permissions.push // false' 2>/dev/null || echo "false")"
-if [[ "$can_push" != "true" ]]; then
-  echo "Error: no write access to ${repo} as ${me}." >&2
-  echo "A plan comment needs push (or triage) on the repo holding the issue." >&2
+# Triage is enough to comment on GitHub, so accept it rather than refusing a
+# user who can legitimately do this. (The message used to name triage while
+# the check required push, telling people the refusal was about a permission
+# they had.)
+perms="$(gh api "repos/${repo}" --jq '[.permissions.push, .permissions.triage] | @tsv' 2>/dev/null || printf 'false\tfalse')"
+can_push="$(cut -f1 <<<"$perms")"
+can_triage="$(cut -f2 <<<"$perms")"
+if [[ "$can_push" != "true" && "$can_triage" != "true" ]]; then
+  echo "Error: ${me} has neither push nor triage on ${repo}." >&2
+  echo "Commenting on an issue there needs one of them." >&2
   exit 3
 fi
 
@@ -237,15 +253,28 @@ post_new() {
 
 if [[ -n "$target" ]]; then
   comment_id="$(jq -r '.id' <<<"$target")"
-  # A 404 here means the comment was deleted between the read and the write.
-  # Creating a replacement is the right recovery: the plan still has to land.
+  patch_err="$(mktemp)"
   if url="$(jq -n --rawfile body "$payload" '{body: $body}' \
       | gh api --method PATCH "repos/${repo}/issues/comments/${comment_id}" \
-          --input - --jq '.html_url' 2>/dev/null)"; then
+          --input - --jq '.html_url' 2>"$patch_err")"; then
     echo "Updated plan comment on ${repo}#${issue}." >&2
-  else
-    echo "Warning: comment ${comment_id} is gone; posting a new one." >&2
+    rm -f "$patch_err"
+  elif grep -q 'HTTP 404' "$patch_err"; then
+    # ONLY a 404 means the comment was deleted between the read and the write,
+    # and only then is creating a replacement right. Recreating on any failure
+    # turns a 403, a 422, a 502 or a rate limit into a SECOND plan comment --
+    # manufacturing the duplicate this marker design exists to prevent, and
+    # wedging every later run against --on-duplicate fail.
+    echo "Warning: comment ${comment_id} is gone (404); posting a new one." >&2
+    rm -f "$patch_err"
     url="$(post_new)"
+  else
+    echo "Error: failed to update comment ${comment_id} on ${repo}#${issue}." >&2
+    sed 's/^/  /' "$patch_err" >&2
+    echo "Not posting a replacement: the comment still exists, and a second" >&2
+    echo "one would split the plan record. Re-run once the cause is cleared." >&2
+    rm -f "$patch_err"
+    exit 7
   fi
 
   # Minimize rather than delete: deleting destroys the Revisions log the

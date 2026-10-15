@@ -44,7 +44,12 @@ emit_table() {
     base="${f##*/}"
     num="${base%%-*}"
     [[ "$num" =~ ^[0-9]+$ ]] || continue
-    title=$(sed -n '1s/^# *[0-9]*\. *//p' "$f")
+    # Read the H1 past any YAML frontmatter: this skill mandates an
+    # applies_to block, so line 1 is '---', not the heading. Reading line 1
+    # yields an empty title and the index fills with UNKNOWN forever.
+    title=$(sed -e '/./,$!d' "$f" \
+            | awk 'NR==1 && $0=="---" {fm=1; next} fm && $0=="---" {fm=0; next} !fm' \
+            | sed -n '/^# /{s/^# *[0-9]*\. *//p;q}')
     status=$(grep -m1 -E '^(\*\*Status:\*\*|- Status:)' "$f" \
              | sed -E 's/^(\*\*Status:\*\*|- Status:) *//' | cut -c1-60)
     date=$(grep -m1 -E '^(\*\*Date:\*\*|- Date:)' "$f" \

@@ -247,17 +247,39 @@ discovered_from=["<this work's task slug>"])`.
   ADR per decision, zero on the fast path. The comment links to any that were
   written; it does not restate them.
 
-Write the comment body to the draft path with your file-writing
-tool — never a heredoc, which drops and splices lines mid-sentence — then:
+Write the comment body to the draft path with your file-writing tool — never a
+heredoc, which drops and splices lines mid-sentence. The path is derived from
+the repo and issue, not fixed, so ask the script for it rather than guessing:
 
 ```bash
-./skills/workflow/plan-technical-approach/scripts/upsert-plan-comment.sh \
+SKILLS=./skills/workflow   # installed: ~/.claude/skills
+"$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
+  --repo <owner/repo> --issue <N> --print-draft-path
+# -> ~/.cache/ol-plan/<owner>-<repo>-<N>.md
+
+"$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
   --repo <owner/repo> --issue <N> --dry-run
 ```
 
 Check what it reports, then re-run without `--dry-run`. The script computes the
 draft path itself, prepends the marker and appends a digest; do not pass paths
-it can derive, and do not hand-write the marker. Format per
+it can derive, and do not hand-write the marker.
+
+**Updating a comment you did not just write?** Read it first, and pass the
+digest back:
+
+```bash
+"$SKILLS"/plan-technical-approach/scripts/fetch-plan-comment.sh \
+  --repo <owner/repo> --issue <N>          # prints the live body and its sha
+"$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
+  --repo <owner/repo> --issue <N> --expect-sha <that sha>
+```
+
+Without `--expect-sha` an upsert is a full-body overwrite, so a session working
+from a stale or empty draft cache replaces the Revisions log, the merged chunk
+PR URLs and the tradeoff ledger wholesale — and the comment's own edit history
+is the only other copy. `--require-existing` prevents duplicates, not
+clobbering. Format per
 [`references/plan-comment-format.md`](references/plan-comment-format.md).
 
 **More than one chunk?** Mirror the delivery shape in the graph: an epic with

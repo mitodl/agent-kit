@@ -100,9 +100,11 @@ directory ends up with two conventions and no convention.
 
 From the filesystem, never from the index — every hand-maintained pointer in
 these repos has drifted, including the index itself. The script also reports
-duplicate numbers and filename/H1 mismatches; both already exist in
-ol-infrastructure, so expect warnings about files you did not touch and leave
-them alone.
+duplicate numbers and filename/H1 mismatches. One such mismatch already exists
+in ol-infrastructure (`0006-label-based-...md` opens with `# 0003.`), so expect
+that one warning about a file you did not touch and leave it alone. There are
+no duplicate numbers there today; if the script reports one, it is real and
+worth stopping for.
 
 Numbers are permanent. Never renumber to close a gap.
 
@@ -163,13 +165,23 @@ A `## Verify` command that ships must **assert the violating state, not the
 keyword**, and must exclude the ADR directory or it matches its own prose:
 
 ```bash
-# Wrong: `bearer_only: false` IS compliance, and this reports FAIL on it.
-grep -rnE 'bearer_only' src/
+# Wrong, twice over. `bearer_only: false` IS compliance, so this reports FAIL
+# on compliant config; and plain grep does not understand a git pathspec --
+# it reads `:(exclude)...` as a filename, exits 2, and the `||` branch then
+# prints OK while the violation scrolls past. That inverts the check.
+grep -rnE 'bearer_only' src/ ':(exclude)docs/adr'
 
-# Right: asserts the violation, and cannot match the ADR's own text.
-grep -rnE 'bearer_only:[[:space:]]*true' src/ ':(exclude)docs/adr' \
+# Right: `git grep` does understand pathspecs, so the exclusion works and the
+# pattern asserts the violating value rather than the keyword.
+git grep -nE 'bearer_only:[[:space:]]*true' -- ':(exclude)docs/adr' \
   && echo "FAIL: gateway-side bearer validation enabled" || echo "OK"
 ```
+
+Use `git grep`, not `grep`, whenever the check needs to exclude the ADR
+directory — which is almost always, since a pattern describing a violation
+usually appears in the ADR describing it. With plain `grep` the exclusion
+silently does nothing worse than nothing: it makes the command exit 2 and
+report success.
 
 Run it before writing the ADR and require it to pass on compliant code. A check
 that cries wolf gets ignored, and so does the real violation it later catches.
@@ -182,11 +194,24 @@ that cries wolf gets ignored, and so does the real violation it later catches.
 and an agent writing "Accepted" next to "human validation pending" is a
 contradiction that has already shipped twice in ol-infrastructure.
 
-Add the pending Review History row:
+**In the ol-infrastructure flavor**, add the pending Review History row:
 
 ```markdown
 | 2026-10-14 | _Pending_ | _Pending_ | Created by AI agent, pending human approval |
 ```
+
+**In the witan flavor there is no Review History table and no
+`**Last Updated:**`** — see
+[`references/repo-flavors.md`](references/repo-flavors.md). Carry the same
+information on the `- Status:` line instead, which is where that flavor already
+records amendments:
+
+```markdown
+- Status: Proposed (created by AI agent, pending human approval)
+```
+
+Do not graft a Review History table onto a witan-flavor ADR to satisfy this
+step. The flavor you detected wins; this step adapts to it.
 
 Acceptance happens later, mechanically:
 [`implement-plan`](../implement-plan/SKILL.md) flips it when the implementation

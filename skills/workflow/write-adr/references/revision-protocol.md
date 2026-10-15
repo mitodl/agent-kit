@@ -43,8 +43,12 @@ gh pr view <N> --repo <owner/repo> --json reviews \
   --jq '[.reviews[] | select(.state == "APPROVED") | .author.login] | unique | join(", ")'
 ```
 
-- A non-empty result → flip `**Status:**` to `Accepted`, append a Review
-  History row naming the approver, bump `**Last Updated:**`.
+- A non-empty result → flip the status to `Accepted` and record the approver,
+  in the ADR's own flavor. ol-infrastructure: `**Status:** Accepted`, a Review
+  History row naming them, and a bumped `**Last Updated:**`. witan: there is no
+  Review History table and no `**Last Updated:**`, so it goes on the status
+  line — `- Status: Accepted 2026-10-14 by @handle` — the same place that
+  flavor records amendments.
 - Empty (admin merge, self-merge, no review) → it stays `Proposed`, and the
   skill **says so out loud** rather than leaving it to be discovered.
 
