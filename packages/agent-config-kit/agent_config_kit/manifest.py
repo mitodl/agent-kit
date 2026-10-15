@@ -190,20 +190,26 @@ def _raw_hook_identity(hook: dict, path: Path) -> str:
     return f"declarative:{hook.get('event')}:{hook.get('command')}"
 
 
-def _merge_hooks(base_hooks: list, overlay_hooks: list, path: Path) -> list[dict]:
+def _check_hook_skills_agree(
+    identity: str, previous: dict, hook: dict, path: Path
+) -> None:
     """A hook's identity ignores ``skill``, so two hooks sharing a
     ``{skill_dir}`` command for different skills would otherwise collapse
     into one, silently dropping the other."""
+    if previous.get("skill") != hook.get("skill"):
+        raise ManifestError(
+            f"{path}: hooks[]: {identity!r} is declared for skills "
+            f"{previous.get('skill')!r} and {hook.get('skill')!r}; give "
+            "each hook its own command"
+        )
+
+
+def _merge_hooks(base_hooks: list, overlay_hooks: list, path: Path) -> list[dict]:
     merged: dict[str, dict] = {}
     for hook in [*base_hooks, *overlay_hooks]:
         identity = _raw_hook_identity(hook, path)
-        previous = merged.get(identity)
-        if previous is not None and previous.get("skill") != hook.get("skill"):
-            raise ManifestError(
-                f"{path}: hooks[]: {identity!r} is declared for skills "
-                f"{previous.get('skill')!r} and {hook.get('skill')!r}; give "
-                "each hook its own command"
-            )
+        if identity in merged:
+            _check_hook_skills_agree(identity, merged[identity], hook, path)
         merged[identity] = hook
     return list(merged.values())
 
@@ -297,13 +303,16 @@ def _process_profile_includes(
                     if key not in selection:
                         selection.append(key)
             own_hooks = data.setdefault("hooks", [])
-            own_identities = {_raw_hook_identity(h, path) for h in own_hooks}
+            own_by_identity = {_raw_hook_identity(h, path): h for h in own_hooks}
             selection = profile.setdefault("hooks", [])
             for hook in included.get("hooks") or []:
                 identity = _raw_hook_identity(hook, path)
-                if identity not in own_identities:
+                previous = own_by_identity.get(identity)
+                if previous is None:
                     own_hooks.append(hook)
-                    own_identities.add(identity)
+                    own_by_identity[identity] = hook
+                else:
+                    _check_hook_skills_agree(identity, previous, hook, path)
                 if identity not in selection:
                     selection.append(identity)
 
