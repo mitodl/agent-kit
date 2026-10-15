@@ -343,7 +343,11 @@ written but doesn't run. Codex hashes the hook's entry (event, matcher,
 command, timeout), so changing any of those means trusting it again; keep
 them stable. It doesn't hash the script the command runs: a `{skill_dir}`
 hook keeps its trust when a later `apply` installs a new version of the
-skill's script.
+skill's script. Codex also keys that trust by each hook's position in the
+file, so `apply --prune` leaves an emptied matcher group in place
+(`"hooks": []`) rather than shifting every later hook. If a removed hook
+shared a group with other handlers, the ones after it do move, and `apply`
+prints a line for each telling you to trust it again.
 
 Hooks are stable and on by default from Codex 0.124.0 (`codex --version`).
 An older Codex needs `[features] codex_hooks = true` in `config.toml`; the

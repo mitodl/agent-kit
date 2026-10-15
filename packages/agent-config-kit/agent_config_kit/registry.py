@@ -207,7 +207,7 @@ def _registry() -> dict[str, AgentPlatform]:
                 }
             ),
             hooks_merge=codex_adapter.merge_hooks,
-            hooks_remove=claude_adapter.remove_hooks,
+            hooks_remove=codex_adapter.remove_hooks,
             hooks_approval=codex_adapter.HOOKS_APPROVAL,
             # Codex's skill locations are the cross-agent .agents/skills
             # directories, not anything under CODEX_HOME.

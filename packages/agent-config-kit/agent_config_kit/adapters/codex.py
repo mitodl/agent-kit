@@ -82,3 +82,32 @@ def _whole_seconds(hook: DeclarativeHook) -> DeclarativeHook:
 
 def merge_hooks(hooks_file: dict, hooks: list[DeclarativeHook]) -> None:
     claude_adapter.merge_hooks(hooks_file, [_whole_seconds(h) for h in hooks])
+
+
+def remove_hooks(hooks_file: dict, hooks: list[DeclarativeHook]) -> bool:
+    """Like Claude's ``remove_hooks``, but a matcher group left with no
+    handlers stays in place as ``"hooks": []``. Codex keys a hook's trust by
+    its group and handler index (``hook_key`` in codex-rs
+    hooks/src/engine/discovery.rs), so dropping a group would shift every
+    later group and make Codex ask to trust those hooks again."""
+    section = hooks_file.get("hooks")
+    if not isinstance(section, dict):
+        return False
+    commands = {(h.event, h.command) for h in hooks}
+    changed = False
+    for event, event_name in claude_adapter.EVENT_NAMES.items():
+        groups = section.get(event_name)
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            remaining = [
+                h
+                for h in group["hooks"]
+                if not (isinstance(h, dict) and (event, h.get("command")) in commands)
+            ]
+            if len(remaining) != len(group["hooks"]):
+                group["hooks"] = remaining
+                changed = True
+    return changed

@@ -288,14 +288,57 @@ def _remove_mcp_servers(
     return removed
 
 
+def _handler_positions(cfg: dict, key_path: tuple[str, ...]) -> dict:
+    """``{(event, group index, handler index): handler}`` for a declarative
+    hooks file."""
+    section: object = cfg
+    for key in key_path:
+        section = section.get(key) if isinstance(section, dict) else None
+    if not isinstance(section, dict):
+        return {}
+    return {
+        (event, gi, hi): handler
+        for event, groups in section.items()
+        if isinstance(groups, list)
+        for gi, group in enumerate(groups)
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hi, handler in enumerate(group["hooks"])
+    }
+
+
+def _moved_hook_notices(
+    platform: registry.AgentPlatform,
+    before: dict,
+    after: dict,
+    target_path: Path,
+    key_path: tuple[str, ...],
+    dry_run: bool,
+) -> list[str]:
+    """Codex keys a hook's trust by its group and handler index, so a hook
+    that a removal shifted within its group (the user's own included) has to
+    be trusted again. ``remove_hooks`` keeps emptied groups in place, so only
+    a handler after a removed one in the same group can move."""
+    old = _handler_positions(before, key_path)
+    verb = "would move" if dry_run else "moved"
+    return [
+        f"{event} hook {handler.get('command')!r} {verb} within {target_path}; "
+        f"{platform.hooks_approval}"
+        for (event, gi, hi), handler in _handler_positions(after, key_path).items()
+        if old.get((event, gi, hi)) != handler and isinstance(handler, dict)
+    ]
+
+
 def _remove_hooks(
     platform: registry.AgentPlatform,
     identities: set[str],
     *,
     scope: Scope,
     dry_run: bool,
+    notices: list[str],
     _json_state: dict[Path, tuple[dict, dict]] | None = None,
 ) -> list[str]:
+    """``notices`` collects a line per remaining hook whose removal-shifted
+    position needs approving again (``AgentPlatform.hooks_approval``)."""
     if not identities or platform.hooks is None:
         return []
     decoded = [
@@ -314,6 +357,7 @@ def _remove_hooks(
                 cfg = load_config_object(target.path)
                 before = copy.deepcopy(cfg) if cfg is not None else None
             if cfg is not None:
+                pre_removal = copy.deepcopy(cfg)
                 changed = False
                 for identity, hook in declarative:
                     if platform.hooks_remove(cfg, [hook]):
@@ -321,6 +365,17 @@ def _remove_hooks(
                         changed = True
                 if changed:
                     write_config(target.path, cfg, dry_run)
+                    if platform.hooks_approval is not None:
+                        notices.extend(
+                            _moved_hook_notices(
+                                platform,
+                                pre_removal,
+                                cfg,
+                                target.path,
+                                target.key_path,
+                                dry_run,
+                            )
+                        )
                 if _json_state is not None:
                     _json_state[target.path] = (before, cfg)
 
@@ -442,6 +497,7 @@ def apply_with_prune(
             set(previous.hooks) - set(current.hooks),
             scope=scope,
             dry_run=dry_run,
+            notices=result.notices,
             _json_state=json_state,
         )
     )

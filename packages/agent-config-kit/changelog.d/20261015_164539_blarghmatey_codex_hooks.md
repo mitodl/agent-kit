@@ -8,7 +8,9 @@
   file. Codex runs a hook only after the user trusts it, and
   agent-config-kit never writes that trust state, so `agent-kit apply` prints
   one line per Codex hook it adds or changes, telling the user to trust it
-  with `/hooks` in the Codex TUI (`InstallResult.notices`). Hooks are on by
+  with `/hooks` in the Codex TUI (`InstallResult.notices`). Codex keys that
+  trust by a hook's group and handler index, so `apply --prune` leaves an
+  emptied matcher group in place, and reports any hook a removal still moved. Hooks are on by
   default from Codex 0.124.0; an older Codex needs `[features] codex_hooks =
   true`.
 - An optional `skill` field on a declarative hook. `{skill_dir}` in its

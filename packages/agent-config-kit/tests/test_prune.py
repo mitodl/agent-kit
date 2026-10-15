@@ -665,9 +665,64 @@ def test_apply_with_prune_removes_dropped_hook_from_codex_hooks_json(
         PlatformState(hooks=[hook_identity(hook)]),
     )
 
-    assert json.loads(hooks_json.read_text()) == {"hooks": {"Stop": [users_own]}}
+    # The emptied group stays, so Codex's index-keyed trust doesn't shift.
+    assert json.loads(hooks_json.read_text()) == {
+        "hooks": {"Stop": [users_own, {"matcher": "", "hooks": []}]}
+    }
     assert result.removed == [hook_identity(hook)]
+    assert result.notices == []
     assert current_state.hooks == []
+
+
+def test_codex_prune_keeps_later_hooks_at_their_trusted_positions(
+    tmp_path, monkeypatch
+):
+    """Codex trusts a hook by (event, group index, handler index); removing
+    the first of two Stop hooks must not move the second."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    first = DeclarativeHook(event=HookEvent.STOP, command="first")
+    second = DeclarativeHook(event=HookEvent.STOP, command="second")
+    apply("codex", _bundle(mcp_servers={}, hooks=[first, second]))
+
+    result, _ = apply_with_prune(
+        "codex",
+        _bundle(mcp_servers={}, hooks=[second]),
+        PlatformState(hooks=[hook_identity(first), hook_identity(second)]),
+    )
+
+    stop = json.loads((tmp_path / ".codex" / "hooks.json").read_text())["hooks"]["Stop"]
+    assert stop[0]["hooks"] == []
+    assert stop[1]["hooks"][0]["command"] == "second"
+    assert result.notices == []
+
+
+def test_codex_prune_reports_hooks_shifted_within_a_shared_group(tmp_path, monkeypatch):
+    """When the user put our command in their own multi-handler group, the
+    handlers after it move up one index, so Codex will ask to trust them
+    again; say so rather than let them silently stop running."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ours = DeclarativeHook(event=HookEvent.STOP, command="witan session-checkpoint")
+    hooks_json = tmp_path / ".codex" / "hooks.json"
+    hooks_json.parent.mkdir()
+    shared = {
+        "matcher": "",
+        "hooks": [
+            {"type": "command", "command": "witan session-checkpoint"},
+            {"type": "command", "command": "mine"},
+        ],
+    }
+    hooks_json.write_text(json.dumps({"hooks": {"Stop": [shared]}}))
+
+    result, _ = apply_with_prune(
+        "codex",
+        _bundle(mcp_servers={}),
+        PlatformState(hooks=[hook_identity(ours)]),
+        dry_run=True,
+    )
+
+    [notice] = result.notices
+    assert notice.startswith(f"Stop hook 'mine' would move within {hooks_json}")
+    assert "/hooks" in notice
 
 
 def test_apply_with_prune_tracks_skill_dir_hooks_by_their_written_command(
@@ -696,6 +751,6 @@ def test_apply_with_prune_tracks_skill_dir_hooks_by_their_written_command(
     )
 
     hooks_json = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
-    assert hooks_json["hooks"]["SessionStart"] == []
+    assert hooks_json["hooks"]["SessionStart"] == [{"matcher": "", "hooks": []}]
     assert result.removed[0] == codex_state.hooks[0]
     assert current_state.hooks == []
