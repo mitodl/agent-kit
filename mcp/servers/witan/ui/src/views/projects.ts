@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit-html";
 import { filterByAssignee, matchesAssignee } from "../assignee.js";
 import { emptyBox } from "../chrome.js";
 import { absolute, ago, repoLabel } from "../format.js";
+import { markdown } from "../markdown.js";
 import { type Route, routeHref } from "../route.js";
 import type {
 	LastSession,
@@ -208,7 +209,7 @@ export function projectRollup(
 				detail.description
 					? html`<section class="prose">
               <h3>Description</h3>
-              <p>${detail.description}</p>
+              ${markdown(detail.description)}
             </section>`
 					: nothing
 			}
@@ -425,7 +426,7 @@ function lastSession(session: LastSession | null, now: number): TemplateResult {
         </p>
         ${
 					session.summary
-						? html`<p class="summary">${session.summary}</p>`
+						? html`<div class="summary prose">${markdown(session.summary)}</div>`
 						: html`<p class="summary muted">No summary.</p>`
 				}
       </li>
@@ -567,7 +568,7 @@ function sessionList(
             </p>
             ${
 							session.summary
-								? html`<p class="summary">${session.summary}</p>`
+								? html`<div class="summary prose">${markdown(session.summary)}</div>`
 								: html`<p class="summary muted">No summary.</p>`
 						}
           </li>

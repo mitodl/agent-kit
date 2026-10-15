@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit-html";
 import { absolute, ago, branchUrl, repoLabel } from "../format.js";
+import { markdown } from "../markdown.js";
 import { type Route, routeHref } from "../route.js";
 import type { CodeBranchRef, TaskDetail } from "../types.js";
 import { slugLinks, uriFact } from "./parts.js";
@@ -105,13 +106,12 @@ function prose(
 	if (!body) {
 		return nothing;
 	}
-	// Rendered as text, not markdown: descriptions are agent-written and
-	// untrusted, and `white-space: pre-wrap` in the stylesheet keeps their
-	// paragraph breaks without an HTML parse.
+	// Agent-written and untrusted, so `markdown()` maps a fixed subset to
+	// templates and never builds an HTML string; see `markdown.ts`.
 	return html`
     <section class="prose">
       <h3>${heading}</h3>
-      <p>${body}</p>
+      ${markdown(body)}
     </section>
   `;
 }
@@ -280,7 +280,7 @@ function comments(
                   >${ago(comment.created_at, now)}</span
                 >
               </p>
-              <p class="prose">${comment.body}</p>
+              <div class="prose">${markdown(comment.body)}</div>
             </li>
           `,
 				)}

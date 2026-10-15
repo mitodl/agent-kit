@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit-html";
 import { absolute, ago, repoLabel } from "../format.js";
+import { markdown } from "../markdown.js";
 import {
 	DEFAULT_ROUTE,
 	MEMORY_FACETS,
@@ -384,7 +385,7 @@ function side(
         >
         ${confidence(endpoint.confidence)}
       </p>
-      <p class="prose">${endpoint.content}</p>
+      <div class="prose">${markdown(endpoint.content)}</div>
     </article>
   `;
 }
@@ -625,7 +626,7 @@ export function memoryDetail(
 
       ${
 				memory.content
-					? html`<section class="prose"><p>${memory.content}</p></section>`
+					? html`<section class="prose">${markdown(memory.content)}</section>`
 					: nothing
 			}
       ${topics(memory, route, now)}
