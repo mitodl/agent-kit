@@ -359,7 +359,11 @@ def _parse_ts(value: str) -> datetime:
     """A graph or journal timestamp, as an aware UTC datetime.
 
     The graph hands back naive ISO strings (omnigraph drops the offset) while
-    the journal stamps `now_iso()`'s `+00:00`; both are UTC.
+    the journal stamps `now_iso()`'s `+00:00`; both are UTC. Both are also only
+    millisecond-precise, so a write and a queued entry can carry the same
+    stamp. Replay counts a tie as "since": it cannot be ordered, and treating it
+    as later turns the queued write into a comment instead of applying it over
+    a change it never saw.
     """
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
@@ -378,7 +382,7 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")
-    if closed_at and _parse_ts(closed_at) > _parse_ts(entry.ts):
+    if closed_at and _parse_ts(closed_at) >= _parse_ts(entry.ts):
         return f"the task was closed at {closed_at}"
     return None
 
@@ -447,7 +451,7 @@ class RemoteServerProxy(RemoteMCPProxy):
             # re-read for it. Usually that is zero or one task.
             for hit in (h for h in hits if h["title"] == title):
                 task = await call("task_get", {"slug": hit["slug"]})
-                if _parse_ts(task["created_at"]) > _parse_ts(entry.ts):
+                if _parse_ts(task["created_at"]) >= _parse_ts(entry.ts):
                     logger.warning(
                         "skipped journal entry %s: task_create %r from %s, but %s "
                         "with that title was created since",
