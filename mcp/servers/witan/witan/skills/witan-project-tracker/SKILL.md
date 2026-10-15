@@ -10,7 +10,8 @@ description: >
   or when completing a project (workflow_project_complete to create a corpus
   trace). Requires the witan MCP server. Covers project lifecycle,
   cross-session linking, parallel sessions, phase transitions, and corpus trace
-  creation for pattern mining.
+  creation for pattern mining. Use it when asked to "continue the X project",
+  "advance the X project", or "pick up where we left off".
 license: BSD-3-Clause
 metadata:
   category: workflow

@@ -2,7 +2,8 @@
 name: witan-task
 description: >
   Interactive task manager for the work-coordination graph. Use to triage and
-  claim ready work, create tasks (including epics and sub-issues), link
+  claim ready work ("what's next", "the next task in X"), find the task for an
+  issue or PR, create tasks (including epics and sub-issues), link
   dependencies, and close finished tasks. Also use it whenever you are about to
   START work on an existing `tk-` task from anywhere — the ready-task list in
   your session context, a `witan project run` prompt, or a slug someone named —
