@@ -22,10 +22,11 @@ design anything and writes no code. It answers "what are we actually doing, and
 how much process does it deserve?" — then hands off.
 
 ```text
-scope-work ──→ plan-technical-approach ──→ implement-plan ──→ shipped
-                        │
-                        └──→ write-adr        one ADR per decision worth
-                                              recording; zero is normal
+  scope-work  -->  plan-technical-approach  -->  implement-plan  -->  shipped
+                            |
+                            +-->  write-adr
+                                  one ADR per decision worth recording,
+                                  and zero is a normal outcome
 
   trivial     plan-technical-approach takes its fast path: no alternatives,
               no scoring, no ADR.
