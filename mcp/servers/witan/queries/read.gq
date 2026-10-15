@@ -440,6 +440,20 @@ query contradicts_out($slug: String) {
     order { $w.created_at desc }
 }
 
+// The Contradicts edges whose endpoints are both in `$slugs`, for `recall`'s
+// contradiction pass over the memories it returns. Aliased for the same reason
+// as `contradicts_pairs`: both endpoints are Memory.
+query contradicts_among($slugs: [String]) {
+    match {
+        $a: Memory
+        $b: Memory
+        $a contradicts $b
+        $a.slug in $slugs
+        $b.slug in $slugs
+    }
+    return { $a.slug as a_slug, $b.slug as b_slug }
+}
+
 query contradicts_in($slug: String) {
     match {
         $m: Memory { slug: $slug }
@@ -667,6 +681,18 @@ query topics_for_memory($slug: String) {
     order { $w.created_at desc }
 }
 
+// The topic slugs every memory in `$slugs` is tagged with, for the topic
+// backfill's existing-edge check.
+query topics_for_memories($slugs: [String]) {
+    match {
+        $m: Memory
+        $tp: Topic
+        $m tagged $tp
+        $m.slug in $slugs
+    }
+    return { $m.slug as memory_slug, $tp.slug as topic_slug }
+}
+
 // ── Project facts ─────────────────────────────────────────────────
 
 query get_project_facts($repo: String) {
@@ -840,6 +866,17 @@ query list_all_projects() {
 query get_workflow_project_by_slug($slug: String) {
     match {
         $p: WorkflowProject { slug: $slug }
+    }
+    return {
+        $p.slug, $p.title, $p.status, $p.phase,
+        $p.repos, $p.updated_at, $p.blocked_by
+    }
+}
+
+query get_workflow_projects_by_slugs($slugs: [String]) {
+    match {
+        $p: WorkflowProject
+        $p.slug in $slugs
     }
     return {
         $p.slug, $p.title, $p.status, $p.phase,
@@ -1117,6 +1154,16 @@ query get_task($slug: String) {
     }
 }
 
+// Status of each task in `$slugs`, for blocker checks. A slug with no task
+// has no row.
+query task_statuses($slugs: [String]) {
+    match {
+        $t: Task
+        $t.slug in $slugs
+    }
+    return { $t.slug, $t.status }
+}
+
 query list_tasks_by_repo($repo: String) {
     match {
         $t: Task { repo: $repo }
@@ -1350,19 +1397,8 @@ query task_code_branches($task_slug: String) {
 }
 
 // ── Edge enumeration, for removal ─────────────────────────────────
-// `task_unlink` deletes an edge by ONE endpoint (the mutation language allows
-// no compound predicate — see mutations.gq), so the server must first know
-// every edge on both sides: it deletes the side with fewer matches, then
-// re-inserts the survivors. Each pair returns the OTHER endpoint's slug.
-
-query blocks_from_slugs($to: String) {
-    match {
-        $a: Task
-        $b: Task { slug: $to }
-        $a blocks $b
-    }
-    return { $a.slug }
-}
+// `task_unlink` checks the edge exists before deleting it, so it can report
+// `removed`. Each query returns the slugs `$from` points at.
 
 query blocks_to_slugs($from: String) {
     match {
@@ -1371,15 +1407,6 @@ query blocks_to_slugs($from: String) {
         $a blocks $b
     }
     return { $b.slug }
-}
-
-query parent_of_from_slugs($to: String) {
-    match {
-        $a: Task
-        $b: Task { slug: $to }
-        $a parentof $b
-    }
-    return { $a.slug }
 }
 
 query parent_of_to_slugs($from: String) {
@@ -1391,15 +1418,6 @@ query parent_of_to_slugs($from: String) {
     return { $b.slug }
 }
 
-query discovered_from_from_slugs($to: String) {
-    match {
-        $a: Task
-        $b: Task { slug: $to }
-        $a discoveredfrom $b
-    }
-    return { $a.slug }
-}
-
 query discovered_from_to_slugs($from: String) {
     match {
         $a: Task { slug: $from }
@@ -1409,15 +1427,6 @@ query discovered_from_to_slugs($from: String) {
     return { $b.slug }
 }
 
-query addresses_from_slugs($to: String) {
-    match {
-        $a: Task
-        $m: Memory { slug: $to }
-        $a addresses $m
-    }
-    return { $a.slug }
-}
-
 query addresses_to_slugs($from: String) {
     match {
         $a: Task { slug: $from }
@@ -1425,15 +1434,6 @@ query addresses_to_slugs($from: String) {
         $a addresses $m
     }
     return { $m.slug }
-}
-
-query project_blocks_from_slugs($to: String) {
-    match {
-        $a: WorkflowProject
-        $b: WorkflowProject { slug: $to }
-        $a projectblocks $b
-    }
-    return { $a.slug }
 }
 
 query project_blocks_to_slugs($from: String) {

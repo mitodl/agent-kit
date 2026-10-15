@@ -1199,6 +1199,11 @@ def _tag_memory_steps(
 # bounded by how many tags one memory can carry.
 _MIGRATE_BATCH_SIZE = 100
 
+# Memory slugs per `topics_for_memories` read in the topic backfill. The list is
+# an inline query parameter, so the sweep reads in bounded chunks for the same
+# reason it writes in them.
+_MIGRATE_READ_BATCH_SIZE = 200
+
 
 def migrate_topics() -> dict:
     """One-shot, idempotent backfill: promote every memory ``tag`` to a
@@ -1228,12 +1233,16 @@ def migrate_topics() -> dict:
             client.change_many(list(steps))
             steps.clear()
 
+    slugs = [row["slug"] for row in rows]
+    tagged: dict[str, set[str]] = {}
+    for i in range(0, len(slugs), _MIGRATE_READ_BATCH_SIZE):
+        chunk = slugs[i : i + _MIGRATE_READ_BATCH_SIZE]
+        for edge in client.read("read.gq", "topics_for_memories", {"slugs": chunk}):
+            tagged.setdefault(edge["memory_slug"], set()).add(edge["topic_slug"])
+
     for row in rows:
         slug = row["slug"]
-        existing = {
-            t["slug"]
-            for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
-        }
+        existing = tagged.get(slug, set())
         for tag in dict.fromkeys(t for t in (row.get("tags") or []) if t.strip()):
             topic_slug = _topic_slug("topic", tag)
             if topic_slug not in seen_topics:
@@ -5767,14 +5776,15 @@ def workflow_project_get_blockers(slug: str) -> list[dict]:
     if not rows:
         return []
     blocked_by = rows[0].get("blocked_by") or []
-    result = []
-    for blocker_slug in blocked_by:
-        blocker_rows = client.read(
-            "read.gq", "get_workflow_project_by_slug", {"slug": blocker_slug}
+    if not blocked_by:
+        return []
+    by_slug = {
+        r["slug"]: r
+        for r in client.read(
+            "read.gq", "get_workflow_projects_by_slugs", {"slugs": blocked_by}
         )
-        if blocker_rows:
-            result.append(blocker_rows[0])
-    return result
+    }
+    return [by_slug[s] for s in blocked_by if s in by_slug]
 
 
 def _project_blocker_status(blocker_slug: str, status_cache: dict[str, str]) -> str:
@@ -6275,6 +6285,15 @@ def _with_lease_flag(row: dict) -> dict:
     return {**row, "lease_expired": readiness.status_pickable(row)}
 
 
+def _task_statuses(slugs: Iterable[str]) -> dict[str, str | None]:
+    """Status of each task in ``slugs``, in one read. A slug with no task is absent."""
+    wanted = list(dict.fromkeys(slugs))
+    if not wanted:
+        return {}
+    rows = client.read("read.gq", "task_statuses", {"slugs": wanted})
+    return {r["slug"]: r.get("status") for r in rows}
+
+
 def _unblock_dependents(repo: str | None) -> None:
     """Flip ``blocked`` tasks back to ``open`` once all their blockers are closed.
 
@@ -6287,16 +6306,20 @@ def _unblock_dependents(repo: str | None) -> None:
         else client.read("read.gq", "list_unscoped_tasks", {})
     )
     status_by_slug = {r["slug"]: r.get("status") for r in rows}
+    blocked = [r for r in rows if r.get("status") == "blocked"]
+    status_by_slug.update(
+        _task_statuses(
+            b
+            for r in blocked
+            for b in r.get("blocked_by") or []
+            if b not in status_by_slug
+        )
+    )
 
-    def is_closed(blocker_slug: str) -> bool:
-        if blocker_slug in status_by_slug:
-            return status_by_slug[blocker_slug] == "closed"
-        fetched = client.read("read.gq", "get_task", {"slug": blocker_slug})
-        return fetched[0].get("status") == "closed" if fetched else True
-
-    for r in rows:
+    # A blocker that no longer exists does not hold anything back.
+    for r in blocked:
         blockers = r.get("blocked_by") or []
-        if r.get("status") == "blocked" and all(is_closed(b) for b in blockers):
+        if all(status_by_slug.get(b, "closed") == "closed" for b in blockers):
             _update_task(r["slug"], {"status": "open"})
 
 
@@ -6579,13 +6602,9 @@ async def task_create(
     # Only "blocked" if a blocker is not already closed — otherwise it's ready
     # now and would never be auto-unblocked.
     status: TaskStatus = "open"
-    for blocker_slug in blocked_by or []:
-        fetched = await _offload(
-            client.read, "read.gq", "get_task", {"slug": blocker_slug}
-        )
-        if fetched and fetched[0].get("status") != "closed":
-            status = "blocked"
-            break
+    blocker_statuses = await _offload(_task_statuses, blocked_by or [])
+    if any(s != "closed" for s in blocker_statuses.values()):
+        status = "blocked"
 
     # One commit for the task and every edge it arrives with — a task created
     # with a project, a parent and two blockers was five Lance versions. The
@@ -7732,13 +7751,16 @@ def task_ready(
     # ``rows`` last: where a slug appears in both, the candidate row is the one
     # the readiness decision is about, so its status wins.
     status_by_slug = {r["slug"]: r.get("status") for r in (*known, *rows)}
+    # Blockers outside the rows read above (another repo's tasks), in one read.
+    fetched = _task_statuses(
+        b for r in rows for b in r.get("blocked_by") or [] if b not in status_by_slug
+    )
 
     def blocker_status(blocker_slug: str) -> str:
         if blocker_slug in status_by_slug:
             return status_by_slug[blocker_slug] or "open"
-        fetched = client.read("read.gq", "get_task", {"slug": blocker_slug})
         # A blocker that no longer exists does not hold anything back.
-        return fetched[0].get("status", "closed") if fetched else "closed"
+        return fetched.get(blocker_slug) or "closed"
 
     ready = [
         r
@@ -7875,43 +7897,18 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     return {"from": from_slug, "to": to_slug, "kind": kind}
 
 
-# Per edge kind: the read queries listing each endpoint's edges, and the
-# mutations deleting by one endpoint or re-inserting a survivor.
+# Per edge kind: the read listing what `from` points at, and the exact delete.
 _EDGE_OPS: dict[str, dict[str, str]] = {
-    "blocks": {
-        "from_q": "blocks_from_slugs",
-        "to_q": "blocks_to_slugs",
-        "del_by_to": "unlink_blocks_by_to",
-        "del_by_from": "unlink_blocks_by_from",
-        "link": "link_blocks",
-    },
-    "parent": {
-        "from_q": "parent_of_from_slugs",
-        "to_q": "parent_of_to_slugs",
-        "del_by_to": "unlink_parent_of_by_to",
-        "del_by_from": "unlink_parent_of_by_from",
-        "link": "link_parent_of",
-    },
+    "blocks": {"to_q": "blocks_to_slugs", "unlink": "unlink_blocks"},
+    "parent": {"to_q": "parent_of_to_slugs", "unlink": "unlink_parent_of"},
     "discovered_from": {
-        "from_q": "discovered_from_from_slugs",
         "to_q": "discovered_from_to_slugs",
-        "del_by_to": "unlink_discovered_from_by_to",
-        "del_by_from": "unlink_discovered_from_by_from",
-        "link": "link_discovered_from",
+        "unlink": "unlink_discovered_from",
     },
-    "addresses": {
-        "from_q": "addresses_from_slugs",
-        "to_q": "addresses_to_slugs",
-        "del_by_to": "unlink_addresses_by_to",
-        "del_by_from": "unlink_addresses_by_from",
-        "link": "link_addresses",
-    },
+    "addresses": {"to_q": "addresses_to_slugs", "unlink": "unlink_addresses"},
     "project_blocks": {
-        "from_q": "project_blocks_from_slugs",
         "to_q": "project_blocks_to_slugs",
-        "del_by_to": "unlink_project_blocks_by_to",
-        "del_by_from": "unlink_project_blocks_by_from",
-        "link": "link_project_blocks",
+        "unlink": "unlink_project_blocks",
     },
 }
 
@@ -7920,43 +7917,14 @@ def _unlink_edge(kind: str, from_slug: str, to_slug: str) -> bool:
     """Remove one ``from -> to`` edge, leaving every other edge of that kind.
 
     Returns whether the edge existed. A no-op (and no mutation at all) when it
-    did not, so calling this twice is safe.
-
-    An edge delete accepts exactly ONE predicate — ``delete E where to = $x``
-    or ``where from = $x``, never both (mutations.gq explains). So an exact
-    single-edge removal is: delete every edge on one endpoint, then put back
-    the ones that were not the target. Two things keep that honest:
-
-    - The side with FEWER edges is chosen, so the fewest possible edges are
-      disturbed. In the common case one side has exactly this edge and nothing
-      is re-inserted at all — a single delete, nothing to restore.
-    - Nothing is deleted unless the target edge is confirmed to exist first.
-
-    NOT ATOMIC, and on a shared server that matters: between the delete and the
-    re-inserts, a concurrent reader sees the survivors missing, and a crash
-    would drop them. omnigraph has no conditional write to close this — see
-    tk-omnigraph-conditional-write-cas-precondition-on--94155f. The exposure is
-    bounded by choosing the smaller side, and is nil for the single-edge case
-    that motivated this. ``task_link`` already does an unguarded
-    read-modify-write on ``blocked_by``, so this adds no new class of risk.
+    did not, so calling this twice is safe. The delete names both endpoints, so
+    no other edge is touched.
     """
     ops = _EDGE_OPS[kind]
-    into = [r["slug"] for r in client.read("read.gq", ops["from_q"], {"to": to_slug})]
     out = [r["slug"] for r in client.read("read.gq", ops["to_q"], {"from": from_slug})]
-    if from_slug not in into or to_slug not in out:
+    if to_slug not in out:
         return False
-
-    if len(out) <= len(into):
-        # Delete everything `from_slug` points at, restore all but `to_slug`.
-        client.change("mutations.gq", ops["del_by_from"], {"from": from_slug})
-        survivors = [(from_slug, other) for other in out if other != to_slug]
-    else:
-        # Delete everything pointing at `to_slug`, restore all but `from_slug`.
-        client.change("mutations.gq", ops["del_by_to"], {"to": to_slug})
-        survivors = [(other, to_slug) for other in into if other != from_slug]
-
-    for src, dst in survivors:
-        client.change("mutations.gq", ops["link"], {"from": src, "to": dst})
+    client.change("mutations.gq", ops["unlink"], {"from": from_slug, "to": to_slug})
     return True
 
 
@@ -8004,9 +7972,7 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
                 # Only clear `blocked` once nothing open is still holding it.
                 if blocked[0].get("status") == "blocked":
                     still_held = any(
-                        (rows := client.read("read.gq", "get_task", {"slug": s}))
-                        and rows[0].get("status") != "closed"
-                        for s in remaining
+                        s != "closed" for s in _task_statuses(remaining).values()
                     )
                     if not still_held:
                         changes["status"] = "open"
@@ -8465,16 +8431,24 @@ def recall(
     in_scope = _contradiction_in_scope(repo_module.detect(override=repo) or "")
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
-    for slug, node in returned_by_slug.items():
-        for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
-            if other["slug"] not in returned_by_slug:
-                continue
-            if not in_scope(node, returned_by_slug[other["slug"]]):
-                continue
-            pair = tuple(sorted((slug, other["slug"])))
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                contradictions.append({"a": pair[0], "b": pair[1]})
+    position = {slug: i for i, slug in enumerate(returned_by_slug)}
+    edges = (
+        client.read("read.gq", "contradicts_among", {"slugs": list(position)})
+        if position
+        else []
+    )
+    # Ordered by the returned memories, so the result does not depend on the
+    # order the engine yields edges in.
+    for edge in sorted(
+        edges, key=lambda e: (position[e["a_slug"]], position[e["b_slug"]])
+    ):
+        a, b = edge["a_slug"], edge["b_slug"]
+        if not in_scope(returned_by_slug[a], returned_by_slug[b]):
+            continue
+        pair = tuple(sorted((a, b)))
+        if pair not in seen_pairs:
+            seen_pairs.add(pair)
+            contradictions.append({"a": pair[0], "b": pair[1]})
 
     return {
         "memories": returned,
