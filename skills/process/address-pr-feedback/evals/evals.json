@@ -1,0 +1,42 @@
+{
+	"skill_name": "address-pr-feedback",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Draft the replies to the Copilot comments on PR #42 in mitodl/agent-kit, don't post anything.",
+			"expected_output": "The skill fetches the PR's feedback, makes any fixes as local commits, and ends with one table of thread, author, verdict, proposed reply, local commit, and evidence for each Copilot thread. Nothing is pushed, replied to, or resolved, and it asks which rows to carry out.",
+			"files": [],
+			"expectations": [
+				"fetch-feedback.sh (or an equivalent read-only fetch) runs against mitodl/agent-kit PR 42",
+				"No call to resolve-thread.sh, resolve-threads.sh, reply-comment.sh, or any gh api mutation (addPullRequestReviewThreadReply, resolveReviewThread, updatePullRequestReviewComment, submitPullRequestReview) is made",
+				"No git push is run and no check is re-run",
+				"The output contains a table with a row per Copilot thread and columns for verdict, proposed reply text, local commit, and evidence",
+				"Copilot threads are held for approval even though they are bot-authored",
+				"The response asks the user which rows to approve before posting"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "I have a pending review open on mitodl/agent-kit PR #42. Add a suggestion block to my comment on src/config.py so it shows the corrected default.",
+			"expected_output": "The skill re-fetches that pending comment's current body by node ID right before editing, appends the suggestion block to that fetched body without changing the rest, writes it back with updatePullRequestReviewComment, and leaves the review unsubmitted.",
+			"files": [],
+			"expectations": [
+				"The comment's body is fetched with a node(id:) query immediately before the update, not reused from an earlier fetch",
+				"The new body is the fetched body with the suggestion block added; the rest of the user's text is unchanged",
+				"The update uses updatePullRequestReviewComment with the body passed from a file or stdin",
+				"submitPullRequestReview is never called and gh pr review is never run"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "Address the Gemini comment on PR #42 in mitodl/agent-kit; it flags a missing None check in witan/server.py.",
+			"expected_output": "The skill applies the fix, runs only the tests covering witan/server.py rather than the whole workspace suite, names those tests in the reply, and replies and resolves the thread directly because it is a bot thread and draft mode was not requested.",
+			"files": [],
+			"expectations": [
+				"The test run is scoped to the test files covering the changed module, not the full suite",
+				"The reply names which tests were run",
+				"The thread is replied to and resolved without asking for approval first, since the author is a Bot and no draft wording was used"
+			]
+		}
+	]
+}

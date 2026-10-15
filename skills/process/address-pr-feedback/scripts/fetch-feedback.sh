@@ -2,6 +2,7 @@
 # Fetch all feedback on a PR in one shot: inline review threads (GraphQL,
 # cursor-paginated), top-level discussion comments (REST, --paginate), and
 # formal reviews (REST, --paginate). Excludes resolved threads by default.
+# Also reports the viewer's own pending (unsubmitted) review, if there is one.
 set -euo pipefail
 
 usage() {
@@ -88,14 +89,45 @@ discussion="$(gh api "repos/${repo}/issues/${pr}/comments" --paginate \
 reviews="$(gh api "repos/${repo}/pulls/${pr}/reviews" --paginate \
   --jq '[.[] | {author: .user.login, author_type: .user.type, state, body, submitted_at}]')"
 
+# GitHub shows a pending review only to its author, so this finds the
+# viewer's own. The comment bodies are a snapshot for reading; the user can
+# edit them in the browser at any time, so re-fetch one before editing it.
+# shellcheck disable=SC2016  # GraphQL variables, not shell
+pending_query='
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(states: [PENDING], first: 1) {
+        nodes {
+          id
+          viewerDidAuthor
+          comments(first: 100) {
+            totalCount
+            nodes { id databaseId path line body }
+          }
+        }
+      }
+    }
+  }
+}'
+
+pending_review="$(gh api graphql -f query="$pending_query" -f owner="$owner" -f name="$name" -F number="$pr" \
+  | jq '[.data.repository.pullRequest.reviews.nodes[] | select(.viewerDidAuthor)] | .[0]
+        | if . == null then null else {id, comment_count: .comments.totalCount, comments: .comments.nodes} end')"
+
 jq -n \
   --arg repo "$repo" \
   --argjson pr "$pr" \
   --argjson review_threads "$(cat "$threads_file")" \
   --argjson discussion_comments "$discussion" \
   --argjson reviews "$reviews" \
-  '{repo: $repo, pr: $pr, review_threads: $review_threads, discussion_comments: $discussion_comments, reviews: $reviews}' \
+  --argjson pending_review "$pending_review" \
+  '{repo: $repo, pr: $pr, review_threads: $review_threads, discussion_comments: $discussion_comments, reviews: $reviews, pending_review: $pending_review}' \
   > "$output"
 
 unresolved_count="$(jq '[.[] | select(.isResolved == false)] | length' "$threads_file")"
 echo "Fetched ${unresolved_count} unresolved review thread(s), $(echo "$discussion" | jq 'length') discussion comment(s), $(echo "$reviews" | jq 'length') review(s) for ${repo}#${pr}" >&2
+
+if [[ "$pending_review" != "null" ]]; then
+  echo "You have a pending review with $(echo "$pending_review" | jq '.comment_count') comment(s) on ${repo}#${pr}. It is unsubmitted; submitting it is your call." >&2
+fi

@@ -76,6 +76,69 @@ mutation($threadId: ID!) {
 given) and then the resolve mutation, so the reply is visible before the
 thread flips to resolved.
 
+## Pending reviews
+
+A review the viewer has started but not submitted has `state: PENDING`, and
+GitHub shows it only to its author. `fetch-feedback.sh` looks for one and
+puts it in `pending_review` (`null` when there is none):
+
+```graphql
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(states: [PENDING], first: 1) {
+        nodes {
+          id
+          viewerDidAuthor
+          comments(first: 100) {
+            totalCount
+            nodes { id databaseId path line body }   # id is the PRRC_... node ID
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The user can keep editing those comments in the browser while you work, so
+the `body` in that payload goes stale. Re-fetch a comment's body immediately
+before changing it:
+
+```graphql
+query($id: ID!) {
+  node(id: $id) {
+    ... on PullRequestReviewComment {
+      body
+      lastEditedAt
+      pullRequestReview { id state viewerDidAuthor }
+    }
+  }
+}
+```
+
+Then apply your change to that body and write the result back:
+
+```graphql
+mutation($id: ID!, $body: String!) {
+  updatePullRequestReviewComment(input: {pullRequestReviewCommentId: $id, body: $body}) {
+    pullRequestReviewComment { id body }
+  }
+}
+```
+
+`body` replaces the whole comment, so a body composed from an earlier read
+silently discards anything the user changed since. Pass the new body with
+`-F body=@file` or `-f body="$(cat file)"`, not inline, for the same
+backtick reason as replies.
+
+`submitPullRequestReview` exists, but this skill never calls it. Submitting
+the review is the user's action.
+
+`addPullRequestReviewThreadReply` takes an optional `pullRequestReviewId`
+("the Node ID of the pending review to which the reply will belong").
+`resolve-thread.sh` does not pass it.
+
 ## Permission errors
 
 `resolveReviewThread` requires the authenticated `gh` user to be the PR
