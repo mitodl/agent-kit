@@ -322,17 +322,18 @@ async def _await_all(
 
     Recorded per task, not once at the end, so the hook thread can read what
     answered even if this loop is blocked and never gets back to returning.
+    And recorded INSIDE the task rather than from a done callback, which runs
+    on a later loop turn: a read that finishes just before another blocks the
+    loop would otherwise never reach ``out``.
     """
-    tasks = {asyncio.ensure_future(fn()): key for key, fn in calls.items()}
 
-    def record(task: asyncio.Future) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        out[tasks[task]] = exc if exc is not None else task.result()
+    async def recorded(key: str, fn: Callable[[], Awaitable[object]]) -> None:
+        try:
+            out[key] = await fn()
+        except Exception as exc:  # noqa: BLE001 — reported to the caller as a value
+            out[key] = exc
 
-    for task in tasks:
-        task.add_done_callback(record)
+    tasks = [asyncio.ensure_future(recorded(key, fn)) for key, fn in calls.items()]
     _, pending = await asyncio.wait(tasks, timeout=deadline - time.monotonic())
     for task in pending:
         task.cancel()

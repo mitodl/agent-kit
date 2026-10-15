@@ -1532,6 +1532,32 @@ def test_gather_returns_at_the_deadline_when_a_call_blocks_the_loop():
     assert isinstance(got["blocked"], ctx_module._TimedOut)
 
 
+def test_gather_keeps_an_answer_that_lands_just_before_the_loop_blocks():
+    """A done callback runs on a later loop turn, so recording from one lost a
+    read that finished right before another blocked the loop: the fast read
+    here completes, then the blocking one runs before any callback could."""
+    from witan import context as ctx_module
+
+    async def _fast():
+        return "fast"
+
+    async def _fails():
+        raise ValueError("read failed")
+
+    async def _blocks_the_loop():
+        time.sleep(3)  # noqa: ASYNC251 — blocking the loop is the case under test
+        return "too late"
+
+    got = ctx_module._gather(
+        {"fast": _fast, "bad": _fails, "blocked": _blocks_the_loop},
+        deadline=time.monotonic() + 0.5,
+    )
+
+    assert got["fast"] == "fast"
+    assert isinstance(got["bad"], ValueError)
+    assert isinstance(got["blocked"], ctx_module._TimedOut)
+
+
 def test_gather_past_its_deadline_starts_nothing():
     from witan import context as ctx_module
 
