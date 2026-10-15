@@ -375,15 +375,50 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     Holders are compared as people, ignoring the ``#<session>`` qualifier, the
     same rule ``task_release`` applies: a close queued from a plain shell on a
     task one of your agent sessions claimed is still yours to close.
+
+    A ``task_release`` that named its ``assignee`` is compared as that holder,
+    because the tool releases as it (``server._claim_holder`` lets an explicit
+    assignee override the caller's identity): a worker that claimed as
+    ``ci-worker`` releases as ``ci-worker``, not as its token's user.
     """
+    holder = entry.holder
+    if entry.tool == "task_release" and "assignee" in entry.args:
+        holder = entry.args["assignee"]
     assignee = task.get("assignee")
     if assignee and readiness.holder_identity(assignee) != readiness.holder_identity(
-        entry.holder
+        holder
     ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")
     if closed_at and _parse_ts(closed_at) >= _parse_ts(entry.ts):
         return f"the task was closed at {closed_at}"
+    return None
+
+
+# Rows per page of the exact-title scan, growing to the tool's own maximum.
+_TITLE_SCAN_LIMITS = (100, 1000, 10000)
+
+
+async def _created_since(
+    call: Callable[..., Awaitable[Any]], title: str, ts: str
+) -> str | None:
+    """The slug of a task titled exactly ``title`` created at or after ``ts``.
+
+    Not ``task_search``: it is relevance-ranked and capped at 20 rows with
+    description matches ahead of title-only ones, so a duplicate can rank
+    outside it. This walks every task by ``updated_at`` desc instead
+    (``task_list(repo="")``) and stops once a page reaches rows updated before
+    ``ts``. A task created since ``ts`` has ``updated_at >= created_at >= ts``,
+    so nothing past that point can be one.
+    """
+    since = _parse_ts(ts)
+    for limit in _TITLE_SCAN_LIMITS:
+        rows = await call("task_list", {"repo": "", "limit": limit})
+        for row in rows:
+            if row["title"] == title and _parse_ts(row["created_at"]) >= since:
+                return row["slug"]
+        if len(rows) < limit or (rows and _parse_ts(rows[-1]["updated_at"]) < since):
+            return None
     return None
 
 
@@ -446,21 +481,17 @@ class RemoteServerProxy(RemoteMCPProxy):
                 )
         elif entry.tool == "task_create":
             title = entry.args["title"]
-            hits = await call("task_search", {"query": title, "repo": ""})
-            # Search rows carry no `created_at`, so each exact-title hit is
-            # re-read for it. Usually that is zero or one task.
-            for hit in (h for h in hits if h["title"] == title):
-                task = await call("task_get", {"slug": hit["slug"]})
-                if _parse_ts(task["created_at"]) >= _parse_ts(entry.ts):
-                    logger.warning(
-                        "skipped journal entry %s: task_create %r from %s, but %s "
-                        "with that title was created since",
-                        entry.id,
-                        title,
-                        entry.ts,
-                        hit["slug"],
-                    )
-                    return None
+            duplicate = await _created_since(call, title, entry.ts)
+            if duplicate is not None:
+                logger.warning(
+                    "skipped journal entry %s: task_create %r from %s, but %s "
+                    "with that title was created since",
+                    entry.id,
+                    title,
+                    entry.ts,
+                    duplicate,
+                )
+                return None
         return entry
 
     @property
