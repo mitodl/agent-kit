@@ -411,7 +411,7 @@ def test_no_prerequisite_when_bundle_has_no_mcp_servers(home, tmp_path):
     assert result.prerequisites == []
 
 
-@pytest.mark.parametrize("platform", ["claude", "copilot", "opencode"])
+@pytest.mark.parametrize("platform", ["claude", "copilot", "opencode", "codex"])
 def test_no_prerequisite_for_platforms_with_native_mcp(home, platform):
     assert apply(platform, _bundle(), dry_run=True).prerequisites == []
 

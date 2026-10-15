@@ -47,7 +47,7 @@ Setup for this repo's own MCP servers and skills is driven by
 [`agent-config-kit`](./packages/agent-config-kit/README.md) (`agent-kit`) and the
 manifest at [`agent-config.toml`](./agent-config.toml) — a single declarative
 file that installs MCP servers, skills, and hooks into whichever coding-agent
-platforms it detects (Claude Code, Pi, GitHub Copilot, OpenCode, ...).
+platforms it detects (Claude Code, Pi, GitHub Copilot, OpenCode, Codex CLI, ...).
 
 ### Installing `agent-kit`
 

@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import copy
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import registry
+from .configio import load_config_object, write_config
 from .installers import _clear_symlink, _ensure_dest_dir, install_skills
-from .jsonio import json_diff, load_json_object, write_json
+from .jsonio import json_diff
 from .models import (
     AgentPlatform,
     CapabilityScope,
@@ -73,7 +74,7 @@ class InstallResult:
     )  # entries pruned by `apply --prune` (see prune.py); always empty otherwise
     diffs: list[tuple[Path, str]] = field(default_factory=list)
     # (path, unified diff) for each JSON target actually changed by this run —
-    # computed from the before/after in-memory dicts before `write_json` is
+    # computed from the before/after in-memory dicts before `write_config` is
     # called, so it's populated the same way under `dry_run` as for a real
     # write. Only JSON-merge targets (MCP servers, declarative hooks) produce
     # one; skill/plugin-file copies are reported via `planned`/`written`
@@ -183,9 +184,11 @@ def apply(
     if platform.mcp is not None and mcp_servers:
         target = _resolve_target(platform.mcp, scope)
         if target is not None:
-            cfg = load_json_object(target.path)
+            cfg = load_config_object(target.path)
             if cfg is None:
-                result.skipped.append((target.path, "could not parse as a JSON object"))
+                result.skipped.append(
+                    (target.path, "could not parse as a config object")
+                )
             else:
                 before = copy.deepcopy(cfg)
                 container = _navigate(cfg, target.key_path)
@@ -200,7 +203,7 @@ def apply(
                     result.diffs.append((target.path, diff))
                 if _json_state is not None:
                     _json_state[target.path] = (before, cfg)
-                write_json(target.path, cfg, dry_run)
+                write_config(target.path, cfg, dry_run)
                 if not dry_run:
                     result.written.append(target.path)
                 if platform.mcp_conditional_on is not None:
@@ -213,10 +216,10 @@ def apply(
         if declarative and platform.hooks_merge is not None:
             target = _resolve_target(platform.hooks, scope)
             if target is not None:
-                cfg = load_json_object(target.path)
+                cfg = load_config_object(target.path)
                 if cfg is None:
                     result.skipped.append(
-                        (target.path, "could not parse as a JSON object")
+                        (target.path, "could not parse as a config object")
                     )
                 else:
                     before = copy.deepcopy(cfg)
@@ -227,7 +230,7 @@ def apply(
                         result.diffs.append((target.path, diff))
                     if _json_state is not None:
                         _json_state[target.path] = (before, cfg)
-                    write_json(target.path, cfg, dry_run)
+                    write_config(target.path, cfg, dry_run)
                     if not dry_run:
                         result.written.append(target.path)
 
@@ -262,6 +265,53 @@ def apply(
     return result
 
 
+def skills_shadowed_by(
+    platform_name: str,
+    targets: list[str],
+    scope: Scope,
+    skills: list[SkillSource] | None = None,
+) -> str | None:
+    """Why a platform's own skill copy would duplicate one it already reads.
+
+    Another target in this run is sufficient, but not necessary: a previous
+    Codex run may already have installed this bundle in Pi's shared skill
+    directory.  When the current bundle's skills are all there, retain that
+    layout for Pi-only apply and validate runs too.
+    """
+    platform = registry.get_platform(platform_name)
+    if platform.skills_also_reads is None:
+        return None
+    also_read = _resolve_target(platform.skills_also_reads, scope)
+    if also_read is None:
+        return None
+    for other in targets:
+        if other == platform_name:
+            continue
+        other_skills = registry.get_platform(other).skills
+        target = _resolve_target(other_skills, scope) if other_skills else None
+        if target is not None and target.path == also_read.path:
+            return other
+    if skills and all(
+        (also_read.path / skill.name / "SKILL.md").is_file() for skill in skills
+    ):
+        return "the shared skill directory"
+    return None
+
+
+def bundle_for(
+    platform_name: str, bundle: RegistrationBundle, targets: list[str], scope: Scope
+) -> RegistrationBundle:
+    """``bundle`` minus its skills when another targeted platform already
+    installs them somewhere ``platform_name`` reads (``skills_shadowed_by``).
+    Used for apply, prune and validate alike, so a prune run also removes
+    the copies an earlier run installed before the overlap was handled."""
+    if bundle.skills and skills_shadowed_by(
+        platform_name, targets, scope, bundle.skills
+    ):
+        return replace(bundle, skills=[])
+    return bundle
+
+
 def apply_all(
     bundle: RegistrationBundle,
     *,
@@ -269,7 +319,14 @@ def apply_all(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict[str, InstallResult]:
+    targets = registry.detect_installed_platforms()
     return {
-        name: apply(name, bundle, scope=scope, dry_run=dry_run, force=force)
-        for name in registry.detect_installed_platforms()
+        name: apply(
+            name,
+            bundle_for(name, bundle, targets, scope),
+            scope=scope,
+            dry_run=dry_run,
+            force=force,
+        )
+        for name in targets
     }

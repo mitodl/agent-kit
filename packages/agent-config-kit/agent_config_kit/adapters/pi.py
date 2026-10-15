@@ -7,7 +7,10 @@ the shared cross-agent pool (~/.agents/skills/): Pi already natively unions
 both directories when discovering skills (its own docs/skills.md "Locations"
 section), so writing the same skill into both is pure duplication — Pi finds
 the name twice and logs a spurious "skill collision" warning on every
-startup. A single dest dir is correct and sufficient.
+startup. A single dest dir is correct and sufficient. The same reasoning runs
+the other way when Codex is also targeted: Codex installs into
+~/.agents/skills/, so Pi's own copy is skipped (``skills_also_reads`` in
+registry.py, ``plan.bundle_for``).
 
 Pi 0.99 and later reads the mcp.json files this adapter writes with its
 built-in MCP extension (``builtin:mcp``). The third-party ``pi-mcp-adapter``

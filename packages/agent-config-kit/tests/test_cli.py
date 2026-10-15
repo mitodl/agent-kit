@@ -1433,3 +1433,76 @@ def test_profiles_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypa
     uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
 
     _run_ok(app, ["profiles", uri, "--cache-dir", str(tmp_path / "cache")])
+
+
+def _write_skill_manifest(tmp_path: Path) -> Path:
+    skill_md = tmp_path / "skills" / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+    return _write_manifest(
+        tmp_path, '[skills]\nmy-skill = "skills/my-skill/SKILL.md"\n'
+    )
+
+
+def test_apply_skips_pi_skills_when_codex_installs_them_where_pi_reads(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_skill_manifest(tmp_path)
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi", "--platform", "codex"])
+
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+    assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
+    assert "pi: skills skipped" in capsys.readouterr().out
+    _run_ok(app, ["validate", str(manifest), "--platform", "pi", "--platform", "codex"])
+
+
+def test_apply_still_installs_pi_skills_without_codex(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_skill_manifest(tmp_path)
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi"])
+
+    assert (tmp_path / ".pi" / "agent" / "skills" / "my-skill" / "SKILL.md").is_file()
+
+
+def test_pi_only_runs_keep_skills_already_installed_by_codex(
+    tmp_path, monkeypatch, capsys
+):
+    """Pi's shared skill discovery must outlive the original multi-platform run."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_skill_manifest(tmp_path)
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi", "--platform", "codex"])
+
+    _run_ok(app, ["validate", str(manifest), "--platform", "pi"])
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi"])
+
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+    assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
+    assert "pi: skills skipped" in capsys.readouterr().out
+
+
+def test_apply_prune_removes_pi_skill_copies_once_codex_is_targeted(
+    tmp_path, monkeypatch
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_skill_manifest(tmp_path)
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi", "--prune"])
+    assert (tmp_path / ".pi" / "agent" / "skills" / "my-skill").is_dir()
+
+    _run_ok(
+        app,
+        ["apply", str(manifest), "--platform", "pi", "--platform", "codex", "--prune"],
+    )
+
+    assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
