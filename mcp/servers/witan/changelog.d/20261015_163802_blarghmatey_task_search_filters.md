@@ -1,9 +1,9 @@
 ### Added
 
 - `task_search` takes `project_slug` and `assignee` (`"@me"` included), the
-  filters `witan tasks QUERY --project/--assignee` already offered. Agents
-  asked for "the next task in project X" reached for them and got a schema
-  rejection. A project search spans every repo. With either filter the
+  filters `witan tasks QUERY --project/--assignee` already offered. Without
+  them, an agent that passed either one got a schema rejection. A project
+  search spans every repo. With either filter the
   20-hit cap applies after filtering, so a match ranked below the unfiltered
   query's top 20 is still found.
 - The witan-task skill has a "Find a task" section: `task_ready`/`task_list`

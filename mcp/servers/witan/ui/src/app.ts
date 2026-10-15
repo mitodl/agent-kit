@@ -1019,11 +1019,10 @@ const LIVE_STATUSES = ["open", "in_progress", "blocked"] as const;
  *
  * Across the repo, `task_search`: BM25 over title and description, the same
  * ranking an agent gets, and repo-scoped the way the board is (the repo's
- * tasks plus unscoped ones). It returns at most `SEARCH_LIMIT` rows and takes
- * no project, so filtering its rows to one project would come back empty
- * whenever that project's matches ranked below the cap. Inside a project the
- * whole project is read instead (uncapped, see `readRollup`) and matched in
- * the browser, so "every task in this project matching X" is exact.
+ * tasks plus unscoped ones). It returns at most `SEARCH_LIMIT` rows, with or
+ * without its `project_slug` filter, so it cannot answer "every task in this
+ * project matching X". Inside a project the whole project is read instead
+ * (uncapped, see `readRollup`) and matched in the browser, so that is exact.
  *
  * Without closed tasks, one call per live status rather than one unfiltered
  * call: the server caps before any filter here could run, so twenty closed

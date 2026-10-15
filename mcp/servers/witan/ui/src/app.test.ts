@@ -520,8 +520,8 @@ describe("App", () => {
 	});
 
 	it("searches a whole project's tasks when one is chosen", async () => {
-		// task_search takes no project and returns its 20 best, so narrowing its
-		// rows to one project would miss that project's lower-ranked matches.
+		// task_search returns its 20 best even with project_slug, so it cannot
+		// list every matching task in a project; the view reads the project.
 		const row = tasks[0];
 		if (!row) {
 			throw new Error("task_list fixture is empty");
