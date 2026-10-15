@@ -209,7 +209,12 @@ A three-bullet issue that says exactly what is wrong beats a page of context.
 
 - Fill in the template sections with the user's details **before** calling
   `gh issue create`. Populated templates are more useful than placeholder text.
-- Strip HTML comments (`<!-- ... -->`) from the final body to keep the issue clean.
+- Strip HTML comments (`<!-- ... -->`) from the final issue **body** to keep the
+  issue clean. This covers the instructional comments the templates ship with.
+  It does not cover machine-readable markers in issue *comments* — the
+  [`plan-technical-approach`](../../workflow/plan-technical-approach/SKILL.md)
+  skill identifies its living plan comment by one, and stripping it makes the
+  next update post a duplicate instead of editing in place.
 - If the user provides a full `org/repo` slug, use it as-is instead of prepending `mitodl/`.
 - For Design QA issues, remind the user to follow the title convention:
   `Design QA: <Template/Section/Component>`.
