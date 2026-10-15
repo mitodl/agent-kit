@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 from agent_config_kit.manifest import load_manifest
@@ -7,6 +8,7 @@ from agent_config_kit.models import (
     HookEvent,
     MergeStrategy,
     PluginRegistration,
+    RemoteServer,
     Scope,
     SkillSource,
     StdioServer,
@@ -603,3 +605,122 @@ def test_apply_pi_diff_redacts_header_values(tmp_path, monkeypatch):
         assert '"Authorization": "<redacted>"' in diff
         assert "super-secret-token" not in diff
         assert "/srv/local-server" in diff  # cwd is not a secret
+
+
+def test_apply_codex_registers_mcp_server_in_config_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    apply("codex", _bundle())
+
+    cfg = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert cfg["mcp_servers"]["witan"] == {
+        "command": "uvx",
+        "args": ["witan", "serve"],
+        "env": {"WITAN_AUTHOR": "tester"},
+    }
+
+
+def test_apply_codex_preserves_hand_edits_in_config_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = tmp_path / ".codex" / "config.toml"
+    config.parent.mkdir()
+    existing = (
+        "# my settings\n"
+        'model = "gpt-5"\n'
+        "\n"
+        "[mcp_servers.other]\n"
+        'command = "foo"  # keep me\n'
+        "enabled = true\n"
+    )
+    config.write_text(existing)
+
+    result = apply("codex", _bundle())
+
+    text = config.read_text()
+    assert text.startswith(existing)
+    assert tomllib.loads(text)["mcp_servers"]["witan"]["command"] == "uvx"
+    assert result.diffs  # tomlkit values (e.g. its Bool) must diff cleanly
+
+
+def test_apply_codex_skips_unparseable_config_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = tmp_path / ".codex" / "config.toml"
+    config.parent.mkdir()
+    config.write_text("not = [valid toml")
+
+    result = apply("codex", _bundle())
+
+    assert result.skipped == [(config, "could not parse as a config object")]
+    assert config.read_text() == "not = [valid toml"
+
+
+def test_apply_codex_remote_server_maps_headers_and_oauth(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = RegistrationBundle(
+        mcp_servers={
+            "tsw": RemoteServer(
+                url="https://example.test/mcp",
+                headers={"X-Team": "ol"},
+                oauth={"clientId": "toolhive-swe-cli", "callbackPort": 8080},
+            )
+        }
+    )
+
+    apply("codex", bundle)
+
+    cfg = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert cfg["mcp_servers"]["tsw"] == {
+        "url": "https://example.test/mcp",
+        "http_headers": {"X-Team": "ol"},
+        "oauth": {
+            "client_id": "toolhive-swe-cli",
+            "callback_port": 8080,
+            "callback_url": "http://localhost:8080/callback",
+        },
+    }
+
+
+def test_apply_codex_keeps_an_explicit_oauth_callback_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = RegistrationBundle(
+        mcp_servers={
+            "tsw": RemoteServer(
+                url="https://example.test/mcp",
+                oauth={
+                    "clientId": "c",
+                    "callbackPort": 8080,
+                    "callbackUrl": "http://127.0.0.1:8080/cb",
+                },
+            )
+        }
+    )
+
+    apply("codex", bundle)
+
+    cfg = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert cfg["mcp_servers"]["tsw"]["oauth"]["callback_url"] == (
+        "http://127.0.0.1:8080/cb"
+    )
+
+
+def test_apply_codex_installs_skills_under_dot_agents(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_md = tmp_path / "src" / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+
+    apply(
+        "codex",
+        _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)]),
+    )
+
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+
+
+def test_apply_project_scope_codex_writes_dot_codex_config_toml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    apply("codex", _bundle(), scope=Scope.PROJECT)
+
+    cfg = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert "witan" in cfg["mcp_servers"]

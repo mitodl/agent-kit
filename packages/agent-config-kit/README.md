@@ -2,7 +2,7 @@
 
 Unified interface for registering MCP servers, skills, and hooks/extensions
 across coding-agent platforms (Claude Code, Pi, GitHub Copilot, OpenCode,
-Kilo Code, ...) without reimplementing every agent's config-file quirks.
+Codex CLI, Kilo Code, ...) without reimplementing every agent's config-file quirks.
 
 Canonical, capability-cluster `pydantic` models (`StdioServer`/`RemoteServer`,
 `DeclarativeHook`/`PluginRegistration`, `SkillSource`, ...) describe *what* to
@@ -270,8 +270,23 @@ the zero-arg "magic" stays legible.
 - `--cache-dir PATH` overrides where remote skill/hook sources are fetched
   and cached (default: `.agent-config-kit-cache` next to the manifest).
 
-Exit codes: `0` success, `1` a platform's target couldn't be parsed as JSON,
-`2` the manifest failed to load.
+Exit codes: `0` success, `1` a platform's target couldn't be parsed (as JSON,
+or as TOML for Codex), `2` the manifest failed to load.
+
+#### Codex CLI
+
+Codex is detected by `~/.codex` (or `$CODEX_HOME`). Its MCP servers go into
+the `[mcp_servers]` tables of `config.toml` (`$CODEX_HOME/config.toml`
+globally, `.codex/config.toml` per project, which Codex reads only once the
+project is trusted). The file is edited in place with `tomlkit`, so your own
+settings and comments survive. Skills go to `~/.agents/skills` (or
+`.agents/skills` in a project), the directories Codex scans. Hooks aren't
+wired for Codex yet. A remote server's `oauth` table is renamed to Codex's
+snake_case keys (`clientId` becomes `client_id`, `callbackPort` becomes
+`callback_port`). A `callbackPort` without a `callbackUrl` also gets
+`callback_url = "http://localhost:<port>/callback"`, because otherwise Codex
+sends a redirect URI with a random path that a fixed loopback registration
+rejects. Run `codex mcp login <name>` to sign in.
 
 #### Platform prerequisites (Pi MCP)
 

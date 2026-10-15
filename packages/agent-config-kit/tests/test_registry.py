@@ -5,7 +5,13 @@ from agent_config_kit.models import ScopeTarget
 
 
 def test_known_platforms_are_the_v1_populated_set():
-    assert set(registry.known_platforms()) == {"claude", "pi", "copilot", "opencode"}
+    assert set(registry.known_platforms()) == {
+        "claude",
+        "pi",
+        "copilot",
+        "opencode",
+        "codex",
+    }
 
 
 def test_claude_is_always_detected():
@@ -107,3 +113,30 @@ def test_every_platforms_global_targets_are_unaffected_by_project_additions(
         registry.get_platform("opencode").mcp.global_.path
         == tmp_path / ".config" / "opencode" / "config.json"
     )
+
+
+def test_codex_targets(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    platform = registry.get_platform("codex")
+
+    assert platform.mcp.global_ == ScopeTarget(
+        path=tmp_path / ".codex" / "config.toml", key_path=("mcp_servers",)
+    )
+    assert platform.mcp.project == ScopeTarget(
+        path=Path(".codex") / "config.toml", key_path=("mcp_servers",)
+    )
+    assert platform.skills.global_ == ScopeTarget(path=tmp_path / ".agents" / "skills")
+    assert platform.skills.project == ScopeTarget(path=Path(".agents") / "skills")
+    assert platform.hooks is None
+
+
+def test_codex_home_overrides_the_codex_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "elsewhere"))
+
+    assert registry.get_platform("codex").mcp.global_.path == (
+        tmp_path / "elsewhere" / "config.toml"
+    )
+    assert "codex" not in registry.detect_installed_platforms()
+    (tmp_path / "elsewhere").mkdir()
+    assert "codex" in registry.detect_installed_platforms()

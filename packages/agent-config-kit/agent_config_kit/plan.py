@@ -12,8 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
+from .configio import load_config_object, write_config
 from .installers import _clear_symlink, _ensure_dest_dir, install_skills
-from .jsonio import json_diff, load_json_object, write_json
+from .jsonio import json_diff
 from .models import (
     AgentPlatform,
     CapabilityScope,
@@ -73,7 +74,7 @@ class InstallResult:
     )  # entries pruned by `apply --prune` (see prune.py); always empty otherwise
     diffs: list[tuple[Path, str]] = field(default_factory=list)
     # (path, unified diff) for each JSON target actually changed by this run —
-    # computed from the before/after in-memory dicts before `write_json` is
+    # computed from the before/after in-memory dicts before `write_config` is
     # called, so it's populated the same way under `dry_run` as for a real
     # write. Only JSON-merge targets (MCP servers, declarative hooks) produce
     # one; skill/plugin-file copies are reported via `planned`/`written`
@@ -183,9 +184,11 @@ def apply(
     if platform.mcp is not None and mcp_servers:
         target = _resolve_target(platform.mcp, scope)
         if target is not None:
-            cfg = load_json_object(target.path)
+            cfg = load_config_object(target.path)
             if cfg is None:
-                result.skipped.append((target.path, "could not parse as a JSON object"))
+                result.skipped.append(
+                    (target.path, "could not parse as a config object")
+                )
             else:
                 before = copy.deepcopy(cfg)
                 container = _navigate(cfg, target.key_path)
@@ -200,7 +203,7 @@ def apply(
                     result.diffs.append((target.path, diff))
                 if _json_state is not None:
                     _json_state[target.path] = (before, cfg)
-                write_json(target.path, cfg, dry_run)
+                write_config(target.path, cfg, dry_run)
                 if not dry_run:
                     result.written.append(target.path)
                 if platform.mcp_conditional_on is not None:
@@ -213,10 +216,10 @@ def apply(
         if declarative and platform.hooks_merge is not None:
             target = _resolve_target(platform.hooks, scope)
             if target is not None:
-                cfg = load_json_object(target.path)
+                cfg = load_config_object(target.path)
                 if cfg is None:
                     result.skipped.append(
-                        (target.path, "could not parse as a JSON object")
+                        (target.path, "could not parse as a config object")
                     )
                 else:
                     before = copy.deepcopy(cfg)
@@ -227,7 +230,7 @@ def apply(
                         result.diffs.append((target.path, diff))
                     if _json_state is not None:
                         _json_state[target.path] = (before, cfg)
-                    write_json(target.path, cfg, dry_run)
+                    write_config(target.path, cfg, dry_run)
                     if not dry_run:
                         result.written.append(target.path)
 

@@ -290,3 +290,23 @@ def test_diff_project_scope_pi_reads_dot_pi_mcp_json(tmp_path, monkeypatch):
         "mcp_servers:witan"
     ]
     assert not (tmp_path / ".pi" / "settings.json").exists()
+
+
+def test_diff_codex_reports_no_drift_after_apply(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle()
+    apply("codex", bundle)
+
+    assert not diff("codex", bundle).has_drift
+
+
+def test_diff_codex_reports_mismatched_server(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apply("codex", _bundle())
+
+    result = diff(
+        "codex",
+        _bundle(mcp_servers={"witan": StdioServer(command="witan", args=["serve"])}),
+    )
+
+    assert result.mismatched_keys == ["mcp_servers:witan"]

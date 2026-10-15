@@ -9,6 +9,7 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2,<3",
+    "tomlkit>=0.13,<1",
 ]
 
 [project.optional-dependencies]

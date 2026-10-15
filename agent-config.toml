@@ -24,8 +24,8 @@
 # `agent-kit apply` — each tier is a separate OAuth prompt and you likely
 # only have Keycloak access to some of them.
 #
-# `oauth` is wired for the `claude`, `pi`, and `opencode` platform
-# adapters. Copilot's adapter intentionally drops `headers`/`oauth`
+# `oauth` is wired for the `claude`, `pi`, `opencode`, and `codex`
+# platform adapters (Codex: sign in with `codex mcp login <name>`). Copilot's adapter intentionally drops `headers`/`oauth`
 # entirely (see its docstring in agent_config_kit/adapters/copilot.py —
 # no upstream schema is publicly fetchable for VS Code's mcp.json, so
 # this was never verified rather than confirmed unsupported), so

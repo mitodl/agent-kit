@@ -18,8 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
+from .configio import load_config_object, write_config
 from .installers import hook_content_hash, skill_content_hash, skill_files
-from .jsonio import json_diff, load_json_object, write_json
+from .jsonio import json_diff
 from .models import (
     SKILL_NAME_PATTERN,
     DeclarativeHook,
@@ -260,7 +261,7 @@ def _remove_mcp_servers(
     if _json_state is not None and target.path in _json_state:
         before, cfg = _json_state[target.path]
     else:
-        cfg = load_json_object(target.path)
+        cfg = load_config_object(target.path)
         if cfg is None:
             return []
         before = copy.deepcopy(cfg)
@@ -269,7 +270,7 @@ def _remove_mcp_servers(
     for name in removed:
         del container[name]
     if removed:
-        write_json(target.path, cfg, dry_run)
+        write_config(target.path, cfg, dry_run)
     if _json_state is not None:
         _json_state[target.path] = (before, cfg)
     return removed
@@ -298,7 +299,7 @@ def _remove_hooks(
             if _json_state is not None and target.path in _json_state:
                 before, cfg = _json_state[target.path]
             else:
-                cfg = load_json_object(target.path)
+                cfg = load_config_object(target.path)
                 before = copy.deepcopy(cfg) if cfg is not None else None
             if cfg is not None:
                 changed = False
@@ -307,7 +308,7 @@ def _remove_hooks(
                         removed.append(identity)
                         changed = True
                 if changed:
-                    write_json(target.path, cfg, dry_run)
+                    write_config(target.path, cfg, dry_run)
                 if _json_state is not None:
                     _json_state[target.path] = (before, cfg)
 

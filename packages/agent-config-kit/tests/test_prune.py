@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -625,3 +626,23 @@ def test_apply_with_prune_project_scope_pi_removes_from_dot_pi_mcp_json(
     assert '-    "witan"' in diff
     assert current_state.mcp_servers == []
     assert not (tmp_path / ".pi" / "settings.json").exists()
+
+
+def test_apply_with_prune_removes_dropped_server_from_codex_config_toml(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apply("codex", _bundle())
+    config = tmp_path / ".codex" / "config.toml"
+    config.write_text(
+        config.read_text() + '\n[mcp_servers.untouched]\ncommand = "foo"\n'
+    )
+
+    result, current_state = apply_with_prune(
+        "codex", _bundle(mcp_servers={}), PlatformState(mcp_servers=["witan"])
+    )
+
+    cfg = tomllib.loads(config.read_text())
+    assert cfg["mcp_servers"] == {"untouched": {"command": "foo"}}
+    assert result.removed == ["witan"]
+    assert current_state.mcp_servers == []

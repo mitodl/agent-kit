@@ -4,7 +4,7 @@ Per spec D7, the canonical models generalize across all 13-14 surveyed
 platforms, but v1 only populates the 5 platforms witan already targets
 (minus Kilo Code, whose MCP config path is unverified — see
 ``tk-verify-witan-install-kilo-writes-to-the-correct--5bf64e`` — so it is
-intentionally absent here until that's resolved).
+intentionally absent here until that's resolved), plus Codex CLI.
 
 Built fresh on every call (not a module-level constant) so ``Path.home()`` is
 read at call time — this keeps it testable via ``monkeypatch.setattr(Path,
@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .adapters import claude as claude_adapter
+from .adapters import codex as codex_adapter
 from .adapters import copilot as copilot_adapter
 from .adapters import opencode as opencode_adapter
 from .adapters import pi as pi_adapter
@@ -166,6 +167,34 @@ def _registry() -> dict[str, AgentPlatform]:
                 project=ScopeTarget(path=Path(".opencode") / "skill")
             ),
             skill_dest_dirs=opencode_adapter.skill_dest_dirs,
+        ),
+        "codex": AgentPlatform(
+            name="Codex CLI",
+            detect=lambda: codex_adapter.codex_home().is_dir(),
+            mcp=CapabilityScope(
+                **{
+                    "global": ScopeTarget(
+                        path=codex_adapter.codex_home() / "config.toml",
+                        key_path=("mcp_servers",),
+                    ),
+                    # Codex reads a project's .codex/config.toml only once
+                    # the project is trusted.
+                    "project": ScopeTarget(
+                        path=Path(".codex") / "config.toml",
+                        key_path=("mcp_servers",),
+                    ),
+                }
+            ),
+            mcp_serialize=codex_adapter.serialize_mcp,
+            # Codex's skill locations are the cross-agent .agents/skills
+            # directories, not anything under CODEX_HOME. No hooks: Codex's
+            # are still behind a feature flag.
+            skills=CapabilityScope(
+                **{
+                    "global": ScopeTarget(path=Path.home() / ".agents" / "skills"),
+                    "project": ScopeTarget(path=Path(".agents") / "skills"),
+                }
+            ),
         ),
     }
 

@@ -83,6 +83,11 @@ def redact_sensitive(value: object) -> object:
     return value
 
 
+def _unwrap(value: dict) -> dict:
+    unwrap = getattr(value, "unwrap", None)
+    return unwrap() if unwrap is not None else value
+
+
 def json_diff(before: dict, after: dict) -> str:
     """Unified diff between two JSON objects' serialized forms, empty string
     if they're equal. Sensitive fields (see ``redact_sensitive``) are
@@ -93,8 +98,10 @@ def json_diff(before: dict, after: dict) -> str:
     (e.g. dict insertion order varying by merge path)."""
     if before == after:
         return ""
-    before_redacted = redact_sensitive(before)
-    after_redacted = redact_sensitive(after)
+    # A tomlkit document (configio's TOML targets) holds wrapper types
+    # json.dumps can't serialize, e.g. its Bool; unwrap to plain Python.
+    before_redacted = redact_sensitive(_unwrap(before))
+    after_redacted = redact_sensitive(_unwrap(after))
     before_lines = json.dumps(before_redacted, indent=2, sort_keys=True).splitlines()
     after_lines = json.dumps(after_redacted, indent=2, sort_keys=True).splitlines()
     diff = "\n".join(

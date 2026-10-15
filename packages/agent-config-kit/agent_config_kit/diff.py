@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
+from .configio import load_config_object
 from .installers import hook_content_hash, install_skills, skill_content_hash
-from .jsonio import load_json_object
 from .models import DeclarativeHook, PluginRegistration, Scope
 from .plan import RegistrationBundle, _default_serialize, _navigate, _resolve_target
 from .prune import AppliedState, hook_identity, stale_names
@@ -73,7 +73,7 @@ def _diff_mcp_servers(
     target = _resolve_target(platform.mcp, scope)
     if target is None:
         return
-    cfg = load_json_object(target.path)
+    cfg = load_config_object(target.path)
     if cfg is None:
         result.unreadable_paths.append(target.path)
         return
@@ -102,7 +102,7 @@ def _diff_hooks(
     if declarative and platform.hooks_merge is not None:
         target = _resolve_target(platform.hooks, scope)
         if target is not None:
-            cfg = load_json_object(target.path)
+            cfg = load_config_object(target.path)
             if cfg is None:
                 result.unreadable_paths.append(target.path)
             else:
