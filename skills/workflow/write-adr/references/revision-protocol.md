@@ -86,13 +86,23 @@ ADR that supersedes the old one."* The skill follows **observed practice**
 instead, and should say so in the pull request so a reviewer who has read that
 guide is not surprised:
 
-- ADR-0009 is Accepted and carries four dated addenda plus a `## Resolution`.
-- witan ADR-0001 and ADR-0011 carry `## Amendment` sections.
-- **Supersession has never once been used in either repo.** Verified: the
-  string "Superseded" appears only in `template.md` and `README.md`, in no
-  actual ADR.
+- **Twelve in-place revisions across the two repos**, counted: ol-infrastructure
+  ADR-0009 carries three `## Addendum` sections plus a `## Resolution`, and
+  witan ADRs 0001, 0003, 0004 and 0011 carry eight `## Amendment` sections
+  between them. Several of those ADRs are `Accepted`.
+- **No ol-infrastructure ADR has ever been superseded.** The string
+  "Superseded" appears there only in `template.md` and `README.md`, in no
+  actual ADR — the status exists on paper and has never been used.
 
-A policy with zero instances and a practice with six is not a close call. The
+The one real supersession in either repo is *partial and cross-repo*: witan
+ADR-0004 carries `- Supersedes: ADR-0009 (ol-infrastructure) D3's
+per-team-token assumption`. It replaces one assumption inside another repo's
+ADR rather than the whole decision, and it did not flip that ADR's status —
+which is itself worth noting, since the documented protocol says supersession
+is bidirectional.
+
+A policy with one partial, cross-repo instance and a practice with twelve is
+not a close call. The
 upstream ADR convention explicitly permits this: *"In theory, immutability is
 ideal. In practice, mutability has worked better for our teams… with a date
 stamp, and a note that the info arrived after the decision."*

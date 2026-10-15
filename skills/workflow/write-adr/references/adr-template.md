@@ -5,7 +5,8 @@ For the witan flavor, see [`repo-flavors.md`](repo-flavors.md).
 
 **Copy the newest ADRs, not `template.md`.** ol-infrastructure's 13 vary widely
 — `Options Considered` is an H2 in five, an H3 in five, absent in three; the
-Review History footer is missing from three; 0012 uses `## Decisions` plural.
+Review History footer is missing from two (0008 and 0012); 0012 uses
+`## Decisions` plural.
 The newest and best-written (0012 and 0013) are the *least* conformant to the
 checked-in template: they dropped `## Implementation Notes`, `## Notes`, effort
 estimates and risk levels, and reference code by path and symbol instead of
