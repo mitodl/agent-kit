@@ -20,6 +20,7 @@ from agent_config_kit.plan import (
     _navigate,
     apply,
     apply_all,
+    skills_shadowed_by,
 )
 
 
@@ -757,3 +758,34 @@ def test_apply_codex_keeps_top_level_keys_after_dotted_mcp_servers(
     assert cfg["model"] == "o3"
     assert cfg["mcp_servers"]["mine"] == {"command": "x"}
     assert cfg["mcp_servers"]["witan"]["command"] == "uvx"
+
+
+def test_apply_all_skips_pi_skills_when_codex_is_detected(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".pi").mkdir()
+    (tmp_path / ".codex").mkdir()
+    skill_md = tmp_path / "src" / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+
+    apply_all(_bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)]))
+
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+    assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
+
+
+def test_skills_shadowed_by_applies_at_project_scope_too():
+    assert skills_shadowed_by("pi", ["pi", "codex"], Scope.PROJECT) == "codex"
+    assert skills_shadowed_by("pi", ["pi", "claude"], Scope.PROJECT) is None
+    assert skills_shadowed_by("codex", ["pi", "codex"], Scope.GLOBAL) is None
+
+
+def test_apply_codex_tolerates_nan_in_config_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = tmp_path / ".codex" / "config.toml"
+    config.parent.mkdir()
+    config.write_text("temp = nan\n")
+
+    apply("codex", _bundle())
+
+    assert "witan" in tomllib.loads(config.read_text())["mcp_servers"]

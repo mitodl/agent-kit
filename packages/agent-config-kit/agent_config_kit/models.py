@@ -256,6 +256,11 @@ class AgentPlatform(BaseModel):
     skill_dest_dirs: Callable[[Path], list[Path]] | None = (
         None  # e.g. OpenCode's dual dest dirs (singular/plural ambiguity)
     )
+    # Skill dirs the platform also discovers natively, beyond its own target
+    # (e.g. Pi reads the cross-agent ~/.agents/skills). When another platform
+    # in the same run installs skills there, this one's own copy would be a
+    # duplicate — see plan.bundle_for.
+    skills_also_reads: CapabilityScope | None = None
 
     lsp: CapabilityScope | None = None
 

@@ -9,6 +9,7 @@ ordering, and formatting intact.
 
 from __future__ import annotations
 
+import math
 import tomllib
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def _dump_toml(doc: tomlkit.TOMLDocument) -> str:
     rewrite the dotted keys as ordinary tables and dump again; if that still
     doesn't round-trip, refuse to write rather than corrupt the file."""
     text = tomlkit.dumps(doc)
-    if tomllib.loads(text) == doc.unwrap():
+    if _same(tomllib.loads(text), doc.unwrap()):
         return text
     dotted = [key.key for key, _ in doc.body if key is not None and key.is_dotted()]
     for name in dotted:
@@ -60,6 +61,17 @@ def _dump_toml(doc: tomlkit.TOMLDocument) -> str:
         del doc[name]
         doc[name] = value
     text = tomlkit.dumps(doc)
-    if tomllib.loads(text) != doc.unwrap():
+    if not _same(tomllib.loads(text), doc.unwrap()):
         raise ValueError("refusing to write TOML that does not round-trip")
     return text
+
+
+def _same(a: object, b: object) -> bool:
+    """``==`` except that ``nan`` (valid TOML) equals itself."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(map(_same, a, b))
+    if isinstance(a, float) and isinstance(b, float) and math.isnan(a):
+        return math.isnan(b)
+    return a == b

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import registry
@@ -265,6 +265,41 @@ def apply(
     return result
 
 
+def skills_shadowed_by(
+    platform_name: str, targets: list[str], scope: Scope
+) -> str | None:
+    """The other targeted platform, if any, that installs skills into a dir
+    ``platform_name`` already reads natively (``skills_also_reads``) — in
+    which case installing this platform's own copy too makes it discover
+    every skill twice (Pi logs a "skill collision" warning for each)."""
+    platform = registry.get_platform(platform_name)
+    if platform.skills_also_reads is None:
+        return None
+    also_read = _resolve_target(platform.skills_also_reads, scope)
+    if also_read is None:
+        return None
+    for other in targets:
+        if other == platform_name:
+            continue
+        other_skills = registry.get_platform(other).skills
+        target = _resolve_target(other_skills, scope) if other_skills else None
+        if target is not None and target.path == also_read.path:
+            return other
+    return None
+
+
+def bundle_for(
+    platform_name: str, bundle: RegistrationBundle, targets: list[str], scope: Scope
+) -> RegistrationBundle:
+    """``bundle`` minus its skills when another targeted platform already
+    installs them somewhere ``platform_name`` reads (``skills_shadowed_by``).
+    Used for apply, prune and validate alike, so a prune run also removes
+    the copies an earlier run installed before the overlap was handled."""
+    if bundle.skills and skills_shadowed_by(platform_name, targets, scope):
+        return replace(bundle, skills=[])
+    return bundle
+
+
 def apply_all(
     bundle: RegistrationBundle,
     *,
@@ -272,7 +307,14 @@ def apply_all(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict[str, InstallResult]:
+    targets = registry.detect_installed_platforms()
     return {
-        name: apply(name, bundle, scope=scope, dry_run=dry_run, force=force)
-        for name in registry.detect_installed_platforms()
+        name: apply(
+            name,
+            bundle_for(name, bundle, targets, scope),
+            scope=scope,
+            dry_run=dry_run,
+            force=force,
+        )
+        for name in targets
     }

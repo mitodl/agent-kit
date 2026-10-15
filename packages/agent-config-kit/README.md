@@ -280,7 +280,10 @@ the `[mcp_servers]` tables of `config.toml` (`$CODEX_HOME/config.toml`
 globally, `.codex/config.toml` per project, which Codex reads only once the
 project is trusted). The file is edited in place with `tomlkit`, so your own
 settings and comments survive. Skills go to `~/.agents/skills` (or
-`.agents/skills` in a project), the directories Codex scans. Hooks aren't
+`.agents/skills` in a project), the directories Codex scans. Pi reads those
+directories too, so when Pi and Codex are both targeted, Pi's own copy of
+each skill is skipped (and `--prune` removes copies an earlier run left in
+`~/.pi/agent/skills`) rather than having Pi find every skill twice. Hooks aren't
 wired for Codex yet. A remote server's `oauth` table is renamed to Codex's
 snake_case keys (`clientId` becomes `client_id`, `callbackPort` becomes
 `callback_port`). A `callbackPort` without a `callbackUrl` also gets

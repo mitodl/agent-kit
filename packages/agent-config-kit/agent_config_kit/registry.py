@@ -115,6 +115,14 @@ def _registry() -> dict[str, AgentPlatform]:
                     "project": ScopeTarget(path=Path(".pi") / "skills"),
                 }
             ),
+            # Pi's docs/skills.md "Locations": it also loads the cross-agent
+            # dirs, globally and from cwd up to the repo root.
+            skills_also_reads=CapabilityScope(
+                **{
+                    "global": ScopeTarget(path=Path.home() / ".agents" / "skills"),
+                    "project": ScopeTarget(path=Path(".agents") / "skills"),
+                }
+            ),
         ),
         "copilot": AgentPlatform(
             name="GitHub Copilot",

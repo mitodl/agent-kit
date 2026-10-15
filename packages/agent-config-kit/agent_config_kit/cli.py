@@ -42,7 +42,7 @@ from .manifest import (
     resolve_profile,
 )
 from .models import SKILL_NAME_PATTERN, Scope
-from .plan import InstallResult, RegistrationBundle
+from .plan import InstallResult, RegistrationBundle, bundle_for, skills_shadowed_by
 from .plan import apply as apply_bundle
 from .plan import apply_all as apply_all_bundle
 from .prune import (
@@ -859,6 +859,14 @@ def apply_command(
             f"last apply: {', '.join(changed)}[/yellow]"
         )
 
+    for name in target_platforms:
+        shadowing = skills_shadowed_by(name, target_platforms, resolved_scope)
+        if shadowing and bundle.skills:
+            console.print(
+                f"[dim]{name}: skills skipped — it already reads the ones "
+                f"{shadowing} installs[/dim]"
+            )
+
     try:
         if prune:
             state_path = (
@@ -871,7 +879,7 @@ def apply_command(
             for name in target_platforms:
                 result, current_state = apply_with_prune(
                     name,
-                    bundle,
+                    bundle_for(name, bundle, target_platforms, resolved_scope),
                     states.get(name, PlatformState()),
                     scope=resolved_scope,
                     dry_run=dry_run,
@@ -891,7 +899,11 @@ def apply_command(
         elif platforms is not None:
             results = {
                 name: apply_bundle(
-                    name, bundle, scope=resolved_scope, dry_run=dry_run, force=force
+                    name,
+                    bundle_for(name, bundle, platforms, resolved_scope),
+                    scope=resolved_scope,
+                    dry_run=dry_run,
+                    force=force,
                 )
                 for name in platforms
             }
@@ -1010,7 +1022,7 @@ def validate_command(
     drifts = {
         name: diff_bundle(
             name,
-            bundle,
+            bundle_for(name, bundle, platforms, resolved_scope),
             scope=resolved_scope,
             previous=applied_states.get(name),
         )
