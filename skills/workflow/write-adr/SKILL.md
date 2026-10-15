@@ -132,15 +132,34 @@ Two rules, both load-bearing:
   on form — `git ls-files -- 'mcp/*.py'` returns 211 files because `*` crosses
   `/`, while `:(glob)mcp/*.py` returns 0. Write subtree scope as `dir/**`,
   never `dir/*`.
-- **Every entry must match at least one tracked file, checked before writing:**
+- **Check every entry against the working tree before writing:**
 
   ```bash
-  git ls-files -- ":(glob)$entry" | grep -q . || echo "glob matches nothing: $entry"
+  git ls-files -- ":(glob)$entry" | grep -q . || echo "matches nothing: $entry"
   ```
 
   A glob matching nothing fails silently and in the dangerous direction — the
   ADR never surfaces and implementation proceeds as if no decision governed the
-  files. Do not write an ADR with an unverified glob.
+  files.
+
+  **But matching nothing has two very different causes, and only one is a bug.**
+  A decision that says where *new* code goes names a path that does not exist
+  yet — the common case, not the edge one. ol-infrastructure ADR-0011 and the
+  canary specs it governs landed in the same commit, so its globs matched
+  nothing at the moment it was written.
+
+  So do not silently refuse, and do not silently accept. **Stop and ask:**
+
+  > `src/notifications/**` matches no tracked file. Is that a path this work
+  > creates, or is the glob wrong?
+
+  - **Creates it** → write the ADR, and record the fact in it so a later reader
+    knows the empty match was intentional:
+    `<!-- applies_to: src/notifications/** is created by this work -->`
+    directly under the frontmatter.
+  - **Glob is wrong** → fix it and re-check.
+  - **No answer available** → do not write the ADR. An unexplained empty glob
+    is the failure this check exists for.
 
 **Record the alternatives, with the condition that would flip each.** "Rejected
 because X" is a verdict; "would have won if Y" is reviewable. The second is

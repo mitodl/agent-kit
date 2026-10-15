@@ -191,6 +191,12 @@ things that decide it:
   chunks are stacked or independent, and flag any dependency on a *deploy*
   rather than a merge; a reviewer cannot infer that from the diff.
 
+**Record the paths each chunk will touch**, as globs or exact files, in the
+chunk table's `Touches` column. `implement-plan` matches those against each
+ADR's `applies_to` before the chunk's first edit — without them a governing
+decision is only discovered once the code already contradicts it. Estimates
+are fine; the point is knowing which decisions apply.
+
 Sizes here are estimates off the baseline. Label them as estimates;
 implementation re-measures.
 
