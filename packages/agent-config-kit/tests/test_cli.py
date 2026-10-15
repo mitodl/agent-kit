@@ -1506,3 +1506,75 @@ def test_apply_prune_removes_pi_skill_copies_once_codex_is_targeted(
 
     assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
     assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+
+
+_SKILL_HOOK_MANIFEST = """
+[skills]
+my-skill = "skills/my-skill/SKILL.md"
+
+[[hooks]]
+kind = "declarative"
+event = "session_start"
+command = "python3 {skill_dir}/check.py"
+skill = "my-skill"
+
+[profiles.hook-only]
+hooks = ["declarative:session_start:python3 {skill_dir}/check.py"]
+"""
+
+
+def test_apply_tells_the_user_to_approve_each_new_codex_hook(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _write_skill_manifest(tmp_path)
+    manifest = _write_manifest(tmp_path, _SKILL_HOOK_MANIFEST)
+
+    _run_ok(
+        app, ["apply", str(manifest), "--platform", "claude", "--platform", "codex"]
+    )
+
+    out = capsys.readouterr().out
+    command = f"python3 {tmp_path}/.agents/skills/my-skill/check.py"
+    approval = [line for line in out.splitlines() if "⚠ codex:" in line]
+    assert len(approval) == 1
+    assert approval[0].startswith("⚠ codex: session_start hook")
+    assert command in out
+    _run_ok(
+        app, ["validate", str(manifest), "--platform", "claude", "--platform", "codex"]
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "codex"])
+
+    assert "⚠ codex:" not in capsys.readouterr().out
+
+
+def test_apply_refuses_a_skill_hook_whose_skill_this_run_skips(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _write_skill_manifest(tmp_path)
+    manifest = _write_manifest(tmp_path, _SKILL_HOOK_MANIFEST)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(
+            [
+                "apply",
+                str(manifest),
+                "--profile",
+                "hook-only",
+                "--platform",
+                "claude",
+                "--platform",
+                "codex",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "'my-skill', which this run does not install" in capsys.readouterr().out
+    assert not (tmp_path / ".claude").exists()
+    assert not (tmp_path / ".codex").exists()

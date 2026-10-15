@@ -161,6 +161,65 @@ def test_load_manifest_skill_entry_must_be_string_or_table(tmp_path):
         load_manifest(manifest)
 
 
+def test_load_manifest_accepts_a_hook_naming_one_of_its_skills(tmp_path):
+    (tmp_path / "skills" / "preflight").mkdir(parents=True)
+    (tmp_path / "skills" / "preflight" / "SKILL.md").write_text("stub")
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [skills]
+        preflight = "skills/preflight/SKILL.md"
+
+        [[hooks]]
+        kind = "declarative"
+        event = "session_start"
+        command = "python3 {skill_dir}/check.py"
+        skill = "preflight"
+        """,
+    )
+
+    [hook] = load_manifest(manifest).bundle.hooks
+
+    assert hook.skill == "preflight"
+    assert hook.command == "python3 {skill_dir}/check.py"
+
+
+def test_load_manifest_rejects_a_hook_naming_an_unknown_skill(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[hooks]]
+        kind = "declarative"
+        event = "session_start"
+        command = "python3 {skill_dir}/check.py"
+        skill = "preflight"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="'preflight', which is not in"):
+        load_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ('command = "{skill_dir}/run.sh"', "names no 'skill'"),
+        ('command = "run.sh"\nskill = "preflight"', "has no {skill_dir}"),
+    ],
+)
+def test_load_manifest_requires_skill_and_skill_dir_together(tmp_path, fields, message):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        f'[[hooks]]\nkind = "declarative"\nevent = "session_start"\n{fields}\n',
+    )
+
+    with pytest.raises(ManifestError, match=re.escape(message)):
+        load_manifest(manifest)
+
+
 def test_load_manifest_accepts_inline_array_of_tables_hooks(tmp_path):
     """F2: `hooks = [ {..}, {..} ]` must parse identically to the
     `[[hooks]]` array-of-tables header form — TOML produces the same

@@ -646,3 +646,56 @@ def test_apply_with_prune_removes_dropped_server_from_codex_config_toml(
     assert cfg["mcp_servers"] == {"untouched": {"command": "foo"}}
     assert result.removed == ["witan"]
     assert current_state.mcp_servers == []
+
+
+def test_apply_with_prune_removes_dropped_hook_from_codex_hooks_json(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hook = DeclarativeHook(event=HookEvent.STOP, command="witan session-checkpoint")
+    hooks_json = tmp_path / ".codex" / "hooks.json"
+    hooks_json.parent.mkdir()
+    users_own = {"matcher": "", "hooks": [{"type": "command", "command": "mine"}]}
+    hooks_json.write_text(json.dumps({"hooks": {"Stop": [users_own]}}))
+    apply("codex", _bundle(mcp_servers={}, hooks=[hook]))
+
+    result, current_state = apply_with_prune(
+        "codex",
+        _bundle(mcp_servers={}),
+        PlatformState(hooks=[hook_identity(hook)]),
+    )
+
+    assert json.loads(hooks_json.read_text()) == {"hooks": {"Stop": [users_own]}}
+    assert result.removed == [hook_identity(hook)]
+    assert current_state.hooks == []
+
+
+def test_apply_with_prune_tracks_skill_dir_hooks_by_their_written_command(
+    tmp_path, monkeypatch
+):
+    """The state records the substituted command, so a later prune matches
+    what is actually in each platform's file."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hook = DeclarativeHook(
+        event=HookEvent.SESSION_START, command="{skill_dir}/run.sh", skill="preflight"
+    )
+    bundle = _bundle(
+        mcp_servers={}, skills=[_skill(tmp_path, "preflight")], hooks=[hook]
+    )
+
+    _, codex_state = apply_with_prune("codex", bundle, PlatformState())
+    _, claude_state = apply_with_prune("claude", bundle, PlatformState())
+
+    codex_command = f"{tmp_path}/.agents/skills/preflight/run.sh"
+    claude_command = f"{tmp_path}/.claude/skills/preflight/run.sh"
+    assert codex_state.hooks == [f"declarative:session_start:{codex_command}"]
+    assert claude_state.hooks == [f"declarative:session_start:{claude_command}"]
+
+    result, current_state = apply_with_prune(
+        "codex", _bundle(mcp_servers={}), codex_state
+    )
+
+    hooks_json = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    assert hooks_json["hooks"]["SessionStart"] == []
+    assert result.removed[0] == codex_state.hooks[0]
+    assert current_state.hooks == []

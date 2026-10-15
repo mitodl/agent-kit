@@ -127,7 +127,11 @@ def test_codex_targets(monkeypatch, tmp_path):
     )
     assert platform.skills.global_ == ScopeTarget(path=tmp_path / ".agents" / "skills")
     assert platform.skills.project == ScopeTarget(path=Path(".agents") / "skills")
-    assert platform.hooks is None
+    assert platform.hooks.global_ == ScopeTarget(
+        path=tmp_path / ".codex" / "hooks.json", key_path=("hooks",)
+    )
+    assert platform.hooks.project is None
+    assert platform.hooks_approval is not None
 
 
 def test_codex_home_overrides_the_codex_dir(monkeypatch, tmp_path):
@@ -136,6 +140,9 @@ def test_codex_home_overrides_the_codex_dir(monkeypatch, tmp_path):
 
     assert registry.get_platform("codex").mcp.global_.path == (
         tmp_path / "elsewhere" / "config.toml"
+    )
+    assert registry.get_platform("codex").hooks.global_.path == (
+        tmp_path / "elsewhere" / "hooks.json"
     )
     assert "codex" not in registry.detect_installed_platforms()
     (tmp_path / "elsewhere").mkdir()

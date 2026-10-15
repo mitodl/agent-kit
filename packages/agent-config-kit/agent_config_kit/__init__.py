@@ -31,7 +31,14 @@ from .models import (
     SkillSource,
     StdioServer,
 )
-from .plan import InstallResult, Prerequisite, RegistrationBundle, apply, apply_all
+from .plan import (
+    HookSkillError,
+    InstallResult,
+    Prerequisite,
+    RegistrationBundle,
+    apply,
+    apply_all,
+)
 from .prune import (
     PlatformState,
     apply_with_prune,
@@ -54,6 +61,7 @@ __all__ = [
     "FrontmatterRule",
     "Hook",
     "HookEvent",
+    "HookSkillError",
     "InstallResult",
     "InstructionsConfig",
     "LspServer",

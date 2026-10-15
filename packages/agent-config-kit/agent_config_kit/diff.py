@@ -20,7 +20,13 @@ from . import registry
 from .configio import load_config_object
 from .installers import hook_content_hash, install_skills, skill_content_hash
 from .models import DeclarativeHook, PluginRegistration, Scope
-from .plan import RegistrationBundle, _default_serialize, _navigate, _resolve_target
+from .plan import (
+    RegistrationBundle,
+    _default_serialize,
+    _navigate,
+    _resolve_target,
+    platform_hooks,
+)
 from .prune import AppliedState, hook_identity, stale_names
 
 
@@ -88,16 +94,18 @@ def _diff_mcp_servers(
 
 
 def _diff_hooks(
+    platform_name: str,
     platform: registry.AgentPlatform,
     bundle: RegistrationBundle,
     scope: Scope,
     result: Drift,
     previous: AppliedState | None,
 ) -> None:
-    if platform.hooks is None or not bundle.hooks:
+    hooks = platform_hooks(platform_name, bundle, scope)
+    if platform.hooks is None or not hooks:
         return
-    declarative = [h for h in bundle.hooks if isinstance(h, DeclarativeHook)]
-    plugins = [h for h in bundle.hooks if isinstance(h, PluginRegistration)]
+    declarative = [h for h in hooks if isinstance(h, DeclarativeHook)]
+    plugins = [h for h in hooks if isinstance(h, PluginRegistration)]
 
     if declarative and platform.hooks_merge is not None:
         target = _resolve_target(platform.hooks, scope)
@@ -180,6 +188,6 @@ def diff(
     platform = registry.get_platform(platform_name)
     result = Drift(platform=platform_name)
     _diff_mcp_servers(platform_name, platform, bundle, scope, result)
-    _diff_hooks(platform, bundle, scope, result, previous)
+    _diff_hooks(platform_name, platform, bundle, scope, result, previous)
     _diff_skills(platform, bundle, scope, result, previous)
     return result

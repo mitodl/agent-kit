@@ -110,6 +110,39 @@ constraints (1-64 characters, lowercase alphanumeric segments separated by
 single hyphens, no leading/trailing/consecutive hyphens) since it becomes
 the installed skill's directory name.
 
+#### Hooks that run a skill's script
+
+A declarative hook can run a file shipped inside a skill. Each platform
+installs skills somewhere different (`~/.claude/skills/<name>` for Claude
+Code, `~/.agents/skills/<name>` for Codex), so name the skill in `skill` and
+write `{skill_dir}` where its installed directory goes:
+
+```toml
+[skills]
+preflight = "skills/preflight/SKILL.md"
+
+[[hooks]]
+kind = "declarative"
+event = "session_start"
+command = "python3 {skill_dir}/scripts/check.py"
+skill = "preflight"
+```
+
+`apply` substitutes each platform's own path, so this one entry writes
+`python3 /home/me/.claude/skills/preflight/scripts/check.py` for Claude Code
+and `python3 /home/me/.agents/skills/preflight/scripts/check.py` for Codex.
+At project scope the path is relative to the project root
+(`.claude/skills/preflight`). The path is substituted as-is, without shell
+quoting.
+
+`skill` and `{skill_dir}` go together: either one without the other fails to
+load. `skill` must name an entry in the manifest's `[skills]`, and the run
+has to install that skill for every platform the hook is written to, so
+`apply` and `validate` exit `2` before writing anything when a `--profile`
+selects the hook without its skill, or a platform installs no skills at the
+chosen scope. Prune and drift detection track the substituted command, which
+is what's in each platform's file.
+
 #### Remote skill/hook sources
 
 `skill_md_path` and `entry_path` also accept a remote URI instead of a
@@ -271,7 +304,8 @@ the zero-arg "magic" stays legible.
   and cached (default: `.agent-config-kit-cache` next to the manifest).
 
 Exit codes: `0` success, `1` a platform's target couldn't be parsed (as JSON,
-or as TOML for Codex), `2` the manifest failed to load.
+or as TOML for Codex), `2` the manifest failed to load or a hook's `skill`
+isn't installed by this run.
 
 #### Codex CLI
 
@@ -283,13 +317,34 @@ settings and comments survive. Skills go to `~/.agents/skills` (or
 `.agents/skills` in a project), the directories Codex scans. Pi reads those
 directories too, so when Pi and Codex are both targeted, Pi's own copy of
 each skill is skipped (and `--prune` removes copies an earlier run left in
-`~/.pi/agent/skills`) rather than having Pi find every skill twice. Hooks aren't
-wired for Codex yet. A remote server's `oauth` table is renamed to Codex's
+`~/.pi/agent/skills`) rather than having Pi find every skill twice. A remote server's `oauth` table is renamed to Codex's
 snake_case keys (`clientId` becomes `client_id`, `callbackPort` becomes
 `callback_port`). A `callbackPort` without a `callbackUrl` also gets
 `callback_url = "http://localhost:<port>/callback"`, because otherwise Codex
 sends a redirect URI with a random path that a fixed loopback registration
 rejects. Run `codex mcp login <name>` to sign in.
+
+Declarative hooks go to `$CODEX_HOME/hooks.json` (global scope only; there
+is no project-scope hooks target for Codex). The file has Claude Code's
+shape, and entries are merged and deduped by command the same way, so hooks
+you added yourself are kept. A timeout is rounded up to whole seconds,
+because Codex reads `timeout` as an integer and rejects the whole file
+otherwise. Keep your own hooks in `hooks.json` too: Codex warns when one
+config layer has hooks in both `hooks.json` and a `[hooks]` table in
+`config.toml`.
+
+Codex runs a hook it didn't ship only after you trust it, and asks again
+whenever the hook changes. `apply` never writes that trust state
+(`trusted_hash`); it prints one line per hook it added or changed, telling
+you to trust it with `/hooks` in the Codex TUI. Until then the hook is
+written but doesn't run. A changed hook has to be trusted again, so keep
+hook commands stable.
+
+Hooks are stable and on by default from Codex 0.124.0 (`codex --version`).
+An older Codex needs `[features] codex_hooks = true` in `config.toml`; the
+feature was renamed `hooks` in 0.129.0, which still accepts `codex_hooks`.
+Codex 0.129.0 is also the first release that requires trusting a hook. The
+`session_end` event needs Codex 0.145.0 or later.
 
 #### Platform prerequisites (Pi MCP)
 

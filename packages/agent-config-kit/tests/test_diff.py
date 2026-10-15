@@ -300,6 +300,31 @@ def test_diff_codex_reports_no_drift_after_apply(tmp_path, monkeypatch):
     assert not diff("codex", bundle).has_drift
 
 
+def test_diff_codex_hooks_with_skill_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_md = tmp_path / "src" / "preflight" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: preflight\n---\n")
+    bundle = _bundle(
+        skills=[SkillSource(name="preflight", skill_md_path=skill_md)],
+        hooks=[
+            DeclarativeHook(
+                event=HookEvent.SESSION_START,
+                command="{skill_dir}/run.sh",
+                skill="preflight",
+            )
+        ],
+    )
+
+    before = diff("codex", bundle)
+    apply("codex", bundle)
+
+    assert f"hooks:session_start:{tmp_path}/.agents/skills/preflight/run.sh" in (
+        before.missing_keys
+    )
+    assert not diff("codex", bundle).has_drift
+
+
 def test_diff_codex_reports_mismatched_server(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     apply("codex", _bundle())

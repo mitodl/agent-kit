@@ -29,7 +29,14 @@ from .models import (
     PluginRegistration,
     Scope,
 )
-from .plan import InstallResult, RegistrationBundle, _navigate, _resolve_target, apply
+from .plan import (
+    InstallResult,
+    RegistrationBundle,
+    _navigate,
+    _resolve_target,
+    apply,
+    platform_hooks,
+)
 
 
 def hook_identity(hook: Hook) -> str:
@@ -61,7 +68,7 @@ class PlatformState:
 
 
 def _bundle_platform_state(
-    bundle: RegistrationBundle, platform_name: str
+    bundle: RegistrationBundle, platform_name: str, scope: Scope
 ) -> PlatformState:
     # Unlike mcp_servers/hooks, a skill's supporting files (scripts/,
     # references/, assets/, ...) are never enumerated in the manifest — only
@@ -90,7 +97,11 @@ def _bundle_platform_state(
                 **bundle.mcp_servers_by_platform.get(platform_name, {}),
             }
         ),
-        hooks=sorted(hook_identity(h) for h in bundle.hooks),
+        # The hooks as written: a ``{skill_dir}`` hook is recorded with its
+        # substituted command, which is what ``_remove_hooks`` has to match.
+        hooks=sorted(
+            hook_identity(h) for h in platform_hooks(platform_name, bundle, scope)
+        ),
         skills=sorted(skill_entries),
     )
 
@@ -417,7 +428,7 @@ def apply_with_prune(
         _json_state=json_state,
     )
     platform = registry.get_platform(platform_name)
-    current = _bundle_platform_state(bundle, platform_name)
+    current = _bundle_platform_state(bundle, platform_name, scope)
 
     result.removed.extend(
         _remove_mcp_servers(

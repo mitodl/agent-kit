@@ -194,9 +194,23 @@ def _registry() -> dict[str, AgentPlatform]:
                 }
             ),
             mcp_serialize=codex_adapter.serialize_mcp,
+            # hooks.json rather than a [hooks] table in config.toml, so
+            # hooks never mean rewriting a hand-edited config.toml. Global
+            # only. Hooks are stable and on by default from Codex 0.124.0
+            # (feature `codex_hooks`, renamed `hooks` in 0.129.0).
+            hooks=CapabilityScope(
+                **{
+                    "global": ScopeTarget(
+                        path=codex_adapter.codex_home() / "hooks.json",
+                        key_path=("hooks",),
+                    ),
+                }
+            ),
+            hooks_merge=codex_adapter.merge_hooks,
+            hooks_remove=claude_adapter.remove_hooks,
+            hooks_approval=codex_adapter.HOOKS_APPROVAL,
             # Codex's skill locations are the cross-agent .agents/skills
-            # directories, not anything under CODEX_HOME. No hooks: Codex's
-            # are still behind a feature flag.
+            # directories, not anything under CODEX_HOME.
             skills=CapabilityScope(
                 **{
                     "global": ScopeTarget(path=Path.home() / ".agents" / "skills"),

@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .fetch import FetchError, fetch_remote, is_remote_uri
-from .models import Hook, LspServer, McpServer, Scope, SkillSource
+from .models import DeclarativeHook, Hook, LspServer, McpServer, Scope, SkillSource
 from .plan import RegistrationBundle
 from .prune import hook_identity
 from .registry import known_platforms
@@ -476,6 +476,19 @@ def _validate_profile_entry_refs(
                     )
 
 
+def _validate_hook_skill_refs(bundle: RegistrationBundle, path: Path) -> None:
+    """A hook's ``skill`` must name one of the manifest's own skills. Whether
+    a given run installs it (profiles, platforms) is checked later, by
+    ``plan.platform_hooks``."""
+    skills = {s.name for s in bundle.skills}
+    for hook in bundle.hooks:
+        if isinstance(hook, DeclarativeHook) and hook.skill not in (None, *skills):
+            raise ManifestError(
+                f"{path}: hooks[]: {hook.command!r} references skill "
+                f"{hook.skill!r}, which is not in [skills]"
+            )
+
+
 def resolve_profile(manifest: Manifest, names: list[str]) -> RegistrationBundle:
     """Union the resolved entries of every named profile, expanding
     ``inherits`` transitively (spec §4.2). ``names=[]`` (no profile selected)
@@ -590,6 +603,7 @@ def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
 
     _detect_profile_cycles(profiles, path)
     _validate_profile_entry_refs(profiles, bundle, path)
+    _validate_hook_skill_refs(bundle, path)
 
     if options_model.default_profiles:
         unknown_profiles = sorted(set(options_model.default_profiles) - set(profiles))
