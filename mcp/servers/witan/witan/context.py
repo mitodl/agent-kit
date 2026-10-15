@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -289,6 +290,18 @@ def _dbg_exc_from(enabled: bool, exc: BaseException, msg: str) -> None:
 # so one read a deployment accepted and never answered held the hook for the
 # MCP client's 300s read timeout, long after Claude Code had killed it at the
 # hook timeout and thrown its output away (agent-kit#349).
+#
+# Each wave's loop still runs on a daemon thread the hook joins with a timeout,
+# because not everything on that loop yields to it. The proxy's token provider
+# is synchronous and runs inside ``_invoke``: a refresh against a stalled
+# identity provider blocks the loop for up to its 15s client timeout, once per
+# read and one read after another, and ``asyncio.wait``'s timer cannot fire
+# until it returns. Joining with a timeout bounds the wave even then, and a
+# daemon thread left behind does not hold the process open.
+
+# How long past the deadline to let a wave's loop finish cancelling what is
+# pending and close, before the hook stops waiting for it.
+_TEARDOWN_GRACE = 0.5
 
 
 class _TimedOut(TimeoutError):
@@ -301,20 +314,28 @@ class _TimedOut(TimeoutError):
 
 
 async def _await_all(
-    calls: dict[str, Callable[[], Awaitable[object]]], deadline: float
-) -> dict[str, object]:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return {key: _TimedOut() for key in calls}
+    calls: dict[str, Callable[[], Awaitable[object]]],
+    deadline: float,
+    out: dict[str, object],
+) -> None:
+    """Record each call's result or exception into ``out`` as it completes.
+
+    Recorded per task, not once at the end, so the hook thread can read what
+    answered even if this loop is blocked and never gets back to returning.
+    """
     tasks = {asyncio.ensure_future(fn()): key for key, fn in calls.items()}
-    done, pending = await asyncio.wait(tasks, timeout=remaining)
-    for task in pending:
-        task.cancel()
-    out: dict[str, object] = {tasks[task]: _TimedOut() for task in pending}
-    for task in done:
+
+    def record(task: asyncio.Future) -> None:
+        if task.cancelled():
+            return
         exc = task.exception()
         out[tasks[task]] = exc if exc is not None else task.result()
-    return out
+
+    for task in tasks:
+        task.add_done_callback(record)
+    _, pending = await asyncio.wait(tasks, timeout=deadline - time.monotonic())
+    for task in pending:
+        task.cancel()
 
 
 def _gather(
@@ -335,7 +356,19 @@ def _gather(
     """
     if not calls:
         return {}
-    return asyncio.run(_await_all(calls, deadline))
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return {key: _TimedOut() for key in calls}
+    out: dict[str, object] = {}
+    loop_thread = threading.Thread(
+        target=asyncio.run,
+        args=(_await_all(calls, deadline, out),),
+        name="witan-ctx",
+        daemon=True,
+    )
+    loop_thread.start()
+    loop_thread.join(remaining + _TEARDOWN_GRACE)
+    return {key: out[key] if key in out else _TimedOut() for key in calls}
 
 
 def _answered(value: object) -> list:

@@ -1513,6 +1513,25 @@ def test_gather_keeps_what_answered_and_cancels_the_rest():
     assert cancelled == [True]
 
 
+def test_gather_returns_at_the_deadline_when_a_call_blocks_the_loop():
+    """The proxy's token provider is synchronous and runs on the loop, so a
+    stalled refresh blocks it and ``asyncio.wait``'s timer cannot fire. The
+    hook must still get control back at the deadline."""
+    from witan import context as ctx_module
+
+    async def _blocks_the_loop():
+        time.sleep(3)  # noqa: ASYNC251 — blocking the loop is the case under test
+        return "too late"
+
+    started = time.monotonic()
+    got = ctx_module._gather(
+        {"blocked": _blocks_the_loop}, deadline=time.monotonic() + 0.5
+    )
+
+    assert time.monotonic() - started < 1.5
+    assert isinstance(got["blocked"], ctx_module._TimedOut)
+
+
 def test_gather_past_its_deadline_starts_nothing():
     from witan import context as ctx_module
 

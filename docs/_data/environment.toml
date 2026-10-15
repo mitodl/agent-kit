@@ -389,7 +389,7 @@ desc = "How long the rendered session-context block is cached on disk, in second
 
 [section.vars.WITAN_CONTEXT_DEADLINE]
 default = "30.0"
-desc = "Time budget, in seconds, for all of the session-context hook's reads against a deployed target, measured from when the hook starts. A read still unanswered at the deadline is cancelled and its block left out, with one line naming what is missing; that partial block is not cached. Keep it under the hook's own 45s timeout, past which the client kills the hook and discards its output."
+desc = "Time budget, in seconds, for all of the session-context hook's reads against a deployed target, measured from when the hook starts. A read still unanswered at the deadline is cancelled and its block left out, with one line naming what is missing; that partial block is not cached. Keep it under the hook's own 45s timeout, past which the client kills the hook and discards its output. Unlike `WITAN_CONTEXT_TTL`, `0` does not disable it: every read is skipped as already timed out."
 
 [section.vars.WITAN_LOG_LEVEL]
 default = "INFO"
