@@ -32,6 +32,13 @@ plan comment is the constant.
   [`plan-technical-approach`](../plan-technical-approach/SKILL.md). No approved
   plan → go there first rather than inventing one and building it.
 - The witan `task_*` / `workflow_*` tools, for claiming and closing chunks.
+  They ship with the witan MCP server, installed by `witan setup` rather than
+  by `agent-kit apply`, so a consumer can have this skill without them. If they
+  are missing, **say so and stop** — do not proceed with the claiming skipped.
+  An unclaimed task being actively worked is indistinguishable from an idle
+  one, which is the collision the claim exists to prevent, and it is worse
+  during implementation than during scoping because there is now code at
+  stake.
 - The plan-comment scripts, which live in the sibling skill
   `plan-technical-approach`. Both ship in the `universal` profile and install
   side by side — under `~/.claude/skills/` once installed, under
@@ -63,14 +70,21 @@ git diff --name-only "$base"...HEAD -- ":(glob)${entry}" | grep -q . \
   && echo "governs this change: ${adr}"
 ```
 
-Before a chunk's first edit, run the same match against the files the chunk
-*will* touch, from the plan. An ADR found after the code is written is a
-rewrite; found before, it is a constraint.
+Before a chunk's first edit, run the same match against that chunk's
+**Touches** entry in the plan's chunk table — the paths it is expected to
+change. An ADR found after the code is written is a rewrite; found before, it
+is a constraint. If the chunk table has no `Touches` column (a plan written
+before this was recorded), derive the paths from the approach and say you did,
+rather than skipping the check.
 
 **Warn on a glob that matches nothing in the repo at all** —
-`git ls-files -- ':(glob)<entry>'` empty means the ADR has gone stale and is
-silently governing nothing. Say which ADR, and do not treat its absence from
-the match as meaningful.
+`git ls-files -- ':(glob)<entry>'` empty means the ADR is governing nothing.
+Say which ADR, and do not treat its absence from the match as meaningful.
+
+Two causes, and at the *start* of the work you cannot tell them apart: the
+glob is wrong, or it names a path this work has not created yet. An ADR
+carrying an `<!-- applies_to: ... is created by this work -->` note is
+declaring the second, so take it at its word for now.
 
 Read every governing ADR's `## Decision` and `## Consequences` before editing.
 A decision you contradict without noticing is the failure this whole convention
@@ -308,7 +322,21 @@ the tool and say so.
 3. If the chunk carried an accepted workaround, comment its PR URL on the
    follow-up issue — that diff is what whoever fixes it has to undo. Leave that
    issue **open**; it tracks work that has not happened.
-4. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore:
+4. **Re-check any forward-looking `applies_to` glob.** An ADR written for this
+   work may have named a path that did not exist yet, flagged with an
+   `<!-- applies_to: ... is created by this work -->` note. The code exists
+   now, so the ambiguity is gone:
+
+   ```bash
+   git ls-files -- ":(glob)$entry" | grep -q . \
+     && echo "now governs real files -- drop the note" \
+     || echo "STILL EMPTY: the glob is wrong, not forward-looking"
+   ```
+
+   Matching → remove the note, the glob is live. Still empty → the glob is
+   genuinely wrong and the ADR governs nothing; fix it in this PR rather than
+   leaving a record that silently applies to no code.
+5. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore:
 
    ```bash
    gh pr view <N> --repo <owner/repo> --json reviews \

@@ -76,9 +76,16 @@ These are inherited, not local inventions:
 
 <"Single PR, ~N lines." — or the chunk table, plus whether chunks are stacked or independent.>
 
-| # | Chunk | Axis | Est. LOC | Depends on | PR |
-|---|-------|------|----------|------------|-----|
-| 1 | <what ships> | <split axis> | ~N | — | |
+<**Touches** carries the paths each chunk is expected to change, as globs or
+exact files. It is not decoration: `implement-plan` matches it against each
+ADR's `applies_to` *before* a chunk's first edit, which is what turns a
+governing decision into a constraint rather than something discovered after the
+code is written. Estimates are fine — the point is to know which decisions
+apply, not to predict the diff.>
+
+| # | Chunk | Axis | Touches | Est. LOC | Depends on | PR |
+|---|-------|------|---------|----------|------------|-----|
+| 1 | <what ships> | <split axis> | `path/**`, `other/file.py` | ~N | — | |
 
 **Tradeoffs**
 
@@ -147,11 +154,11 @@ Both copies of the retry logic are reachable from the scheduler, and they have a
 
 Three chunks, independent PRs. Chunk 3 depends on chunk 2 being **deployed**, not merged: the old copy is the rollback target until the new path has run in production, so deleting it at merge time would leave nothing to revert to.
 
-| # | Chunk | Axis | Est. LOC | Depends on | PR |
-|---|-------|------|----------|------------|-----|
-| 1 | Retry policy in the client wrapper | Functional layer — domain logic | ~280 | — | #4821 (merged) |
-| 2 | Migrate the scheduler path | Functional layer — consumers | ~190 | 1 merged | #4834 (open) |
-| 3 | Delete the second copy | Risk isolation — pure removal | ~120 | 2 deployed | |
+| # | Chunk | Axis | Touches | Est. LOC | Depends on | PR |
+|---|-------|------|---------|----------|------------|-----|
+| 1 | Retry policy in the client wrapper | Functional layer — domain logic | `clients/**` | ~280 | — | #4821 (merged) |
+| 2 | Migrate the scheduler path | Functional layer — consumers | `scheduler/**` | ~190 | 1 merged | #4834 (open) |
+| 3 | Delete the second copy | Risk isolation — pure removal | `tasks/retry.py` | ~120 | 2 deployed | |
 
 **Tradeoffs**
 

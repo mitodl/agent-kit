@@ -142,11 +142,16 @@ new_sha="$(sha256_of < "$payload.unsigned")"
 } > "$payload"
 rm -f "$payload.stripped" "$payload.unsigned"
 
-# GitHub rejects an issue comment body over 65536 characters. Catch it here so
-# the failure names the number instead of surfacing as an opaque 422.
-size="$(wc -c < "$payload" | tr -d ' ')"
+# GitHub rejects an issue comment body over 65536 CHARACTERS. Measure
+# characters, not bytes: this house style is full of em dashes and arrows, and
+# `wc -c` would reject a compliant ~63.8k-character body as if it were over.
+# The locale is pinned because `wc -m` counts bytes under LC_ALL=C, which would
+# silently reintroduce exactly that bug on a machine without a UTF-8 locale.
+size="$(LC_ALL=C.UTF-8 wc -m < "$payload" | tr -d ' ')"
+bytes="$(wc -c < "$payload" | tr -d ' ')"
 if (( size > 65536 )); then
-  echo "Error: plan body is ${size} bytes; GitHub's limit is 65536." >&2
+  echo "Error: plan body is ${size} characters (${bytes} bytes); GitHub's limit" >&2
+  echo "is 65536 characters." >&2
   echo "Trim the Revisions log to the most recent entries plus an elided count." >&2
   exit 6
 fi
