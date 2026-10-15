@@ -5125,6 +5125,7 @@ def workflow_project_update(
     dropped = set(_canon(remove_repos))
     new_repos = [r for r in _merge_repos(base, _canon(add_repos)) if r not in dropped]
 
+    now = now_iso()
     payload = {
         "slug": slug,
         "title": title if title is not None else current.get("title"),
@@ -5137,17 +5138,46 @@ def workflow_project_update(
         "github_issue": (
             github_issue if github_issue is not None else current.get("github_issue")
         ),
-        "preauthorized": _envelope_list(
-            preauthorized if preauthorized is not None else current.get("preauthorized")
-        ),
-        "reserved_decisions": _envelope_list(
-            reserved_decisions
-            if reserved_decisions is not None
-            else current.get("reserved_decisions")
-        ),
-        "updated_at": now_iso(),
+        "updated_at": now,
     }
-    client.change("mutations.gq", "update_workflow_project_fields", payload)
+    # The envelope lists are written only when passed, each by its own
+    # mutation, never copied forward from `current`: a stale copy would restore
+    # a grant another session just revoked, or drop a reservation it just
+    # added. The general fields are skipped on an envelope-only call for the
+    # same reason. Every step lands in one commit.
+    envelope_only = (
+        preauthorized is not None or reserved_decisions is not None
+    ) and all(
+        v is None
+        for v in (
+            title,
+            description,
+            repos,
+            add_repos,
+            remove_repos,
+            tags,
+            github_issue,
+            status,
+        )
+    )
+    steps = (
+        []
+        if envelope_only
+        else [("mutations.gq", "update_workflow_project_fields", payload)]
+    )
+    for key, value in (
+        ("preauthorized", preauthorized),
+        ("reserved_decisions", reserved_decisions),
+    ):
+        if value is not None:
+            steps.append(
+                (
+                    "mutations.gq",
+                    f"update_workflow_project_{key}",
+                    {"slug": slug, key: _envelope_list(value), "updated_at": now},
+                )
+            )
+    client.change_many(steps)
 
     updated = client.read("read.gq", "get_workflow_project", {"slug": slug})
     return updated[0] if updated else payload

@@ -272,7 +272,9 @@ query update_workflow_project_description(
 // the caller supplies only what changed and the tool reads-modifies-writes the
 // rest — a per-field mutation would need a read between each one. `phase`,
 // `github_pr`, `completed_at` and `blocked_by` are deliberately absent: they
-// belong to advance/complete/block, which enforce their own semantics.
+// belong to advance/complete/block, which enforce their own semantics. The
+// autonomy envelope is absent too, and has a mutation per list below: written
+// back from a read, a stale copy would undo a concurrent grant or reservation.
 query update_workflow_project_fields(
     $slug: String,
     $title: String,
@@ -281,8 +283,6 @@ query update_workflow_project_fields(
     $status: String,
     $tags: [String]?,
     $github_issue: String?,
-    $preauthorized: [String]?,
-    $reserved_decisions: [String]?,
     $updated_at: DateTime
 ) {
     update WorkflowProject
@@ -293,10 +293,28 @@ query update_workflow_project_fields(
             status: $status,
             tags: $tags,
             github_issue: $github_issue,
-            preauthorized: $preauthorized,
-            reserved_decisions: $reserved_decisions,
             updated_at: $updated_at
         }
+        where slug = $slug
+}
+
+query update_workflow_project_preauthorized(
+    $slug: String,
+    $preauthorized: [String]?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { preauthorized: $preauthorized, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query update_workflow_project_reserved_decisions(
+    $slug: String,
+    $reserved_decisions: [String]?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { reserved_decisions: $reserved_decisions, updated_at: $updated_at }
         where slug = $slug
 }
 

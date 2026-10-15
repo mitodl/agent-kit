@@ -4,6 +4,8 @@ how the context hook and ``witan project run`` render them."""
 
 import uuid
 
+import pytest
+
 from witan import context as ctx
 
 from .conftest import requires_omnigraph
@@ -80,6 +82,143 @@ def test_writes_to_other_fields_leave_the_envelope_intact(server):
     assert got["title"] == "renamed"
     assert got["preauthorized"] == ALLOW
     assert got["reserved_decisions"] == RESERVE
+
+
+@requires_omnigraph
+def test_an_unrelated_edit_does_not_restore_a_concurrently_changed_envelope(
+    server, monkeypatch
+):
+    """A title edit reads the row, another session revokes the grants and adds
+    a reservation, then the title edit writes. Copying the envelope forward
+    from that read would put the grants back and drop the reservation."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(
+        title="envelope",
+        description="d",
+        preauthorized=ALLOW,
+        reserved_decisions=RESERVE,
+    )
+    slug = proj["slug"]
+    real_read = srv.client.read
+    interleaved = []
+
+    def read_then_concurrent_write(queries, name, params):
+        rows = real_read(queries, name, params)
+        if name == "get_workflow_project" and not interleaved:
+            interleaved.append(True)
+            server.workflow_project_update(
+                slug, preauthorized=[], reserved_decisions=[*RESERVE, "rotating keys"]
+            )
+        return rows
+
+    monkeypatch.setattr(srv.client, "read", read_then_concurrent_write)
+    server.workflow_project_update(slug, title="renamed")
+    monkeypatch.setattr(srv.client, "read", real_read)
+
+    got = server.workflow_project_get(slug)
+    assert interleaved
+    assert got["title"] == "renamed"
+    assert got["preauthorized"] is None
+    assert got["reserved_decisions"] == [*RESERVE, "rotating keys"]
+
+
+@requires_omnigraph
+def test_updating_one_envelope_list_does_not_write_the_other(server, monkeypatch):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(
+        title="envelope",
+        description="d",
+        preauthorized=ALLOW,
+        reserved_decisions=RESERVE,
+    )
+    written = []
+    real_change_many = srv.client.change_many
+
+    def recording_change_many(steps, **kwargs):
+        written.extend(name for _, name, _ in steps)
+        return real_change_many(steps, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change_many", recording_change_many)
+    server.workflow_project_update(proj["slug"], preauthorized=["only this"])
+
+    assert written == ["update_workflow_project_preauthorized"]
+    got = server.workflow_project_get(proj["slug"])
+    assert got["preauthorized"] == ["only this"]
+    assert got["reserved_decisions"] == RESERVE
+
+
+def _guard_client(monkeypatch, *, needle, category, **cfg):
+    """Put a WriteGuard on the test client, flagging ``needle``."""
+    from witan import server as srv
+    from witan.config import ScanConfig
+    from witan.scan import Finding, ScannerRegistry, WriteGuard, masked_preview
+
+    class Needle:
+        name = "needle"
+
+        def __init__(self):
+            self.category = category
+
+        def scan(self, text, field, node_type):
+            start = text.find(needle)
+            if start == -1:
+                return []
+            return [
+                Finding(
+                    detector=self.name,
+                    category=category,
+                    start=start,
+                    end=start + len(needle),
+                    preview=masked_preview(self.name, needle),
+                )
+            ]
+
+    guard = WriteGuard(ScanConfig(enabled=True, **cfg), ScannerRegistry([Needle()]))
+    monkeypatch.setattr(srv.client, "guard", guard)
+
+
+@requires_omnigraph
+def test_create_with_a_secret_in_the_envelope_is_refused(server, monkeypatch):
+    from witan.scan import WriteBlocked
+
+    _guard_client(monkeypatch, needle="AKIASECRET", category="secret")
+    with pytest.raises(WriteBlocked):
+        server.workflow_project_create(
+            title="envelope", description="d", preauthorized=["use AKIASECRET"]
+        )
+    assert server.workflow_project_list(repo="") == []
+
+
+@requires_omnigraph
+def test_update_with_a_secret_in_the_envelope_is_refused(server, monkeypatch):
+    from witan.scan import WriteBlocked
+
+    proj = server.workflow_project_create(
+        title="envelope", description="d", reserved_decisions=RESERVE
+    )
+    _guard_client(monkeypatch, needle="AKIASECRET", category="secret")
+    with pytest.raises(WriteBlocked):
+        server.workflow_project_update(
+            proj["slug"], title="renamed", reserved_decisions=["AKIASECRET"]
+        )
+    # One commit: the refused list takes the title edit down with it.
+    got = server.workflow_project_get(proj["slug"])
+    assert got["title"] == "envelope"
+    assert got["reserved_decisions"] == RESERVE
+
+
+@requires_omnigraph
+def test_update_redacts_an_envelope_item_in_the_store(server, monkeypatch):
+    proj = server.workflow_project_create(title="envelope", description="d")
+    _guard_client(monkeypatch, needle="a@b.com", category="pii", pii_action="redact")
+
+    got = server.workflow_project_update(
+        proj["slug"], preauthorized=["deploy to QA", "email a@b.com when done"]
+    )
+
+    assert got["preauthorized"] == ["deploy to QA", "email «redacted:needle» when done"]
 
 
 @requires_omnigraph
