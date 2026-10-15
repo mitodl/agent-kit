@@ -266,12 +266,18 @@ def apply(
 
 
 def skills_shadowed_by(
-    platform_name: str, targets: list[str], scope: Scope
+    platform_name: str,
+    targets: list[str],
+    scope: Scope,
+    skills: list[SkillSource] | None = None,
 ) -> str | None:
-    """The other targeted platform, if any, that installs skills into a dir
-    ``platform_name`` already reads natively (``skills_also_reads``) — in
-    which case installing this platform's own copy too makes it discover
-    every skill twice (Pi logs a "skill collision" warning for each)."""
+    """Why a platform's own skill copy would duplicate one it already reads.
+
+    Another target in this run is sufficient, but not necessary: a previous
+    Codex run may already have installed this bundle in Pi's shared skill
+    directory.  When the current bundle's skills are all there, retain that
+    layout for Pi-only apply and validate runs too.
+    """
     platform = registry.get_platform(platform_name)
     if platform.skills_also_reads is None:
         return None
@@ -285,6 +291,10 @@ def skills_shadowed_by(
         target = _resolve_target(other_skills, scope) if other_skills else None
         if target is not None and target.path == also_read.path:
             return other
+    if skills and all(
+        (also_read.path / skill.name / "SKILL.md").is_file() for skill in skills
+    ):
+        return "the shared skill directory"
     return None
 
 
@@ -295,7 +305,9 @@ def bundle_for(
     installs them somewhere ``platform_name`` reads (``skills_shadowed_by``).
     Used for apply, prune and validate alike, so a prune run also removes
     the copies an earlier run installed before the overlap was handled."""
-    if bundle.skills and skills_shadowed_by(platform_name, targets, scope):
+    if bundle.skills and skills_shadowed_by(
+        platform_name, targets, scope, bundle.skills
+    ):
         return replace(bundle, skills=[])
     return bundle
 

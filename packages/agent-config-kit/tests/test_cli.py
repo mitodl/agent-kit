@@ -1471,6 +1471,24 @@ def test_apply_still_installs_pi_skills_without_codex(tmp_path, monkeypatch):
     assert (tmp_path / ".pi" / "agent" / "skills" / "my-skill" / "SKILL.md").is_file()
 
 
+def test_pi_only_runs_keep_skills_already_installed_by_codex(
+    tmp_path, monkeypatch, capsys
+):
+    """Pi's shared skill discovery must outlive the original multi-platform run."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_skill_manifest(tmp_path)
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi", "--platform", "codex"])
+
+    _run_ok(app, ["validate", str(manifest), "--platform", "pi"])
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi"])
+
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+    assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
+    assert "pi: skills skipped" in capsys.readouterr().out
+
+
 def test_apply_prune_removes_pi_skill_copies_once_codex_is_targeted(
     tmp_path, monkeypatch
 ):

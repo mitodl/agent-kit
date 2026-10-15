@@ -860,7 +860,9 @@ def apply_command(
         )
 
     for name in target_platforms:
-        shadowing = skills_shadowed_by(name, target_platforms, resolved_scope)
+        shadowing = skills_shadowed_by(
+            name, target_platforms, resolved_scope, bundle.skills
+        )
         if shadowing and bundle.skills:
             console.print(
                 f"[dim]{name}: skills skipped — it already reads the ones "
