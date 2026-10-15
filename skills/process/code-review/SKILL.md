@@ -246,18 +246,37 @@ drafting context. Each skeptic is briefed with
 - the PR description and linked issue bodies collected under [Stated
   goals](#stated-goals), so intentional-design claims can be checked
   against what the author wrote
-- the path to the checkout, and the companion repos the claim depends on
+- the review target as resolved under [Scope input](#scope-input) (e.g.
+  "`feature-x` against merge base `abc123`", "PR #42") and the path to a
+  tree holding its post-change state
+- the companion repos the claim depends on
 
 Not findings outside its group, and not the reasoning that produced them.
+
+The post-change tree matters because the current checkout often isn't the
+reviewed revision: a PR target is read with `gh pr diff`, and a named branch
+is diffed without switching to it. A skeptic reading the wrong tree can
+refute a real finding with a caller guard that the diff deletes in another
+hunk. For a working-tree or path target, the checkout is the post-change
+state. For a branch, add a scratch worktree once before fan-out (`git
+worktree add --detach <scratch-dir> <branch>`); for a PR, fetch its head
+first (`git fetch origin pull/<n>/head`, then the same command with
+`FETCH_HEAD`). Every skeptic in the run shares that tree, and the brief
+requires their evidence to come from it.
 
 Companion repos matter when the claim turns on another service: the status
 codes an API returns, auth applied at a gateway route, a config default set
 by infrastructure. Name the repo in the brief. The skeptic looks for a
 local checkout first (a sibling of this repo's root, e.g. under `~/code`),
 otherwise shallow-clones it into a scratch directory (`git clone --depth
-1`) and deletes the clone when done. Where cross-repo code-graph tools are
-available (witan-code's `code_interface_*`), it may use them; otherwise it
-greps the checkout. Neither is required.
+1`) and returns the clone's path with its verdicts. Where cross-repo
+code-graph tools are available (witan-code's `code_interface_*`), it may
+use them; otherwise it greps the checkout. Neither is required.
+
+The reviewer, not the skeptic, owns cleanup. Scratch worktrees and clones
+stay in place until every verdict's evidence has been re-read (below), then
+the reviewer removes them (`git worktree remove <scratch-dir>` for a
+worktree, deleting the directory for a clone).
 
 Fan-out: with a subagent facility, run one subagent per group of
 candidates, at most 6 at once, grouping candidates on the same file or

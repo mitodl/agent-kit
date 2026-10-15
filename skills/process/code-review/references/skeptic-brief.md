@@ -18,7 +18,8 @@ problems; report nothing outside the findings you were given.
 - One or more findings, each with a summary, file:line, severity, and
   failure scenario, plus the diff hunk it points at.
 - The PR description and the bodies of the issues it links.
-- The path to the repository checkout.
+- The review target (e.g. "`feature-x` against merge base `abc123`", "PR
+  #42") and the path to a tree holding its post-change state.
 - Companion repos the findings depend on, if any: another service, the
   gateway or infrastructure config, a shared library.
 
@@ -29,12 +30,19 @@ be true for the scenario to happen, then check each of those things in the
 code: the callers, the types and validators on the input, the settings, the
 code that runs before and after.
 
+Read this repo's code from the post-change tree you were given, not from
+whatever checkout you happen to be in. Evidence from this repo must exist
+in that tree: a guard that only exists on the base branch, or in another
+working tree, and that the diff removes or never reaches, doesn't refute
+anything.
+
 When the claim depends on another repo (which status codes an API returns,
 whether the gateway enforces auth on a route, a config default set by
 infrastructure), read that repo. Use a local checkout if one exists (a
 sibling of this repo's root, e.g. under `~/code`); otherwise shallow-clone
-it into a scratch directory with `git clone --depth 1` and delete the
-clone when you finish. If cross-repo code-graph tools are available
+it into a scratch directory with `git clone --depth 1`. Leave the clone in
+place and list its path in your reply: the reviewer re-reads your evidence
+there and removes the clone afterwards. If cross-repo code-graph tools are available
 (witan-code's `code_interface_*`), you may use them to find providers and
 consumers; otherwise grep.
 
@@ -96,4 +104,8 @@ Argument: <one to three sentences tying the evidence to the verdict>
 
 Evidence is mandatory for every verdict, including `upheld`: cite what you
 checked. A `refuted` verdict without a file:line or command output will be
-treated as `uncertain`.
+treated as `uncertain`. Cite companion-repo files as `<repo>/<path>:<line>`
+so the reviewer can find them.
+
+After the blocks, list every scratch clone you created, one path per line
+under `Scratch clones:`, or `Scratch clones: none`.
