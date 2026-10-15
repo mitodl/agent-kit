@@ -55,7 +55,7 @@ source "${script_dir}/paths.sh"
 usage() {
   echo "Usage: $0 --repo <owner/repo> --issue <N|url> [--body-file <file|->]" >&2
   echo "          [--expect-sha <sha256>] [--on-duplicate fail|oldest|newest]" >&2
-  echo "          [--require-existing] [--dry-run]" >&2
+  echo "          [--require-existing] [--dry-run] [--print-draft-path]" >&2
   echo "Prefer --body-file over any inline body: a shell argument has its" >&2
   echo "backticks and \$ expanded before this script sees it." >&2
   exit 1
