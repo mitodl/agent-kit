@@ -105,6 +105,18 @@ def projects(
     )
 
 
+def _print_envelope(p: dict) -> None:
+    """The project's autonomy envelope, in full, one item per line."""
+    for key, label in (
+        ("preauthorized", "pre-authorized"),
+        ("reserved_decisions", "reserved for a human"),
+    ):
+        if p.get(key):
+            console.print(f"  {label}:")
+            for item in p[key]:
+                console.print(f"    - {esc(item)}")
+
+
 def _project_show(slug: str) -> None:
     """Show a project, its sessions, and rolled-up tasks."""
     s = _srv()
@@ -131,6 +143,7 @@ def _project_show(slug: str) -> None:
             console.print(f"  blocked by {blocker} [{_styled(st, _STATUS_STYLE)}]")
     if p.get("blocks"):
         console.print(f"  blocks: {', '.join(p['blocks'])}")
+    _print_envelope(p)
     console.print(f"\n{esc(p.get('description') or '(no description)')}\n")
 
     sessions = _fn(s.workflow_session_list)(project_slug=slug)
@@ -219,6 +232,7 @@ def project_status(
         console.print(f"  pr: {p['github_pr']}")
     if st["blockers"]:
         console.print(f"  [yellow]blocked by[/yellow]: {', '.join(st['blockers'])}")
+    _print_envelope(p)
 
     ls = st["last_session"]
     if ls:
@@ -353,6 +367,8 @@ def project_create(
     repo: str | None = None,
     github_issue: str | None = None,
     tags: list[str] | None = None,
+    allow: list[str] | None = None,
+    reserve: list[str] | None = None,
 ) -> None:
     """Create a new workflow project.
 
@@ -364,6 +380,11 @@ def project_create(
     repo: Repo URI to associate (default: auto-detected from git remote).
     github_issue: URL of the tracking GitHub issue.
     tags: Optional tags for grouping and search.
+    allow:
+        An action agents may take on this project without asking. Repeat the
+        flag for each item; items are not comma-split.
+    reserve:
+        A decision kept for a human. Repeatable, like ``--allow``.
     """
     s = _srv()
     repos = [repo] if repo else None
@@ -374,6 +395,8 @@ def project_create(
         repos=repos,
         github_issue=github_issue,
         tags=_split_csv(tags),
+        preauthorized=allow,
+        reserved_decisions=reserve,
     )
     console.print(f"[green]Created project:[/green] [bold]{result['slug']}[/bold]")
     if result.get("repos"):
@@ -398,6 +421,8 @@ def project_update(
     tags: list[str] | None = None,
     github_issue: str | None = None,
     status: str | None = None,
+    allow: list[str] | None = None,
+    reserve: list[str] | None = None,
 ) -> None:
     """Correct a project's metadata after creation.
 
@@ -427,6 +452,12 @@ def project_update(
     tags: Replacement tags.
     github_issue: Replacement tracking issue URL.
     status: ``active`` or ``abandoned``.
+    allow:
+        Replace the actions agents may take without asking. Repeat the flag
+        for each item; ``--empty-allow`` clears the list.
+    reserve:
+        Replace the decisions kept for a human. Repeatable;
+        ``--empty-reserve`` clears the list.
     """
     if status is not None and status not in ("active", "abandoned"):
         console.print(
@@ -451,6 +482,8 @@ def project_update(
         tags=_split_csv(tags),
         github_issue=github_issue,
         status=status,
+        preauthorized=allow,
+        reserved_decisions=reserve,
     )
     if result is None:
         console.print(f"[red]No project {slug}.[/red]")
@@ -461,6 +494,7 @@ def project_update(
     if result.get("repos"):
         console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
     console.print(f"  phase: {result.get('phase')}  status: {result.get('status')}")
+    _print_envelope(result)
 
 
 @project_app.command(name="advance")

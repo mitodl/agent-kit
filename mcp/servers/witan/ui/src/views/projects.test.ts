@@ -101,7 +101,7 @@ describe("projectRollup", () => {
 		render(projectRollup(rollup, DEFAULT_ROUTE), root);
 
 		// `description` and `author` exist only on `workflow_project_get`; the
-		// rollup's six-field `project` has neither. Reading them here is what
+		// rollup's eight-field `project` has neither. Reading them here is what
 		// stops the two projections being folded back into one type.
 		expect(text()).toContain("A human-readable surface for the graph.");
 		expect(text()).toContain("fixtures");

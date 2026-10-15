@@ -87,6 +87,8 @@ e.g. wp-add-vault-k8s-auth-a3f912
 | `github_issue` | `String?` |  |
 | `github_pr` | `String?` |  |
 | `blocked_by` | `[String]?` | denormalized blocker project slugs (drives ready-work) |
+| `preauthorized` | `[String]?` | actions an agent may take on this project without asking |
+| `reserved_decisions` | `[String]?` | decisions kept for a human; agents batch these into one list |
 
 ### `WorkflowSession`
 

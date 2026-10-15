@@ -492,6 +492,9 @@ Create a new workflow project.
 * `--repo STR`:
 * `--github-issue STR`:
 * `--tags STR..., --empty-tags`:
+* `--allow STR..., --empty-allow`: An action agents may take on this project without asking. Repeat the
+    flag for each item; items are not comma-split.
+* `--reserve STR..., --empty-reserve`: A decision kept for a human. Repeatable, like ``--allow``.
 
 ### witan project update
 
@@ -526,6 +529,10 @@ trace without a narrative.
 * `--tags STR..., --empty-tags`:
 * `--github-issue STR`:
 * `--status STR`:
+* `--allow STR..., --empty-allow`: Replace the actions agents may take without asking. Repeat the flag
+    for each item; ``--empty-allow`` clears the list.
+* `--reserve STR..., --empty-reserve`: Replace the decisions kept for a human. Repeatable;
+    ``--empty-reserve`` clears the list.
 
 ### witan project advance
 

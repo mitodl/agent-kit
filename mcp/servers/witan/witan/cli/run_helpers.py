@@ -199,6 +199,21 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
         "Description:",
         p.get("description") or "(none)",
     ]
+    if p.get("preauthorized"):
+        lines += [
+            "",
+            "Pre-authorized by the project owner (do these without asking):",
+            *(f"  - {item}" for item in p["preauthorized"]),
+        ]
+    if p.get("reserved_decisions"):
+        lines += [
+            "",
+            (
+                "Reserved for a human (don't act; collect these into one numbered "
+                "list with a recommendation each, at the next natural stop):"
+            ),
+            *(f"  - {item}" for item in p["reserved_decisions"]),
+        ]
     if tasks:
         lines += ["", "Ready tasks:"]
         for t in tasks:

@@ -1063,6 +1063,12 @@ def _project_repos(row: dict) -> list[str]:
     return list(row.get("repos") or [])
 
 
+def _envelope_list(items: list[str] | None) -> list[str] | None:
+    """An autonomy-envelope list as stored: stripped, blanks dropped, and
+    ``None`` rather than ``[]`` when nothing is left, matching ``tags``."""
+    return [i.strip() for i in items or [] if i.strip()] or None
+
+
 def _merge_repos(*sources: list[str] | str | None) -> list[str]:
     """Union repo URIs from any mix of lists/scalars, dropping blanks/dupes,
     preserving first-seen order."""
@@ -4655,6 +4661,8 @@ def workflow_project_create(
     repos: list[str] | None = None,
     github_issue: str | None = None,
     tags: list[str] | None = None,
+    preauthorized: list[str] | None = None,
+    reserved_decisions: list[str] | None = None,
 ) -> dict:
     """
     Create a new workflow project to track an engineering objective.
@@ -4695,6 +4703,15 @@ def workflow_project_create(
         e.g. ``github.com/mitodl/ol-django/issues/847``.
     tags:
         Optional list of tags for grouping and searching.
+    preauthorized:
+        The autonomy envelope's first half: actions an agent working this
+        project may take without asking, e.g. ``"deploy to the QA stack"`` or
+        ``"use the existing ~/.ssh/deploy key"``. Standing approval from the
+        project owner, scoped to this project.
+    reserved_decisions:
+        The other half: decisions kept for a human, e.g. ``"merging to
+        main"``. An agent collects these into one list for the user rather
+        than acting on them or asking about each one separately.
     """
     now = now_iso()
     slug = _make_slug("workflow_project", title)
@@ -4723,6 +4740,8 @@ def workflow_project_create(
             "tags": tags,
             "github_issue": github_issue,
             "github_pr": None,
+            "preauthorized": _envelope_list(preauthorized),
+            "reserved_decisions": _envelope_list(reserved_decisions),
             "created_at": now,
             "updated_at": now,
         },
@@ -4737,6 +4756,13 @@ def workflow_project_get(slug: str) -> dict | None:
 
     Returns the full project node (including ``blocked_by`` and ``blocks``
     lists) or ``null`` if not found.
+
+    ``preauthorized`` and ``reserved_decisions`` are the project's autonomy
+    envelope (see ``workflow_project_create``): treat the first as standing
+    approval from the project owner and do not ask again; do not act on the
+    second, but collect those into one list for the user. Neither overrides a
+    permission prompt, the user's in-session instructions, or a repo's
+    AGENTS.md.
 
     ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
     before this one is ready. ``blocks`` lists projects this project is
@@ -4874,7 +4900,16 @@ def workflow_project_status(slug: str) -> dict | None:
     return {
         "project": {
             k: p.get(k)
-            for k in ("slug", "title", "phase", "status", "repos", "github_pr")
+            for k in (
+                "slug",
+                "title",
+                "phase",
+                "status",
+                "repos",
+                "github_pr",
+                "preauthorized",
+                "reserved_decisions",
+            )
         },
         "ready_tasks": [_project_ready_row(t) for t in ready[:_PROJECT_READY_CAP]],
         "ready_truncated": ready_truncated,
@@ -5009,6 +5044,8 @@ def workflow_project_update(
     tags: list[str] | None = None,
     github_issue: str | None = None,
     status: Literal["active", "abandoned"] | None = None,
+    preauthorized: list[str] | None = None,
+    reserved_decisions: list[str] | None = None,
 ) -> dict | None:
     """
     Correct a project's metadata after creation.
@@ -5060,6 +5097,15 @@ def workflow_project_update(
         URL of the GitHub issue tracking this work.
     status:
         ``active`` | ``abandoned``.
+    preauthorized:
+        Replacement list of actions an agent may take on this project without
+        asking. Pass ``[]`` to clear. When the user grants something "for this
+        project", record it here rather than only acting on it, so the next
+        session does not have to ask again. Replaces the whole list: read it
+        with ``workflow_project_get`` first to add one item.
+    reserved_decisions:
+        Replacement list of decisions kept for a human. Pass ``[]`` to clear.
+        Replaces the whole list, as ``preauthorized`` does.
     """
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     if not rows:
@@ -5088,6 +5134,14 @@ def workflow_project_update(
         "tags": (tags if tags is not None else current.get("tags")) or None,
         "github_issue": (
             github_issue if github_issue is not None else current.get("github_issue")
+        ),
+        "preauthorized": _envelope_list(
+            preauthorized if preauthorized is not None else current.get("preauthorized")
+        ),
+        "reserved_decisions": _envelope_list(
+            reserved_decisions
+            if reserved_decisions is not None
+            else current.get("reserved_decisions")
         ),
         "updated_at": now_iso(),
     }

@@ -34,6 +34,8 @@ blocks creation.
 | `repos` | list[str]? | `null` | Canonical repo URIs this project spans. The current repo (detected from<br>``.git/config``) is added automatically. Omit entirely when creating a<br>repo-less "floating" project from outside any git repo. Guessing here is<br>fine — a project's real blast radius is rarely known at creation. The<br>set can be corrected at any time with ``workflow_project_update``<br>(``repos`` to replace it, ``add_repos``/``remove_repos`` to nudge it),<br>and it also grows on its own as sessions run in new repos. |
 | `github_issue` | str? | `null` | URL of the GitHub issue tracking this work.<br>e.g. ``github.com/mitodl/ol-django/issues/847``. |
 | `tags` | list[str]? | `null` | Optional list of tags for grouping and searching. |
+| `preauthorized` | list[str]? | `null` | The autonomy envelope's first half: actions an agent working this<br>project may take without asking, e.g. ``"deploy to the QA stack"`` or<br>``"use the existing ~/.ssh/deploy key"``. Standing approval from the<br>project owner, scoped to this project. |
+| `reserved_decisions` | list[str]? | `null` | The other half: decisions kept for a human, e.g. ``"merging to<br>main"``. An agent collects these into one list for the user rather<br>than acting on them or asking about each one separately. |
 
 ## `workflow_project_get`
 
@@ -41,6 +43,13 @@ Retrieve a single workflow project by slug.
 
 Returns the full project node (including ``blocked_by`` and ``blocks``
 lists) or ``null`` if not found.
+
+``preauthorized`` and ``reserved_decisions`` are the project's autonomy
+envelope (see ``workflow_project_create``): treat the first as standing
+approval from the project owner and do not ask again; do not act on the
+second, but collect those into one list for the user. Neither overrides a
+permission prompt, the user's in-session instructions, or a repo's
+AGENTS.md.
 
 ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
 before this one is ready. ``blocks`` lists projects this project is
@@ -142,6 +151,8 @@ Two things this deliberately can't do:
 | `tags` | list[str]? | `null` | Replacement tag list. Pass ``[]`` to clear. |
 | `github_issue` | str? | `null` | URL of the GitHub issue tracking this work. |
 | `status` | `active` \| `abandoned`? | `null` | ``active`` \| ``abandoned``. |
+| `preauthorized` | list[str]? | `null` | Replacement list of actions an agent may take on this project without<br>asking. Pass ``[]`` to clear. When the user grants something "for this<br>project", record it here rather than only acting on it, so the next<br>session does not have to ask again. Replaces the whole list: read it<br>with ``workflow_project_get`` first to add one item. |
+| `reserved_decisions` | list[str]? | `null` | Replacement list of decisions kept for a human. Pass ``[]`` to clear.<br>Replaces the whole list, as ``preauthorized`` does. |
 
 ## `workflow_project_advance`
 

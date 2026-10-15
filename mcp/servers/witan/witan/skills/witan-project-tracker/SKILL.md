@@ -152,6 +152,41 @@ Two things it deliberately can't do:
   `workflow_project_complete` stays the only route to a corpus trace, so a trace
   never exists without an outcome narrative.
 
+## Autonomy Envelope
+
+A project can record what its owner has already decided about agent autonomy,
+in two lists. The injected context shows them under the project as
+`Pre-authorized:` and `Reserved for a human:` (capped there; the full lists are
+in `workflow_project_get`).
+
+- `preauthorized` items are standing approval from the project owner, scoped to
+  this project. Act on them without asking again.
+- `reserved_decisions` items are not yours to act on. Collect them and present
+  one numbered list, with a recommendation for each, at the next natural stop,
+  rather than stopping to ask about each one as it comes up.
+- Historical notes in a project description, task comment or session summary
+  describe past state, not standing prohibitions, unless they are written as a
+  rule. "No agent-performed NAS changes" in a summary of an earlier phase does
+  not forbid a deploy the envelope pre-authorizes.
+- The envelope never overrides the harness's permission prompts, the user's
+  instructions in the current session, or a repo's `AGENTS.md`.
+
+When the user grants something "for this project", record it instead of only
+acting on it, so the next session doesn't have to ask:
+
+```text
+workflow_project_update(
+    slug="wp-...",
+    preauthorized=["deploy to the QA stack", "use the existing ~/.ssh/deploy key"],
+    reserved_decisions=["merging to main", "anything touching production data"],
+)
+```
+
+Each argument replaces its whole list, so read the project first to add one
+item, and pass `[]` to clear a list. The CLI equivalent is
+`witan project update <slug> --allow "..." --reserve "..."` (repeat a flag per
+item; `--empty-allow` / `--empty-reserve` clear).
+
 ## Phase Transitions
 
 When the project moves between phases (e.g. spec is approved, implementation

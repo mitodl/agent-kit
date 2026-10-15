@@ -127,6 +127,10 @@ export interface WorkflowProjectCore {
 	phase: WorkflowPhase;
 	status: string;
 	repos: string[] | null;
+	/** The autonomy envelope: actions the owner approved once, for this project. */
+	preauthorized: string[] | null;
+	/** The autonomy envelope: decisions kept for a human. */
+	reserved_decisions: string[] | null;
 }
 
 /** A row from `workflow_project_list`. */
@@ -138,7 +142,7 @@ export interface WorkflowProjectSummary extends WorkflowProjectCore {
 }
 
 /**
- * The rollup's `project`, which is a six-field projection.
+ * The rollup's `project`, which is an eight-field projection.
  *
  * NOT what `workflow_project_get` returns: that one carries nine more fields
  * (see `WorkflowProjectDetail`). Sharing one interface between them made the
@@ -513,6 +517,8 @@ const WORKFLOW_PROJECT_CORE: Record<string, Check> = {
 	phase: workflowPhase,
 	status: str,
 	repos: strList,
+	preauthorized: strList,
+	reserved_decisions: strList,
 };
 
 const WORKFLOW_PROJECT: Record<string, Check> = {
@@ -602,7 +608,7 @@ export function isWorkflowProjectCore(
 	return matches(value, WORKFLOW_PROJECT_CORE);
 }
 
-/** The rollup's `project`: six fields, NOT what `workflow_project_get` sends. */
+/** The rollup's `project`: eight fields, NOT what `workflow_project_get` sends. */
 export function isWorkflowProject(value: unknown): value is WorkflowProject {
 	return matches(value, WORKFLOW_PROJECT);
 }

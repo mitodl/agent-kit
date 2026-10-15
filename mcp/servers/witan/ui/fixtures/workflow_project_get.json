@@ -9,8 +9,14 @@
     "github_issue": null,
     "github_pr": null,
     "phase": "discovery",
+    "preauthorized": [
+      "Rebuild the UI bundle"
+    ],
     "repos": [
       "https://github.com/mitodl/agent-kit"
+    ],
+    "reserved_decisions": [
+      "Publishing a release"
     ],
     "slug": "wp-fixture-001",
     "status": "active",

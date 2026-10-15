@@ -745,6 +745,7 @@ def _render_context_block(
             lines.append(f"  Phase: {p['phase']}")
             if p.get("github_issue"):
                 lines.append(f"  Issue: {p['github_issue']}")
+            lines.extend(_project_envelope_lines(p))
             lines.extend(
                 _project_session_lines(sessions_by_project.get(p["slug"], []), p)
             )
@@ -1126,6 +1127,35 @@ def _project_session_lines(sessions: list[dict], project: dict) -> list[str]:
                 f"  ⚠ {in_phase} sessions in `{phase}` — if this phase is done, "
                 "call `workflow_project_advance` (or `workflow_project_complete`)."
             )
+    return out
+
+
+# The envelope is injected on every prompt, so each list is capped; the full
+# lists are one `workflow_project_get` away.
+_ENVELOPE_ITEM_CAP = 5
+_ENVELOPE_ITEM_CHARS = 160
+
+
+def _project_envelope_lines(project: dict) -> list[str]:
+    """The project's autonomy envelope, one line per non-empty list."""
+    out: list[str] = []
+    for key, label in (
+        ("preauthorized", "Pre-authorized"),
+        ("reserved_decisions", "Reserved for a human"),
+    ):
+        items = project.get(key) or []
+        if not items:
+            continue
+        shown = [
+            item
+            if len(item) <= _ENVELOPE_ITEM_CHARS
+            else f"{item[: _ENVELOPE_ITEM_CHARS - 1]}…"
+            for item in items[:_ENVELOPE_ITEM_CAP]
+        ]
+        line = f"  {label}: {'; '.join(shown)}"
+        if len(items) > _ENVELOPE_ITEM_CAP:
+            line += f" (+{len(items) - _ENVELOPE_ITEM_CAP} more, workflow_project_get)"
+        out.append(line)
     return out
 
 

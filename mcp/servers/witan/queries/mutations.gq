@@ -225,6 +225,8 @@ query insert_workflow_project(
     $tags: [String]?,
     $github_issue: String?,
     $github_pr: String?,
+    $preauthorized: [String]?,
+    $reserved_decisions: [String]?,
     $created_at: DateTime,
     $updated_at: DateTime
 ) {
@@ -239,6 +241,8 @@ query insert_workflow_project(
         tags: $tags,
         github_issue: $github_issue,
         github_pr: $github_pr,
+        preauthorized: $preauthorized,
+        reserved_decisions: $reserved_decisions,
         created_at: $created_at,
         updated_at: $updated_at
     }
@@ -277,6 +281,8 @@ query update_workflow_project_fields(
     $status: String,
     $tags: [String]?,
     $github_issue: String?,
+    $preauthorized: [String]?,
+    $reserved_decisions: [String]?,
     $updated_at: DateTime
 ) {
     update WorkflowProject
@@ -287,6 +293,8 @@ query update_workflow_project_fields(
             status: $status,
             tags: $tags,
             github_issue: $github_issue,
+            preauthorized: $preauthorized,
+            reserved_decisions: $reserved_decisions,
             updated_at: $updated_at
         }
         where slug = $slug
