@@ -45,7 +45,7 @@
 		},
 		{
 			"id": 4,
-			"prompt": "Is the 429 handling from mitodl/hq#812 addressed in this PR? The issue asks that fetch_course_runs retry on HTTP 429, honoring the Retry-After header, for up to 3 attempts.\n\nDiff to src/sync/client.py:\n+import time\n+\n def fetch_course_runs(session, url):\n-    response = session.get(url, timeout=30)\n-    response.raise_for_status()\n-    return response.json()\n+    for attempt in range(3):\n+        response = session.get(url, timeout=30)\n+        if response.status_code == 429 and attempt < 2:\n+            time.sleep(2 ** attempt)\n+            continue\n+        response.raise_for_status()\n+        return response.json()",
+			"prompt": "Is the 429 handling from mitodl/hq#812 addressed in this PR? The issue asks that fetch_course_runs retry on HTTP 429, honoring the Retry-After header, for at most 3 requests in total.\n\nDiff to src/sync/client.py:\n+import time\n+\n def fetch_course_runs(session, url):\n-    response = session.get(url, timeout=30)\n-    response.raise_for_status()\n-    return response.json()\n+    for attempt in range(3):\n+        response = session.get(url, timeout=30)\n+        if response.status_code == 429 and attempt < 2:\n+            time.sleep(2 ** attempt)\n+            continue\n+        response.raise_for_status()\n+        return response.json()",
 			"expected_output": "A report that lists the request's goal as the stated goal and answers that it is only partly addressed: a goal-alignment finding that Retry-After is never read, so a 429 carrying Retry-After: 60 is retried after 1s and then 2s and fails on the third attempt about 3s in. The three-attempt limit is met and is not reported as a gap.",
 			"files": [],
 			"expectations": [

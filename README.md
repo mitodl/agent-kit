@@ -137,8 +137,8 @@ agent-kit profiles agent-config.toml                    # skill counts per profi
 
 `validate` writes nothing. It prints one row per detected platform and exits
 1 when anything has drifted. A skill that isn't installed shows up under
-`missing paths` as its file path, e.g.
-`~/.claude/skills/deploy-verification/SKILL.md`, and a missing MCP server
+`missing paths` as one row per file in it, e.g.
+`/home/<you>/.claude/skills/deploy-verification/SKILL.md`, and a missing MCP server
 shows up under `missing` as `mcp_servers:<name>`. Run it without `--profile`
 to see every catalog skill you don't have; run it with the profile you
 installed to check only that profile. `witan-task`, `witan-memory` and the
