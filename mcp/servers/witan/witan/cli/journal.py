@@ -89,8 +89,14 @@ def journal_drop(entry_id: str) -> None:
     ----------
     entry_id: The entry's id, from ``witan journal list``.
     """
-    remote = _remote()
-    if not WriteJournal(journal_path(remote.url)).remove(entry_id):
-        print_error(f"No queued write {entry_id!r}.")
-        raise SystemExit(1)
+    journal = WriteJournal(journal_path(_remote().url))
+    # Under the replay lock, so an entry an in-flight replay already read is
+    # not sent after this reports it dropped.
+    with journal.replaying() as acquired:
+        if not acquired:
+            print_error("A replay is in progress; try again when it finishes.")
+            raise SystemExit(1)
+        if not journal.remove(entry_id):
+            print_error(f"No queued write {entry_id!r}.")
+            raise SystemExit(1)
     console.print(f"[green]Dropped[/green] [bold]{esc(entry_id)}[/bold]")
