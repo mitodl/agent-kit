@@ -81,8 +81,29 @@ Two details make the loop work:
    attempt's read decides whether a rival won (`{"claimed": false, "reason":
    "lost_race", "held_by": …}`) or the conflict was unrelated, and a budget that
    runs out reports `"reason": "contention"` once a last read shows the task is
-   still claimable. Any other task write that runs out raises `WriteContention`,
-   having written nothing.
+   still claimable. Any other task write that runs out raises
+   `WriteContention`, and that write did not land. A tool that makes more than
+   one write can still have landed an earlier one: `task_close` commits the
+   close and then reopens each dependent with its own fenced write, so a
+   dependent that runs out comes back as a `warning` on the closed task rather
+   than as an error. `task_unlink` deletes the edge before it clears
+   `parent_slug`, and re-running it clears a `parent_slug` left behind.
+
+### The cost: refusals under unrelated load
+
+The fence is the whole branch head, so every task write (not only a claim) can
+be refused by a write anywhere on the graph, and a call can run out of
+attempts with nothing wrong with its task. That is the trade for no longer
+silently reverting a claim. Over the 7 days to 2026-10-16 the production graph
+peaked at about 9 write-tool calls a minute (5-minute rate) and averaged 0.15,
+with p95 tool durations near 5s for `task_update` and `task_comment` and 10s or
+more for `task_close` and `task_claim`. At that peak a single attempt has
+roughly an even chance of being refused and five in a row a few percent;
+off-peak it is negligible. A refused write wrote nothing, so retrying the call
+is safe, and a retried `task_close` keeps its original `closed_at`.
+
+A row-scoped guard (a mutation that matches on `slug` and `updated_at`) would
+not be refused by unrelated writes. It is unexplored.
 
 ### What it does not cover
 

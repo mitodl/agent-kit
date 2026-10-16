@@ -1015,6 +1015,27 @@ class _TaskWriteRefused(Exception):
         self.result = result
 
 
+def _claim_contention(slug: str, holder: str, what: str) -> dict:
+    """``task_claim``'s answer when its fenced writes ran out of attempts.
+
+    ``what`` says which writes, after the attempt count. A retryable answer
+    rather than the raw conflict text
+    (tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414).
+    """
+    logger.warning(
+        "witan.task_claim.contention_exhausted",
+        task_slug=slug,
+        holder=holder,
+        attempts=_TASK_WRITE_MAX_ATTEMPTS,
+    )
+    return {
+        "slug": slug,
+        "claimed": False,
+        "reason": "contention",
+        "remedy": f"{_TASK_WRITE_MAX_ATTEMPTS} {what}. Retry task_claim.",
+    }
+
+
 def _claim_refusal(slug: str, row: dict, holder: str, force: bool) -> dict | None:
     """``task_claim``'s refusal for ``row``, or ``None`` if ``holder`` may take it.
 
@@ -1547,6 +1568,10 @@ def migrate_repo_keys() -> dict:
         if old and old != new:
             repos_changed[old] = new
 
+    # What the last attempt's read had left to fold: `None` when another
+    # writer (or an earlier run) already folded it, so it is not counted.
+    folding: dict[str, tuple[str | None, str | None] | None] = {"last": None}
+
     def fold_task_keys(current: dict) -> dict | None:
         # Through `_update_task`, not a write of the listed row: the listing is
         # older than any claim or edit landing while this runs, and writing it
@@ -1556,8 +1581,9 @@ def migrate_repo_keys() -> dict:
         new_repo = normalise(repo) if repo else repo
         new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
         if new_repo == repo and new_refs == refs:
+            folding["last"] = None
             return None
-        _note(repo, new_repo)
+        folding["last"] = (repo, new_repo)
         return {"repo": new_repo, "symbol_refs": new_refs}
 
     for row in client.read("read.gq", "list_all_tasks_full", {}):
@@ -1567,8 +1593,20 @@ def migrate_repo_keys() -> dict:
         new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
         if new_repo == repo and new_refs == refs:
             continue
-        _update_task(row["slug"], fold_task_keys)
-        counts["tasks_updated"] += 1
+        folding["last"] = None
+        try:
+            _update_task(row["slug"], fold_task_keys)
+        except WriteContention as exc:
+            msg = (
+                f"migrate_repo_keys stopped at task {row['slug']}: concurrent "
+                f"writes refused it {_TASK_WRITE_MAX_ATTEMPTS} times. It is "
+                "idempotent and safe to re-run; rows already folded are skipped. "
+                f"Done so far: {counts}."
+            )
+            raise WriteContention(msg) from exc
+        if folding["last"] is not None:
+            _note(*folding["last"])
+            counts["tasks_updated"] += 1
 
     for row in client.read("read.gq", "list_all_memories_full", {}):
         repo = row.get("repo")
@@ -6301,11 +6339,18 @@ def _task_statuses(slugs: Iterable[str]) -> dict[str, str | None]:
     return {r["slug"]: r.get("status") for r in rows}
 
 
-def _unblock_dependents(repo: str | None) -> None:
+def _unblock_dependents(repo: str | None) -> list[str]:
     """Flip ``blocked`` tasks back to ``open`` once all their blockers are closed.
 
     Called after a task closes so ``task_list`` status stays truthful. Scoped to the
     closed task's repo (blockers and dependents share a repo in practice).
+
+    Returns the slugs it could not sweep because their fenced write exhausted
+    its retries. One dependent's contention must not abort the rest, and must
+    not reach ``task_close``'s caller as an error: the close itself has already
+    committed by the time this runs. A dependent left ``blocked`` with every
+    blocker closed is still ready (``readiness.status_pickable``), and the next
+    sweep (any close in the repo, or a claim of that task) retries it.
     """
     rows = (
         client.read("read.gq", "list_tasks_by_repo", {"repo": repo, "status": None})
@@ -6335,10 +6380,34 @@ def _unblock_dependents(repo: str | None) -> None:
         return None
 
     # A blocker that no longer exists does not hold anything back.
+    unswept: list[str] = []
     for r in blocked:
         blockers = r.get("blocked_by") or []
         if all(status_by_slug.get(b, "closed") == "closed" for b in blockers):
-            _update_task(r["slug"], reopen_if_unblocked)
+            try:
+                _update_task(r["slug"], reopen_if_unblocked)
+            except WriteContention:
+                logger.warning(
+                    "witan.unblock_dependents.contention", task_slug=r["slug"]
+                )
+                unswept.append(r["slug"])
+    return unswept
+
+
+def _with_unswept_warning(task: dict, unswept: list[str]) -> dict:
+    """``task`` plus a warning naming the dependents a sweep could not reopen."""
+    if not unswept:
+        return task
+    return {
+        **task,
+        "warning": (
+            f"{task['slug']} is closed, but {len(unswept)} dependent(s) are still "
+            f"marked blocked because concurrent writes refused the update: "
+            f"{', '.join(unswept)}. Every blocker of each is closed, so task_ready "
+            "already lists them; the next close in this repo, or a claim of one "
+            "of them, reopens it."
+        ),
+    }
 
 
 #: A task row change, or a function computing one from the row the write is
@@ -6472,12 +6541,14 @@ def _update_task_once(
 
     if merged_status != "closed":
         merged_closed_at = None
+    elif current.get("status") == "closed" and current.get("closed_at"):
+        # ALREADY closed, so neither an unrelated edit nor a retried
+        # `task_close` (whose first attempt landed but whose caller saw an
+        # error) may re-stamp it.
+        merged_closed_at = current.get("closed_at")
     elif changes.get("closed_at"):
         # `task_close` naming its own timestamp.
         merged_closed_at = changes["closed_at"]
-    elif current.get("status") == "closed":
-        # ALREADY closed, so an unrelated edit must not re-stamp it.
-        merged_closed_at = current.get("closed_at")
     else:
         # ARRIVING at closed. The current value is not carried over even when
         # there is one: a row that was not closed but carries a `closed_at` is
@@ -7144,6 +7215,22 @@ def task_update(
     lease and refuses if someone else holds it); to close a task prefer
     ``task_close``; to add dependencies use ``task_link``.
 
+    The write is fenced on the read it merged from: it applies only while the
+    graph is unchanged since this call read the task, and a refusal re-reads
+    and merges again, up to five attempts. That is what stops an edit from
+    reverting a claim that landed after its read. The cost is availability.
+    The fence is the whole branch head, so writes anywhere on the graph refuse
+    it. Over the 7 days to 2026-10-16 the production graph peaked at about 9
+    write-tool calls a minute (5-minute rate) and averaged 0.15, with p95 tool
+    durations near 5s for ``task_update`` and 10s or more for ``task_close`` and
+    ``task_claim``. At that peak one attempt has roughly an even chance of
+    being refused and all five a few percent; off-peak it is negligible.
+    Running out raises ``WriteContention`` with nothing written, and retrying
+    is safe. (A row-scoped guard, a mutation matching on ``slug`` and
+    ``updated_at``, would avoid refusals from unrelated writes; it is
+    unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
+    ``task_close``.
+
     Parameters
     ----------
     slug:
@@ -7297,7 +7384,9 @@ def task_update(
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
-        _unblock_dependents(updated.get("repo"))
+        updated = _with_unswept_warning(
+            updated, _unblock_dependents(updated.get("repo"))
+        )
 
     return updated
 
@@ -7309,6 +7398,17 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 
     Closing a blocker is what unblocks its dependents — they become visible to
     ``task_ready`` once every blocker is closed.
+
+    The close is fenced like ``task_update`` and has the same trade: under
+    write load elsewhere on the graph it can run out of attempts and raise
+    ``WriteContention`` with nothing written (see ``task_update`` for the
+    production rates as of 2026-10-16). Retrying is safe, and a retry of a
+    close that did land keeps its original ``closed_at``. Reopening each
+    dependent is a separate fenced write after the close has committed, so one
+    that runs out of attempts does not fail the call: the closed task comes
+    back with a ``warning`` naming the dependents still marked ``blocked``.
+    ``task_ready`` lists them anyway, since every blocker is closed, and the
+    next close in the repo or a claim of one of them reopens it.
 
     Parameters
     ----------
@@ -7324,7 +7424,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
         {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
     )
     if closed:
-        _unblock_dependents(closed.get("repo"))
+        closed = _with_unswept_warning(closed, _unblock_dependents(closed.get("repo")))
     return closed
 
 
@@ -7427,8 +7527,18 @@ async def task_claim(
     if status == "blocked":
         # A task can be stale-blocked (blocked_by is empty or all closed). Run the
         # unblock sweep before rejecting so stale status doesn't permanently prevent
-        # claiming.
-        await _offload(_unblock_dependents, task.get("repo"))
+        # claiming. Contention on another dependent is that dependent's problem;
+        # contention on this one means it is still blocked only because the
+        # reopen was refused, which is load, not a reason to refuse the claim.
+        unswept = await _offload(_unblock_dependents, task.get("repo"))
+        if slug in unswept:
+            return _claim_contention(
+                slug,
+                holder,
+                "attempts to reopen this stale-blocked task (every blocker is "
+                "closed) were each refused because the graph changed after it "
+                "was read",
+            )
         rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
         if not rows or rows[0].get("status") == "blocked":
             return {"slug": slug, "claimed": False, "reason": "blocked"}
@@ -7499,23 +7609,13 @@ async def task_claim(
             return None
         if (refusal := _claim_refusal(slug, rows[0], holder, force)) is not None:
             return refusal
-        logger.warning(
-            "witan.task_claim.contention_exhausted",
-            task_slug=slug,
-            holder=holder,
-            attempts=_TASK_WRITE_MAX_ATTEMPTS,
+        return _claim_contention(
+            slug,
+            holder,
+            "claim attempts were each refused because the graph changed after "
+            "the task was read, and it is still claimable, so the writes were "
+            "elsewhere on the graph",
         )
-        return {
-            "slug": slug,
-            "claimed": False,
-            "reason": "contention",
-            "remedy": (
-                f"{_TASK_WRITE_MAX_ATTEMPTS} claim attempts were each refused "
-                "because the graph changed after the task was read, and it is "
-                "still claimable, so the writes were elsewhere on the graph. "
-                "Retry task_claim."
-            ),
-        }
     if claimed is None:
         # Deleted between the first read and the fenced one.
         return None
@@ -7925,7 +8025,11 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
             return changes
 
         _update_task(to_slug, unblock_from)
-    elif kind == "parent" and removed:
+    elif kind == "parent":
+        # Not gated on `removed`: the edge delete is its own commit, so a call
+        # whose sync then ran out of attempts leaves the edge gone and
+        # `parent_slug` set, and a retry finds no edge to remove. The row is
+        # what says whether there is still something to clear.
 
         def orphan(current: dict) -> dict | None:
             if current.get("parent_slug") != from_slug:

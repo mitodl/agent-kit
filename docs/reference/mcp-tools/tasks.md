@@ -153,6 +153,22 @@ correct the repo association (``repo``), or attach an ``external_uri``. To
 lease and refuses if someone else holds it); to close a task prefer
 ``task_close``; to add dependencies use ``task_link``.
 
+The write is fenced on the read it merged from: it applies only while the
+graph is unchanged since this call read the task, and a refusal re-reads
+and merges again, up to five attempts. That is what stops an edit from
+reverting a claim that landed after its read. The cost is availability.
+The fence is the whole branch head, so writes anywhere on the graph refuse
+it. Over the 7 days to 2026-10-16 the production graph peaked at about 9
+write-tool calls a minute (5-minute rate) and averaged 0.15, with p95 tool
+durations near 5s for ``task_update`` and 10s or more for ``task_close`` and
+``task_claim``. At that peak one attempt has roughly an even chance of
+being refused and all five a few percent; off-peak it is negligible.
+Running out raises ``WriteContention`` with nothing written, and retrying
+is safe. (A row-scoped guard, a mutation matching on ``slug`` and
+``updated_at``, would avoid refusals from unrelated writes; it is
+unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
+``task_close``.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug of the task to update. |
@@ -242,6 +258,17 @@ Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 
 Closing a blocker is what unblocks its dependents — they become visible to
 ``task_ready`` once every blocker is closed.
+
+The close is fenced like ``task_update`` and has the same trade: under
+write load elsewhere on the graph it can run out of attempts and raise
+``WriteContention`` with nothing written (see ``task_update`` for the
+production rates as of 2026-10-16). Retrying is safe, and a retry of a
+close that did land keeps its original ``closed_at``. Reopening each
+dependent is a separate fenced write after the close has committed, so one
+that runs out of attempts does not fail the call: the closed task comes
+back with a ``warning`` naming the dependents still marked ``blocked``.
+``task_ready`` lists them anyway, since every blocker is closed, and the
+next close in the repo or a claim of one of them reopens it.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

@@ -1681,6 +1681,113 @@ def test_task_write_refuses_a_read_with_no_commit(server, monkeypatch):
     assert row["description"] == "x"
 
 
+def _refuse_task_rows(srv, monkeypatch, *slugs: str) -> None:
+    """Make every `update_task` write of ``slugs`` conflict, as if unrelated
+    writes refused each attempt. Other writes go through."""
+    from witan import graph as graph_mod
+
+    real_change = srv.client.change
+
+    def refuse(query_file, name, params, *args, **kwargs):
+        if name == "update_task" and params.get("slug") in slugs:
+            raise graph_mod.OmnigraphConflict("write authority changed")
+        return real_change(query_file, name, params, *args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change", refuse)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
+
+
+@requires_omnigraph
+def test_close_keeps_sweeping_and_warns_when_a_dependent_runs_out(server, monkeypatch):
+    """The close has committed before the sweep runs, so one dependent's
+    exhausted reopen must not reach the caller as "nothing was written", and
+    must not stop the other dependents being reopened."""
+    from witan import server as srv
+
+    blocker = server.task_create(title="blocker", description="x")
+    stuck = server.task_create(title="stuck", description="x")
+    freed = server.task_create(title="freed", description="x")
+    server.task_link(blocker["slug"], stuck["slug"], kind="blocks")
+    server.task_link(blocker["slug"], freed["slug"], kind="blocks")
+    _refuse_task_rows(srv, monkeypatch, stuck["slug"])
+
+    closed = server.task_close(blocker["slug"], resolution="done")
+
+    assert closed["status"] == "closed"
+    assert stuck["slug"] in closed["warning"]
+    assert freed["slug"] not in closed["warning"]
+    assert server.task_get(freed["slug"])["status"] == "open"
+    assert server.task_get(stuck["slug"])["status"] == "blocked"
+    # Still ready: every blocker is closed.
+    assert stuck["slug"] in {t["slug"] for t in server.task_ready()}
+
+
+@requires_omnigraph
+def test_a_retried_close_keeps_its_closed_at(server):
+    """A caller that saw an error after its close landed retries it. The retry
+    must not move the close time."""
+    t = server.task_create(title="closed-twice", description="x")
+    first = server.task_close(t["slug"], resolution="done")
+
+    again = server.task_close(t["slug"], resolution="done")
+
+    assert again["closed_at"] == first["closed_at"]
+    assert again["resolution"] == "done"
+
+
+@requires_omnigraph
+def test_unlink_parent_clears_a_parent_slug_left_by_an_exhausted_sync(
+    server, monkeypatch
+):
+    """The edge delete commits before the `parent_slug` clear. When the clear
+    runs out of attempts the edge is already gone, so a retry has no edge to
+    remove and must still clear the field."""
+    from witan import server as srv
+    from witan_core.omnigraph import WriteContention
+
+    epic = server.task_create(title="epic", description="x", type="epic")
+    child = server.task_create(title="child", description="y", parent=epic["slug"])
+    real_change = srv.client.change
+    _refuse_task_rows(srv, monkeypatch, child["slug"])
+
+    with pytest.raises(WriteContention):
+        server.task_unlink(epic["slug"], child["slug"], kind="parent")
+    assert server.task_get(child["slug"])["parent_slug"] == epic["slug"]
+
+    monkeypatch.setattr(srv.client, "change", real_change)
+    retried = server.task_unlink(epic["slug"], child["slug"], kind="parent")
+
+    assert retried["removed"] is False
+    assert server.task_get(child["slug"])["parent_slug"] is None
+
+
+@requires_omnigraph
+def test_claim_of_a_stale_blocked_task_reports_contention_on_its_reopen(
+    server, monkeypatch
+):
+    """Claiming a task whose blockers are all closed reopens it first. When
+    that reopen runs out of attempts the answer is ``contention`` (retry), not
+    an error and not ``blocked``. Once the load is gone the claim goes through."""
+    from witan import server as srv
+
+    blocker = server.task_create(title="blocker", description="x")
+    stale = server.task_create(title="stale-blocked", description="x")
+    server.task_link(blocker["slug"], stale["slug"], kind="blocks")
+    real_change = srv.client.change
+    _refuse_task_rows(srv, monkeypatch, stale["slug"])
+    server.task_close(blocker["slug"])
+    assert server.task_get(stale["slug"])["status"] == "blocked"
+
+    refused = server.task_claim(stale["slug"], assignee="agentA")
+
+    assert refused["claimed"] is False
+    assert refused["reason"] == "contention"
+
+    monkeypatch.setattr(srv.client, "change", real_change)
+    granted = server.task_claim(stale["slug"], assignee="agentA")
+    assert granted["claimed"] is True
+
+
 # ── Task comments ──────────────────────────────────────────────────
 
 

@@ -191,6 +191,29 @@ appends, the release holder check, the unblock sweep) recompute it on each
 attempt's read. A read with no `graph_commit_id` raises rather than falling
 back to an unconditional write, since both transports report one on 0.13.
 
+The trade is availability. The fence is the whole branch head, so every task
+write, not only a claim, can be refused by an unrelated write and can run out
+of attempts with `WriteContention` (nothing written; retrying is safe).
+Measured on production (`witan_tool_calls_total` and
+`witan_tool_duration_milliseconds`, the 7 days to 2026-10-16): council-graph
+write tools peaked at about 9 calls a minute as a 5-minute rate and averaged
+0.15, and p95 tool duration was about 5s for `task_update` and `task_comment`
+and at the 10s bucket cap for `task_close` and `task_claim`. At that peak one
+attempt has roughly an even chance of refusal and exhausting five a few
+percent; off-peak it is negligible. We judged that better than a claim that
+reverts silently. A row-scoped guard (a mutation matching on `slug` and
+`updated_at`) would not be refused by unrelated writes; it is unexplored.
+
+Two tools make more than one write, and a later one can run out after an
+earlier one committed. `task_close` (and `task_update` to `closed`) commits the
+close, then reopens each dependent separately; a dependent that runs out is
+skipped, the rest are still swept, and the closed task comes back with a
+`warning` naming it (it is still ready, since every blocker is closed, and the
+next sweep retries it). A retried close keeps the original `closed_at`.
+`task_unlink(kind="parent")` deletes the edge, then clears `parent_slug`
+whenever the row still names that parent, so re-running it repairs a sync that
+ran out.
+
 Outside the guarantee:
 
 - Writes meant to change the holder: `force`, a `task_update` that sets
