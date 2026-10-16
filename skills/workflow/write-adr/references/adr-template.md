@@ -199,12 +199,28 @@ the single authority.
 ## Verify
 
 ```bash
+# Nothing runs this automatically.
+#
 # Asserts the violating value, not the keyword: `bearer_only: false` is
 # compliance, and `introspection_endpoint_auth_method` is a different setting.
-# Nothing runs this automatically.
-grep -rnE 'bearer_only:[[:space:]]*true' local-dev/apps/*/apisix-routes.yaml \
-  && echo "FAIL: gateway-side bearer validation enabled" \
-  || echo "OK"
+#
+# Checks that it scanned something before reporting compliance. A pathspec
+# matching no file is indistinguishable, in the scan's exit status, from a
+# clean scan -- so a renamed directory would report OK forever.
+routes=':(glob)local-dev/apps/*/apisix-routes.yaml'
+
+if ! git ls-files -- "$routes" | grep -q .; then
+  echo "FAIL: no file matched ${routes}; this check scanned nothing" >&2
+  exit 2
+fi
+
+status=0
+git grep -nE 'bearer_only:[[:space:]]*true' -- "$routes" || status=$?
+case "$status" in
+  0) echo "FAIL: gateway-side bearer validation enabled" >&2; exit 1 ;;
+  1) echo "OK" ;;
+  *) echo "FAIL: scan did not run (git grep exit ${status})" >&2; exit 2 ;;
+esac
 ```
 
 ## Related Decisions

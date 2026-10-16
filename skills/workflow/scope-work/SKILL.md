@@ -6,10 +6,12 @@ description: >
   process it deserves. Use this skill at the start of any feature or bug — when
   asked to "implement <feature>", "fix this bug", "work on issue #N", "start on
   <ticket>", "what's involved in", "how big is this" — or whenever work is
-  about to begin without an agreed scope. Routes to one of three outcomes: a
-  trivial change goes straight to planning, work that needs a design record
-  gets the full treatment, and work that cannot be sized yet gets a time-boxed
-  spike first. Tracks the work as a witan task. Requires the witan MCP server.
+  about to begin without an agreed scope. Routes the work by how much process
+  it deserves: a trivial change goes straight to planning, work with a decision
+  worth recording gets the full treatment plus an ADR, work spanning several
+  pull requests or sessions gets a spec in the repo, work that cannot be sized
+  yet gets a time-boxed spike first, and a call the team cannot make alone goes
+  to an RFC. Tracks the work as a witan task. Requires the witan MCP server.
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -27,12 +29,20 @@ how much process does it deserve?" — then hands off.
   +-- trivial     ------+
   |                     |
   +-- decision(s) ------+--> plan-technical-approach --> implement-plan --> shipped
-  |                              |
-  |                              +--> write-adr
-  |                                   one ADR per decision worth recording,
-  |                                   and zero is a normal outcome
+  |                     |         |
+  +-- needs a spec -----+         +--> spec file in the repo
+  |                               |    multi-PR, multi-session or multi-repo
+  |                               |    work; reviewed in a PR, not a comment
+  |                               |         |
+  |                               |         +--> write-adr (per settled decision)
+  |                               |
+  |                               +--> write-adr
+  |                                    one ADR per decision worth recording,
+  |                                    and zero is a normal outcome
   |
   +-- unknowable  --> spike --> re-enter scope-work with the findings
+  |
+  +-- not ours to decide alone --> create-ol-rfc-discussion --> write-adr
 ```
 
 A **trivial** change still goes through `plan-technical-approach`, but on its
@@ -41,20 +51,28 @@ fast path: one obvious approach, no alternatives, no scoring, and no ADR.
 **Planning always comes before the record.** An ADR's `## Options Considered`
 is the output of scoring alternatives, so `write-adr` is entered from
 `plan-technical-approach`, never directly from here. What this skill decides is
-*how much* planning the work deserves — not which artifact gets written.
+*how much* planning the work deserves — the artifact follows from that.
+
+**Spec and ADR are not the same record at two sizes.** A spec is the plan for
+one body of work and becomes history when it ships; an ADR is one decision and
+stays true as long as the code does. Work on the spec route produces both: the
+spec first, then an ADR per decision that settles. The distinction, and which
+directory each lives in, is in
+[`references/complexity-triage.md`](references/complexity-triage.md).
 
 | File | Purpose |
 |------|---------|
-| [`references/complexity-triage.md`](references/complexity-triage.md) | The three tiers, their criteria, and the spike protocol |
+| [`references/complexity-triage.md`](references/complexity-triage.md) | The tiers, which artifact each produces, and the spike protocol |
 | [`references/witan-tracking.md`](references/witan-tracking.md) | Task lookup, claiming, project join-before-create |
 
 ## Prerequisites
 
 Work is tracked in witan, so the `task_*` and `workflow_*` tools must be
-connected. They ship with the witan MCP server, installed by `witan setup` —
-not by `agent-kit apply`, so a consumer can have this skill without them. If
-they are missing, say so, point at `witan setup` and
-`mcp/servers/witan/README.md`, and stop.
+connected. This skill ships in witan's own bundle and `witan setup` installs
+both together, so in practice they are there. If they are not — a stale
+install, or the MCP server not loading — say so, point at `witan setup` and
+`mcp/servers/witan/README.md`, and stop. Do not fall back to issue-only
+tracking: an untracked claim is the collision the tracking exists to prevent.
 
 ---
 
@@ -84,14 +102,14 @@ Resolve the target in this order, and never re-ask for something already known:
 5. Ask.
 
 **No issue yet?** Hand off to
-[`create-ol-github-issue`](../../process/create-ol-github-issue/SKILL.md). Pass
+`create-ol-github-issue`. Pass
 what this session already knows — the repo from the git remote, and Technical
 Issue as the default template for engineering work — so the engineer is not
 re-asked three things. Come back at Step 3.
 
 **Acceptance criteria belong in the issue body.** If the issue has none, add
 them there — not to the plan comment later. The independent review in
-[`create-ol-pull-request`](../../process/create-ol-pull-request/SKILL.md) takes
+`create-ol-pull-request` takes
 goals only from sources the authoring session did not write; criteria that live
 in the agent's own plan comment are self-review with extra steps.
 
@@ -105,7 +123,7 @@ Comments routinely carry the constraint that invalidates the obvious approach.
 
 **Tracker repos.** In `mitodl/hq` the issue lives in the tracker while the code
 lives in a product repo;
-[`github-issue-triage`](../../process/github-issue-triage/SKILL.md) explains
+`github-issue-triage` explains
 how to resolve which. Record both — they are used differently downstream: the
 plan comment goes on the repo holding the **issue**, the code and any ADRs live
 in the **product** repo, and the task lookup is scoped to the product repo
@@ -144,12 +162,19 @@ anti-abuse framing are in
 | Tier | Route |
 |---|---|
 | **Trivial** — one obvious mechanism, contained, tens of lines, plain revert undoes it, not auth/payments/PII | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **fast path**: one approach, no scoring, no ADR |
-| **Has a decision worth recording** — anything else that is knowable | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **full path**: alternatives scored, then [`write-adr`](../write-adr/SKILL.md) records what was decided |
+| **Has a decision worth recording** — one or two PRs, and a future reader will ask why | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **full path**: alternatives scored, then [`write-adr`](../write-adr/SKILL.md) records what was decided |
+| **Needs a spec** — several PRs across more than one session or repo, interlocking decisions, or open questions blocking the design | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **spec path**: the plan lands as a reviewed file where this repo already keeps them, and settled decisions are extracted to ADRs |
 | **Unknowable** — a load-bearing fact is missing, so it cannot be sized | Spike first, then re-enter here |
+| **Not ours to decide alone** — needs agreement from outside the team | `create-ol-rfc-discussion`, with an ADR recording the outcome |
 
-**When in doubt, it is not trivial.** Running the full process on a simple
-change costs ten minutes. Skipping it on a complex one ships an unexamined
-design decision. Classify conservatively.
+**When in doubt, it is not trivial.** Skipping the full process on a complex
+change ships an unexamined design decision; running it on a simple one costs a
+scoring pass and a short plan comment. Classify conservatively.
+
+**Size alone decides nothing.** "This will take several PRs" is a delivery fact,
+not a decision to record — it is what makes the spec tier worth checking, and
+chunk boundaries are settled later by
+[`chunking-the-work.md`](../plan-technical-approach/references/chunking-the-work.md).
 
 Say which tier you chose and which criteria decided it, so the engineer can
 disagree cheaply before any of the downstream work starts.
@@ -157,7 +182,7 @@ disagree cheaply before any of the downstream work starts.
 **Off-ramp: the issue may be wrong.** Grounding regularly turns up a false
 premise, work that already landed, or another repo's problem. Do not route work
 that should not happen. Report it, reuse the verdict vocabulary in
-[`github-issue-triage`](../../process/github-issue-triage/SKILL.md) rather than
+`github-issue-triage` rather than
 inventing one, and record it with `task_comment(slug=..., text=...)` — not
 `task_update`, which overwrites someone else's description, and not
 `task_create`, since "your premise is wrong" is not work.
@@ -166,14 +191,21 @@ inventing one, and record it with `task_comment(slug=..., text=...)` — not
 
 ## Step 5 — Track it
 
-Find the task, create it only if there is none, claim it, and join or create
-the project at phase `discovery`. The lookup is not a one-call affair — the
-chain, the claim semantics and the project rules are in
-[`references/witan-tracking.md`](references/witan-tracking.md).
+Find the task, create it only if there is none, and claim it. Where the work is
+a project rather than a single-session fix, propose the project to join or
+create and get one confirmation before anything touches the graph.
+
+The lookup chain, the claim timing and the project rules are in
+[`references/witan-tracking.md`](references/witan-tracking.md), which links on
+to [`witan-task`](../witan-task/SKILL.md) and
+[`witan-workflow`](../witan-workflow/SKILL.md) for the mechanics rather than
+restating them.
 
 Claim before handing off. An unclaimed task being actively worked is
 indistinguishable from an idle one, and a second session will start the same
-work.
+work. **Read the task's comments as you claim it** — a comment outranks the
+description, and "the premise here is wrong" is exactly the kind of thing
+Step 4 should have seen.
 
 ---
 

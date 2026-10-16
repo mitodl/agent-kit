@@ -42,12 +42,21 @@ approved and recorded, which is what
   alternatives invented without reading the code are fiction, and the rubric
   has nothing to score against.
 
+**On entry, make sure this session is linked.** Do not assume `scope-work` ran
+in it: planning often starts in a fresh session the morning after scoping, and
+this skill's Step 6 writes to the graph. If the injected session context shows
+no linked session, link one now following
+[`witan-workflow`](../witan-workflow/SKILL.md), and **keep the returned
+`session_slug`** — it is the thread tying this session's later `memory_store`
+calls and `workflow_session_end` together. Already linked, nothing to do.
+
 ## Entry modes
 
 | Entry | Behavior |
 |---|---|
-| **Fast path** — scoping called the work trivial | Skip Steps 1–3. One obvious approach, short plan comment, no spec, no ledger. Go to Step 4. |
+| **Fast path** — scoping called the work trivial | Skip Steps 1–3. One obvious approach, short plan comment, no ledger, no ADR. Go to Step 4. |
 | **Full path** — scoping found a decision worth recording | All steps. The chosen approach and its alternatives feed the ADR(s) written by [`write-adr`](../write-adr/SKILL.md); delivery stays in the plan comment. |
+| **Spec path** — scoping found work spanning several PRs, sessions or repos | All steps, and the plan lands as a **file in the repo** rather than only a comment. See [Step 6](#step-6--record-the-approved-plan). |
 
 Scoring comes first, then the record: run Steps 1–4, then hand the chosen
 approach and the rejected alternatives to [`write-adr`](../write-adr/SKILL.md),
@@ -73,7 +82,7 @@ produces a nonsense ledger:
 |---|---|
 | An approach — "replace the cache layer" | Becomes a candidate |
 | A constraint — "don't touch the serializer" | A filter applied to every candidate before scoring, and a named ledger row |
-| A requirement — "must work on the 2019 data" | Goes to the spec, not the ledger |
+| A requirement — "must work on the 2019 data" | Goes to the issue's acceptance criteria, not the ledger |
 
 Ask once. **"No view" is a valid answer** — record "no approach offered" and
 move on. Never invent one and attribute it to them: Step 3 scores it as theirs,
@@ -220,9 +229,12 @@ approval. Do not bury it in the chunk table.
 
 **If the recommendation is a workaround, show the drafted follow-up issue too**
 — title, target repo, body — and say that approving the plan means opening it.
-If the engineer declines the follow-up, the workaround is no longer approved:
-recommend something else, or get them to say on the record that the debt is
-accepted untracked.
+**Declining the follow-up declines the workaround.** Go back and recommend
+something else; the approved option is then whatever wins without it. There is
+no third door where the workaround ships and the debt goes untracked: the
+rubric makes the Follow-up URL mandatory for exactly this row, and Step 6 opens
+the issue before the plan is recorded, so an "accepted untracked" workaround
+would be approved against a ledger it cannot satisfy.
 
 Then confirm. With a structured question tool, use the options approve /
 revise / pick another / cancel; otherwise ask the same in plain prose, number
@@ -238,7 +250,7 @@ want options after all. Never forward to implementation.
 
 **Approved a workaround? Open its follow-up issue first**, so the ledger row
 carries a URL instead of a promise. Create it with
-[`create-ol-github-issue`](../../process/create-ol-github-issue/SKILL.md) using
+`create-ol-github-issue` using
 the body approved in Step 5 — do not re-draft it. Then link it the three ways
 [`references/ranking-rubric.md`](references/ranking-rubric.md) requires: the
 ledger row, the code comment (added during implementation), and a witan task —
@@ -248,24 +260,97 @@ discovered_from=["<this work's task slug>"])`.
 **Where the plan lands depends on the route:**
 
 - **The plan comment is the work record** — chunks, phases, status, the
-  tradeoff ledger. Always, on both paths.
+  tradeoff ledger. Always, on every path.
 - **Decisions worth recording go to [`write-adr`](../write-adr/SKILL.md)**, one
   ADR per decision, zero on the fast path. The comment links to any that were
   written; it does not restate them.
+- **On the spec path, the design goes in a file in the repo**, and the comment
+  shrinks to what it is good at: chunk status and links. See below.
+
+### The spec path
+
+Work spanning several pull requests, sessions or repos produces a **spec**: a
+reviewed file in the repo, not an issue comment. At that size a comment kept
+consistent by hand with a digest is rebuilding a versioned file the hard way,
+and the thing readers need — what was decided, in what order, and what is still
+open — is exactly what a diff and a PR review handle well.
+
+Put it where the repo already keeps them rather than inventing a location:
+
+```bash
+git ls-files | grep -iE '(^|/)docs/(plans|specs|design)/|(^|/)docs/internals/design/' \
+  | sed 's|/[^/]*$||' | sort -u
+```
+
+`docs/plans/`, `docs/specs/`, `docs/design/` and `docs/internals/design/` are
+all in use across the org's repos. Follow whichever you find, and only create
+one when there is none — the same rule
+[`write-adr`](../write-adr/SKILL.md) applies to ADR directories, for the same
+reason.
+
+Shape it like the ones already there: problem, numbered decisions, measured
+facts, phases, sequence, open questions. It changes while the work is in flight
+and becomes history when the work ships.
+
+**Extract each decision into its own ADR as it settles, not up front.** A
+decision still moving is a spec section; an ADR written over it would be
+amended before the work shipped. The spec links to each ADR as it is written.
+
+Then advance the project to `spec`, which on this route means exactly "the spec
+exists and is under review".
 
 Write the comment body to the draft path with your file-writing tool — never a
 heredoc, which drops and splices lines mid-sentence. The path is derived from
 the repo and issue, not fixed, so ask the script for it rather than guessing:
 
+<a id="resolving-the-scripts"></a>
+
+**Resolving the scripts.** They ship *inside this skill*, so the one reliable
+anchor is the directory you loaded this `SKILL.md` from — `scripts/` is beside
+it, and sibling skills are in its parent. Use that first.
+
+`~/.claude/skills` is **not** a safe default: skills install to
+`.claude/skills`, `~/.pi/agent/skills`, `.agents/skills`, `.github/skills` and
+`.opencode/skill` depending on the agent, in project scope as well as global,
+and this skill also ships inside the witan package. Four of those roots have no
+`~/.claude` in them at all.
+
+If you genuinely cannot tell where you were loaded from, probe once and reuse
+the answer for the whole session — project scope first, since a project-scoped
+install overrides the global one:
+
 ```bash
-SKILLS=~/.claude/skills    # in-repo development: ./skills/workflow
-"$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
+for root in .claude/skills .agents/skills .pi/skills .github/skills \
+            .opencode/skill "$HOME/.claude/skills" "$HOME/.agents/skills" \
+            "$HOME/.pi/agent/skills" mcp/servers/witan/witan/skills; do
+  [ -f "$root/plan-technical-approach/scripts/upsert-plan-comment.sh" ] \
+    && SKILLS="$root" && break
+done
+[ -n "${SKILLS:-}" ] || echo "plan-comment scripts not found -- locate the installed skill root before continuing" >&2
+```
+
+The list is fixed and in a fixed order on purpose. The resolved command string
+is then the same on every run on a given machine, so a permission-allowlist
+entry approved once keeps matching — the same reason `scripts/paths.sh` derives
+the draft path itself instead of taking it as an argument.
+
+```bash
+PTA="$SKILLS/plan-technical-approach/scripts"
+
+bash "$PTA/upsert-plan-comment.sh" \
   --repo <owner/repo> --issue <N> --print-draft-path
 # -> ~/.cache/ol-plan/<owner>-<repo>-<N>.md
 
-"$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
+bash "$PTA/upsert-plan-comment.sh" \
   --repo <owner/repo> --issue <N> --dry-run
 ```
+
+Invoke with `bash <path>` rather than as a bare executable. The mode bits do
+survive the wheel — `witan setup` copies with `shutil.copy2` and hatchling
+preserves them — but `bash <path>` works whether or not they did, and the
+failure it avoids (`permission denied` from a copy that dropped the bit) is
+one an agent tends to work around by rewriting the command rather than fixing
+the install.
 
 Check what it reports, then re-run without `--dry-run`. The script computes the
 draft path itself, prepends the marker and appends a digest; do not pass paths
@@ -275,11 +360,17 @@ it can derive, and do not hand-write the marker.
 digest back:
 
 ```bash
-"$SKILLS"/plan-technical-approach/scripts/fetch-plan-comment.sh \
+bash "$PTA/fetch-plan-comment.sh" \
   --repo <owner/repo> --issue <N>          # prints the live body and its sha
-"$SKILLS"/plan-technical-approach/scripts/upsert-plan-comment.sh \
+bash "$PTA/upsert-plan-comment.sh" \
   --repo <owner/repo> --issue <N> --expect-sha <that sha>
 ```
+
+The `sha` that `fetch` prints is **computed from the body it fetched**, not
+copied out of the footer that body carries, so an edit made in the GitHub UI
+changes it. `--expect-sha` is still not a lock: GitHub's PATCH ignores
+`If-Match`, so it catches an edit made *before* your read and nothing landing
+after it.
 
 Without `--expect-sha` an upsert is a full-body overwrite, so a session working
 from a stale or empty draft cache replaces the Revisions log, the merged chunk
@@ -290,16 +381,34 @@ clobbering. Format per
 
 **More than one chunk?** Mirror the delivery shape in the graph: an epic with
 one child task per chunk, and `blocks` links for a stack, so the order is
-visible to anyone looking for ready work:
+visible to anyone looking for ready work.
+
+**Promote the task `scope-work` already claimed — do not create a second one.**
+One issue is one task; it becomes an epic when the work turns out to need
+chunking:
 
 ```text
-task_create(type="epic", title="<the whole piece>", external_uri="<issue url>")
-task_create(title="<chunk 1>", parent="<epic slug>", type="feature")
+task_update(slug="<the task scope-work claimed>", type="epic")
+task_create(title="<chunk 1>", parent="<that slug>", type="feature",
+            project_slug="<project>")
+task_create(title="<chunk 2>", parent="<that slug>", type="feature",
+            project_slug="<project>")
 task_link(from_slug="<chunk-1 slug>", to_slug="<chunk-2 slug>", kind="blocks")
 ```
 
+Two things that bit here before:
+
+- Calling `task_create(type="epic", external_uri=<the same issue>)` left **two**
+  tasks pointing at one issue. `implement-plan` closes "the epic, or the single
+  task", so the claimed scoping task stayed `in_progress` forever — holding a
+  lease on work that had shipped.
+- **Pass `project_slug` on every chunk task.** Without it the chunks do not roll
+  up to the `WorkflowProject`, and the project's own status reads as though
+  nothing is happening while every chunk is in flight.
+
 Note that `task_update` cannot set `blocked_by` after creation — `task_link` is
-the only way to add the dependency later. A single chunk needs no epic.
+the only way to add the dependency later. A single chunk needs no epic and no
+promotion: the task stays a task.
 
 Advance the project to `implementation` with `workflow_project_advance`, then
 hand off to [`implement-plan`](../implement-plan/SKILL.md).
