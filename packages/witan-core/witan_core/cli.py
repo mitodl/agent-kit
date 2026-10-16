@@ -105,6 +105,10 @@ def report_install(
     # older agent-config-kit, whose InstallResult lacks the field, still
     # prints the rest of the report instead of raising.
     prerequisites = getattr(result, "prerequisites", None) or []
+    # ``removed`` is where apply_all reports the skill copies it deletes
+    # because another target's copy shadows them (e.g. Pi's own copy once
+    # Codex installs the same skill to ~/.agents/skills).
+    removed = getattr(result, "removed", None) or []
     if console is not None:
         console.print(f"\n[bold]{label}[/bold]")
         for path in result.planned:
@@ -112,6 +116,9 @@ def report_install(
             console.print(f"  [green]→[/green] {path}{tag}")
         for path, reason in result.skipped:
             console.print(f"  [yellow]skip[/yellow] {path} — {reason}")
+        for path in removed:
+            verb = "would remove" if dry_run else "removed"
+            console.print(f"  [red]✗[/red] {verb} {path}")
         for prereq in prerequisites:
             text = prereq.message(dry_run=dry_run)
             if prereq.needs_attention:
@@ -127,6 +134,9 @@ def report_install(
             print(f"  -> {path}{tag}")
         for path, reason in result.skipped:
             print(f"  skip {path} — {reason}")
+        for path in removed:
+            verb = "would remove" if dry_run else "removed"
+            print(f"  {verb} {path}")
         for prereq in prerequisites:
             tag = "WARNING" if prereq.needs_attention else "note"
             print(f"  {tag}: {prereq.message(dry_run=dry_run)}")

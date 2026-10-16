@@ -13,7 +13,13 @@ from pathlib import Path
 
 from . import registry
 from .configio import load_config_object, write_config
-from .installers import _clear_symlink, _ensure_dest_dir, install_skills
+from .installers import (
+    _clear_symlink,
+    _ensure_dest_dir,
+    _prune_empty_dirs,
+    install_skills,
+    skill_files,
+)
 from .jsonio import json_diff
 from .models import (
     SKILL_DIR_PLACEHOLDER,
@@ -77,7 +83,8 @@ class InstallResult:
     skipped: list[tuple[Path, str]] = field(default_factory=list)  # (path, reason)
     removed: list[Path | str] = field(
         default_factory=list
-    )  # entries pruned by `apply --prune` (see prune.py); always empty otherwise
+    )  # entries pruned by `apply --prune` (see prune.py), plus skill copies
+    # another target's copy now shadows (see remove_shadowed_skills)
     diffs: list[tuple[Path, str]] = field(default_factory=list)
     # (path, unified diff) for each JSON target actually changed by this run —
     # computed from the before/after in-memory dicts before `write_config` is
@@ -423,6 +430,71 @@ def bundle_for(
     return bundle
 
 
+def remove_shadowed_skills(
+    platform_name: str,
+    bundle: RegistrationBundle,
+    targets: list[str],
+    scope: Scope,
+    *,
+    dry_run: bool = False,
+) -> list[Path]:
+    """Delete ``platform_name``'s own copies of the skills ``bundle_for``
+    stopped installing there.
+
+    ``bundle_for`` only stops *writing* a duplicate. A copy an earlier run
+    wrote, before the shadowing target was installed (e.g. ``witan setup
+    --agent all`` run before Codex was), stays behind, and the platform finds
+    the name twice: Pi logs a "skill collision" for each one on every start.
+
+    Removes only the files ``install_skills`` would have written there, so
+    anything else in a skill's dir survives (as does the dir, then). Run it
+    after every target is applied: outside ``dry_run`` a skill's copy is only
+    removed once the copy it is shadowed by is on disk, and never when it
+    resolves to that copy or to the skill's own source.
+    """
+    if not bundle.skills or not skills_shadowed_by(
+        platform_name, targets, scope, bundle.skills
+    ):
+        return []
+    platform = registry.get_platform(platform_name)
+    own = _resolve_target(platform.skills, scope) if platform.skills else None
+    # skills_shadowed_by returned a reason, so skills_also_reads is set.
+    assert platform.skills_also_reads is not None
+    shared = _resolve_target(platform.skills_also_reads, scope)
+    if own is None or shared is None:
+        return []
+    removed: list[Path] = []
+    for skill in bundle.skills:
+        src_dir = skill.skill_md_path.parent
+        shared_dir = shared.path / skill.name
+        if not dry_run and not (shared_dir / "SKILL.md").is_file():
+            continue
+        for dest_base in skill_dest_dirs(platform, own.path):
+            skill_dir = dest_base / skill.name
+            # A symlinked skill dir points at files this run never wrote
+            # (often a source checkout); never delete through it.
+            if skill_dir.is_symlink() or not skill_dir.is_dir():
+                continue
+            # The same directory reached another way: the shared copy, or the
+            # skill's own source (a manifest may point into Pi's dir, or the
+            # dir may be a symlink to the source tree).
+            if skill_dir.resolve() in (shared_dir.resolve(), src_dir.resolve()):
+                continue
+            for rel in skill_files(skill):
+                dest = skill_dir / rel
+                if not (dest.is_file() or dest.is_symlink()):
+                    continue
+                if not dest.parent.resolve().is_relative_to(skill_dir.resolve()):
+                    continue
+                if dest.resolve() == (src_dir / rel).resolve():
+                    continue
+                if not dry_run:
+                    dest.unlink()
+                    _prune_empty_dirs(dest.parent, stop_above=dest_base)
+                removed.append(dest)
+    return removed
+
+
 def apply_all(
     bundle: RegistrationBundle,
     *,
@@ -432,7 +504,7 @@ def apply_all(
 ) -> dict[str, InstallResult]:
     targets = registry.detect_installed_platforms()
     check_hook_skills(bundle, targets, scope)
-    return {
+    results = {
         name: apply(
             name,
             bundle_for(name, bundle, targets, scope),
@@ -442,3 +514,8 @@ def apply_all(
         )
         for name in targets
     }
+    for name, result in results.items():
+        result.removed.extend(
+            remove_shadowed_skills(name, bundle, targets, scope, dry_run=dry_run)
+        )
+    return results

@@ -10,7 +10,8 @@ the name twice and logs a spurious "skill collision" warning on every
 startup. A single dest dir is correct and sufficient. The same reasoning runs
 the other way when Codex is also targeted: Codex installs into
 ~/.agents/skills/, so Pi's own copy is skipped (``skills_also_reads`` in
-registry.py, ``plan.bundle_for``).
+registry.py, ``plan.bundle_for``), and a copy an earlier run left in Pi's
+dir is removed (``plan.remove_shadowed_skills``).
 
 Pi 0.99 and later reads the mcp.json files this adapter writes with its
 built-in MCP extension (``builtin:mcp``). The third-party ``pi-mcp-adapter``
