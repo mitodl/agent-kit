@@ -32,9 +32,17 @@ case "$*" in
   "rev-parse --show-toplevel") echo "$REPO_ROOT" ;;
   "rev-parse --abbrev-ref origin/HEAD") echo origin/main ;;
   "rev-list --left-right --count HEAD...origin/main") echo "0 ${BEHIND:-3}" ;;
+  "remote get-url origin")
+    [ -n "$NO_ORIGIN" ] && exit 2
+    echo "${ORIGIN_URL:-https://github.com/mitodl/agent-kit.git}" ;;
+  "remote get-url alpha") echo git@github.com:mitodl/agent-kit.git ;;
+  "remote get-url zeta") echo https://github.com/elsewhere/agent-kit.git ;;
+  "remote") echo alpha; echo zeta ;;
+  # The raw config, in config order and before url.*.insteadOf expansion.
   "config --get-regexp"*)
-    echo remote.fork.url git@github.com:someone/agent-kit.git
-    echo remote.origin.url "${ORIGIN_URL:-https://github.com/mitodl/agent-kit.git}" ;;
+    echo remote.zeta.url https://github.com/elsewhere/agent-kit.git
+    echo remote.alpha.url work:agent-kit.git
+    [ -z "$NO_ORIGIN" ] && echo remote.origin.url work:agent-kit.git ;;
   *) exit 1 ;;
 esac
 """
@@ -218,6 +226,23 @@ class PreflightTest(unittest.TestCase):
             with self.subTest(origin=origin):
                 stdout, _ = self.run_preflight(ORIGIN_URL=origin)
                 self.assertEqual(stdout, "")
+
+    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
+    def test_witan_reads_remotes_through_git(self) -> None:
+        self.stub_all_passing()
+        self.witan_config.write_text(
+            f'remote_url = "{self.dead_url}"\n'
+            "[targets.work]\n"
+            f'remote_url = "{self.health_url}"\n'
+            'match_orgs = ["mitodl"]\n'
+        )
+        # origin is an insteadOf alias that only `git remote get-url` expands.
+        stdout, _ = self.run_preflight(ORIGIN_URL="git@github.com:mitodl/agent-kit.git")
+        self.assertEqual(stdout, "")
+        # Without origin, the first remote in git's sorted order (alpha), not
+        # the first in the config file (zeta).
+        stdout, _ = self.run_preflight(NO_ORIGIN="1")
+        self.assertEqual(stdout, "")
 
     @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_target_env_selects_the_target(self) -> None:

@@ -195,12 +195,25 @@ def check_drift(repo_root: Path | None) -> str | None:
 
 
 def _remote_url(repo_root: Path) -> str | None:
-    """``origin``'s URL, else the first remote's (``witan.repo.git_remote_url``)."""
-    out = _run(["git", "config", "--get-regexp", r"^remote\..*\.url$"], cwd=repo_root)
-    if out is None or out.returncode != 0:
+    """``origin``'s URL, else the first remote's in git's sorted order, as
+    ``witan.repo.git_remote_url`` resolves it. ``remote get-url`` rather than
+    the raw config, so ``url.*.insteadOf`` aliases are expanded."""
+
+    def get_url(name: str) -> str | None:
+        out = _run(["git", "remote", "get-url", name], cwd=repo_root)
+        if out is None or out.returncode != 0:
+            return None
+        return out.stdout.strip() or None
+
+    if url := get_url("origin"):
+        return url
+    names = _run(["git", "remote"], cwd=repo_root)
+    if names is None or names.returncode != 0:
         return None
-    urls = dict(line.split(" ", 1) for line in out.stdout.splitlines() if " " in line)
-    return urls.get("remote.origin.url") or next(iter(urls.values()), None)
+    for name in names.stdout.split():
+        if name != "origin" and (url := get_url(name)):
+            return url
+    return None
 
 
 def _repo_key(repo_root: Path | None) -> str | None:
