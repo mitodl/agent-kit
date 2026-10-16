@@ -95,7 +95,7 @@ describe("copyButton", () => {
 		button().click();
 
 		await vi.waitFor(() => expect(button().dataset.copied).toBe("no"));
-		expect(button().querySelector('[role="status"]')?.textContent).toBe(
+		expect(root.querySelector('[role="status"]')?.textContent).toBe(
 			"Copy failed",
 		);
 	});
@@ -107,12 +107,10 @@ describe("copyButton", () => {
 
 		button().click();
 		await vi.waitFor(() => expect(button().dataset.copied).toBe("yes"));
-		expect(button().querySelector('[role="status"]')?.textContent).toBe(
-			"Copied",
-		);
+		expect(root.querySelector('[role="status"]')?.textContent).toBe("Copied");
 		vi.advanceTimersByTime(1500);
 
 		expect(button().dataset.copied).toBeUndefined();
-		expect(button().querySelector('[role="status"]')?.textContent).toBe("");
+		expect(root.querySelector('[role="status"]')?.textContent).toBe("");
 	});
 });

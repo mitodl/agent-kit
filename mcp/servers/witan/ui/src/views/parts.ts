@@ -67,8 +67,9 @@ const failedIcon = svg`
  * state: lit-html leaves an attribute it does not bind alone, so a re-render
  * from a poll in the next 1.5s does not cut the tick short, and nothing outside
  * the button has to know a copy happened. The outcome is a shape as well as a
- * colour (a tick or a cross), and is announced through the button's own live
- * region, since the icons are hidden from assistive tech.
+ * colour (a tick or a cross), and is announced through a live region beside
+ * the button: the icons are hidden from assistive tech, and a region inside a
+ * button may be too, since ARIA makes a button's children presentational.
  */
 export function copyButton(value: string, label = value): TemplateResult {
 	return html`<button
@@ -82,7 +83,7 @@ export function copyButton(value: string, label = value): TemplateResult {
 			event.preventDefault();
 			event.stopPropagation();
 			const button = event.currentTarget as HTMLButtonElement;
-			const status = button.querySelector(".copy-status");
+			const status = button.nextElementSibling;
 			void copyText(value).then((copied) => {
 				button.dataset.copied = copied ? "yes" : "no";
 				if (status) {
@@ -96,10 +97,8 @@ export function copyButton(value: string, label = value): TemplateResult {
 				}, COPIED_MS);
 			});
 		}}
-  >${copyIcon}${copiedIcon}${failedIcon}<span
-      class="copy-status"
-      role="status"
-    ></span></button>`;
+  >${copyIcon}${copiedIcon}${failedIcon}</button
+  ><span class="copy-status" role="status"></span>`;
 }
 
 /**

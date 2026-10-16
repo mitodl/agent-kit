@@ -225,7 +225,7 @@ function taskRows(
 													titles.get(task.project_slug) ??
 													html`<code>${task.project_slug}</code>`
 												}</a
-                      >`
+                      >${copyButton(task.project_slug)}`
 										: "—"
 								}
               </td>

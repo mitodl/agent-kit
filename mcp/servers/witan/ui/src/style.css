@@ -175,7 +175,6 @@ button:hover {
 /* Copy-a-slug button: an icon beside a project or task name, quiet until it is
    pointed at, so a table of them does not read as a column of buttons. */
 button.copy {
-	position: relative;
 	display: inline-flex;
 	align-items: center;
 	vertical-align: middle;
@@ -215,7 +214,7 @@ button.copy[data-copied="no"] .icon-failed {
 }
 
 /* Announced, never seen: the icon already shows the outcome. */
-button.copy .copy-status {
+.copy-status {
 	position: absolute;
 	width: 1px;
 	height: 1px;
