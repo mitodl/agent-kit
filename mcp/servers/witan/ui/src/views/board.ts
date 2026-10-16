@@ -4,6 +4,7 @@ import { emptyBox } from "../chrome.js";
 import { absolute, ago, parseTimestamp, repoLabel } from "../format.js";
 import { type Route, routeHref } from "../route.js";
 import type { TaskPriority, TaskRow, TaskStatus } from "../types.js";
+import { copyButton } from "./parts.js";
 
 /**
  * The Board (spec §6.4): Ready, In progress, Blocked and, when asked for,
@@ -304,7 +305,8 @@ export function boardCard(
     <li class="card status-${task.status}${task.lease_expired ? " stale" : ""}">
       <p class="card-head">
         <span class="badge priority">${task.priority}</span>
-        <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a>
+        <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a
+        >${copyButton(task.slug)}
       </p>
       <p class="card-meta">
         ${task.type}
@@ -323,7 +325,7 @@ export function boardCard(
 					!route.project && task.project_slug
 						? html`· <a href=${routeHref(route, { project: task.project_slug })}
                   ><code>${task.project_slug}</code></a
-                >`
+                >${copyButton(task.project_slug)}`
 						: nothing
 				}
         ${

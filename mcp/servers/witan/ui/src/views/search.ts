@@ -9,6 +9,7 @@ import type {
 	TaskSearchRow,
 	WorkflowProjectSummary,
 } from "../types.js";
+import { copyButton } from "./parts.js";
 
 /**
  * The Search view: projects and tasks matching the header's search text.
@@ -168,7 +169,7 @@ function projectRows(
                 <a
                   href=${routeHref(route, openProject(project.slug))}
                   >${project.title}</a
-                >
+                >${copyButton(project.slug)}
               </td>
               <td>${project.phase}</td>
               <td>${(project.repos ?? []).map(repoLabel).join(", ") || "—"}</td>
@@ -210,7 +211,8 @@ function taskRows(
 					(task) => html`
             <tr class=${task.status === "closed" ? "closed" : ""}>
               <td>
-                <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a>
+                <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a
+                >${copyButton(task.slug)}
               </td>
               <td>${task.status}</td>
               <td>${task.priority}</td>
@@ -223,7 +225,7 @@ function taskRows(
 													titles.get(task.project_slug) ??
 													html`<code>${task.project_slug}</code>`
 												}</a
-                      >`
+                      >${copyButton(task.project_slug)}`
 										: "—"
 								}
               </td>
