@@ -2,6 +2,8 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from agent_config_kit.manifest import load_manifest
 from agent_config_kit.models import (
     DeclarativeHook,
@@ -15,13 +17,16 @@ from agent_config_kit.models import (
 )
 from agent_config_kit.paths import vscode_user_dir
 from agent_config_kit.plan import (
+    HookSkillError,
     RegistrationBundle,
     _merge_into,
     _navigate,
     apply,
     apply_all,
+    platform_hooks,
     skills_shadowed_by,
 )
+from agent_config_kit.prune import PlatformState, apply_with_prune
 
 
 def _bundle(**overrides) -> RegistrationBundle:
@@ -789,3 +794,263 @@ def test_apply_codex_tolerates_nan_in_config_toml(tmp_path, monkeypatch):
     apply("codex", _bundle())
 
     assert "witan" in tomllib.loads(config.read_text())["mcp_servers"]
+
+
+def _skill(tmp_path: Path, name: str = "preflight") -> SkillSource:
+    skill_md = tmp_path / "src" / name / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text(f"---\nname: {name}\n---\n")
+    return SkillSource(name=name, skill_md_path=skill_md)
+
+
+def _skill_hook() -> DeclarativeHook:
+    return DeclarativeHook(
+        event=HookEvent.SESSION_START,
+        command="python3 {skill_dir}/scripts/check.py",
+        skill="preflight",
+    )
+
+
+def _codex_hooks(tmp_path: Path) -> dict:
+    return json.loads((tmp_path / ".codex" / "hooks.json").read_text())["hooks"]
+
+
+def test_apply_codex_writes_declarative_hooks_to_hooks_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers={},
+        hooks=[
+            DeclarativeHook(
+                event=HookEvent.SESSION_START,
+                command="witan inject-context",
+                timeout_seconds=7.5,
+            )
+        ],
+    )
+
+    result = apply("codex", bundle)
+
+    assert _codex_hooks(tmp_path) == {
+        "SessionStart": [
+            {
+                "matcher": "",
+                # Codex reads timeout as whole seconds and rejects 7.5.
+                "hooks": [
+                    {"type": "command", "command": "witan inject-context", "timeout": 8}
+                ],
+            }
+        ]
+    }
+    assert result.written == [tmp_path / ".codex" / "hooks.json"]
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_apply_codex_merges_with_users_own_hooks_and_dedups(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hooks_json = tmp_path / ".codex" / "hooks.json"
+    hooks_json.parent.mkdir()
+    users_own = {
+        "matcher": "startup",
+        "hooks": [{"type": "command", "command": "mine"}],
+    }
+    hooks_json.write_text(
+        json.dumps(
+            {"description": "hand-written", "hooks": {"SessionStart": [users_own]}}
+        )
+    )
+    bundle = _bundle(
+        mcp_servers={},
+        hooks=[DeclarativeHook(event=HookEvent.SESSION_START, command="witan ctx")],
+    )
+
+    apply("codex", bundle)
+    rerun = apply("codex", bundle)
+
+    data = json.loads(hooks_json.read_text())
+    assert data["description"] == "hand-written"
+    session_start = data["hooks"]["SessionStart"]
+    assert session_start[0] == users_own
+    assert [h["command"] for e in session_start for h in e["hooks"]] == [
+        "mine",
+        "witan ctx",
+    ]
+    assert rerun.diffs == []
+
+
+def test_apply_codex_reports_one_approval_notice_per_new_or_changed_hook(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hook = DeclarativeHook(event=HookEvent.SESSION_START, command="witan ctx")
+    other = DeclarativeHook(event=HookEvent.STOP, command="witan checkpoint")
+    bundle = _bundle(mcp_servers={}, hooks=[hook, other])
+
+    dry = apply("codex", bundle, dry_run=True)
+    first = apply("codex", bundle)
+    rerun = apply("codex", bundle)
+    retimed = apply(
+        "codex",
+        _bundle(
+            mcp_servers={},
+            hooks=[hook, other.model_copy(update={"timeout_seconds": 30})],
+        ),
+    )
+
+    assert len(dry.notices) == 2
+    assert "would be written" in dry.notices[0]
+    assert len(first.notices) == 2
+    assert "'witan ctx' was written to" in first.notices[0]
+    assert "/hooks" in first.notices[0]
+    assert rerun.notices == []
+    [notice] = retimed.notices
+    assert "witan checkpoint" in notice
+
+
+def test_apply_claude_reports_no_approval_notices(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hook = DeclarativeHook(event=HookEvent.SESSION_START, command="witan ctx")
+
+    assert apply("claude", _bundle(mcp_servers={}, hooks=[hook])).notices == []
+
+
+def test_apply_codex_never_writes_hook_trust_state(tmp_path, monkeypatch):
+    """Codex runs a user hook only once its hash matches a trusted_hash the
+    user approved; writing one ourselves would skip that approval."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        skills=[_skill(tmp_path)],
+        hooks=[
+            DeclarativeHook(event=HookEvent.SESSION_START, command="witan ctx"),
+            _skill_hook(),
+        ],
+    )
+
+    apply("codex", bundle)
+
+    codex_files = [p for p in (tmp_path / ".codex").rglob("*") if p.is_file()]
+    assert {p.name for p in codex_files} == {"config.toml", "hooks.json"}
+    assert not any("trusted_hash" in p.read_text() for p in codex_files)
+    config = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert set(config) == {"mcp_servers"}
+    hooks_file = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    assert set(hooks_file) == {"hooks"}
+
+
+def test_apply_codex_has_no_project_scope_hooks(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bundle = _bundle(
+        mcp_servers={},
+        hooks=[DeclarativeHook(event=HookEvent.SESSION_START, command="witan ctx")],
+    )
+
+    result = apply("codex", bundle, scope=Scope.PROJECT)
+
+    assert result.planned == []
+    assert not (tmp_path / ".codex").exists()
+
+
+def test_apply_substitutes_skill_dir_per_platform(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(mcp_servers={}, skills=[_skill(tmp_path)], hooks=[_skill_hook()])
+
+    apply("claude", bundle)
+    apply("codex", bundle)
+
+    claude = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    [claude_entry] = claude["hooks"]["SessionStart"]
+    assert claude_entry["hooks"][0]["command"] == (
+        f"python3 {tmp_path}/.claude/skills/preflight/scripts/check.py"
+    )
+    [codex_entry] = _codex_hooks(tmp_path)["SessionStart"]
+    assert codex_entry["hooks"][0]["command"] == (
+        f"python3 {tmp_path}/.agents/skills/preflight/scripts/check.py"
+    )
+    assert (tmp_path / ".agents" / "skills" / "preflight" / "SKILL.md").is_file()
+
+
+def test_apply_substitutes_skill_dir_at_project_scope(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bundle = _bundle(mcp_servers={}, skills=[_skill(tmp_path)], hooks=[_skill_hook()])
+
+    apply("claude", bundle, scope=Scope.PROJECT)
+
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    [entry] = settings["hooks"]["SessionStart"]
+    assert entry["hooks"][0]["command"] == (
+        "python3 .claude/skills/preflight/scripts/check.py"
+    )
+
+
+def test_apply_errors_when_a_hooks_skill_is_not_installed_this_run(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(mcp_servers={}, hooks=[_skill_hook()])
+
+    with pytest.raises(HookSkillError, match="'preflight'"):
+        apply("codex", bundle)
+    assert not (tmp_path / ".codex").exists()
+
+
+def test_apply_raises_for_a_missing_skill_before_writing_mcp_servers(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(hooks=[_skill_hook()])
+
+    with pytest.raises(HookSkillError):
+        apply("codex", bundle)
+    with pytest.raises(HookSkillError):
+        apply_with_prune("claude", bundle, PlatformState())
+
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+    assert not (tmp_path / ".claude.json").exists()
+
+
+def test_skill_hooks_are_not_resolved_where_the_scope_has_no_hooks_target(
+    tmp_path, monkeypatch
+):
+    """Codex has no project-scope hooks file, so a skill hook that would
+    never be written there must not fail an otherwise valid run."""
+    monkeypatch.chdir(tmp_path)
+    bundle = _bundle(hooks=[_skill_hook()])
+
+    assert platform_hooks("codex", bundle, Scope.PROJECT) == []
+    apply("codex", bundle, scope=Scope.PROJECT)
+
+    assert (
+        "witan"
+        in tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())[
+            "mcp_servers"
+        ]
+    )
+
+
+def test_apply_all_checks_skill_hooks_before_writing_any_platform(
+    tmp_path, monkeypatch
+):
+    """apply() writes MCP servers before it reaches hooks, so without the
+    up-front check Claude's .claude.json would be written before the
+    missing skill raises."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    bundle = _bundle(hooks=[_skill_hook()])
+
+    with pytest.raises(HookSkillError):
+        apply_all(bundle)
+
+    assert not (tmp_path / ".claude.json").exists()
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_platform_hooks_skips_skill_hooks_where_declarative_hooks_never_go(
+    tmp_path, monkeypatch
+):
+    """Pi's hooks are plugin files: a {skill_dir} hook never reaches it, so a
+    skill Pi skips (because Codex installs it) can't fail Pi's run."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plugin = PluginRegistration(entry_path=tmp_path / "witan.ts")
+    bundle = _bundle(mcp_servers={}, hooks=[_skill_hook(), plugin])
+
+    assert platform_hooks("pi", bundle, Scope.GLOBAL) == [plugin]
+    assert platform_hooks("copilot", bundle, Scope.GLOBAL) == []

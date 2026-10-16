@@ -643,3 +643,40 @@ def test_include_with_malformed_mcp_servers_in_included_file_raises_manifest_err
 
     with pytest.raises(ManifestError, match=r"\[mcp_servers\] must be a table"):
         load_manifest(manifest)
+
+
+def test_profile_includes_reject_one_skill_dir_command_for_two_skills(tmp_path):
+    """Hook identity is event + command, so without the check the second
+    profile's hook is dropped and selecting that profile resolves the
+    first skill's hook instead."""
+    for name in ("a", "b"):
+        (tmp_path / name / "skills" / name).mkdir(parents=True)
+        (tmp_path / name / "skills" / name / "SKILL.md").write_text("stub")
+        _write(
+            tmp_path,
+            f"{name}/bundle.toml",
+            f"""
+            [skills]
+            {name} = "skills/{name}/SKILL.md"
+
+            [[hooks]]
+            kind = "declarative"
+            event = "session_start"
+            command = "sh {{skill_dir}}/hook.sh"
+            skill = "{name}"
+            """,
+        )
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [profiles.a]
+        include = ["a/bundle.toml"]
+
+        [profiles.b]
+        include = ["b/bundle.toml"]
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="declared for skills 'a' and 'b'"):
+        load_manifest(manifest)

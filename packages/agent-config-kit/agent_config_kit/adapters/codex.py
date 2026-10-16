@@ -17,15 +17,27 @@ fetched 2026-10-15) and what ``codex mcp add`` itself writes (codex-cli
   which a client registered with a fixed loopback redirect rejects. So a
   ``callbackPort`` without a ``callbackUrl`` also gets a fixed
   ``http://localhost:<port>/callback``.
+
+Declarative hooks go to ``$CODEX_HOME/hooks.json``, which has Claude Code's
+``{"hooks": {"<Event>": [{matcher, hooks: [...]}]}}`` shape (codex-rs
+``HooksFile``/``MatcherGroup``), so the Claude adapter's merge and dedup are
+reused. Codex parses ``timeout`` as a whole number of seconds and drops the
+whole file on a float, so timeouts are rounded up. Codex keeps hook trust
+(``trusted_hash``) in its own config and runs a hook only once the user has
+trusted it there; nothing here writes that state.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from pathlib import Path
 
-from ..models import McpServer, RemoteServer, StdioServer
+from ..models import DeclarativeHook, McpServer, RemoteServer, StdioServer
+from . import claude as claude_adapter
+
+HOOKS_APPROVAL = "Codex won't run it until you trust it with /hooks in the Codex TUI"
 
 
 def codex_home() -> Path:
@@ -60,3 +72,42 @@ def serialize_mcp(server: McpServer) -> dict:
             )
         data["oauth"] = oauth
     return data
+
+
+def _whole_seconds(hook: DeclarativeHook) -> DeclarativeHook:
+    if hook.timeout_seconds is None:
+        return hook
+    return hook.model_copy(update={"timeout_seconds": math.ceil(hook.timeout_seconds)})
+
+
+def merge_hooks(hooks_file: dict, hooks: list[DeclarativeHook]) -> None:
+    claude_adapter.merge_hooks(hooks_file, [_whole_seconds(h) for h in hooks])
+
+
+def remove_hooks(hooks_file: dict, hooks: list[DeclarativeHook]) -> bool:
+    """Like Claude's ``remove_hooks``, but a matcher group left with no
+    handlers stays in place as ``"hooks": []``. Codex keys a hook's trust by
+    its group and handler index (``hook_key`` in codex-rs
+    hooks/src/engine/discovery.rs), so dropping a group would shift every
+    later group and make Codex ask to trust those hooks again."""
+    section = hooks_file.get("hooks")
+    if not isinstance(section, dict):
+        return False
+    commands = {(h.event, h.command) for h in hooks}
+    changed = False
+    for event, event_name in claude_adapter.EVENT_NAMES.items():
+        groups = section.get(event_name)
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            remaining = [
+                h
+                for h in group["hooks"]
+                if not (isinstance(h, dict) and (event, h.get("command")) in commands)
+            ]
+            if len(remaining) != len(group["hooks"]):
+                group["hooks"] = remaining
+                changed = True
+    return changed

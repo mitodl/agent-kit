@@ -42,7 +42,14 @@ from .manifest import (
     resolve_profile,
 )
 from .models import SKILL_NAME_PATTERN, Scope
-from .plan import InstallResult, RegistrationBundle, bundle_for, skills_shadowed_by
+from .plan import (
+    HookSkillError,
+    InstallResult,
+    RegistrationBundle,
+    bundle_for,
+    check_hook_skills,
+    skills_shadowed_by,
+)
 from .plan import apply as apply_bundle
 from .plan import apply_all as apply_all_bundle
 from .prune import (
@@ -643,6 +650,12 @@ def _report(
         )
     console.print(table)
     _print_prerequisites(results, dry_run=dry_run)
+    for name, result in results.items():
+        for notice in result.notices:
+            console.print("⚠ ", style="bold yellow", end="")
+            console.print(
+                f"{name}: {notice}", style="yellow", markup=False, highlight=False
+            )
     if show_diff:
         _print_diffs(results)
     return had_skipped
@@ -682,6 +695,16 @@ def _print_diffs(results: dict[str, InstallResult]) -> None:
                 else:
                     style = None
                 console.print(line, style=style, markup=False, highlight=False)
+
+
+def _check_hook_skills(
+    bundle: RegistrationBundle, platforms: list[str], scope: Scope
+) -> None:
+    try:
+        check_hook_skills(bundle, platforms, scope)
+    except HookSkillError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(2) from exc
 
 
 def _apply_overlay_to_bundle(
@@ -836,6 +859,7 @@ def apply_command(
     target_platforms = (
         platforms if platforms is not None else detect_installed_platforms()
     )
+    _check_hook_skills(bundle, target_platforms, resolved_scope)
 
     # Staleness detection (spec Part B, S4) — unconditional, never gated on
     # --prune, and never blocking: apply() already re-copies every
@@ -1018,6 +1042,7 @@ def validate_command(
     platforms = _resolve_platforms(loaded.options.platforms, platform)
     if platforms is None:
         platforms = detect_installed_platforms()
+    _check_hook_skills(bundle, platforms, resolved_scope)
 
     applied_state_path = _default_applied_state_path(manifest_path, resolved_scope)
     applied_states = load_applied_state(applied_state_path)

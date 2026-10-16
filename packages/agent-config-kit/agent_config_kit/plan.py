@@ -16,6 +16,7 @@ from .configio import load_config_object, write_config
 from .installers import _clear_symlink, _ensure_dest_dir, install_skills
 from .jsonio import json_diff
 from .models import (
+    SKILL_DIR_PLACEHOLDER,
     AgentPlatform,
     CapabilityScope,
     DeclarativeHook,
@@ -28,6 +29,11 @@ from .models import (
     ScopeTarget,
     SkillSource,
 )
+
+
+class HookSkillError(Exception):
+    """A hook names a ``skill`` this run won't install for the platform, so
+    its ``{skill_dir}`` has nothing to point at."""
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,10 @@ class InstallResult:
     # declares a prerequisite (``AgentPlatform.mcp_conditional_on``),
     # populated identically under ``dry_run`` — informational, never a
     # reason to skip the write.
+    notices: list[str] = field(default_factory=list)
+    # One line per declarative hook this run added or changed on a platform
+    # that won't run it until the user approves it
+    # (``AgentPlatform.hooks_approval``). Populated under ``dry_run`` too.
 
 
 @dataclass
@@ -145,6 +155,84 @@ def _default_serialize(server: McpServer) -> dict:
     )
 
 
+def skill_dest_dirs(platform: AgentPlatform, target: Path) -> list[Path]:
+    """Where ``platform`` installs skills under its skills ``target``."""
+    return platform.skill_dest_dirs(target) if platform.skill_dest_dirs else [target]
+
+
+def hook_changes(platform: AgentPlatform, cfg: dict, hook: DeclarativeHook) -> bool:
+    """Whether merging ``hook`` would change ``cfg``. ``hooks_merge`` is
+    dedup-based, so an already-present, unchanged hook is a no-op."""
+    assert platform.hooks_merge is not None
+    probe = copy.deepcopy(cfg)
+    platform.hooks_merge(probe, [hook])
+    return probe != cfg
+
+
+def _skill_dir(
+    platform_name: str,
+    platform: AgentPlatform,
+    hook: DeclarativeHook,
+    bundle: RegistrationBundle,
+    scope: Scope,
+) -> Path:
+    if hook.skill not in {s.name for s in bundle.skills}:
+        raise HookSkillError(
+            f"{platform_name}: hook {hook.command!r} references skill "
+            f"{hook.skill!r}, which this run does not install"
+        )
+    target = _resolve_target(platform.skills, scope) if platform.skills else None
+    if target is None:
+        raise HookSkillError(
+            f"{platform_name}: hook {hook.command!r} references skill "
+            f"{hook.skill!r}, but {platform.name} installs no skills at "
+            f"{scope.value} scope"
+        )
+    return skill_dest_dirs(platform, target.path)[0] / hook.skill
+
+
+def platform_hooks(
+    platform_name: str, bundle: RegistrationBundle, scope: Scope
+) -> list[Hook]:
+    """The hooks in ``bundle`` that ``platform_name`` actually writes:
+    declarative hooks for a platform that merges them into a config file,
+    plugin files for one that doesn't. A declarative hook's ``{skill_dir}``
+    is replaced with where this platform installs its ``skill``, so one
+    manifest entry serves every platform. Raises ``HookSkillError`` when
+    that skill isn't installed for this platform in this run."""
+    platform = registry.get_platform(platform_name)
+    if platform.hooks is None or _resolve_target(platform.hooks, scope) is None:
+        return []
+    if platform.hooks_merge is None:
+        return [h for h in bundle.hooks if isinstance(h, PluginRegistration)]
+    hooks: list[Hook] = []
+    for hook in bundle.hooks:
+        if not isinstance(hook, DeclarativeHook):
+            continue
+        if hook.skill is not None:
+            skill_dir = _skill_dir(platform_name, platform, hook, bundle, scope)
+            hook = hook.model_copy(
+                update={
+                    "command": hook.command.replace(
+                        SKILL_DIR_PLACEHOLDER, str(skill_dir)
+                    ),
+                    "skill": None,
+                }
+            )
+        hooks.append(hook)
+    return hooks
+
+
+def check_hook_skills(
+    bundle: RegistrationBundle, targets: list[str], scope: Scope
+) -> None:
+    """Resolve every target's ``{skill_dir}`` hooks before anything is
+    written, so a hook naming a skill one platform won't install fails the
+    run instead of leaving the platforms before it half-applied."""
+    for name in targets:
+        platform_hooks(name, bundle_for(name, bundle, targets, scope), scope)
+
+
 def _mcp_prerequisite(platform: AgentPlatform, scope: Scope) -> Prerequisite:
     assert platform.mcp_conditional_on is not None
     if platform.mcp_prerequisite_check is None:
@@ -156,6 +244,24 @@ def _mcp_prerequisite(platform: AgentPlatform, scope: Scope) -> Prerequisite:
         satisfied=satisfied,
         detail=detail,
     )
+
+
+def _approval_notices(
+    platform: AgentPlatform,
+    hooks: list[DeclarativeHook],
+    before: dict,
+    path: Path,
+    dry_run: bool,
+) -> list[str]:
+    """One line per hook whose merge changes ``before`` (new, or e.g. a new
+    timeout): an unchanged hook was already approved on an earlier run."""
+    verb = "would be written" if dry_run else "was written"
+    return [
+        f"{hook.event.value} hook {hook.command!r} {verb} to {path}; "
+        f"{platform.hooks_approval}"
+        for hook in hooks
+        if hook_changes(platform, before, hook)
+    ]
 
 
 def apply(
@@ -176,6 +282,9 @@ def apply(
     apply-then-prune lifecycle instead of just this merge step."""
     platform = registry.get_platform(platform_name)
     result = InstallResult(platform=platform_name)
+    # Resolved before any write: a missing skill raises HookSkillError here
+    # rather than after the MCP target is already written.
+    hooks = platform_hooks(platform_name, bundle, scope)
 
     mcp_servers = {
         **bundle.mcp_servers,
@@ -209,9 +318,9 @@ def apply(
                 if platform.mcp_conditional_on is not None:
                     result.prerequisites.append(_mcp_prerequisite(platform, scope))
 
-    if platform.hooks is not None and bundle.hooks:
-        declarative = [h for h in bundle.hooks if isinstance(h, DeclarativeHook)]
-        plugins = [h for h in bundle.hooks if isinstance(h, PluginRegistration)]
+    if platform.hooks is not None and hooks:
+        declarative = [h for h in hooks if isinstance(h, DeclarativeHook)]
+        plugins = [h for h in hooks if isinstance(h, PluginRegistration)]
 
         if declarative and platform.hooks_merge is not None:
             target = _resolve_target(platform.hooks, scope)
@@ -224,6 +333,12 @@ def apply(
                 else:
                     before = copy.deepcopy(cfg)
                     platform.hooks_merge(cfg, declarative)
+                    if platform.hooks_approval is not None:
+                        result.notices.extend(
+                            _approval_notices(
+                                platform, declarative, before, target.path, dry_run
+                            )
+                        )
                     result.planned.append(target.path)
                     diff = json_diff(before, cfg)
                     if diff:
@@ -252,11 +367,7 @@ def apply(
     if platform.skills is not None and bundle.skills:
         target = _resolve_target(platform.skills, scope)
         if target is not None:
-            dest_dirs = (
-                platform.skill_dest_dirs(target.path)
-                if platform.skill_dest_dirs
-                else [target.path]
-            )
+            dest_dirs = skill_dest_dirs(platform, target.path)
             dests = install_skills(bundle.skills, dest_dirs, dry_run, force=force)
             result.planned.extend(dests)
             if not dry_run:
@@ -320,6 +431,7 @@ def apply_all(
     force: bool = False,
 ) -> dict[str, InstallResult]:
     targets = registry.detect_installed_platforms()
+    check_hook_skills(bundle, targets, scope)
     return {
         name: apply(
             name,

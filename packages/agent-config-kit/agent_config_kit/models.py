@@ -15,7 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ── Capability 1: MCP servers ────────────────────────────────────────────────
 
@@ -113,6 +113,9 @@ class HookEvent(str, Enum):
     STOP = "stop"
 
 
+SKILL_DIR_PLACEHOLDER = "{skill_dir}"
+
+
 class DeclarativeHook(BaseModel):
     """Claude Code, Continue, Codex CLI, Gemini CLI, adapted Goose/Cline."""
 
@@ -120,7 +123,29 @@ class DeclarativeHook(BaseModel):
     event: HookEvent
     matcher: str | None = None
     command: str
-    timeout_seconds: float | None = None
+    # Codex parses the rounded-up value as a u64 and drops the whole hooks
+    # file (the user's own hooks too) when it can't.
+    timeout_seconds: float | None = Field(
+        default=None, ge=0, lt=2**64, allow_inf_nan=False
+    )
+    # A skill whose installed directory ``command`` references as
+    # ``{skill_dir}``. Each platform installs skills somewhere different, so
+    # ``plan.platform_hooks`` substitutes that platform's path at plan time.
+    skill: str | None = None
+
+    @model_validator(mode="after")
+    def _skill_dir_needs_skill(self) -> DeclarativeHook:
+        uses_placeholder = SKILL_DIR_PLACEHOLDER in self.command
+        if self.skill is None and uses_placeholder:
+            raise ValueError(
+                f"command uses {SKILL_DIR_PLACEHOLDER} but the hook names no 'skill'"
+            )
+        if self.skill is not None and not uses_placeholder:
+            raise ValueError(
+                f"hook names skill {self.skill!r} but its command has no "
+                f"{SKILL_DIR_PLACEHOLDER} to substitute"
+            )
+        return self
 
 
 class PluginRegistration(BaseModel):
@@ -249,6 +274,11 @@ class AgentPlatform(BaseModel):
     hooks_remove: Callable[[dict, list[DeclarativeHook]], bool] | None = (
         None  # inverse of hooks_merge, for `apply --prune` (spec §5)
     )
+    # Set when the platform won't run a newly written or changed declarative
+    # hook until the user approves it (e.g. Codex's hook trust). Finishes the
+    # sentence "<event> hook <command> was written to <path>; ..." that
+    # plan.apply reports for each such hook.
+    hooks_approval: str | None = None
 
     instructions: InstructionsConfig | None = None
 

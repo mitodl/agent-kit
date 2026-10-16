@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from ..models import DeclarativeHook, HookEvent, McpServer, RemoteServer, StdioServer
 
-_EVENT_NAMES: dict[HookEvent, str] = {
+EVENT_NAMES: dict[HookEvent, str] = {
     HookEvent.PRE_TOOL_USE: "PreToolUse",
     HookEvent.POST_TOOL_USE: "PostToolUse",
     HookEvent.SESSION_START: "SessionStart",
@@ -60,7 +60,7 @@ def merge_hooks(settings: dict, hooks: list[DeclarativeHook]) -> None:
     hooks_section = settings["hooks"]
 
     for hook in hooks:
-        event_name = _EVENT_NAMES[hook.event]
+        event_name = EVENT_NAMES[hook.event]
         command_hook: dict = {"type": "command", "command": hook.command}
         # Claude Code's per-command hook object accepts an optional integer
         # "timeout" (seconds); only emit it when set so hooks without one keep
@@ -96,7 +96,7 @@ def remove_hooks(settings: dict, hooks: list[DeclarativeHook]) -> bool:
         return False
     changed = False
     for hook in hooks:
-        event_name = _EVENT_NAMES[hook.event]
+        event_name = EVENT_NAMES[hook.event]
         entries = hooks_section.get(event_name)
         if not isinstance(entries, list):
             continue

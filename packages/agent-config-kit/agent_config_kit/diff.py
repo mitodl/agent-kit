@@ -12,7 +12,6 @@ files/dirs, so drift is reported per capability key (e.g.
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,7 +19,15 @@ from . import registry
 from .configio import load_config_object
 from .installers import hook_content_hash, install_skills, skill_content_hash
 from .models import DeclarativeHook, PluginRegistration, Scope
-from .plan import RegistrationBundle, _default_serialize, _navigate, _resolve_target
+from .plan import (
+    RegistrationBundle,
+    _default_serialize,
+    _navigate,
+    _resolve_target,
+    hook_changes,
+    platform_hooks,
+    skill_dest_dirs,
+)
 from .prune import AppliedState, hook_identity, stale_names
 
 
@@ -88,16 +95,18 @@ def _diff_mcp_servers(
 
 
 def _diff_hooks(
+    platform_name: str,
     platform: registry.AgentPlatform,
     bundle: RegistrationBundle,
     scope: Scope,
     result: Drift,
     previous: AppliedState | None,
 ) -> None:
-    if platform.hooks is None or not bundle.hooks:
+    hooks = platform_hooks(platform_name, bundle, scope)
+    if platform.hooks is None or not hooks:
         return
-    declarative = [h for h in bundle.hooks if isinstance(h, DeclarativeHook)]
-    plugins = [h for h in bundle.hooks if isinstance(h, PluginRegistration)]
+    declarative = [h for h in hooks if isinstance(h, DeclarativeHook)]
+    plugins = [h for h in hooks if isinstance(h, PluginRegistration)]
 
     if declarative and platform.hooks_merge is not None:
         target = _resolve_target(platform.hooks, scope)
@@ -107,14 +116,9 @@ def _diff_hooks(
                 result.unreadable_paths.append(target.path)
             else:
                 for hook in declarative:
-                    # hooks_merge is idempotent/dedup-based: merging a single
-                    # hook into an unmodified copy of cfg is a no-op if it's
-                    # already present, and a mutation if it's missing — reuses
-                    # the platform's own merge as the single source of truth
-                    # instead of re-deriving its dedup key here.
-                    probe = copy.deepcopy(cfg)
-                    platform.hooks_merge(probe, [hook])
-                    if probe != cfg:
+                    # The platform's own merge is the single source of truth
+                    # for whether the hook is present, not a re-derived key.
+                    if hook_changes(platform, cfg, hook):
                         result.missing_keys.append(
                             f"hooks:{hook.event.value}:{hook.command}"
                         )
@@ -149,11 +153,7 @@ def _diff_skills(
     target = _resolve_target(platform.skills, scope)
     if target is None:
         return
-    dest_dirs = (
-        platform.skill_dest_dirs(target.path)
-        if platform.skill_dest_dirs
-        else [target.path]
-    )
+    dest_dirs = skill_dest_dirs(platform, target.path)
     dests = install_skills(bundle.skills, dest_dirs, dry_run=True)
     result.missing_paths.extend(dest for dest in dests if not dest.exists())
 
@@ -180,6 +180,6 @@ def diff(
     platform = registry.get_platform(platform_name)
     result = Drift(platform=platform_name)
     _diff_mcp_servers(platform_name, platform, bundle, scope, result)
-    _diff_hooks(platform, bundle, scope, result, previous)
+    _diff_hooks(platform_name, platform, bundle, scope, result, previous)
     _diff_skills(platform, bundle, scope, result, previous)
     return result

@@ -29,7 +29,15 @@ from .models import (
     PluginRegistration,
     Scope,
 )
-from .plan import InstallResult, RegistrationBundle, _navigate, _resolve_target, apply
+from .plan import (
+    InstallResult,
+    RegistrationBundle,
+    _navigate,
+    _resolve_target,
+    apply,
+    platform_hooks,
+    skill_dest_dirs,
+)
 
 
 def hook_identity(hook: Hook) -> str:
@@ -61,7 +69,7 @@ class PlatformState:
 
 
 def _bundle_platform_state(
-    bundle: RegistrationBundle, platform_name: str
+    bundle: RegistrationBundle, platform_name: str, scope: Scope
 ) -> PlatformState:
     # Unlike mcp_servers/hooks, a skill's supporting files (scripts/,
     # references/, assets/, ...) are never enumerated in the manifest — only
@@ -90,7 +98,11 @@ def _bundle_platform_state(
                 **bundle.mcp_servers_by_platform.get(platform_name, {}),
             }
         ),
-        hooks=sorted(hook_identity(h) for h in bundle.hooks),
+        # The hooks as written: a ``{skill_dir}`` hook is recorded with its
+        # substituted command, which is what ``_remove_hooks`` has to match.
+        hooks=sorted(
+            hook_identity(h) for h in platform_hooks(platform_name, bundle, scope)
+        ),
         skills=sorted(skill_entries),
     )
 
@@ -276,14 +288,57 @@ def _remove_mcp_servers(
     return removed
 
 
+def _handler_positions(cfg: dict, key_path: tuple[str, ...]) -> dict:
+    """``{(event, group index, handler index): handler}`` for a declarative
+    hooks file."""
+    section: object = cfg
+    for key in key_path:
+        section = section.get(key) if isinstance(section, dict) else None
+    if not isinstance(section, dict):
+        return {}
+    return {
+        (event, gi, hi): handler
+        for event, groups in section.items()
+        if isinstance(groups, list)
+        for gi, group in enumerate(groups)
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hi, handler in enumerate(group["hooks"])
+    }
+
+
+def _moved_hook_notices(
+    platform: registry.AgentPlatform,
+    before: dict,
+    after: dict,
+    target_path: Path,
+    key_path: tuple[str, ...],
+    dry_run: bool,
+) -> list[str]:
+    """Codex keys a hook's trust by its group and handler index, so a hook
+    that a removal shifted within its group (the user's own included) has to
+    be trusted again. ``remove_hooks`` keeps emptied groups in place, so only
+    a handler after a removed one in the same group can move."""
+    old = _handler_positions(before, key_path)
+    verb = "would move" if dry_run else "moved"
+    return [
+        f"{event} hook {handler.get('command')!r} {verb} within {target_path}; "
+        f"{platform.hooks_approval}"
+        for (event, gi, hi), handler in _handler_positions(after, key_path).items()
+        if old.get((event, gi, hi)) != handler and isinstance(handler, dict)
+    ]
+
+
 def _remove_hooks(
     platform: registry.AgentPlatform,
     identities: set[str],
     *,
     scope: Scope,
     dry_run: bool,
+    notices: list[str],
     _json_state: dict[Path, tuple[dict, dict]] | None = None,
 ) -> list[str]:
+    """``notices`` collects a line per remaining hook whose removal-shifted
+    position needs approving again (``AgentPlatform.hooks_approval``)."""
     if not identities or platform.hooks is None:
         return []
     decoded = [
@@ -302,6 +357,7 @@ def _remove_hooks(
                 cfg = load_config_object(target.path)
                 before = copy.deepcopy(cfg) if cfg is not None else None
             if cfg is not None:
+                pre_removal = copy.deepcopy(cfg)
                 changed = False
                 for identity, hook in declarative:
                     if platform.hooks_remove(cfg, [hook]):
@@ -309,6 +365,17 @@ def _remove_hooks(
                         changed = True
                 if changed:
                     write_config(target.path, cfg, dry_run)
+                    if platform.hooks_approval is not None:
+                        notices.extend(
+                            _moved_hook_notices(
+                                platform,
+                                pre_removal,
+                                cfg,
+                                target.path,
+                                target.key_path,
+                                dry_run,
+                            )
+                        )
                 if _json_state is not None:
                     _json_state[target.path] = (before, cfg)
 
@@ -366,11 +433,7 @@ def _remove_skills(
     target = _resolve_target(platform.skills, scope)
     if target is None:
         return []
-    dest_dirs = (
-        platform.skill_dest_dirs(target.path)
-        if platform.skill_dest_dirs
-        else [target.path]
-    )
+    dest_dirs = skill_dest_dirs(platform, target.path)
     removed: list[Path] = []
     for entry in sorted(entries):
         skill_name, _, rel = entry.partition("/")
@@ -417,7 +480,7 @@ def apply_with_prune(
         _json_state=json_state,
     )
     platform = registry.get_platform(platform_name)
-    current = _bundle_platform_state(bundle, platform_name)
+    current = _bundle_platform_state(bundle, platform_name, scope)
 
     result.removed.extend(
         _remove_mcp_servers(
@@ -434,6 +497,7 @@ def apply_with_prune(
             set(previous.hooks) - set(current.hooks),
             scope=scope,
             dry_run=dry_run,
+            notices=result.notices,
             _json_state=json_state,
         )
     )

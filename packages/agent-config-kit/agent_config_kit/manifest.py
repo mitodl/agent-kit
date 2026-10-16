@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .fetch import FetchError, fetch_remote, is_remote_uri
-from .models import Hook, LspServer, McpServer, Scope, SkillSource
+from .models import DeclarativeHook, Hook, LspServer, McpServer, Scope, SkillSource
 from .plan import RegistrationBundle
 from .prune import hook_identity
 from .registry import known_platforms
@@ -190,12 +190,27 @@ def _raw_hook_identity(hook: dict, path: Path) -> str:
     return f"declarative:{hook.get('event')}:{hook.get('command')}"
 
 
+def _check_hook_skills_agree(
+    identity: str, previous: dict, hook: dict, path: Path
+) -> None:
+    """A hook's identity ignores ``skill``, so two hooks sharing a
+    ``{skill_dir}`` command for different skills would otherwise collapse
+    into one, silently dropping the other."""
+    if previous.get("skill") != hook.get("skill"):
+        raise ManifestError(
+            f"{path}: hooks[]: {identity!r} is declared for skills "
+            f"{previous.get('skill')!r} and {hook.get('skill')!r}; give "
+            "each hook its own command"
+        )
+
+
 def _merge_hooks(base_hooks: list, overlay_hooks: list, path: Path) -> list[dict]:
     merged: dict[str, dict] = {}
-    for hook in base_hooks:
-        merged[_raw_hook_identity(hook, path)] = hook
-    for hook in overlay_hooks:
-        merged[_raw_hook_identity(hook, path)] = hook
+    for hook in [*base_hooks, *overlay_hooks]:
+        identity = _raw_hook_identity(hook, path)
+        if identity in merged:
+            _check_hook_skills_agree(identity, merged[identity], hook, path)
+        merged[identity] = hook
     return list(merged.values())
 
 
@@ -288,13 +303,16 @@ def _process_profile_includes(
                     if key not in selection:
                         selection.append(key)
             own_hooks = data.setdefault("hooks", [])
-            own_identities = {_raw_hook_identity(h, path) for h in own_hooks}
+            own_by_identity = {_raw_hook_identity(h, path): h for h in own_hooks}
             selection = profile.setdefault("hooks", [])
             for hook in included.get("hooks") or []:
                 identity = _raw_hook_identity(hook, path)
-                if identity not in own_identities:
+                previous = own_by_identity.get(identity)
+                if previous is None:
                     own_hooks.append(hook)
-                    own_identities.add(identity)
+                    own_by_identity[identity] = hook
+                else:
+                    _check_hook_skills_agree(identity, previous, hook, path)
                 if identity not in selection:
                     selection.append(identity)
 
@@ -476,6 +494,19 @@ def _validate_profile_entry_refs(
                     )
 
 
+def _validate_hook_skill_refs(bundle: RegistrationBundle, path: Path) -> None:
+    """A hook's ``skill`` must name one of the manifest's own skills. Whether
+    a given run installs it (profiles, platforms) is checked later, by
+    ``plan.platform_hooks``."""
+    skills = {s.name for s in bundle.skills}
+    for hook in bundle.hooks:
+        if isinstance(hook, DeclarativeHook) and hook.skill not in (None, *skills):
+            raise ManifestError(
+                f"{path}: hooks[]: {hook.command!r} references skill "
+                f"{hook.skill!r}, which is not in [skills]"
+            )
+
+
 def resolve_profile(manifest: Manifest, names: list[str]) -> RegistrationBundle:
     """Union the resolved entries of every named profile, expanding
     ``inherits`` transitively (spec §4.2). ``names=[]`` (no profile selected)
@@ -590,6 +621,7 @@ def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
 
     _detect_profile_cycles(profiles, path)
     _validate_profile_entry_refs(profiles, bundle, path)
+    _validate_hook_skill_refs(bundle, path)
 
     if options_model.default_profiles:
         unknown_profiles = sorted(set(options_model.default_profiles) - set(profiles))
