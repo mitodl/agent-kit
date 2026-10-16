@@ -188,9 +188,10 @@ def server(tmp_path, monkeypatch, tmp_state_dir, no_background_optimize):
     monkeypatch.setenv("WITAN_AUTHOR", "pytest")
     # Isolate from the real agent session: memory_store auto-wires a
     # SessionProduced edge when the agent session id (CLAUDE_SESSION_ID, else
-    # PI_SESSION_ID) resolves to a live session.
+    # PI_SESSION_ID, else CODEX_SESSION_ID) resolves to a live session.
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("PI_SESSION_ID", raising=False)
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
 
     from witan import config as cfg_mod
     from witan import graph as graph_mod

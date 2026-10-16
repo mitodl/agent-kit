@@ -279,6 +279,9 @@ holds the session: the in-process module locally, or the deployment over MCP.
 Writing straight to a local store here is what used to leave deployed
 sessions open forever.
 
+Under Codex, whose hooks get no session variable, the session id comes
+from the hook's stdin payload instead.
+
 **Parameters**:
 
 * `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
@@ -680,8 +683,8 @@ Link a session to a workflow project.
 
 * `PROJECT-SLUG, --project-slug`: **[required]**
 * `--phase CHOICE`: **[required]** *[choices: discovery, spec, implementation, delivery]*
-* `--session-id STR`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else a
-    generated uuid. The Stop hook keys its state file on this.
+* `--session-id STR`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
+    ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
 * `--repo STR`:
 * `--tags STR..., --empty-tags`:
 
@@ -780,7 +783,7 @@ Re-run after every upgrade to refresh installed files.
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
+* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
 * `--force, --no-force`: *[default: False]*
@@ -1779,9 +1782,10 @@ witan code reindex-hook
 
 Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
 
-Reads the Claude Code hook payload from stdin, extracts
-``tool_input.file_path`` (or ``path``/``filename``), and queues it for
-reindexing if it exists. One detached drainer per checkout applies the
+Reads the hook payload from stdin, extracts ``tool_input.file_path`` (or
+``path``/``filename``) from Claude Code's, or every file a Codex
+``apply_patch`` adds, updates or moves to, and queues each for reindexing
+if it exists. One detached drainer per checkout applies the
 queue, so parallel agents editing one worktree do not race each other's
 writes to its branch view. Logs from the last drainer are kept in
 ``$TMPDIR/witan-code-<uid>/``. Best-effort: a missing or
@@ -1814,7 +1818,7 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
+* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
 * `--force, --no-force`: *[default: False]*

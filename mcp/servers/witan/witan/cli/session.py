@@ -52,8 +52,8 @@ def session_start(
     project_slug: The ``wp-`` slug of the project this session belongs to.
     phase: The phase this session is working in.
     session_id: Unique id for the session.
-        Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else a
-        generated uuid. The Stop hook keys its state file on this.
+        Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
+        ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
     repo: Repo URI to scope the session to (default: auto-detected).
     tags: Optional tags.
     """

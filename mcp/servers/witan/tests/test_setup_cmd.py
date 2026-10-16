@@ -334,3 +334,65 @@ def test_setup_force_reaches_the_claude_hook_script_copy(
     setup_cmd.setup(agent="claude", author="tester", force=True)
     assert (hooks / script.name).is_file()
     assert not (hooks / script.name).is_symlink()
+
+
+def test_setup_writes_witan_hooks_to_codex_and_says_to_trust_them(
+    tmp_path, monkeypatch, _no_network, capsys
+):
+    """An empty ``~/.codex`` is enough for ``--agent all`` to pick Codex up.
+
+    Codex runs a hook only after the user trusts it with ``/hooks``, and
+    nothing here may write that trust state, so the install report is the only
+    place the user learns the two hooks are waiting on them.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setitem(sys.modules, "witan_code", None)
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+
+    setup_cmd.setup(agent="all", dry_run=False)
+
+    hooks_file = codex_home / "hooks.json"
+    assert json.loads(hooks_file.read_text()) == {
+        "hooks": {
+            "UserPromptSubmit": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "witan inject-context",
+                            "timeout": 45,
+                        }
+                    ],
+                }
+            ],
+            "Stop": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "witan session-checkpoint",
+                            "timeout": 60,
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Codex CLI" in out
+    for command in ("witan inject-context", "witan session-checkpoint"):
+        assert f"hook '{command}' was written to {hooks_file};" in out
+    assert out.count("⚠ action") == 2
+    assert "trust it with /hooks" in out
+    assert not any(
+        "trusted_hash" in p.read_text() for p in codex_home.rglob("*") if p.is_file()
+    )
+
+    # Claude's copy of the same hooks is untouched by the Codex write.
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert {
+        h["command"] for e in settings["hooks"]["UserPromptSubmit"] for h in e["hooks"]
+    } == {"witan inject-context"}
