@@ -3311,7 +3311,8 @@ def _edge_index() -> dict:
 
     Runs a handful of global single-column edge queries and counts in Python:
     cheaper than per-candidate traversals and independent of result-set size.
-    Bounded by edge count, mirroring ``all_superseded_slugs``. Cached (see above).
+    Bounded by edge count for corroboration and by memory count for the two
+    sets. Cached (see above).
     """
     global _edge_index_cache, _edge_index_cache_key
     now = time.monotonic()
@@ -3341,9 +3342,7 @@ def _edge_index() -> dict:
         "produced_edges_to",
     ):
         corroboration.update(slugs(query))
-    contradicted = set(slugs("contradicts_edges_from")) | set(
-        slugs("contradicts_edges_to")
-    )
+    contradicted = set(slugs("contradicted_slugs"))
     superseded = set(slugs("all_superseded_slugs"))
     result = {
         "corroboration": corroboration,
@@ -3440,15 +3439,6 @@ def _rerank(
 # ── Tools ─────────────────────────────────────────────────────────
 
 
-def _superseded_slugs() -> set[str]:
-    """Every memory some newer memory ``Supersedes``, uncached.
-
-    For the unranked reads, which need only this set: ``_edge_index()`` would
-    run eleven queries to also build ranking tallies they never read.
-    """
-    return {r["slug"] for r in client.read("read.gq", "all_superseded_slugs", {})}
-
-
 @_tool
 def memory_search(
     query: str,
@@ -3525,8 +3515,9 @@ def memory_list(
     including dropping superseded memories, applies before that cap, so fewer
     than 100 rows is the whole listing and exactly 100 means there may be
     more. The slim unscoped listing has no 100-row cap. A ``language``-filtered
-    or slim listing reads the 10,000 most recent memories and filters those,
-    so it is complete only while the store holds fewer than 10,000.
+    or slim listing reads the 10,000 most recent memories (current ones only,
+    unless ``include_superseded``) and filters those, so it is complete only
+    while the store holds fewer than 10,000 of them.
 
     Parameters
     ----------
@@ -3546,13 +3537,14 @@ def memory_list(
     """
     detected = repo_module.detect(override=repo)
     slim = not detected and repo != ""
+    # Every read below prunes superseded rows in the query, before its cap, so
+    # a full page means the cap was hit rather than that pruning ate into it.
+    name = "list_memories" if include_superseded else "list_current_memories"
     if slim or language:
         # Filters the capped reads cannot apply before their `limit 100`, so
         # read every memory and filter here: a filter after the cap would
         # shorten the list without anything saying more matches exist.
-        rows = client.read("read.gq", "list_memories_unbounded", {"kind": kind or None})
-        superseded = set() if include_superseded else _superseded_slugs()
-        rows = [r for r in rows if r["slug"] not in superseded]
+        rows = client.read("read.gq", f"{name}_unbounded", {"kind": kind or None})
         if slim:
             # Unscoped memories (repo=null) only; memory_get any slug for more.
             return [_slim_memory(r) for r in rows if not r.get("repo")]
@@ -3563,11 +3555,8 @@ def memory_list(
             and (r.get("language") or "").lower() == language.lower()
         ][:_MEMORY_LIST_CAP]
 
-    # The capped reads exclude superseded rows in the query, so a full page
-    # means the cap was hit rather than that pruning ate into it.
     # No repo detected here means the explicit all-repos opt-in (repo=""),
     # which returns full content.
-    name = "list_memories" if include_superseded else "list_current_memories"
     return client.read(
         "read.gq", name, {"repo": detected or None, "kind": kind or None}
     )
@@ -4317,15 +4306,13 @@ def memory_contradictions(
         the resolved ones.
     """
     in_scope = _contradiction_in_scope(repo)
-    superseded = set() if include_superseded else _superseded_slugs()
+    query = "contradicts_pairs" if include_superseded else "contradicts_current_pairs"
 
     pairs: dict[frozenset[str], dict] = {}
-    for row in client.read("read.gq", "contradicts_pairs", {}):
+    for row in client.read("read.gq", query, {}):
         a = {f: row[f"a_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
         b = {f: row[f"b_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
         if not in_scope(a, b):
-            continue
-        if a["slug"] in superseded or b["slug"] in superseded:
             continue
         edge = _edge_meta(row)
         key = frozenset((a["slug"], b["slug"]))

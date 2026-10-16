@@ -335,6 +335,24 @@ def test_supersedes_hides_old_from_list(server):
 
 
 @requires_omnigraph
+@pytest.mark.parametrize("kind", [None, "pattern"])
+def test_supersedes_hides_old_from_the_slim_listing(server, monkeypatch, kind):
+    """The slim path reads the unbounded listings, which prune in the query."""
+    old = server.memory_store(kind="pattern", title="old", content="a", repo="")
+    new = server.memory_store(kind="pattern", title="new", content="b", repo="")
+    server.memory_link(new["slug"], old["slug"], "supersedes")
+    monkeypatch.setenv("WITAN_REPO", "")
+
+    assert {m["slug"] for m in server.memory_list(kind=kind)} == {new["slug"]}
+    assert {
+        m["slug"] for m in server.memory_list(kind=kind, include_superseded=True)
+    } == {
+        old["slug"],
+        new["slug"],
+    }
+
+
+@requires_omnigraph
 @pytest.mark.parametrize(
     ("kwargs"),
     [{}, {"kind": "pattern"}, {"repo": ""}, {"repo": "", "kind": "pattern"}],
