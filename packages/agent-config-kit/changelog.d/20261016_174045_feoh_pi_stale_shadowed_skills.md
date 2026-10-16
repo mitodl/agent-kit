@@ -7,6 +7,7 @@
   never prunes, so every run after Codex was installed left Pi with a
   "skill collision" warning for each witan skill. A copy is removed only after
   Codex's copy exists. Only the files the skill itself ships are deleted, and
-  nothing is deleted through a symlinked skill directory or a Pi skills
-  directory that points at `~/.agents/skills`. The removals are listed in
+  nothing is deleted through a symlinked skill directory, from a Pi skills
+  directory that points at `~/.agents/skills`, or from the skill's own source
+  (a manifest entry that points into `~/.pi/agent/skills`). The removals are listed in
   `InstallResult.removed`.

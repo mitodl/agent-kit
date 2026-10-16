@@ -449,8 +449,8 @@ def remove_shadowed_skills(
     Removes only the files ``install_skills`` would have written there, so
     anything else in a skill's dir survives (as does the dir, then). Run it
     after every target is applied: outside ``dry_run`` a skill's copy is only
-    removed once the copy it is shadowed by is on disk, and never when the
-    two paths resolve to the same directory (a symlinked skills dir).
+    removed once the copy it is shadowed by is on disk, and never when it
+    resolves to that copy or to the skill's own source.
     """
     if not bundle.skills or not skills_shadowed_by(
         platform_name, targets, scope, bundle.skills
@@ -465,6 +465,7 @@ def remove_shadowed_skills(
         return []
     removed: list[Path] = []
     for skill in bundle.skills:
+        src_dir = skill.skill_md_path.parent
         shared_dir = shared.path / skill.name
         if not dry_run and not (shared_dir / "SKILL.md").is_file():
             continue
@@ -474,13 +475,18 @@ def remove_shadowed_skills(
             # (often a source checkout); never delete through it.
             if skill_dir.is_symlink() or not skill_dir.is_dir():
                 continue
-            if skill_dir.resolve() == shared_dir.resolve():
+            # The same directory reached another way: the shared copy, or the
+            # skill's own source (a manifest may point into Pi's dir, or the
+            # dir may be a symlink to the source tree).
+            if skill_dir.resolve() in (shared_dir.resolve(), src_dir.resolve()):
                 continue
             for rel in skill_files(skill):
                 dest = skill_dir / rel
                 if not (dest.is_file() or dest.is_symlink()):
                     continue
                 if not dest.parent.resolve().is_relative_to(skill_dir.resolve()):
+                    continue
+                if dest.resolve() == (src_dir / rel).resolve():
                     continue
                 if not dry_run:
                     dest.unlink()

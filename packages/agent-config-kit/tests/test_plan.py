@@ -884,6 +884,42 @@ def test_remove_shadowed_skills_never_deletes_through_a_symlinked_skill_dir(
     assert (checkout / "SKILL.md").is_file()
 
 
+def test_remove_shadowed_skills_never_deletes_a_source_kept_in_pis_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    skill_md = tmp_path / ".pi" / "agent" / "skills" / "my-notes" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-notes\n---\n")
+    bundle = _bundle(skills=[SkillSource(name="my-notes", skill_md_path=skill_md)])
+
+    results = apply_all(bundle)
+
+    assert results["pi"].removed == []
+    assert skill_md.is_file()
+    assert (tmp_path / ".agents" / "skills" / "my-notes" / "SKILL.md").is_file()
+
+
+def test_remove_shadowed_skills_never_deletes_through_a_pi_dir_symlinked_to_sources(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    sources = tmp_path / "checkout" / "skills"
+    skill_md = sources / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+    (tmp_path / ".pi" / "agent").mkdir(parents=True)
+    (tmp_path / ".pi" / "agent" / "skills").symlink_to(sources)
+    bundle = _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)])
+
+    results = apply_all(bundle)
+
+    assert results["pi"].removed == []
+    assert skill_md.is_file()
+
+
 def test_skills_shadowed_by_applies_at_project_scope_too():
     assert skills_shadowed_by("pi", ["pi", "codex"], Scope.PROJECT) == "codex"
     assert skills_shadowed_by("pi", ["pi", "claude"], Scope.PROJECT) is None
