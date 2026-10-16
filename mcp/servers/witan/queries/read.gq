@@ -908,6 +908,68 @@ query search_tasks_title($query: String, $repo: String?, $status: String?) {
     limit 20
 }
 
+// Filtered task search (`project_slug` / `assignee`). Status, repo and
+// assignee are applied in Python, after the read, so these must not cap at
+// 20: a cap before the filter drops every match ranked below the 20th hit of
+// the unfiltered query. The project pair filters in the match instead, so a
+// project's own hits are never crowded out by other projects'.
+
+query search_tasks_by_project($query: String, $project_slug: String) {
+    match {
+        $t: Task { project_slug: $project_slug }
+        search($t.description, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.description, $query) desc }
+    limit 10000
+}
+
+query search_tasks_by_project_title($query: String, $project_slug: String) {
+    match {
+        $t: Task { project_slug: $project_slug }
+        search($t.title, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.title, $query) desc }
+    limit 10000
+}
+
+query search_tasks_all_uncapped($query: String) {
+    match {
+        $t: Task
+        search($t.description, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.description, $query) desc }
+    limit 10000
+}
+
+query search_tasks_all_uncapped_title($query: String) {
+    match {
+        $t: Task
+        search($t.title, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.title, $query) desc }
+    limit 10000
+}
+
 query get_task($slug: String) {
     match {
         $t: Task { slug: $slug }

@@ -104,11 +104,21 @@ before ``task_create`` to check whether the work is already tracked;
 ``task_create`` also runs it automatically and returns the top matches
 as ``similar`` in its response.
 
+To find "the next task" in a project there is no query to rank by: use
+``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
+every task in it.
+
+With ``project_slug`` or ``assignee``, the 20-hit cap applies after the
+filters, so a match that ranks below 20 on the unfiltered query is still
+returned.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Free-text search query. |
-| `repo` | str? | `null` | Repo scoping — see instructions. Matches against the detected repo<br>plus unscoped tasks (``repo=None``), same as ``task_list``. |
+| `repo` | str? | `null` | Repo scoping — see instructions. Matches against the detected repo<br>plus unscoped tasks (``repo=None``), same as ``task_list``. Ignored<br>when ``project_slug`` is given. |
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Optional filter: ``open``, ``in_progress``, ``blocked``, or<br>``closed``. Omit to search all statuses — a closed task is still<br>useful to surface (the work may already be done). |
+| `project_slug` | str? | `null` | Search only the tasks of this WorkflowProject (``wp-`` slug), in<br>every repo. |
+| `assignee` | str? | `null` | Search only tasks held by this owner, matched as ``task_list``<br>matches it; ``"@me"`` is the calling identity. |
 
 ## `task_ready`
 

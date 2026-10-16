@@ -253,6 +253,14 @@ List tasks for the current repo (or filtered).
 witan tasks --ready --project wp-migrate-auth-oauth2
 ```
 
+A positional `QUERY` searches titles and descriptions instead of listing, with
+the same flags (this is the CLI form of `task_search`; there is no
+`witan task search`):
+
+```bash
+witan tasks "oauth callback" --project wp-migrate-auth-oauth2
+```
+
 ### `task <slug>` — show
 
 Default subcommand of the `task` group: `witan task tk-…` prints one task's
