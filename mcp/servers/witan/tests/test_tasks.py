@@ -1227,14 +1227,54 @@ def test_unleased_stale_in_progress_is_still_reclaimable(server, monkeypatch):
     assert c["claimed"] is True
 
 
-# ── CAS claims: conflict detection ──────────────────────────────────────
+# ── Fenced task writes: claims and every other read-merge-write ─────────
+#
+# Every `_update_task` write states the commit its own read was served at, so
+# most of these inject a rival write between that read and the write and let
+# the real store (the CLI's `--if-commit`) refuse the stale one. Fakes inject
+# once and then delegate, so the rival's own writes go through them unchanged.
+
+
+def _no_pause(_attempt):
+    """Stand-in for ``_task_write_pause``: the backoff is about attempt count,
+    not real time."""
+
+
+def _rival_claim(srv, slug: str, holder: str = "agentB") -> None:
+    srv._update_task(
+        slug,
+        {"status": "in_progress", "assignee": holder, "claimed_at": srv.now_iso()},
+    )
+
+
+def _after_first_read(srv, monkeypatch, rival) -> dict:
+    """Run ``rival`` right after the next fenced read, so the write that read
+    is fenced on a head the rival has already moved. ``state["conflicts"]``
+    counts the refusals `_update_task` re-read on (one pause per refusal), on
+    either write path: a single `change` or a composed `change_many` batch."""
+    real_read = srv.client.read_with_commit
+    state = {"injected": False, "conflicts": 0}
+
+    def read_then_rival(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        if not state["injected"]:
+            state["injected"] = True
+            rival()
+        return result
+
+    def count_refusal(_attempt):
+        state["conflicts"] += 1
+
+    monkeypatch.setattr(srv.client, "read_with_commit", read_then_rival)
+    monkeypatch.setattr(srv, "_task_write_pause", count_refusal)
+    return state
 
 
 @requires_omnigraph
 def test_claim_conflict_reports_lost_race_without_clobber(server, monkeypatch):
-    """agentA reads the task as open, but a rival (agentB) commits its claim in
-    the race window and agentA's write surfaces an OCC conflict. agentA must
-    report ``lost_race`` and leave agentB's claim intact — not blindly re-apply."""
+    """agentA's claim write conflicts because agentB's claim landed first. The
+    retry's own read finds agentB, so agentA reports ``lost_race`` and leaves
+    agentB's claim intact rather than re-applying its own."""
     from witan import graph as graph_mod
     from witan import server as srv
 
@@ -1242,41 +1282,23 @@ def test_claim_conflict_reports_lost_race_without_clobber(server, monkeypatch):
     real_change = srv.client.change
     calls = {"n": 0}
 
-    def flaky_change(*args, surface_conflict=False, **kwargs):
-        if surface_conflict and calls["n"] == 0:
-            calls["n"] += 1
-            # rival wins the race: its claim lands first, then ours conflicts
-            srv._update_task(
-                t["slug"],
-                {
-                    "status": "in_progress",
-                    "assignee": "agentB",
-                    "claimed_at": srv.now_iso(),
-                },
-            )
+    def rival_then_conflict(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            _rival_claim(srv, t["slug"])
             raise graph_mod.OmnigraphConflict("stale view")
-        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+        return real_change(*args, **kwargs)
 
-    monkeypatch.setattr(srv.client, "change", flaky_change)
+    monkeypatch.setattr(srv.client, "change", rival_then_conflict)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
 
     res = server.task_claim(t["slug"], assignee="agentA")
     assert res["claimed"] is False
     assert res["reason"] == "lost_race"
     assert res["held_by"] == "agentB"
-    # the losing claim did not overwrite the winner
+    # Our refused write, then the rival's. No retry of ours.
+    assert calls["n"] == 2
     assert server.task_get(t["slug"])["assignee"] == "agentB"
-
-
-async def _instant_sleep(_seconds):
-    """Stand-in for ``anyio.sleep``: the claim loop's backoff is about attempt
-    count, not real time."""
-
-
-def _rival_claim(srv, slug: str) -> None:
-    srv._update_task(
-        slug,
-        {"status": "in_progress", "assignee": "agentB", "claimed_at": srv.now_iso()},
-    )
 
 
 @requires_omnigraph
@@ -1291,27 +1313,27 @@ def test_claim_decides_on_the_row_it_fences_on(server, monkeypatch):
     t = server.task_create(title="claimed-in-between", description="x")
     real_read = srv.client.read_with_commit
     real_change = srv.client.change
-    injected = {"done": False}
+    state = {"injected": False, "writes": 0}
 
     def rival_then_read(*args, **kwargs):
-        if not injected["done"]:
-            injected["done"] = True
+        if not state["injected"]:
+            state["injected"] = True
             _rival_claim(srv, t["slug"])
         return real_read(*args, **kwargs)
 
-    def no_claim_write(*args, surface_conflict=False, **kwargs):
-        if surface_conflict:
-            raise AssertionError("agentA's claim must not be written")
-        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+    def counting_change(*args, **kwargs):
+        state["writes"] += 1
+        return real_change(*args, **kwargs)
 
     monkeypatch.setattr(srv.client, "read_with_commit", rival_then_read)
-    monkeypatch.setattr(srv.client, "change", no_claim_write)
+    monkeypatch.setattr(srv.client, "change", counting_change)
 
     res = server.task_claim(t["slug"], assignee="agentA")
 
     assert res["claimed"] is False
     assert res["reason"] == "lost_race"
     assert res["held_by"] == "agentB"
+    assert state["writes"] == 1, "only the rival's claim may be written"
     assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
@@ -1320,199 +1342,248 @@ def test_claim_fenced_on_a_moved_head_is_refused_by_the_store(server, monkeypatc
     """A rival commits between the fenced read and agentA's write. Nothing is
     stubbed on the write path: the real store refuses the stale precondition,
     and the retry's own read finds agentB holding the task."""
-    from witan import graph as graph_mod
     from witan import server as srv
 
     t = server.task_create(title="fenced-on-a-moved-head", description="x")
-    real_read = srv.client.read_with_commit
-    real_change = srv.client.change
-    injected = {"done": False}
-    conflicts = {"n": 0}
-
-    def read_then_rival(*args, **kwargs):
-        result = real_read(*args, **kwargs)
-        if not injected["done"]:
-            injected["done"] = True
-            _rival_claim(srv, t["slug"])
-        return result
-
-    def counting_change(*args, **kwargs):
-        try:
-            return real_change(*args, **kwargs)
-        except graph_mod.OmnigraphConflict:
-            conflicts["n"] += 1
-            raise
-
-    monkeypatch.setattr(srv.client, "read_with_commit", read_then_rival)
-    monkeypatch.setattr(srv.client, "change", counting_change)
-    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
+    state = _after_first_read(srv, monkeypatch, lambda: _rival_claim(srv, t["slug"]))
 
     res = server.task_claim(t["slug"], assignee="agentA")
 
-    assert conflicts["n"] == 1, "the store did not refuse the stale precondition"
+    assert state["conflicts"] == 1, "the store did not refuse the stale precondition"
     assert res["claimed"] is False
     assert res["reason"] == "lost_race"
+    assert res["held_by"] == "agentB"
+    assert server.task_get(t["slug"])["assignee"] == "agentB"
+
+
+@requires_omnigraph
+def test_a_stale_task_update_does_not_revert_a_granted_claim(server, monkeypatch):
+    """The sequence review reproduced against the unfenced write: X's
+    `task_update` reads the open row, A's claim is granted, X's full-row write
+    lands with the pre-claim status/assignee/claimed_at, and B is then granted
+    the same task. X's write is fenced on its read now, so the store refuses
+    it, the retry merges X's edit over the claimed row, and B is refused."""
+    from witan import server as srv
+
+    t = server.task_create(title="edited-while-claimed", description="x")
+    granted = {}
+
+    def a_claims():
+        granted["a"] = server.task_claim(t["slug"], assignee="agentA")
+
+    state = _after_first_read(srv, monkeypatch, a_claims)
+
+    updated = server.task_update(t["slug"], description="edited")
+
+    assert granted["a"]["claimed"] is True
+    assert state["conflicts"] == 1, "X's stale write was not refused"
+    assert updated["description"] == "edited"
+    assert updated["status"] == "in_progress"
+    assert updated["assignee"] == "agentA"
+    assert updated["claimed_at"] is not None
+
+    b = server.task_claim(t["slug"], assignee="agentB")
+    assert b["claimed"] is False
+    assert b["held_by"] == "agentA"
+
+
+@requires_omnigraph
+def test_a_stale_parent_link_is_fenced_with_its_edge(server, monkeypatch):
+    """`task_update(parent=…)` writes the row and the ParentOf edge in one
+    commit. That batch is fenced too: a claim landing after its read refuses
+    the whole commit, and the retry writes both over the claimed row."""
+    from witan import server as srv
+
+    epic = server.task_create(title="epic", description="x", type="epic")
+    t = server.task_create(title="child-while-claimed", description="x")
+    state = _after_first_read(srv, monkeypatch, lambda: _rival_claim(srv, t["slug"]))
+
+    updated = server.task_update(t["slug"], parent=epic["slug"])
+
+    assert state["conflicts"] == 1
+    assert updated["parent_slug"] == epic["slug"]
+    assert updated["assignee"] == "agentB"
+    assert updated["status"] == "in_progress"
+    children = srv.client.read("read.gq", "parent_of_to_slugs", {"from": epic["slug"]})
+    assert [r["slug"] for r in children] == [t["slug"]]
+
+
+@requires_omnigraph
+def test_release_is_checked_on_the_row_it_is_fenced_on(server, monkeypatch):
+    """agentA releases, but agentB took the task over after agentA's read. The
+    stale release is refused by the store and the retry's read says agentB
+    holds it, so agentA is refused rather than releasing agentB's claim."""
+    from witan import server as srv
+
+    t = server.task_create(title="released-after-a-steal", description="x")
+    assert server.task_claim(t["slug"], assignee="agentA")["claimed"] is True
+    state = _after_first_read(
+        srv,
+        monkeypatch,
+        lambda: server.task_claim(t["slug"], assignee="agentB", force=True),
+    )
+
+    res = server.task_release(t["slug"], assignee="agentA")
+
+    assert state["conflicts"] == 1
+    assert res["released"] is False
     assert res["held_by"] == "agentB"
     assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
 @requires_omnigraph
 def test_claim_consecutive_conflicts_stay_surfaced_no_clobber(server, monkeypatch):
-    """Two OCC conflicts in a row must both stay on the surfaced path — the
-    retry after the first conflict must NOT fall back to the blind-retry loop,
-    which could clobber a rival that commits during the second attempt."""
+    """Two conflicts in a row must both be re-read, never fall back to a blind
+    retry, which could clobber a rival that commits during the second
+    attempt."""
     from witan import graph as graph_mod
     from witan import server as srv
 
     t = server.task_create(title="twice-contended", description="x")
     real_change = srv.client.change
-    calls = {"n": 0}
+    raised = {"n": 0}
 
-    def flaky_change(*args, surface_conflict=False, **kwargs):
-        if surface_conflict and calls["n"] < 2:
-            i = calls["n"]
-            calls["n"] += 1
-            if i == 1:
-                # on the second attempt a rival wins before our write conflicts
-                srv._update_task(
-                    t["slug"],
-                    {
-                        "status": "in_progress",
-                        "assignee": "agentB",
-                        "claimed_at": srv.now_iso(),
-                    },
-                )
+    def flaky_change(*args, **kwargs):
+        if raised["n"] == 0:
+            raised["n"] = 1
             raise graph_mod.OmnigraphConflict("stale view")
-        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+        if raised["n"] == 1:
+            # On the second attempt a rival wins before our write conflicts.
+            raised["n"] = 2
+            _rival_claim(srv, t["slug"])
+            raise graph_mod.OmnigraphConflict("stale view")
+        return real_change(*args, **kwargs)
 
     monkeypatch.setattr(srv.client, "change", flaky_change)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
 
     res = server.task_claim(t["slug"], assignee="agentA")
     assert res["claimed"] is False
     assert res["reason"] == "lost_race"
     assert res["held_by"] == "agentB"
-    # both conflicts were surfaced (never fell through to a blind-retry write)
-    assert calls["n"] == 2
     assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
 @requires_omnigraph
-def test_claim_conflict_does_not_resurrect_a_closed_task(server, monkeypatch):
-    """A close committed during the CAS retry window must not be reverted back
-    to in_progress by the next retry attempt. `_update_task` merges `status`
-    from `claim` unconditionally regardless of what its own fresh read shows
-    (see its docstring), so a retry that does not revalidate claimability
-    first would silently resurrect a closed task. Review finding on the PR
-    for tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
+@pytest.mark.parametrize("status", ["closed", "blocked"])
+def test_claim_conflict_does_not_resurrect_a_finished_task(server, monkeypatch, status):
+    """A close (or block) committed during the retry window must not be
+    reverted to in_progress by the next attempt. `_update_task`'s merge sets
+    `status` from `claim` regardless of the row, so the retry's `require`
+    is what refuses before anything is written. Review finding on the PR for
+    tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
     from witan import graph as graph_mod
     from witan import server as srv
 
-    t = server.task_create(title="closed-mid-claim", description="x")
+    t = server.task_create(title=f"{status}-mid-claim", description="x")
     real_change = srv.client.change
     calls = {"n": 0}
 
-    async def no_sleep(_seconds):
-        return None
-
-    monkeypatch.setattr(srv.anyio, "sleep", no_sleep)
-
-    def close_then_conflict(*args, surface_conflict=False, **kwargs):
-        if surface_conflict and calls["n"] == 0:
-            calls["n"] += 1
-            # the task is closed (by a rival, or via task_close) in the
-            # window between our read and our write
-            srv._update_task(
-                t["slug"], {"status": "closed", "closed_at": srv.now_iso()}
-            )
+    def finish_then_conflict(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            srv._update_task(t["slug"], {"status": status})
             raise graph_mod.OmnigraphConflict("stale view")
-        if surface_conflict:
-            raise AssertionError("must not retry the write once the task is closed")
-        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+        return real_change(*args, **kwargs)
 
-    monkeypatch.setattr(srv.client, "change", close_then_conflict)
+    monkeypatch.setattr(srv.client, "change", finish_then_conflict)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
 
     res = server.task_claim(t["slug"], assignee="agentA")
 
-    assert res == {"slug": t["slug"], "claimed": False, "reason": "closed"}
-    assert calls["n"] == 1
-    assert server.task_get(t["slug"])["status"] == "closed"
-
-
-@requires_omnigraph
-def test_claim_conflict_does_not_reopen_a_blocked_task(server, monkeypatch):
-    """Same regression as the closed-task case, for `blocked`."""
-    from witan import graph as graph_mod
-    from witan import server as srv
-
-    t = server.task_create(title="blocked-mid-claim", description="x")
-    real_change = srv.client.change
-    calls = {"n": 0}
-
-    async def no_sleep(_seconds):
-        return None
-
-    monkeypatch.setattr(srv.anyio, "sleep", no_sleep)
-
-    def block_then_conflict(*args, surface_conflict=False, **kwargs):
-        if surface_conflict and calls["n"] == 0:
-            calls["n"] += 1
-            srv._update_task(t["slug"], {"status": "blocked"})
-            raise graph_mod.OmnigraphConflict("stale view")
-        if surface_conflict:
-            raise AssertionError("must not retry the write once the task is blocked")
-        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
-
-    monkeypatch.setattr(srv.client, "change", block_then_conflict)
-
-    res = server.task_claim(t["slug"], assignee="agentA")
-
-    assert res == {"slug": t["slug"], "claimed": False, "reason": "blocked"}
-    assert calls["n"] == 1
-    assert server.task_get(t["slug"])["status"] == "blocked"
+    assert res == {"slug": t["slug"], "claimed": False, "reason": status}
+    # Our refused write, then the rival's. The retry wrote nothing.
+    assert calls["n"] == 2
+    assert server.task_get(t["slug"])["status"] == status
 
 
 @requires_omnigraph
 def test_claim_exhausted_conflicts_report_contention_not_raise(server, monkeypatch):
-    """Every retry attempt hits an OCC conflict from unrelated writes elsewhere
-    on the graph — no rival ever actually holds the task. task_claim must
-    exhaust its retry budget and report a structured ``{"claimed": false,
-    "reason": "contention"}`` — not leak the raw `OmnigraphConflict` (the
-    omnigraph "write authority ... changed during preparation" prose) to the
-    caller. See tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
+    """Every attempt is refused by unrelated writes elsewhere on the graph and
+    no rival ever holds the task. task_claim reports a structured
+    ``{"claimed": false, "reason": "contention"}`` rather than leaking the raw
+    conflict. See tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
     from witan import graph as graph_mod
     from witan import server as srv
 
     t = server.task_create(title="perpetually-contended", description="x")
     calls = {"n": 0}
 
-    async def no_sleep(_seconds):
-        return None
-
-    monkeypatch.setattr(srv.anyio, "sleep", no_sleep)
-
-    def always_conflict(*args, surface_conflict=False, **kwargs):
-        if surface_conflict:
-            calls["n"] += 1
-            raise graph_mod.OmnigraphConflict(
-                "write authority 'table_head:node:Task' changed during preparation"
-            )
-        raise AssertionError("unconditional write attempted mid-claim")
+    def always_conflict(*args, **kwargs):
+        calls["n"] += 1
+        raise graph_mod.OmnigraphConflict(
+            "write authority 'table_head:node:Task' changed during preparation"
+        )
 
     monkeypatch.setattr(srv.client, "change", always_conflict)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
 
     res = server.task_claim(t["slug"], assignee="agentA")
 
     assert res["claimed"] is False
     assert res["reason"] == "contention"
-    assert calls["n"] == srv._CLAIM_MAX_ATTEMPTS
+    assert calls["n"] == srv._TASK_WRITE_MAX_ATTEMPTS
     # left exactly as it started, not half-claimed
     assert server.task_get(t["slug"])["status"] == "open"
 
 
 @requires_omnigraph
+def test_claim_exhausted_by_a_rival_reports_who_holds_it(server, monkeypatch):
+    """When the write that refused the last attempt was a rival's claim, the
+    read after exhaustion says so: ``lost_race`` naming the holder, not
+    ``contention``."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    t = server.task_create(title="lost-on-the-last-attempt", description="x")
+    real_change = srv.client.change
+    state = {"ours": 0, "rival": False}
+
+    def conflict_unless_rival(*args, **kwargs):
+        if state["rival"]:
+            return real_change(*args, **kwargs)
+        state["ours"] += 1
+        if state["ours"] == srv._TASK_WRITE_MAX_ATTEMPTS:
+            state["rival"] = True
+            _rival_claim(srv, t["slug"])
+            state["rival"] = False
+        raise graph_mod.OmnigraphConflict("stale view")
+
+    monkeypatch.setattr(srv.client, "change", conflict_unless_rival)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert res["claimed"] is False
+    assert res["reason"] == "lost_race"
+    assert res["held_by"] == "agentB"
+
+
+@requires_omnigraph
+def test_a_non_claim_write_that_exhausts_its_attempts_raises(server, monkeypatch):
+    """Other task writes have no structured refusal to give, so exhaustion is
+    a `WriteContention` (a refusal, nothing written) rather than a raw
+    conflict."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+    from witan_core.omnigraph import WriteContention
+
+    t = server.task_create(title="edit-under-load", description="x")
+
+    def always_conflict(*args, **kwargs):
+        raise graph_mod.OmnigraphConflict("stale view")
+
+    monkeypatch.setattr(srv.client, "change", always_conflict)
+    monkeypatch.setattr(srv, "_task_write_pause", _no_pause)
+
+    with pytest.raises(WriteContention, match="Nothing was written"):
+        server.task_update(t["slug"], description="edited")
+
+
+@requires_omnigraph
 def test_claim_retries_back_off_between_attempts(server, monkeypatch):
     """A retry after an unrelated conflict must wait, not immediately re-fire —
-    three back-to-back attempts have no chance against multi-second write
+    back-to-back attempts have no chance against multi-second write
     contention. See tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
     from witan import graph as graph_mod
     from witan import server as srv
@@ -1520,30 +1591,30 @@ def test_claim_retries_back_off_between_attempts(server, monkeypatch):
     t = server.task_create(title="briefly-contended", description="x")
     real_change = srv.client.change
     calls = {"n": 0}
-    sleeps = []
+    pauses = []
 
-    async def recording_sleep(seconds):
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(srv.anyio, "sleep", recording_sleep)
-
-    def flaky_once(*args, surface_conflict=False, **kwargs):
-        if surface_conflict and calls["n"] == 0:
-            calls["n"] += 1
+    def flaky_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
             raise graph_mod.OmnigraphConflict("stale view")
-        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+        return real_change(*args, **kwargs)
 
     monkeypatch.setattr(srv.client, "change", flaky_once)
+    monkeypatch.setattr(srv, "_task_write_pause", pauses.append)
 
     res = server.task_claim(t["slug"], assignee="agentA")
 
     assert res["claimed"] is True
-    # attempt 1's backoff: base delay plus up to 10% jitter (see _claim_backoff)
-    assert len(sleeps) == 1
-    assert srv._CLAIM_BACKOFF_BASE <= sleeps[0] <= srv._CLAIM_BACKOFF_BASE * 1.1
+    assert pauses == [1]
 
 
-# ── conditional claims (omnigraph #470 compare-and-swap) ─────────────
+def test_task_write_backoff_is_jittered_and_capped():
+    from witan import server as srv
+
+    base = srv._TASK_WRITE_BACKOFF_BASE
+    # attempt 1's backoff: base delay plus up to 10% jitter
+    assert base <= srv._task_write_backoff(1) <= base * 1.1
+    assert srv._task_write_backoff(50) == srv._TASK_WRITE_BACKOFF_CAP
 
 
 @requires_omnigraph
@@ -1569,7 +1640,7 @@ def test_claim_states_the_precondition_from_its_own_read(server, monkeypatch):
 
     def spy_change(*args, if_commit=None, **kwargs):
         seen.setdefault("if_commit", if_commit)
-        return real_change(*args, **kwargs)
+        return real_change(*args, if_commit=if_commit, **kwargs)
 
     monkeypatch.setattr(srv.client, "read_with_commit", spy_read)
     monkeypatch.setattr(srv.client, "change", spy_change)
@@ -1581,10 +1652,10 @@ def test_claim_states_the_precondition_from_its_own_read(server, monkeypatch):
 
 
 @requires_omnigraph
-def test_conditional_update_refuses_a_read_with_no_commit(server, monkeypatch):
+def test_task_write_refuses_a_read_with_no_commit(server, monkeypatch):
     """Both transports report the read's commit on omnigraph 0.13. A read that
-    does not leaves no precondition to state, and sending the claim without one
-    would make it an unconditional write, so it raises and writes nothing."""
+    does not leaves no precondition to state, and sending the write without
+    one would make it unconditional, so it raises and writes nothing."""
     from witan import server as srv
 
     t = server.task_create(title="no-commit-read", description="x")
@@ -1602,29 +1673,12 @@ def test_conditional_update_refuses_a_read_with_no_commit(server, monkeypatch):
 
     with pytest.raises(RuntimeError, match="graph_commit_id"):
         server.task_claim(t["slug"], assignee="agentA")
+    with pytest.raises(RuntimeError, match="graph_commit_id"):
+        server.task_update(t["slug"], description="edited")
 
     [row], _ = real_read("read.gq", "get_task", {"slug": t["slug"]})
     assert row["status"] == "open"
-
-
-@requires_omnigraph
-def test_conditional_update_refuses_to_ride_with_extra_steps(server):
-    """Refused, not silently downgraded to an unconditional multi-step commit.
-
-    A caller asking for a precondition and not getting one is the failure mode
-    this whole change exists to remove, so the unsupported combination is an
-    error rather than a quiet weakening.
-    """
-    from witan import server as srv
-
-    t = server.task_create(title="batched", description="x")
-    with pytest.raises(ValueError, match="extra_steps"):
-        srv._update_task(
-            t["slug"],
-            {"status": "in_progress"},
-            conditional=True,
-            extra_steps=[("mutations.gq", "update_task", {"slug": t["slug"]})],
-        )
+    assert row["description"] == "x"
 
 
 # ── Task comments ──────────────────────────────────────────────────

@@ -184,15 +184,36 @@ The claim now decides claimability on the row its conditional write is fenced
 on (`_update_task`'s `require`), so a successful write proves nobody claimed,
 closed or blocked the task between that read and the commit. Part 3 and the
 catch-up loop are gone. A rival whose claim lands later either read ours and is
-refused, or fenced on an older head and gets a 412. A read with no
-`graph_commit_id` now raises rather than falling back to an unconditional
-write, since both transports report one on 0.13.
+refused, or fenced on an older head and gets a 412.
+
+That alone did not protect a granted claim. `update_task` sets the whole row,
+and every other caller of `_update_task` (`task_update`, `task_close`,
+`task_release`, `task_link`, `task_unlink`, the unblock sweep and
+`migrate_repo_keys`) wrote it unconditionally from its own earlier read. A
+description edit that read the row before a claim landed put back
+`status=open`, `assignee=None` and `claimed_at=None`, and a second claimer was
+then granted the task too; review reproduced exactly that over the CLI. So
+every `_update_task` write is now fenced on the read it merged from, including
+the composed row-plus-edge batch (`change_many(if_commit=...)`, witan-core
+0.42.0). A refused write re-reads and merges again, up to five attempts with
+jittered backoff, and callers whose change depends on the row (`blocked_by`
+appends, the release holder check, the unblock sweep) recompute it on each
+attempt's read. A read with no `graph_commit_id` raises rather than falling
+back to an unconditional write, since both transports report one on 0.13.
 
 Outside the guarantee:
 
-- Writes that skip the check: `force`, a `task_update` of `assignee` or
-  `status`, and a claim taken once the lease lapses.
+- Writes meant to change the holder: `force`, a `task_update` that sets
+  `assignee` or `status`, `task_release --force`, and a claim taken once the
+  lease lapses. Each is decided on the current row; it overrides the claim
+  deliberately rather than by accident.
 - Holders that compare equal (the missing `session_id` case above).
+- Writes that bypass `_update_task`. The partial `set_task_author` update sets
+  only `author` and `updated_at`, so it cannot revert a claim. `store_merge`
+  (`witan migrate merge`) is not fenced: it exports the target, reconciles,
+  and loads the winning rows with `load --mode merge`, and on a served store
+  its write lock is a no-op, so a claim that lands between the export and the
+  load can be overwritten by a winning row from the source.
 - A claim whose response never arrives. From 0.12 the server keeps running an
   admitted write after its caller disconnects. Against the local 0.13.0
   server, a mutate whose connection was reset 2 ms after sending still landed,

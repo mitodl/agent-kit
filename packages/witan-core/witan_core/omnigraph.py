@@ -1928,6 +1928,7 @@ class OmnigraphClient:
         *,
         surface_conflict: bool = False,
         chunk_size: int | None = None,
+        if_commit: str | None = None,
     ) -> None:
         """Run several named mutations as ONE commit.
 
@@ -1945,9 +1946,13 @@ class OmnigraphClient:
         engine rejects a body mixing inserts/updates with deletes. Deletes batch
         freely with other deletes; just keep them in their own call.
 
-        NOT for a compare-and-swap. A batch commits or fails whole, so a
-        conflict cannot be attributed to one step — ``task_claim`` and anything
-        else that needs to detect losing a race must stay on ``change``.
+        ``if_commit`` fences the whole batch the way it fences :meth:`change`:
+        the commit applies only while that branch head is still current, and
+        a refusal means no step was applied. A conflict cannot be attributed to
+        one step, so a compare-and-swap caller re-reads everything it derived
+        the batch from. It cannot be combined with ``chunk_size``: chunks are
+        separate commits, and only the first could state the head it was read
+        at.
 
         ``chunk_size`` splits the work into that many statements per commit and
         must be >= 1.
@@ -1973,6 +1978,8 @@ class OmnigraphClient:
             # drop every write. Zero raises, but as an opaque "range() arg 3
             # must not be zero" far from the caller that chose the value.
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+        if chunk_size is not None and if_commit is not None:
+            raise ValueError("if_commit cannot fence a chunked batch")
         if chunk_size is not None and len(steps) > chunk_size:
             chunks = math.ceil(len(steps) / chunk_size)
             for index, start in enumerate(range(0, len(steps), chunk_size), start=1):
@@ -2011,7 +2018,13 @@ class OmnigraphClient:
             return
         if len(steps) == 1:
             query_file, name, params = steps[0]
-            self.change(query_file, name, params, surface_conflict=surface_conflict)
+            self.change(
+                query_file,
+                name,
+                params,
+                surface_conflict=surface_conflict,
+                if_commit=if_commit,
+            )
             return
         if self.guard is not None:
             steps = [(f, n, self.guard(n, p)) for f, n, p in steps]
@@ -2038,8 +2051,10 @@ class OmnigraphClient:
                 params,
                 "mutate",
                 surface_conflict=surface_conflict,
+                if_graph_commit=if_commit,
             )
             return
+        extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",
             "-e",
@@ -2047,6 +2062,7 @@ class OmnigraphClient:
             "witan_batch",
             "--params",
             json.dumps(params),
+            *extra,
             surface_conflict=surface_conflict,
         )
 

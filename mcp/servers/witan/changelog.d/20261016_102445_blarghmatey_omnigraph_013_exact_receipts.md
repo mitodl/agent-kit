@@ -4,5 +4,5 @@
 
 ### Removed
 
-- `task_claim`'s post-write verification read, the loop that retried it until its `graph_commit_id` caught up with the claim's own, and the `witan.task_claim.verify` / `witan.task_update.conditional` log lines. A successful conditional write already proves nobody claimed, closed or blocked the task first, so the read-back could only observe a later write that skips the check (a `force` steal, a `task_update`). `witan.commit_ids`, which only that loop used, is gone too.
+- `task_claim`'s post-write verification read, the loop that retried it until its `graph_commit_id` caught up with the claim's own, and the `witan.task_claim.verify` / `witan.task_update.conditional` log lines. A successful conditional write already proves nobody claimed, closed or blocked the task first, so the read-back could only observe a later write meant to change the holder (a `force` steal, an explicit reassignment). `witan.commit_ids`, which only that loop used, is gone too.
 - The unconditional fallback for a conditional task write whose read reported no `graph_commit_id`. omnigraph 0.13 reports one on both transports, so such a read now raises instead of sending the claim without a precondition.

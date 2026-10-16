@@ -41,8 +41,8 @@ reason the task exists at all.
 Here is the honest version, because a confident wrong answer here causes real
 double-work.
 
-**A claim is a compare-and-swap with a lease. It excludes other claims, not
-every write.**
+**A claim is a compare-and-swap with a lease. Once granted, it changes only by
+a write meant to change it.**
 
 ### How it works
 
@@ -61,29 +61,41 @@ claim that succeeds therefore proves nobody claimed, closed or blocked the task
 in between. A rival whose claim lands later either read yours and is refused,
 or fenced on an older head and is refused by the store.
 
+Every other task write is fenced the same way. A task write replaces the whole
+row, so an unfenced edit that read the task before your claim would put back
+the old status and assignee and leave the task open for a second claimer.
+Instead, `task_update`, `task_close`, `task_release`, `task_link`,
+`task_unlink` and the unblock sweep each state the commit of the read they
+merged from, and a refused write re-reads and merges again.
+
 Two details make the loop work:
 
-1. **Conflict-surfacing writes.** `task_claim` opts into raising a typed
+1. **Conflict-surfacing writes.** A task write raises a typed
    `OmnigraphConflict` on a refused precondition or a write conflict, rather
-   than retrying. Every other write keeps transparent retry, which idempotent
-   upserts rely on, but for a claim a blind retry would re-apply the claim
-   *over* whoever won.
+   than retrying the same merge. A blind retry would re-apply a row built from
+   a read that is already stale.
 
 2. **Bounded retry.** The precondition covers the whole branch head, not this
-   task, so any concurrent write to the graph refuses it. On a conflict,
-   `task_claim` backs off and tries again, and the next attempt's read decides
-   whether a rival won (`{"claimed": false, "reason": "lost_race", "held_by":
-   …}`) or the conflict was unrelated. A budget that runs out reports
-   `"reason": "contention"`.
+   task, so any concurrent write to the graph refuses it. A refused write backs
+   off, re-reads and tries again, up to five times. For a claim, the next
+   attempt's read decides whether a rival won (`{"claimed": false, "reason":
+   "lost_race", "held_by": …}`) or the conflict was unrelated, and a budget that
+   runs out reports `"reason": "contention"` once a last read shows the task is
+   still claimable. Any other task write that runs out raises `WriteContention`,
+   having written nothing.
 
 ### What it does not cover
 
-- Writes that skip the check. `force` steals on purpose, `task_update` can set
-  `assignee` or `status` directly, and a claim taken after the lease lapses is
-  a legitimate takeover.
+- Writes meant to change the holder. `force` steals on purpose, `task_update`
+  can set `assignee` or `status` directly, `task_release --force` clears
+  someone else's claim, and a claim taken after the lease lapses is a
+  legitimate takeover.
 - Two sessions that claim under the same holder string. Pass `session_id`, or
   they cannot be told apart (the claim reports `"qualified": false`).
-- A claim whose response is lost. The server finishes an admitted write after
+- `store_merge` (`witan migrate merge`), which loads reconciled rows rather
+  than writing through the fenced path. A claim that lands while a merge into a
+  served store runs can be overwritten by a newer row from the source.
+- A write whose response is lost. The server finishes an admitted write after
   its caller disconnects, so a timeout or a dropped connection can leave a claim
   that landed. witan does not re-send it. Re-read with `task_get` before
   retrying.

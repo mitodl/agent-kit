@@ -6,7 +6,7 @@
 
 # Tasks
 
-The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. `task_claim` is a compare-and-swap with a lease: it excludes rival claims, but not writes that skip the check (`force`, `task_update`). See [ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for what is and is not guaranteed.
+The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. `task_claim` is a compare-and-swap with a lease, and every task write is fenced on the row it read, so a granted claim changes only by a write meant to change it (`force`, an explicit `task_update` of assignee or status). See [ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for what is and is not guaranteed.
 
 ## `task_create`
 
@@ -200,9 +200,12 @@ The claim is a compare-and-swap. It is written only while the branch head
 is still the one the task was read at, and that read is where
 claimability is decided, so a granted claim means nobody else claimed,
 closed or blocked the task first. A lost race reports ``{"claimed": false,
-"reason": "lost_race", "held_by": …}``. Writes that skip that check can
-still change the holder afterwards: ``force``, a ``task_update`` of
-``assignee`` or ``status``, or a claim taken once the lease lapses. An error
+"reason": "lost_race", "held_by": …}``. Every other task write is fenced
+the same way and merged from the row it read, so an edit that read the
+task before the claim is refused and re-merged rather than reverting it.
+The holder can still change afterwards by a write meant to change it:
+``force``, a ``task_update`` that sets ``assignee`` or ``status``, a
+``task_release --force``, or a claim taken once the lease lapses. An error
 whose outcome is unknown (a lost response, a client timeout) may still have
 claimed the task, because the server finishes an admitted write after its
 caller disconnects, so re-read with ``task_get`` before retrying. See

@@ -1042,9 +1042,9 @@ def test_read_with_commit_returns_the_snapshot_token(monkeypatch, tmp_path, _fak
 def test_read_with_commit_tolerates_a_server_that_supplies_none(
     monkeypatch, tmp_path, _fake_http
 ):
-    """A pre-#470 tier answers without the field, and that must be a clean
-    `None` rather than a KeyError — it is the signal to fall back to the
-    best-effort path, which is a supported state, not a broken one."""
+    """A response without the field (a read whose branch has no head commit)
+    must be a clean `None` rather than a KeyError. Callers refuse to write
+    conditionally on it; they do not get to pass it on as a precondition."""
     (tmp_path / "read.gq").write_text(QUERY_SOURCE)
     _fake_http.script = [ok({"rows": [{"m.slug": "a"}]})]
     client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
@@ -1058,9 +1058,7 @@ def test_read_with_commit_tolerates_a_server_that_supplies_none(
 def test_change_returns_the_commit_its_own_write_produced(
     monkeypatch, tmp_path, _fake_http
 ):
-    """`change()`'s return value is the NEW head, not the one fenced on — the
-    floor `task_claim`'s verification compares a later unconstrained read's
-    own commit against, to tell "caught up" from "still stale". Shape
+    """`change()`'s return value is the NEW head, not the one fenced on. Shape
     verified against the real CLI, 2026-08-18: `omnigraph mutate --json` on a
     real store answers exactly `{"commit": {"graph_commit_id": ..., ...}}`,
     and the HTTP `ChangeOutput` struct is the same type serialized either way.
@@ -1089,9 +1087,9 @@ def test_change_returns_the_commit_its_own_write_produced(
 def test_change_returns_none_when_the_tier_supplies_no_commit(
     monkeypatch, tmp_path, _fake_http
 ):
-    """A pre-#470 tier, or one that simply omits `commit`: `None`, not a
-    KeyError — the caller's documented signal to fall back to an unconstrained
-    verification read, same posture as `read_with_commit`."""
+    """A response that omits `commit` gives `None`, not a KeyError, the same
+    posture as `read_with_commit`. 0.13 sends `"commit": null` for a write
+    that matched nothing."""
     _fake_http.script = [
         ok({"branch": "main", "query_name": "claim", "affected_nodes": 1})
     ]
@@ -1341,6 +1339,59 @@ def test_change_many_sends_one_composed_request(monkeypatch, tmp_path, _fake_htt
     assert len(_fake_http.created[0].requests) == 1
     body = json.loads(_fake_http.created[0].requests[0]["body"])
     assert body["params"] == {"s0_slug": "a", "s1_slug": "b"}
+
+
+def test_change_many_fences_the_whole_batch(monkeypatch, tmp_path, _fake_http):
+    """A batch with `if_commit` is one conditional request: the route and the
+    header move together, exactly as for `change`."""
+    (tmp_path / "mutations.gq").write_text(
+        "query insert_topic($slug: String) {\n    insert Topic { slug: $slug }\n}\n"
+    )
+    _fake_http.script = [ok({"affected_nodes": 2})]
+    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
+
+    client.change_many(
+        [
+            ("mutations.gq", "insert_topic", {"slug": "a"}),
+            ("mutations.gq", "insert_topic", {"slug": "b"}),
+        ],
+        if_commit="01M08E24Y",
+    )
+
+    [request] = _fake_http.created[0].requests
+    assert request["path"] == "/graphs/council/mutate/if-graph-commit"
+    assert request["headers"][ogh.IF_GRAPH_COMMIT_HEADER] == "01M08E24Y"
+
+
+def test_a_single_step_batch_keeps_its_fence(monkeypatch, tmp_path, _fake_http):
+    """One step goes straight to `change`; the precondition must go with it."""
+    _fake_http.script = [ok({"affected_nodes": 1})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change_many([("mutations.gq", "claim", {"slug": "t-1"})], if_commit="01X")
+
+    [request] = _fake_http.created[0].requests
+    assert request["path"] == "/graphs/council/mutate/if-graph-commit"
+    assert request["headers"][ogh.IF_GRAPH_COMMIT_HEADER] == "01X"
+
+
+def test_a_chunked_batch_cannot_be_fenced(monkeypatch, tmp_path, _fake_http):
+    """Chunks are separate commits, so only the first could state the head it
+    was read at. Refused before anything is sent."""
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(ValueError, match="chunked"):
+        client.change_many(
+            [("mutations.gq", "claim", {"slug": "t-1"})] * 3,
+            chunk_size=2,
+            if_commit="01X",
+        )
+
+    assert not _fake_http.created
 
 
 def test_the_guard_still_rewrites_params_over_http(monkeypatch, tmp_path, _fake_http):

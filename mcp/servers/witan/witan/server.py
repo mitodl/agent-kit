@@ -41,6 +41,7 @@ from witan_core.export_rows import (
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
+    WriteContention,
     acquire_store_flock,
     release_store_flock,
     schema_apply,
@@ -544,7 +545,7 @@ async def _offload(fn, /, *args, **kwargs):
         # ★ IN A `finally` BECAUSE THE GUARD RECORDS BEFORE THE WRITE IS ISSUED.
         # `scan.enforce` notes the redaction and then hands the rewritten params
         # to the mutation, so a call that redacts and *then* raises — an
-        # `OmnigraphConflict` from `_update_task(surface_conflict=True)`, say —
+        # `WriteContention` from `_update_task`'s fenced retry, say —
         # has already produced a notice. Adopting only on success would discard
         # it, which is the silent-rewrite failure this module exists to prevent,
         # just narrowed to the error path.
@@ -1001,16 +1002,16 @@ def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
     )
 
 
-class _ClaimRefused(Exception):
-    """The row a claim was about to be fenced on is not claimable.
+class _TaskWriteRefused(Exception):
+    """The row a task write was about to be fenced on fails the caller's check.
 
-    Raised from inside ``_update_task`` (see its ``require``) so the refusal is
-    decided on the same snapshot the conditional write would have stated as
-    its precondition, and nothing is written.
+    Raised from a ``require`` callback inside ``_update_task``, so the refusal
+    is decided on the same snapshot the write would have stated as its
+    precondition, and nothing is written. ``result`` is the tool's answer.
     """
 
     def __init__(self, result: dict) -> None:
-        super().__init__(result["reason"])
+        super().__init__(result.get("reason", "refused"))
         self.result = result
 
 
@@ -1044,12 +1045,14 @@ def _claim_refusal(slug: str, row: dict, holder: str, force: bool) -> dict | Non
     return None
 
 
-# Bounded re-tries for the CAS claim loop: on each surfaced conflict (a 412
-# from the precondition, or a 409 from a writer that moved the branch head
-# during prepare) we back off and re-attempt, and the next attempt's own read
-# decides whether the task is still claimable. Was 3 with no backoff between
-# attempts — three back-to-back immediate re-attempts have no chance against
-# the contention windows tk-the-write-gate-is-sized-against-a-3-45s-solo-wri-73fc2b measured
+# Bounded re-tries for a fenced task write (`_update_task`): on each refused
+# precondition (a 412) or write conflict (a 409 from a writer that moved the
+# branch head during prepare) it backs off, re-reads and merges again. The
+# precondition is the whole branch head, so ANY concurrent write to the graph
+# refuses it, not only one to this task. Was 3 with no backoff between
+# attempts (for the claim, which had this loop first) — three back-to-back
+# immediate re-attempts have no chance against the contention windows
+# tk-the-write-gate-is-sized-against-a-3-45s-solo-wri-73fc2b measured
 # (loaded writes taking 17-44s), so an unrelated conflict on a hot table (e.g.
 # node:Task, written by every claim/update/close across every session) would
 # exhaust this budget and escape as a raw OmnigraphConflict — see
@@ -1057,21 +1060,27 @@ def _claim_refusal(slug: str, row: dict, holder: str, force: bool) -> dict | Non
 # paired with a short jittered backoff below; still deliberately short next to
 # the 30s call deadline, since a real fix for multi-second contention is the
 # write-gate/batching work, not a longer spin here.
-_CLAIM_MAX_ATTEMPTS = 5
-_CLAIM_BACKOFF_BASE = 0.25
-_CLAIM_BACKOFF_CAP = 3.0
+_TASK_WRITE_MAX_ATTEMPTS = 5
+_TASK_WRITE_BACKOFF_BASE = 0.25
+_TASK_WRITE_BACKOFF_CAP = 3.0
 
 
-def _claim_backoff(attempt: int) -> float:
-    """Jittered exponential backoff between CAS retry attempts.
+def _task_write_backoff(attempt: int) -> float:
+    """Jittered exponential backoff between fenced task-write attempts.
 
     Jitter matters here specifically because the trigger case is a burst of
     concurrent claimers on the same task/table — lockstep exponential backoff
     would just have them collide again on the next attempt.
     """
-    delay = _CLAIM_BACKOFF_BASE * (2 ** (attempt - 1))
+    delay = _TASK_WRITE_BACKOFF_BASE * (2 ** (attempt - 1))
     jitter = random.uniform(0, 0.1 * delay)
-    return min(delay + jitter, _CLAIM_BACKOFF_CAP)
+    return min(delay + jitter, _TASK_WRITE_BACKOFF_CAP)
+
+
+def _task_write_pause(attempt: int) -> None:
+    """Sleep before re-attempt ``attempt + 1``. Its own name so tests can
+    observe the backoff without patching ``time.sleep`` for the whole process."""
+    time.sleep(_task_write_backoff(attempt))
 
 
 def _project_repos(row: dict) -> list[str]:
@@ -1538,6 +1547,19 @@ def migrate_repo_keys() -> dict:
         if old and old != new:
             repos_changed[old] = new
 
+    def fold_task_keys(current: dict) -> dict | None:
+        # Through `_update_task`, not a write of the listed row: the listing is
+        # older than any claim or edit landing while this runs, and writing it
+        # back whole would revert them.
+        repo = current.get("repo")
+        refs = current.get("symbol_refs")
+        new_repo = normalise(repo) if repo else repo
+        new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
+        if new_repo == repo and new_refs == refs:
+            return None
+        _note(repo, new_repo)
+        return {"repo": new_repo, "symbol_refs": new_refs}
+
     for row in client.read("read.gq", "list_all_tasks_full", {}):
         repo = row.get("repo")
         refs = row.get("symbol_refs")
@@ -1545,12 +1567,7 @@ def migrate_repo_keys() -> dict:
         new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
         if new_repo == repo and new_refs == refs:
             continue
-        _note(repo, new_repo)
-        client.change(
-            "mutations.gq",
-            "update_task",
-            {**row, "repo": new_repo, "symbol_refs": new_refs, "updated_at": now},
-        )
+        _update_task(row["slug"], fold_task_keys)
         counts["tasks_updated"] += 1
 
     for row in client.read("read.gq", "list_all_memories_full", {}):
@@ -6306,19 +6323,33 @@ def _unblock_dependents(repo: str | None) -> None:
         )
     )
 
+    def reopen_if_unblocked(current: dict) -> dict | None:
+        # Decided again on the row the write is fenced on: by now the task may
+        # have been closed, claimed or re-blocked by someone else.
+        if current.get("status") != "blocked":
+            return None
+        blockers = current.get("blocked_by") or []
+        statuses = _task_statuses(blockers) if blockers else {}
+        if all(statuses.get(b, "closed") == "closed" for b in blockers):
+            return {"status": "open"}
+        return None
+
     # A blocker that no longer exists does not hold anything back.
     for r in blocked:
         blockers = r.get("blocked_by") or []
         if all(status_by_slug.get(b, "closed") == "closed" for b in blockers):
-            _update_task(r["slug"], {"status": "open"})
+            _update_task(r["slug"], reopen_if_unblocked)
+
+
+#: A task row change, or a function computing one from the row the write is
+#: fenced on (``None`` for "nothing to change").
+_TaskChanges = dict | Callable[[dict], dict | None]
 
 
 def _update_task(
     slug: str,
-    changes: dict,
+    changes: _TaskChanges,
     *,
-    surface_conflict: bool = False,
-    conditional: bool = False,
     extra_steps: list[_Step] | None = None,
     default_if_missing: dict[str, Callable[[], object]] | None = None,
     require: Callable[[dict], None] | None = None,
@@ -6329,23 +6360,29 @@ def _update_task(
     avoid per-field update queries. Returns the updated node, or ``None`` when
     the task did not exist (nothing was written).
 
-    ``surface_conflict`` propagates to the write so a compare-and-swap caller
-    (``task_claim``) sees an :class:`~witan.graph.OmnigraphConflict` on a lost
-    optimistic-concurrency race instead of the write being silently retried.
+    ★ EVERY WRITE IS FENCED ON THE READ IT MERGED FROM. ``update_task`` sets
+    the whole row, so a write merged from a stale read puts the stale values
+    of every field back, not only the ones the caller changed: a description
+    edit that read the row before a claim landed would reopen the task and
+    clear the holder. The write therefore states the read's
+    ``graph_commit_id`` as its precondition (omnigraph's
+    ``/mutate/if-graph-commit``, the CLI's ``--if-commit``) and is refused,
+    having changed nothing, if anything committed since. A refusal re-reads and
+    merges again, up to ``_TASK_WRITE_MAX_ATTEMPTS`` times, then raises
+    :class:`~witan_core.omnigraph.WriteContention`. Both transports report the
+    read's commit on omnigraph 0.13, so a read without one raises rather than
+    sending the write unconditionally.
 
-    ``conditional`` makes the write a real compare-and-swap: it is applied only
-    while the branch head this function READ is still current, and otherwise
-    refused terminally, having changed nothing (omnigraph #470). Combined with
-    ``surface_conflict`` the refusal arrives as ``OmnigraphConflict``, which is
-    what turns "I lost" from an inference into a fact. Both transports report
-    the read's ``graph_commit_id`` on omnigraph 0.13, so a read without one
-    raises rather than sending the write unconditionally.
+    ``changes`` may be a function of the row. A caller whose change depends on
+    the row's current values (``task_link`` appending to ``blocked_by``)
+    passes one, so the decision is made again on each attempt's read rather
+    than once on a read the fence does not cover. Returning ``None`` changes
+    nothing; ``extra_steps`` are still written, fenced the same way.
 
-    ``require`` is called with the row this call read, before anything is
-    written, and raises to refuse the write. With ``conditional`` it decides on
-    the same snapshot the precondition names, so a write that then succeeds
-    proves the row still looked that way when it landed. ``task_claim`` checks
-    claimability here for that reason.
+    ``require`` is called with the row each attempt read, before anything is
+    written, and raises to refuse the write. It decides on the same snapshot
+    the precondition names, so a write that then succeeds proves the row still
+    looked that way when it landed. ``task_claim`` checks claimability here.
 
     ``extra_steps`` ride in the SAME commit as the update — for a caller whose
     change is one logical edit spanning a row and an edge. ``task_update`` with
@@ -6358,35 +6395,47 @@ def _update_task(
     A missing task still writes NOTHING, extras included — the early return
     below happens before any step is issued.
 
-    ``default_if_missing`` fills a field ONLY from the read this call itself
-    just took, never from a value a caller precomputed earlier. That
-    distinction is the whole point: ``task_update``'s own gap-fill for
-    ``assignee`` used to read the row, decide off THAT snapshot, then hand
-    the decided value back here as an ordinary ``changes`` entry — a second,
-    avoidable read-then-decide sitting in front of the read-then-decide this
-    function already does, doubling the window in which something else
-    (``task_claim``, most obviously) could set the field for real between
-    the two reads. `merged` below is built from `current`, read moments
-    before the write goes out, so resolving here — not before calling this
-    function — closes that avoidable half of the gap. It does NOT make the
-    write itself compare-and-swap: an unconditional ``task_update`` call can
-    still race its own write the same way every other field here already
-    can (see the CAS paragraph above); this only removes the extra, earlier
-    window this helper does not need to have.
+    ``default_if_missing`` fills a field ONLY from the read this attempt just
+    took, never from a value a caller precomputed earlier: ``task_update``'s
+    ``assignee`` gap-fill must not overwrite a holder that a ``task_claim``
+    set after the caller decided there was none.
     """
-    if conditional and extra_steps:
-        # Refused rather than silently downgraded. `change_many` composes the
-        # batch into one mutate, and pairing a whole-branch precondition with a
-        # multi-step commit needs its own thought about what a partial refusal
-        # means — nobody needs it yet, so the combination is an error instead of
-        # a quietly unconditional write.
-        msg = "conditional=True does not support extra_steps"
-        raise ValueError(msg)
+    for attempt in range(1, _TASK_WRITE_MAX_ATTEMPTS + 1):
+        try:
+            return _update_task_once(
+                slug,
+                changes,
+                extra_steps=extra_steps,
+                default_if_missing=default_if_missing,
+                require=require,
+            )
+        except OmnigraphConflict as exc:
+            if attempt == _TASK_WRITE_MAX_ATTEMPTS:
+                msg = (
+                    f"{slug} was not updated: {attempt} attempts each found the "
+                    "graph changed since the task was read. Nothing was written; "
+                    "retry once the other writers are done."
+                )
+                raise WriteContention(msg) from exc
+            _task_write_pause(attempt)
+    raise AssertionError("unreachable: the loop returns or raises")
+
+
+def _update_task_once(
+    slug: str,
+    changes: _TaskChanges,
+    *,
+    extra_steps: list[_Step] | None,
+    default_if_missing: dict[str, Callable[[], object]] | None,
+    require: Callable[[dict], None] | None,
+) -> dict | None:
+    """One fenced attempt of :func:`_update_task`. Raises ``OmnigraphConflict``
+    when the store refuses the precondition or another writer moved the head."""
     rows, read_commit = client.read_with_commit("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
     current = rows[0]
-    if conditional and read_commit is None:
+    if read_commit is None:
         msg = (
             f"the read of {slug} reported no graph_commit_id, so there is no "
             "precondition to state; refusing to write it unconditionally"
@@ -6394,6 +6443,14 @@ def _update_task(
         raise RuntimeError(msg)
     if require is not None:
         require(current)
+    if callable(changes):
+        changes = changes(current)
+    if changes is None:
+        if extra_steps:
+            client.change_many(
+                extra_steps, surface_conflict=True, if_commit=read_commit
+            )
+        return current
     if default_if_missing:
         for field, factory in default_if_missing.items():
             if field not in changes and not current.get(field):
@@ -6475,24 +6532,16 @@ def _update_task(
         "updated_at": now_iso(),
     }
     update: _Step = ("mutations.gq", "update_task", merged)
-    if extra_steps:
-        client.change_many([update, *extra_steps], surface_conflict=surface_conflict)
-    else:
-        # Single-statement `change` on the bare path: the compare-and-swap
-        # caller goes through here, and keeping its write exactly as it was
-        # keeps `surface_conflict`'s behaviour untouched.
-        #
-        # ★ THE PRECONDITION IS THE COMMIT FROM *THIS* FUNCTION'S OWN READ, a
-        # few lines up — not one the caller supplies. That is the invariant
-        # that makes the compare-and-swap mean anything: `merged` is built from
-        # THAT snapshot, so demanding the head has not moved since is exactly
-        # "nothing changed under the values I am about to write back". A token
-        # from any earlier read would fence the wrong interval.
-        client.change(
-            *update,
-            surface_conflict=surface_conflict,
-            if_commit=read_commit if conditional else None,
-        )
+    # ★ THE PRECONDITION IS THE COMMIT FROM THIS ATTEMPT'S OWN READ, not one the
+    # caller supplies. `merged` is built from THAT snapshot, so demanding the
+    # head has not moved since is exactly "nothing changed under the values I
+    # am about to write back". A token from any earlier read would fence the
+    # wrong interval. `surface_conflict` turns a refusal into the
+    # `OmnigraphConflict` `_update_task` re-reads on, instead of a blind retry
+    # of a merge that is already stale.
+    client.change_many(
+        [update, *(extra_steps or [])], surface_conflict=True, if_commit=read_commit
+    )
     return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
@@ -7318,9 +7367,12 @@ async def task_claim(
     is still the one the task was read at, and that read is where
     claimability is decided, so a granted claim means nobody else claimed,
     closed or blocked the task first. A lost race reports ``{"claimed": false,
-    "reason": "lost_race", "held_by": …}``. Writes that skip that check can
-    still change the holder afterwards: ``force``, a ``task_update`` of
-    ``assignee`` or ``status``, or a claim taken once the lease lapses. An error
+    "reason": "lost_race", "held_by": …}``. Every other task write is fenced
+    the same way and merged from the row it read, so an edit that read the
+    task before the claim is refused and re-merged rather than reverting it.
+    The holder can still change afterwards by a write meant to change it:
+    ``force``, a ``task_update`` that sets ``assignee`` or ``status``, a
+    ``task_release --force``, or a claim taken once the lease lapses. An error
     whose outcome is unknown (a lost response, a client timeout) may still have
     claimed the task, because the server finishes an admitted write after its
     caller disconnects, so re-read with ``task_get`` before retrying. See
@@ -7417,69 +7469,53 @@ async def task_claim(
     now = now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}
 
-    # The claim is a compare-and-swap. `conditional=True` fences the write on
-    # the branch head `_update_task` read the task at, and `require` decides
-    # claimability on that same row, so a write that succeeds proves nobody
-    # claimed, closed or blocked the task between that read and our commit. A
-    # rival whose claim lands later must have read ours (and is refused here)
-    # or fenced on an older head (and gets a 412). That is why there is no
-    # read-back after the write: it could only observe a later write that
-    # bypassed this check, such as a `force` steal, which happened after the
-    # claim was granted.
+    # The claim is a compare-and-swap. `_update_task` fences the write on the
+    # branch head it read the task at, and `require` decides claimability on
+    # that same row, so a write that succeeds proves nobody claimed, closed or
+    # blocked the task between that read and our commit. A rival whose claim
+    # lands later must have read ours (and is refused here) or fenced on an
+    # older head (and gets a 412). Every other `_update_task` write is fenced
+    # the same way, so a stale `task_update` cannot put a pre-claim row back
+    # either. That is why there is no read-back after the write.
     #
-    # surface_conflict stays on for every attempt: a consecutive conflict must
-    # never fall back to the blind-retry path, which would re-apply the claim
-    # over whoever committed in the meantime.
-    #
-    # ★ EXPECT MORE CONFLICTS THAN CONTENTION. The precondition is the whole
-    # branch head, not this row, so ANY concurrent write to the graph invalidates
-    # it — a rival claim and an unrelated `memory_store` are indistinguishable.
-    # That is why _CLAIM_MAX_ATTEMPTS exists and why a conflict backs off and
-    # retries, leaving the next attempt's read to decide whether a rival won.
+    # A conflict (any concurrent write to the graph, since the precondition is
+    # the whole branch head) is retried inside `_update_task`, and each attempt
+    # re-runs `require` on its own read.
     def require_claimable(current: dict) -> None:
         if (refusal := _claim_refusal(slug, current, holder, force)) is not None:
-            raise _ClaimRefused(refusal)
+            raise _TaskWriteRefused(refusal)
 
-    for attempt in range(_CLAIM_MAX_ATTEMPTS):
-        try:
-            claimed = await _offload(
-                _update_task,
-                slug,
-                claim,
-                surface_conflict=True,
-                conditional=True,
-                require=require_claimable,
-            )
-            break
-        except _ClaimRefused as refused:
-            return refused.result
-        except OmnigraphConflict:
-            if attempt + 1 == _CLAIM_MAX_ATTEMPTS:
-                # Exhausted the budget without ever seeing a rival hold the
-                # task or the task become closed/blocked. Report it as a
-                # retryable condition rather than leaking the raw omnigraph
-                # "write authority ... changed during preparation" text to
-                # the caller (tk-task-claim-exhausts-its-3-attempt-no-backoff-
-                # cas-674414).
-                logger.warning(
-                    "witan.task_claim.contention_exhausted",
-                    task_slug=slug,
-                    holder=holder,
-                    attempts=_CLAIM_MAX_ATTEMPTS,
-                )
-                return {
-                    "slug": slug,
-                    "claimed": False,
-                    "reason": "contention",
-                    "remedy": (
-                        f"{_CLAIM_MAX_ATTEMPTS} claim attempts each hit a "
-                        "write conflict on the graph without the task itself "
-                        "becoming closed, blocked, or held by a rival — most "
-                        "likely heavy write load elsewhere on the graph. "
-                        "Retry task_claim."
-                    ),
-                }
-            await anyio.sleep(_claim_backoff(attempt + 1))
+    try:
+        claimed = await _offload(_update_task, slug, claim, require=require_claimable)
+    except _TaskWriteRefused as refused:
+        return refused.result
+    except WriteContention:
+        # Every attempt was refused by some write. One more read says whether
+        # that write was a rival taking the task, and reports it as such
+        # rather than as load (tk-task-claim-exhausts-its-3-attempt-no-backoff-
+        # cas-674414 is why exhaustion is an answer and not a raw error).
+        rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
+        if not rows:
+            return None
+        if (refusal := _claim_refusal(slug, rows[0], holder, force)) is not None:
+            return refusal
+        logger.warning(
+            "witan.task_claim.contention_exhausted",
+            task_slug=slug,
+            holder=holder,
+            attempts=_TASK_WRITE_MAX_ATTEMPTS,
+        )
+        return {
+            "slug": slug,
+            "claimed": False,
+            "reason": "contention",
+            "remedy": (
+                f"{_TASK_WRITE_MAX_ATTEMPTS} claim attempts were each refused "
+                "because the graph changed after the task was read, and it is "
+                "still claimable, so the writes were elsewhere on the graph. "
+                "Retry task_claim."
+            ),
+        }
     if claimed is None:
         # Deleted between the first read and the fenced one.
         return None
@@ -7558,25 +7594,38 @@ def task_release(
     — the point of that field is to survive exactly this.
     """
     holder = _claim_holder(assignee, session_id)
-    rows = client.read("read.gq", "get_task", {"slug": slug})
-    if not rows:
-        return None
-    current_holder = rows[0].get("assignee")
-    # Identity-level match, so you can release a claim your *other* session took
-    # (same person, different `#<session>` qualifier) without reaching for force.
-    # Another person's claim still needs it.
-    if current_holder and not _same_person(current_holder, holder) and not force:
-        return {
-            "slug": slug,
-            "released": False,
-            "held_by": current_holder,
-            "remedy": (
-                f"{slug} is held by {current_holder}, not {holder}. Release it "
-                f"anyway with `witan task release {slug} --force`."
-            ),
-        }
 
-    _update_task(slug, {"status": status, "assignee": None, "claimed_at": None})
+    def require_held_by_caller(current: dict) -> None:
+        # Checked on the row the release is fenced on, so a claim someone else
+        # took after an earlier read is refused rather than released.
+        # Identity-level match, so you can release a claim your *other* session
+        # took (same person, different `#<session>` qualifier) without reaching
+        # for force. Another person's claim still needs it.
+        current_holder = current.get("assignee")
+        if current_holder and not _same_person(current_holder, holder) and not force:
+            raise _TaskWriteRefused(
+                {
+                    "slug": slug,
+                    "released": False,
+                    "held_by": current_holder,
+                    "remedy": (
+                        f"{slug} is held by {current_holder}, not {holder}. "
+                        f"Release it anyway with `witan task release {slug} "
+                        "--force`."
+                    ),
+                }
+            )
+
+    try:
+        released = _update_task(
+            slug,
+            {"status": status, "assignee": None, "claimed_at": None},
+            require=require_held_by_caller,
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
+    if released is None:
+        return None
     return {"slug": slug, "released": True, "status": status}
 
 
@@ -7740,28 +7789,29 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     if kind == "blocks":
         # The edge always lands; the denormalized `blocked_by`/`status` sync
-        # only when there's something new to sync. Reading `to_slug` FIRST
-        # (rather than after, as this used to) is what lets the two land in
-        # ONE commit via `extra_steps` when both apply — order doesn't change
-        # what's read, since the edge write doesn't touch `to_slug`'s row.
+        # only when there's something new to sync. Both land in ONE commit via
+        # `extra_steps`, and the sync is computed from the row that commit is
+        # fenced on, so a concurrent `blocked_by` append or status change is
+        # merged with rather than overwritten.
         link_step: _Step = (
             "mutations.gq",
             "link_blocks",
             {"from": from_slug, "to": to_slug},
         )
-        blocked = client.read("read.gq", "get_task", {"slug": to_slug})
-        changes = None
-        if blocked:
-            existing = blocked[0].get("blocked_by") or []
-            if from_slug not in existing:
-                changes = {"blocked_by": [*existing, from_slug]}
-                if blocked[0].get("status") == "open":
-                    blocker = client.read("read.gq", "get_task", {"slug": from_slug})
-                    if blocker and blocker[0].get("status") != "closed":
-                        changes["status"] = "blocked"
-        if changes is not None:
-            _update_task(to_slug, changes, extra_steps=[link_step])
-        else:
+
+        def block_on_from(current: dict) -> dict | None:
+            existing = current.get("blocked_by") or []
+            if from_slug in existing:
+                return None
+            changes: dict = {"blocked_by": [*existing, from_slug]}
+            if current.get("status") == "open":
+                blocker = client.read("read.gq", "get_task", {"slug": from_slug})
+                if blocker and blocker[0].get("status") != "closed":
+                    changes["status"] = "blocked"
+            return changes
+
+        if _update_task(to_slug, block_on_from, extra_steps=[link_step]) is None:
+            # No such task: let the engine refuse the edge, as it always has.
             client.change(*link_step)
     elif kind == "parent":
         # Edge + `parent_slug` sync are one logical edit, always both — the
@@ -7855,25 +7905,34 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     removed = _unlink_edge(kind, from_slug, to_slug)
 
+    # Both syncs are computed from the row their write is fenced on, so a
+    # concurrent edit to the same task is merged with rather than overwritten.
     if kind == "blocks":
-        blocked = client.read("read.gq", "get_task", {"slug": to_slug})
-        if blocked:
-            existing = blocked[0].get("blocked_by") or []
-            if from_slug in existing:
-                remaining = [s for s in existing if s != from_slug]
-                changes: dict = {"blocked_by": remaining or None}
-                # Only clear `blocked` once nothing open is still holding it.
-                if blocked[0].get("status") == "blocked":
-                    still_held = any(
-                        s != "closed" for s in _task_statuses(remaining).values()
-                    )
-                    if not still_held:
-                        changes["status"] = "open"
-                _update_task(to_slug, changes)
+
+        def unblock_from(current: dict) -> dict | None:
+            existing = current.get("blocked_by") or []
+            if from_slug not in existing:
+                return None
+            remaining = [s for s in existing if s != from_slug]
+            changes: dict = {"blocked_by": remaining or None}
+            # Only clear `blocked` once nothing open is still holding it.
+            if current.get("status") == "blocked":
+                still_held = any(
+                    s != "closed" for s in _task_statuses(remaining).values()
+                )
+                if not still_held:
+                    changes["status"] = "open"
+            return changes
+
+        _update_task(to_slug, unblock_from)
     elif kind == "parent" and removed:
-        child = client.read("read.gq", "get_task", {"slug": to_slug})
-        if child and child[0].get("parent_slug") == from_slug:
-            _update_task(to_slug, {"parent_slug": None})
+
+        def orphan(current: dict) -> dict | None:
+            if current.get("parent_slug") != from_slug:
+                return None
+            return {"parent_slug": None}
+
+        _update_task(to_slug, orphan)
 
     return {"from": from_slug, "to": to_slug, "kind": kind, "removed": removed}
 
