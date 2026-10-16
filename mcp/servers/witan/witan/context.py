@@ -488,6 +488,9 @@ _HELD_TASK_LIMIT = 3
 _COMMENT_RENDER_LIMIT = 5
 _COMMENT_PREVIEW_CHARS = 400
 
+# The witan-task skill's checkpoint line: `checkpoint <step>: <ref> | next: <action>`.
+_CHECKPOINT_PREFIX = "checkpoint "
+
 
 def _held_by(rows: list[dict], author: str | None) -> list[dict]:
     """The ``in_progress`` tasks among ``rows`` that ``author`` holds.
@@ -506,9 +509,35 @@ def _held_by(rows: list[dict], author: str | None) -> list[dict]:
     return [
         r
         for r in rows
-        if r.get("status") == "in_progress"
-        and readiness.holder_identity(r.get("assignee")) == author
+        if r.get("status") == "in_progress" and _is_holder(author, r.get("assignee"))
     ]
+
+
+def _is_holder(author: str | None, holder: str | None) -> bool:
+    """Whether ``author``, a bare identity, is the person ``holder`` names.
+
+    One-sided on purpose: only the holder can carry a ``#session`` qualifier,
+    and an identity is free-form (``WITAN_AUTHOR``, git ``user.name``, a token's
+    ``preferred_username``), so it may end in something qualifier-shaped
+    itself. Stripping both sides would read author ``alice#ops`` as ``alice``.
+    The unstripped holder covers a claim recorded with no session.
+    """
+    return author in (holder, readiness.holder_identity(holder))
+
+
+def _is_own_checkpoint(comment: dict, holder: str | None) -> bool:
+    """Whether ``comment`` is a ``checkpoint`` note the task's holder left.
+
+    The witan-task skill has the holder leave one after each durable step so a
+    cut-off run can resume. Surfaced here, each would come straight back on the
+    holder's next prompt as a "new comment" to act on. The skill reads them at
+    claim time instead, so only the holder's own are skipped: a teammate's
+    checkpoint on work you now hold is still news. Matched by person, not
+    session, so a checkpoint from another of your sessions is skipped too.
+    """
+    return (comment.get("body") or "").startswith(_CHECKPOINT_PREFIX) and _is_holder(
+        comment.get("author"), holder
+    )
 
 
 def _held_task_comments(
@@ -541,7 +570,12 @@ def _held_task_comments(
             _dbg_exc(debug, f"comment read failed for {task['slug']!r}")
             continue
         delivered = set(seen.get(task["slug"]) or ())
-        unread = [c for c in comments if c.get("slug") not in delivered]
+        unread = [
+            c
+            for c in comments
+            if c.get("slug") not in delivered
+            and not _is_own_checkpoint(c, task.get("assignee"))
+        ]
         if unread:
             out.append((task, unread))
     _dbg(debug, f"held={len(held)} task(s) with unread comments={len(out)}")

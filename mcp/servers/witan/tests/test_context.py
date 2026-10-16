@@ -1313,6 +1313,124 @@ def test_inject_context_caps_comments_rendered_per_block(tmp_path, monkeypatch):
     assert still == list(range(ctx_module._COMMENT_RENDER_LIMIT, total))
 
 
+@requires_omnigraph
+def test_inject_context_skips_your_own_checkpoint_comments(tmp_path, monkeypatch):
+    """The witan-task skill has the holder leave a `checkpoint ...` comment
+    after each durable step. Those are for the next session's claim-time read,
+    not for this session's next prompt, so the holder's own are skipped, matched
+    by person even though the claim carries a `#session` qualifier and the
+    comment does not. Anyone else's comment, checkpoint or not, still shows."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/ckp")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    me = srv.cfg.author
+    task = _unwrap(srv.task_create)(title="held work", description="x")
+    _unwrap(srv.task_claim)(task["slug"], assignee=f"{me}#5e313f6d")
+    _unwrap(srv.task_comment)(
+        slug=task["slug"],
+        text="checkpoint pushed: tm/x @ 3f2a1c9 | next: gh pr create --fill-first",
+    )
+    _unwrap(srv.task_comment)(slug=task["slug"], text="my own plain note")
+    srv.client.change(
+        "mutations.gq",
+        "insert_task_comment",
+        {
+            "slug": "tc-teammate-checkpoint",
+            "task_slug": task["slug"],
+            "body": "checkpoint blocked: waiting on infra | next: ask in #ops",
+            "author": "someone-else",
+            "created_at": "2030-01-01T00:00:00Z",
+        },
+    )
+
+    text = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "New Comments on Work You Hold" in text
+    assert "checkpoint pushed" not in text
+    assert "my own plain note" in text
+    assert "checkpoint blocked: waiting on infra" in text
+
+
+@pytest.mark.parametrize(
+    ("author", "holder", "skipped"),
+    [
+        ("alice", "alice#5e313f6d", True),
+        ("alice", "alice", True),
+        ("bob", "alice#5e313f6d", False),
+        # An identity is free-form, so it can end in something qualifier-shaped.
+        # Only the holder side may be stripped.
+        ("alice#ops", "alice#5e313f6d", False),
+        ("alice#ops", "alice#ops#5e313f6d", True),
+        ("alice#ops", "alice#ops", True),
+        (None, "alice#5e313f6d", False),
+    ],
+)
+def test_own_checkpoint_matches_the_author_against_the_holder(author, holder, skipped):
+    from witan import context as ctx_module
+
+    comment = {"author": author, "body": "checkpoint pushed: x @ 3f2a1c9 | next: y"}
+    assert ctx_module._is_own_checkpoint(comment, holder) is skipped
+
+
+def test_held_by_matches_an_unqualified_claim_by_a_hash_identity():
+    from witan import context as ctx_module
+
+    rows = [
+        {"slug": "tk-a", "status": "in_progress", "assignee": "alice#ops"},
+        {"slug": "tk-b", "status": "in_progress", "assignee": "alice#ops#5e313f6d"},
+        {"slug": "tk-c", "status": "in_progress", "assignee": "alice#5e313f6d"},
+    ]
+    held = ctx_module._held_by(rows, "alice#ops")
+    assert [r["slug"] for r in held] == ["tk-a", "tk-b"]
+
+
+def test_inject_context_remote_skips_your_own_checkpoint_comments(
+    tmp_path, monkeypatch
+):
+    """Same filter on the deployment path, where the holder string comes from
+    the `@me` read rather than a local `cfg.author`."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ckp-remote")
+
+    held = {
+        "slug": "tk-held",
+        "title": "held work",
+        "status": "in_progress",
+        "assignee": "alice#5e313f6d",
+    }
+    server = _FakeRemoteServer(
+        projects=[],
+        ready=[],
+        sessions_by_project={},
+        held=[held],
+        comments={
+            "tk-held": [
+                {
+                    "slug": "tc-1",
+                    "author": "alice",
+                    "body": "checkpoint validated: just test-witan-council | next: push",
+                },
+                {"slug": "tc-2", "author": "bob", "body": "checkpoint from bob"},
+                {"slug": "tc-3", "author": "alice", "body": "a plain note"},
+            ]
+        },
+    )
+    text = ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+
+    assert "checkpoint validated" not in text
+    assert "bob: checkpoint from bob" in text
+    assert "alice: a plain note" in text
+
+
 def test_inject_context_remote_asks_for_held_tasks_across_all_repos(
     tmp_path, monkeypatch
 ):
