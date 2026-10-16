@@ -336,6 +336,23 @@ def test_refines_counts_as_corroboration(server):
 
 
 @requires_omnigraph
+def test_edge_index_flags_both_ends_of_a_contradiction(server):
+    from witan import server as srv
+
+    a, b, c = (
+        server.memory_store(kind="pattern", title=t, content=t)["slug"]
+        for t in ("a", "b", "c")
+    )
+    server.memory_link(a, b, "contradicts")
+    server.memory_link(c, a, "supersedes")
+    server.memory_link(b, c, "supersedes")
+
+    idx = srv._edge_index()
+    assert idx["contradicted"] == {a, b}
+    assert idx["superseded"] == {a, c}
+
+
+@requires_omnigraph
 def test_edge_index_cache_invalidated_on_link(server):
     from witan import server as srv
 

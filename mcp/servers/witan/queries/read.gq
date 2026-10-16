@@ -116,6 +116,25 @@ query list_memories_unbounded($kind: String?) {
     limit 10000
 }
 
+// The same without superseded memories, memory_list's default for the slim
+// and language-filtered paths. The prune runs before the `limit 10000`, as in
+// `list_current_memories`.
+
+query list_current_memories_unbounded($kind: String?) {
+    match {
+        $m: Memory
+        $kind is null or $m.kind = $kind
+        not { $_ supersedes $m }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { $m.created_at desc }
+    limit 10000
+}
+
 // Every mutable field, for the one-shot `witan migrate repo-keys` scan — the
 // other unbounded listings above omit symbol_refs, which update_memory also
 // needs (it replaces the full mutable set, per its own doc comment).
@@ -322,6 +341,29 @@ query contradicts_pairs() {
     order { $w.created_at desc }
 }
 
+// `contradicts_pairs` without the pairs where either side is superseded,
+// memory_contradictions' default: superseding a side resolves the pair.
+query contradicts_current_pairs() {
+    match {
+        $a: Memory
+        $b: Memory
+        $a $w:contradicts $b
+        not { $_ supersedes $a }
+        not { $_ supersedes $b }
+    }
+    return {
+        $a.slug as a_slug, $a.title as a_title, $a.kind as a_kind,
+        $a.repo as a_repo, $a.author as a_author, $a.updated_at as a_updated_at,
+        $a.content as a_content, $a.confidence as a_confidence,
+        $b.slug as b_slug, $b.title as b_title, $b.kind as b_kind,
+        $b.repo as b_repo, $b.author as b_author, $b.updated_at as b_updated_at,
+        $b.content as b_content, $b.confidence as b_confidence,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
+}
+
 // Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
 query applies_to_sources($slug: String) {
     match {
@@ -403,23 +445,25 @@ query provenance_siblings($slug: String) {
     return { $other.slug }
 }
 
-// All slugs that are the TARGET of any Supersedes edge — i.e. the superseded set.
-// Used to prune/deprioritise in the Python re-rank. Bounded; the superseded set
-// is small relative to total memories.
+// Every memory that is the TARGET of a Supersedes edge, i.e. the superseded
+// set. Used to prune/deprioritise in the Python re-rank. One row per memory,
+// not per edge, and one Memory scan: matching `$m supersedes $old` instead
+// binds and hash-joins both endpoints.
 query all_superseded_slugs() {
     match {
         $m: Memory
-        $old: Memory
-        $m supersedes $old
+        exists { $_ supersedes $m }
     }
-    return { $old.slug }
+    return { $m.slug }
 }
 
 // ── Edge index (for the composite re-rank) ────────────────────────
-// Each query returns one endpoint slug per edge (single column — the row
-// unwrapper collapses "a.slug"/"b.slug" to "slug", so returning both would
-// collide). The server tallies degrees in Python to score corroboration and
-// flag contradicted memories. Symmetric edges expose both endpoints.
+// Each corroboration query returns one endpoint slug per edge (single column —
+// the row unwrapper collapses "a.slug"/"b.slug" to "slug", so returning both
+// would collide), and the server tallies degrees in Python. A `count { }`
+// block cannot replace them: it is a match filter and cannot be returned.
+// A grouped `count($b)` per endpoint returns the same tallies but was no
+// faster at 20k memories / 126k edges, so the per-edge reads stay.
 
 query rel_edges_from() {
     match { $a: Memory $b: Memory $a relatedto $b }
@@ -445,13 +489,14 @@ query refines_edges_to() {
     match { $a: Memory $b: Memory $a refines $b }
     return { $b.slug }
 }
-query contradicts_edges_from() {
-    match { $a: Memory $b: Memory $a contradicts $b }
-    return { $a.slug }
-}
-query contradicts_edges_to() {
-    match { $a: Memory $b: Memory $a contradicts $b }
-    return { $b.slug }
+// Every memory on either end of a Contradicts edge. Undirected, so one read
+// covers both directions.
+query contradicted_slugs() {
+    match {
+        $m: Memory
+        exists { $m <contradicts> $_ }
+    }
+    return { $m.slug }
 }
 query informed_edges_to() {
     match { $p: WorkflowProject $m: Memory $p informed $m }
