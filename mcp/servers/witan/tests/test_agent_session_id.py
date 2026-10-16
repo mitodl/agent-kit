@@ -408,3 +408,29 @@ def test_hook_payload_is_empty_without_a_json_object_on_a_pipe(monkeypatch, stdi
 
     monkeypatch.setattr("sys.stdin", stdin)
     assert hooks._hook_payload() == {}
+
+
+def test_codex_checkpoint_keeps_a_config_error_off_stdout(
+    tmp_state_dir, no_background_optimize, monkeypatch, tmp_path, capsys
+):
+    """A half-configured remote makes ``_srv()`` print its error, and Codex
+    fails a Stop hook whose stdout isn't a JSON decision. The error belongs
+    on stderr, and the handle stays for the next Stop to retry."""
+    from witan.cli import _common, hooks
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("")
+    monkeypatch.setenv("WITAN_CONFIG", str(cfg_file))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.invalid/mcp")
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.setattr(_common, "_server", None)
+    assert session_state.write_handle(CODEX_SID, {"session_slug": "ws-codex"})
+    monkeypatch.setattr("sys.stdin", io.StringIO(_codex_stop_payload(tmp_path)))
+
+    hooks.session_checkpoint()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "OIDC" in captured.err
+    assert session_state.read_handle(CODEX_SID) == {"session_slug": "ws-codex"}

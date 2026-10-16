@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -128,15 +129,18 @@ def session_checkpoint() -> None:
     session_slug = (handle or {}).get("session_slug")
     if session_slug:
         try:
-            _fn(_srv().workflow_session_end)(
-                session_slug=session_slug,
-                summary=(
-                    "Session ended (auto-closed by Stop hook — "
-                    "call workflow_session_end explicitly for a better summary)"
-                ),
-                tools_used=None,
-                files_changed=_changed_files() or None,
-            )
+            # Codex fails a Stop hook whose stdout isn't a JSON decision, and
+            # `_srv()` prints its half-configured-remote error to stdout.
+            with contextlib.redirect_stdout(sys.stderr):
+                _fn(_srv().workflow_session_end)(
+                    session_slug=session_slug,
+                    summary=(
+                        "Session ended (auto-closed by Stop hook — "
+                        "call workflow_session_end explicitly for a better summary)"
+                    ),
+                    tools_used=None,
+                    files_changed=_changed_files() or None,
+                )
         # SystemExit is not an Exception: _srv() raises it for a half-configured
         # remote, and letting it escape would break the "never blocks" contract.
         except (Exception, SystemExit):  # noqa: BLE001, S110 — never fail the agent
