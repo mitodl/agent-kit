@@ -181,3 +181,17 @@ language = "system"
 pass_filenames = false
 files = "^(skills/.*\\.md|agent-config\\.toml|bin/check_skill_portability\\.py)$"
 priority = 10
+
+# ── Skills: session-preflight script tests (priority 10, parallel) ────────────
+# The script ships inside the skill and runs under plain `python3` at session
+# start, so its tests are stdlib unittest too: no env to build, and they run
+# here because no package's pytest suite covers files under skills/.
+
+[[repos.hooks]]
+id = "session-preflight-tests"
+name = "session-preflight script tests"
+entry = "python3 -m unittest discover -s tests/skills"
+language = "system"
+pass_filenames = false
+files = "^(skills/workflow/session-preflight/|tests/skills/)"
+priority = 10
