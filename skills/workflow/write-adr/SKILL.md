@@ -42,6 +42,14 @@ Invoked without those, go there first. `## Options Considered` is the output of
 scoring, so an ADR written before it records a preference rather than a
 decision — and an ADR written before the code has been read records neither.
 
+**Resolve `$SKILLS` once, on entry.** Steps 3 and 6 run scripts from
+`$SKILLS/write-adr/scripts/`. It is the directory this skill installed into —
+take it from the path you loaded this `SKILL.md` from, or fall back to the
+fixed probe in
+[`plan-technical-approach`](../plan-technical-approach/SKILL.md#resolving-the-scripts).
+Not `~/.claude/skills`: that is right only for a global install on Claude Code,
+and this skill ships inside the witan package as well.
+
 ---
 
 ## Step 1 — Does this decision deserve an ADR?
@@ -95,7 +103,11 @@ directory ends up with two conventions and no convention.
 ## Step 3 — Allocate the number
 
 ```bash
-./skills/workflow/write-adr/scripts/next-adr-number.sh <adr-dir>
+# $SKILLS is the skill root you resolved on entry -- see "Resolving the
+# scripts" in plan-technical-approach. Not a hardcoded root: this skill ships
+# inside the witan package and `witan setup` installs it to a different place
+# on each of the five supported agents.
+bash "$SKILLS/write-adr/scripts/next-adr-number.sh" <adr-dir>
 ```
 
 From the filesystem, never from the index — every hand-maintained pointer in
@@ -190,17 +202,43 @@ keyword**, and must exclude the ADR directory or it matches its own prose:
 # prints OK while the violation scrolls past. That inverts the check.
 grep -rnE 'bearer_only' src/ ':(exclude)docs/adr'
 
-# Right: `git grep` does understand pathspecs, so the exclusion works and the
-# pattern asserts the violating value rather than the keyword.
+# Still wrong, more subtly. `git grep` does understand pathspecs, and the
+# pattern now asserts the violating value -- but `||` catches every nonzero
+# status, not just "no match". A bad pathspec, an unreadable file or running
+# outside a work tree all exit 2 and print OK, so the check reports compliance
+# precisely when it failed to look. And `echo FAIL` exits 0, so a violation
+# leaves the command succeeding; in CI that passes the build.
 git grep -nE 'bearer_only:[[:space:]]*true' -- ':(exclude)docs/adr' \
   && echo "FAIL: gateway-side bearer validation enabled" || echo "OK"
+
+# Right: three outcomes, not two. git grep exits 0 for a match, 1 for a clean
+# scan, and >1 when it could not scan -- and the script's own exit status has
+# to carry the verdict, or nothing downstream can act on it.
+#
+# `|| status=$?` rather than a bare call followed by `status=$?`: the latter
+# aborts the whole check under `set -e` on the no-match case, which is the
+# PASSING one.
+status=0
+git grep -nE 'bearer_only:[[:space:]]*true' -- ':(exclude)docs/adr' || status=$?
+case "$status" in
+  0) echo "FAIL: gateway-side bearer validation enabled" >&2; exit 1 ;;
+  1) echo "OK" ;;
+  *) echo "FAIL: scan did not run (git grep exit ${status}); result says nothing" >&2
+     exit 2 ;;
+esac
 ```
 
-Use `git grep`, not `grep`, whenever the check needs to exclude the ADR
-directory — which is almost always, since a pattern describing a violation
-usually appears in the ADR describing it. With plain `grep` the exclusion
-silently does nothing worse than nothing: it makes the command exit 2 and
-report success.
+Two rules, both from that progression:
+
+- **Use `git grep`, not `grep`,** whenever the check needs to exclude the ADR
+  directory — which is almost always, since a pattern describing a violation
+  usually appears in the ADR describing it. With plain `grep` the exclusion
+  does something worse than nothing: it makes the command exit 2 and report
+  success.
+- **Distinguish all three statuses, and exit nonzero on a violation.** A
+  `&& echo FAIL || echo OK` chain collapses "clean" and "could not scan" into
+  the same answer and always exits 0. A check whose exit status does not depend
+  on what it found is decoration.
 
 Run it before writing the ADR and require it to pass on compliant code. A check
 that cries wolf gets ignored, and so does the real violation it later catches.
@@ -242,7 +280,7 @@ pull request merges with a human approving review. See
 ## Step 6 — Update the index, then commit with the code
 
 ```bash
-./skills/workflow/write-adr/scripts/adr-index.sh --verify <adr-dir>
+bash "$SKILLS/write-adr/scripts/adr-index.sh" --verify <adr-dir>
 ```
 
 Add the new row. If the script reports drift in rows you did not touch, **leave

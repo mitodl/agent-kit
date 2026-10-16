@@ -156,7 +156,7 @@ so the ledger row can carry a URL instead of a promise.
 **Where.** The same repo as the originating issue, unless the debt is
 unambiguously in a different product repo — that is where the team already
 looks. Use the Technical Issue template from
-[`create-ol-github-issue`](../../../process/create-ol-github-issue/SKILL.md),
+`create-ol-github-issue`,
 which is the engineering-work shape; this is not a bug report. Apply a
 debt-tracking label only if the repo already has one. Do not invent a label.
 

@@ -32,18 +32,29 @@ plan comment is the constant.
   [`plan-technical-approach`](../plan-technical-approach/SKILL.md). No approved
   plan → go there first rather than inventing one and building it.
 - The witan `task_*` / `workflow_*` tools, for claiming and closing chunks.
-  They ship with the witan MCP server, installed by `witan setup` rather than
-  by `agent-kit apply`, so a consumer can have this skill without them. If they
-  are missing, **say so and stop** — do not proceed with the claiming skipped.
+  This skill ships in witan's own bundle and `witan setup` installs both
+  together. If they are missing anyway, **say so and stop** — do not proceed
+  with the claiming skipped.
   An unclaimed task being actively worked is indistinguishable from an idle
   one, which is the collision the claim exists to prevent, and it is worse
   during implementation than during scoping because there is now code at
   stake.
 - The plan-comment scripts, which live in the sibling skill
-  `plan-technical-approach`. Both ship in the `universal` profile and install
-  side by side — under `~/.claude/skills/` once installed, under
-  `skills/workflow/` in this repo. If the sibling is absent, say so rather than
-  hand-rolling a comment update that loses the marker and digest.
+  `plan-technical-approach`. Both ship in witan's skill bundle and install side
+  by side, so the sibling is in the parent of the directory you loaded this
+  skill from — resolve it that way rather than assuming an install root, since
+  the five supported agents use five different ones. If the sibling really is
+  absent, say so rather than hand-rolling a comment update that loses the
+  marker and digest.
+
+**On entry, make sure this session is linked.** This is the skill most likely
+to start in a session of its own — chunk 3 gets picked up days after chunk 1,
+often by someone else — and Step 6 ends a session with
+`workflow_session_end(session_slug=...)`. Nothing can end a session this run
+never started. So if the injected session context shows no linked session, link
+one following [`witan-workflow`](../witan-workflow/SKILL.md) and keep the
+`session_slug`; without it this chunk's work is attributed to no project and
+the close-out call has nothing to close.
 
 **This skill carries no implementation guidance.** How to write the code
 belongs to the language and domain skills — `drf-api-performance`,
@@ -70,6 +81,24 @@ git diff --name-only "$base"...HEAD -- ":(glob)${entry}" | grep -q . \
   && echo "governs this change: ${adr}"
 ```
 
+**`applies_to` is not the whole set.** That match only sees ADRs carrying the
+metadata, which is new — every record written before this convention has none,
+including witan's own. Those are skipped in silence, and the empty-glob warning
+below cannot catch a *missing* entry the way it catches a wrong one. So list
+them explicitly and judge them by hand:
+
+```bash
+# Every ADR with no applies_to frontmatter at all.
+for adr in <adr-dir>/[0-9]*.md; do
+  grep -q '^applies_to:' "$adr" || echo "unscoped: $adr"
+done
+```
+
+Read each unscoped record's decision and the paths it names in prose, and
+decide relevance from those. **Zero ADRs govern this change is a conclusion,
+not a default** — it may only be reached once the unscoped ones have been read,
+because an inherited decision binds just as hard as a scoped one.
+
 Before a chunk's first edit, run the same match against that chunk's
 **Touches** entry in the plan's chunk table — the paths it is expected to
 change. An ADR found after the code is written is a rewrite; found before, it
@@ -86,16 +115,30 @@ glob is wrong, or it names a path this work has not created yet. An ADR
 carrying an `<!-- applies_to: ... is created by this work -->` note is
 declaring the second, so take it at its word for now.
 
-Read every governing ADR's `## Decision` and `## Consequences` before editing.
-A decision you contradict without noticing is the failure this whole convention
-exists to prevent.
+**Read every governing ADR in full before editing** — its status, its
+`## Decision`, its `## Consequences`, **every `## Addendum` or `## Amendment`,
+and any record that supersedes it.** A decision you contradict without noticing
+is the failure this whole convention exists to prevent.
 
-Claim the chunk you are starting, not all of them:
-`task_claim(slug="<chunk task>", session_id="<$CLAUDE_SESSION_ID or
-$PI_SESSION_ID>")`. Pass `session_id`, never `assignee` — `assignee` replaces
-the holder outright, recording a session with no person behind it. A refusal
-comes back as `{"claimed": false, "held_by": ...}`: surface it and pick
-different work rather than forcing past a live lease.
+Decision-plus-consequences is not enough, and this workflow is the reason: the
+[revision protocol](../write-adr/references/revision-protocol.md) appends a
+dated addendum rather than rewriting `## Decision`, precisely so the original
+wording survives. So the original wording is routinely the *stale* half — an
+addendum can change what implementation must do while `## Decision` still reads
+the way it did when it was written. Take the current state from the whole file:
+
+- `Superseded by ADR-NNNN` → that record governs, not this one. Follow it.
+- `Deprecated` → still in force for existing code, not for new.
+- `Proposed` → not yet agreed. Build to it, and say it is unaccepted.
+
+**Claim the chunk you are starting, not all of them.** Claiming the whole stack
+up front hides from everyone else that only one of them is live.
+
+How to claim — which id to pass, why never `assignee`, what a refusal looks
+like, and the requirement to read the task's existing comments first — is in
+[`witan-task`](../witan-task/SKILL.md). Those comments matter most here: a
+previous session's **checkpoint** is how you find out that this chunk's branch
+is already pushed, or its PR already open, before you redo either.
 
 Work chunks in the recorded order. A stacked chunk cannot start before the one
 below it; a dependency on a *deploy* rather than a merge means waiting for
@@ -107,9 +150,19 @@ production, not for the merge button.
 
 Implement its phases. At **every phase boundary**:
 
-1. Run [`validate-before-commit`](../validate-before-commit/SKILL.md) — not
+1. Run `validate-before-commit` — not
    only at close-out. A phase that ends with failing hooks has not ended.
 2. Update the plan comment (Step 4).
+
+**Leave a checkpoint at each durable step** — a branch created, a commit, a
+push, a PR opened — so a run cut off mid-chunk can be resumed instead of
+reconstructed. The step names, the one-line format and the fetch-first resume
+procedure are in
+[`witan-task`](../witan-task/SKILL.md) under "Checkpoint as you go" and
+"Resuming from a checkpoint". **Follow the link; do not copy the format or the
+git commands here.** Both changed once already during that skill's own review —
+a fetch was added and the branch-list pattern corrected — and a copy would
+already be wrong.
 
 **An accepted workaround** gets a code comment at the workaround site naming
 its follow-up issue, landing **in the same pull request as the workaround** —
@@ -119,7 +172,7 @@ to everyone who does not already know it is there.
 **Scope creep** goes back to the engineer. Work discovered outside the approved
 plan is not silently absorbed; the default disposition is a follow-up
 (`task_create`, or an issue via
-[`create-ol-github-issue`](../../process/create-ol-github-issue/SKILL.md)).
+`create-ol-github-issue`).
 
 ---
 
@@ -130,24 +183,41 @@ at **every phase boundary** and **every chunk boundary** (a PR opened, a PR
 merged — record the URL against its chunk), and when the work is blocked. Not
 per commit: a record that churns is one nobody reads.
 
+**Which record wins.** Chunk progress lives in three places, so say once which
+is authoritative and keep it that way:
+
+| For | Authority |
+|-----|-----------|
+| Whether a chunk is done | The chunk's **witan task** state |
+| Whether its PR is open, queued, merged, needs rebase | **`gh stack view --json`** |
+| The narrative — why, in what order, what was traded away | The **plan comment** |
+
+The comment is **derived from** the first two, not maintained in parallel with
+them. It exists so a reader without witan can follow the work; the moment it is
+treated as a second status record, it is a third thing to keep in sync and the
+first to go stale. If it disagrees with task state or `gh stack`, the comment
+is wrong — fix the comment.
+
 Pass `--require-existing` on every update after the first, so a transient read
 failure cannot open a second comment:
 
-The scripts live in the sibling skill, and the two skills install side by side
-— in this repo under `skills/workflow/`, once installed under
-`~/.claude/skills/`. Anchor on whichever root applies rather than using a
-relative path, which resolves under neither when the working directory is the
-product repo:
+The scripts live in the sibling skill `plan-technical-approach`, which installs
+beside this one. Resolve its directory as
+[that skill's own "Resolving the scripts"](../plan-technical-approach/SKILL.md#resolving-the-scripts)
+describes — from the directory you loaded the skill from, with a fixed probe as
+the fallback — rather than assuming `~/.claude/skills`, which is wrong for Pi,
+Copilot, OpenCode, Codex and every project-scoped install. Never use a path
+relative to the working directory: that is the product repo, where neither
+skill lives.
 
 ```bash
-SKILLS=~/.claude/skills    # in-repo development: ./skills/workflow
 PTA="$SKILLS/plan-technical-approach/scripts"
 
 # Not just the first update: read before overwriting a comment this session
 # did not write, or the Revisions log and merged PR URLs are replaced wholesale.
-"$PTA"/fetch-plan-comment.sh --repo <owner/repo> --issue <N>
+bash "$PTA/fetch-plan-comment.sh" --repo <owner/repo> --issue <N>
 
-"$PTA"/upsert-plan-comment.sh \
+bash "$PTA/upsert-plan-comment.sh" \
   --repo <owner/repo> --issue <N> --require-existing --expect-sha <sha>
 ```
 
@@ -211,7 +281,7 @@ past the hard limit with no axis that works it needs the same bypass approval
 planning would have asked for.
 
 Then hand to
-[`create-ol-pull-request`](../../process/create-ol-pull-request/SKILL.md), with
+`create-ol-pull-request`, with
 two things:
 
 - **The chunk's base branch, explicitly.** A stacked chunk targets the previous
@@ -322,34 +392,61 @@ the tool and say so.
 3. If the chunk carried an accepted workaround, comment its PR URL on the
    follow-up issue — that diff is what whoever fixes it has to undo. Leave that
    issue **open**; it tracks work that has not happened.
-4. **Re-check any forward-looking `applies_to` glob.** An ADR written for this
-   work may have named a path that did not exist yet, flagged with an
-   `<!-- applies_to: ... is created by this work -->` note. The code exists
-   now, so the ambiguity is gone:
+4. **Re-check any forward-looking `applies_to` glob — but only once the chunk
+   that creates the path has landed.** An ADR written for this work may have
+   named a path that did not exist yet, flagged with an
+   `<!-- applies_to: ... is created by this work -->` note:
 
    ```bash
-   git ls-files -- ":(glob)$entry" | grep -q . \
-     && echo "now governs real files -- drop the note" \
-     || echo "STILL EMPTY: the glob is wrong, not forward-looking"
+   status=0
+   git ls-files -- ":(glob)$entry" | grep -q . || status=$?
+   if [[ "$status" -eq 0 ]]; then
+     echo "now governs real files -- drop the note"
+   else
+     echo "still empty: wrong glob, or a path a LATER chunk creates"
+   fi
    ```
 
-   Matching → remove the note, the glob is live. Still empty → the glob is
-   genuinely wrong and the ADR governs nothing; fix it in this PR rather than
-   leaving a record that silently applies to no code.
-5. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore:
+   Matching → remove the note, the glob is live.
 
-   ```bash
-   gh pr view <N> --repo <owner/repo> --json reviews \
-     --jq '[.reviews[] | select(.state == "APPROVED") | .author.login] | unique | join(", ")'
-   ```
+   **Still empty is not yet a verdict.** All the ADRs land with the first
+   chunk, while the paths they govern may be created by the third, so an empty
+   match after chunk 1 proves nothing. Resolve it against the plan's chunk
+   table: if a **later** chunk's `Touches` covers the path, the note is still
+   accurate — leave it and re-check when that chunk merges. Only when the
+   chunk that was supposed to create the path has merged and the glob is
+   *still* empty is it genuinely wrong, and then it needs the follow-up PR
+   below, because by now this chunk's PR has merged.
+5. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore.
+   Query each reviewer's latest verdict with bots excluded — the exact command
+   and the three ways the obvious version gets it wrong are in
+   [the revision protocol](../write-adr/references/revision-protocol.md).
+   Do not re-derive it here; this skill had its own copy and the two drifted.
 
    A human approver → flip the status to `Accepted` and record who approved
    it, **in whichever form that ADR's flavor uses**: an ol-infrastructure ADR
    gets a Review History row and a bumped `**Last Updated:**`; a witan ADR has
    neither, so the approver goes on the `- Status:` line
    (`Accepted 2026-10-14 by @handle`). No approving review → it stays
-   `Proposed`, and say so rather than leaving it to be discovered. Full rule in
-   [the revision protocol](../write-adr/references/revision-protocol.md).
+   `Proposed`, and say so rather than leaving it to be discovered.
+
+6. **Deliver steps 4 and 5 as a follow-up pull request.** Close-out runs
+   *after* the merge, so every edit it makes — a status flipped to `Accepted`,
+   a note dropped, a corrected glob, a regenerated index or docs mirror — is a
+   change to a tracked file on the default branch with nothing carrying it
+   there. Editing the working tree, or pushing to the merged chunk's branch,
+   does not update the merged record: the ADR stays `Proposed` on `main` while
+   the task and the session close around it.
+
+   So open one small PR per close-out, titled for what it does
+   (`docs(adr): accept ADR-0014 after #412`), carrying only the acceptance
+   edits. It needs no plan comment and no chunk task — it is bookkeeping the
+   merge triggered, not new work. Where the repo has further obligations (this
+   one regenerates the docs mirror and a nav entry), they ride along in it.
+
+   Same rule in reverse: do **not** hold a chunk's PR open waiting for its own
+   acceptance. The approval that accepts the ADR is the approval that merges
+   the PR, so the edit can only ever come afterwards.
 
 **When the last chunk merges:**
 

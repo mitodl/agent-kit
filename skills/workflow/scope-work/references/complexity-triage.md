@@ -1,9 +1,24 @@
 # Complexity triage
 
 How [`scope-work`](../SKILL.md) decides how much process a piece of work
-deserves. Three tiers, assessed **after** grounding in the code and never from
+deserves. Four tiers, assessed **after** grounding in the code and never from
 the issue title — a "simple UI tweak" that turns out to touch a shared
 component is not simple, and only the grounding tells you which one you have.
+
+**Two questions, not one.** *How much deciding does this need* and *how much
+of it will outlive the work* are different, and the artifacts answer different
+ones:
+
+| Artifact | Lifetime | Holds |
+|---|---|---|
+| Plan comment | The work | Chunks, phases, status, the tradeoff ledger |
+| **Spec** | The work | Several interlocking decisions, open questions, a sequence across PRs, sessions or repos. Changes in flight; becomes history when done |
+| **ADR** | As long as the code | **One** decision, scoped with `applies_to`, amended rather than rewritten, read by someone two years later asking why |
+| RFC | Until it is decided | A question that needs input from outside the team before anyone can choose |
+
+A spec is not a long ADR and an ADR is not a small spec. Decisions inside a
+spec that will outlive the project get **extracted into their own ADRs** once
+they settle, and the spec links to them.
 
 ## Tier 1 — Trivial
 
@@ -36,7 +51,6 @@ Any one of these is enough:
 - It crosses a deployable boundary (backend and frontend, service and infra,
   two repos).
 - It changes user-facing behavior someone should agree on before it is built.
-- It is large enough to need splitting into several pull requests.
 - It touches auth, permissions, payments or PII at all.
 - It involves pulling in new dependencies
 
@@ -50,7 +64,45 @@ decision.
 This tier means the work contains at least one decision a future reader will
 ask *why* about. It may produce one ADR, or several — one per decision.
 
-## Tier 3 — Unknowable
+**"Needs several pull requests" is deliberately not on that list.** How work is
+split is a delivery question, owned by
+[`chunking-the-work.md`](../../plan-technical-approach/references/chunking-the-work.md),
+and a chunk boundary is not a decision anyone will come back to ask about. Size
+alone routes nowhere; what it does is make Tier 3 worth checking.
+
+## Tier 3 — Needs a spec
+
+The work is one *body* of work rather than one decision. Any of:
+
+- It spans **several pull requests across more than one session**, so the plan
+  has to survive being picked up by someone who was not there.
+- It spans **more than one repo or deployable**, where the sequence between
+  them is itself the hard part.
+- It carries **open questions that block the design** — not unknowns that need
+  a spike, but questions whose answers the team has to converge on while the
+  work is already moving.
+- It contains **several decisions that interlock**, where choosing one
+  constrains the next, and recording them separately would lose the ordering.
+
+**Route:** [`plan-technical-approach`](../../plan-technical-approach/SKILL.md),
+full path, then a **spec** in the repo's existing location —
+`docs/plans/`, `docs/specs/`, `docs/design/` or `docs/internals/design/`,
+whichever that repo already uses. It is a reviewed file in a pull request, not
+an issue comment: at the size these reach, a comment kept consistent by hand
+with a digest is rebuilding a versioned file the hard way.
+
+Each decision in it that will outlive the project is extracted into its own
+[ADR](../../write-adr/SKILL.md) **once it settles**, and linked from the spec.
+Not up front: a decision still moving is a spec section, and an ADR written
+over it would be amended before the work shipped.
+
+This is the tier the team already works in — there are 11 specs in
+ol-infrastructure's `docs/plans/`, 8 across ol-data-platform's `docs/specs/`
+and `docs/design/`, and 14 in agent-kit's `docs/internals/design/`. They share a
+shape: problem, numbered decisions, measured facts, phases, sequence, open
+questions.
+
+## Tier 4 — Unknowable
 
 Not "large" — **unsizable**. A load-bearing fact is missing, and without it any
 estimate and any design is a guess dressed up as a plan:
@@ -65,14 +117,29 @@ The tell is that you cannot write down the options without inventing a fact.
 
 **Route:** spike first — see below.
 
+## Off to the side — needs a decision from outside the team
+
+Not a tier, because it is not about size. When the choice needs agreement from
+people who are not going to read an ADR — another team owns the contract, or
+the call is as much product as engineering — the artifact is an **RFC**, via
+`create-ol-rfc-discussion`,
+and an ADR records the outcome once it is settled. Routing that to an ADR
+first records a decision the team was not entitled to make alone.
+
 ---
 
 ## When in doubt, it is not trivial
 
-Running the full process on a simple change costs ten minutes. Running the fast
-path on a complex one ships an unexamined design decision, which is the thing
-this whole workflow exists to prevent. The asymmetry is deliberate: classify
-conservatively.
+Running the fast path on a complex change ships an unexamined design decision,
+which is the thing this whole workflow exists to prevent. Running the full
+process on a simple one costs a scoring pass and a short plan comment. The
+asymmetry is deliberate: classify conservatively.
+
+**The full path is not free, and its cost has not been measured.** A scoring
+pass, an ADR and a plan comment is real work, and on the full path it runs
+before any code is written. Treat "it is cheaper than being wrong" as the
+argument — it does not need a number, and an invented one ("ten minutes")
+invites being quoted back when the true figure turns out to be larger.
 
 Two specific traps:
 

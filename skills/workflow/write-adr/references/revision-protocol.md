@@ -39,8 +39,32 @@ acceptance event.**
 close-out:
 
 ```bash
-gh pr view <N> --repo <owner/repo> --json reviews \
-  --jq '[.reviews[] | select(.state == "APPROVED") | .author.login] | unique | join(", ")'
+# Each reviewer's LATEST review only, bots excluded.
+#
+# Three things this gets right that the obvious version does not:
+#
+# 1. The review list is the full HISTORY, so `select(.state == "APPROVED")`
+#    alone answers "did anyone ever approve this". A reviewer who approved and
+#    then pushed CHANGES_REQUESTED still matches. Group by reviewer and take
+#    their last verdict instead.
+# 2. COMMENTED is dropped BEFORE grouping: leaving a comment after approving
+#    does not withdraw the approval, so it must not displace it.
+# 3. Bots are excluded on `.user.type`, which is why this uses `gh api` and not
+#    `gh pr view --json reviews` -- that form reports no type at all and
+#    strips the `[bot]` suffix from the login, so Copilot's review arrives
+#    indistinguishable from a person's. A Copilot approval is not acceptance.
+#
+# REST returns reviews oldest-first and jq's sort is stable, so `last` really
+# is each reviewer's most recent verdict.
+gh api "repos/<owner/repo>/pulls/<N>/reviews" --paginate --jq '
+  [ .[]
+    | select(.user.type != "Bot")
+    | select(.state != "COMMENTED")
+  ]
+  | group_by(.user.login)
+  | map(last)
+  | map(select(.state == "APPROVED") | .user.login)
+  | unique | join(", ")'
 ```
 
 - A non-empty result → flip the status to `Accepted` and record the approver,
@@ -55,6 +79,19 @@ gh pr view <N> --repo <owner/repo> --json reviews \
 This is a mechanical edit driven by an observable event, not an agent forming a
 judgment about whether a decision is good — which is what the humans-only rule
 actually guards against.
+
+**The edit needs its own pull request.** The acceptance event is the merge, so
+the edit necessarily comes after it: the file being changed is already on the
+default branch. A local edit does not update it, and neither does a push to the
+merged branch — that branch is spent. Without a PR to carry it, the record on
+`main` stays `Proposed` while everyone involved believes it was accepted, which
+is the exact drift this whole section exists to close.
+
+So acceptance ships as one small follow-up PR — `docs(adr): accept ADR-0014
+after #412` — carrying the status flip, the approver, and any index or docs
+regeneration the repo requires. It gets no plan comment and no task: it is
+bookkeeping the merge triggered, not new work.
+[`implement-plan`](../../implement-plan/SKILL.md) opens it at close-out.
 
 **Staleness, with teeth.** When `implement-plan` runs, any ADR that has been
 `Proposed` for more than 90 days while the paths it governs have shipped code
