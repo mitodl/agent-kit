@@ -148,3 +148,94 @@ removed.
 Re-run the measurement above to decide whether (b) ever becomes worth it. The
 signal is an assignee with no `#` that is identity-shaped rather than
 `cfg.author`-shaped.
+
+## Addendum (2026-10-16): the claim is a store-level compare-and-swap
+
+The premise above no longer holds. omnigraph #470 added
+`/mutate/if-graph-commit` (the CLI's `--if-commit`): the write applies only
+while the branch head still equals the `graph_commit_id` the caller read, and
+otherwise answers 412 having written nothing. Upstream compares against the
+same pinned view the write executes on and re-checks under the branch gate
+before effects (`mutate_as_with_expected_head`,
+`crates/omnigraph/src/exec/mutation.rs`, v0.13.0). Against a local 0.13.0
+server, a write fenced on the current head returned 200 with
+`commit.parent_commit_id` equal to the fence, and the same write fenced on the
+previous head returned 412 with `precondition_failure {expected, actual}`.
+
+`task_claim` has stated that precondition since it landed, but it still decided
+claimability on an earlier, unfenced read, and it kept part 3 plus a loop that
+retried the verification read until its commit caught up with the claim's own.
+That left a gap: a rival that claimed between the first read and the fenced one
+was overwritten by a write whose precondition held, and both callers could be
+told `claimed: true`. The verification read could not see it, because our claim
+was by then the last write.
+
+The claim now decides claimability on the row its conditional write is fenced
+on (`_update_task`'s `require`), so a successful write proves nobody claimed,
+closed or blocked the task between that read and the commit. Part 3 and the
+catch-up loop are gone. A rival whose claim lands later either read ours and is
+refused, or fenced on an older head and gets a 412.
+
+That alone did not protect a granted claim. `update_task` sets the whole row,
+and every other caller of `_update_task` (`task_update`, `task_close`,
+`task_release`, `task_link`, `task_unlink`, the unblock sweep and
+`migrate_repo_keys`) wrote it unconditionally from its own earlier read. A
+description edit that read the row before a claim landed put back
+`status=open`, `assignee=None` and `claimed_at=None`, and a second claimer was
+then granted the task too; review reproduced exactly that over the CLI. So
+every `_update_task` write is now fenced on the read it merged from, including
+the composed row-plus-edge batch (`change_many(if_commit=...)`, witan-core
+0.42.0). A refused write re-reads and merges again, up to five attempts with
+jittered backoff, and callers whose change depends on the row (`blocked_by`
+appends, the release holder check, the unblock sweep) recompute it on each
+attempt's read. A read with no `graph_commit_id` raises rather than falling
+back to an unconditional write, since both transports report one on 0.13.
+
+The trade is availability. The fence is the whole branch head, so every task
+write, not only a claim, can be refused by an unrelated write and can run out
+of attempts with `WriteContention` (nothing written; retrying is safe).
+Measured on production (`witan_tool_calls_total` and
+`witan_tool_duration_milliseconds`, the 7 days to 2026-10-16): council-graph
+write tools peaked at about 9 calls a minute as a 5-minute rate and averaged
+0.15, and p95 tool duration was about 5s for `task_update` and `task_comment`
+and at the 10s bucket cap for `task_close` and `task_claim`. At that peak one
+attempt has roughly an even chance of refusal and exhausting five a few
+percent; off-peak it is negligible. We judged that better than a claim that
+reverts silently. A row-scoped guard (a mutation matching on `slug` and
+`updated_at`) would not be refused by unrelated writes; it is unexplored.
+
+Two tools make more than one write, and a later one can run out after an
+earlier one committed. `task_close` (and `task_update` to `closed`) commits the
+close, then reopens each dependent separately; a dependent that runs out is
+skipped, the rest are still swept, and the closed task comes back with a
+`warning` naming it (it is still ready, since every blocker is closed, and the
+next sweep retries it). A retried close keeps the original `closed_at`.
+`task_unlink(kind="parent")` deletes the edge, then clears `parent_slug`
+whenever the row still names that parent, so re-running it repairs a sync that
+ran out.
+
+Outside the guarantee:
+
+- Writes meant to change the holder: `force`, a `task_update` that sets
+  `assignee` or `status`, `task_release --force`, and a claim taken once the
+  lease lapses. Each is decided on the current row; it overrides the claim
+  deliberately rather than by accident.
+- Holders that compare equal (the missing `session_id` case above).
+- Writes that bypass `_update_task`. The partial `set_task_author` update sets
+  only `author` and `updated_at`, so it cannot revert a claim. `store_merge`
+  (`witan migrate merge`) is not fenced: it exports the target, reconciles,
+  and loads the winning rows with `load --mode merge`, and on a served store
+  its write lock is a no-op, so a claim that lands between the export and the
+  load can be overwritten by a winning row from the source.
+- A claim whose response never arrives. From 0.12 the server keeps running an
+  admitted write after its caller disconnects. Against the local 0.13.0
+  server, a mutate whose connection was reset 2 ms after sending still landed,
+  and one reset before the server routed it did not, so a client timeout or a
+  lost response leaves the outcome unknown. The transport does not re-send a
+  write that failed mid-flight, and upstream has no durable request-result
+  lookup in 0.13, so the caller re-reads before retrying.
+- An in-doubt publish. The 0.12 publisher reads a commit back when its
+  acknowledgement is lost and returns success if it landed. Only a read-back
+  that cannot complete surfaces, as a 500 `internal` whose message names the
+  commit ("manifest publish outcome is in doubt: graph commit … may be
+  durable"), and it is not retried.

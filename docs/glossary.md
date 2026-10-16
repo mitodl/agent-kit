@@ -92,9 +92,8 @@ and detect the collision at commit time, instead of serialising them up front.
 and the precondition a CAS write states. Through omnigraph 0.11 they are
 [ULIDs](https://github.com/ulid/spec), which sort lexicographically in
 creation order. From 0.12 every commit after a graph's first is
-`hb1.<block>.<slot>.<nonce>` with a decimal slot, which does not, so "is this
-snapshot at least as new as my write?" is answered by parsing the two ids
-(`witan/commit_ids.py`), not by comparing them as strings.
+`hb1.<block>.<slot>.<nonce>` with a decimal slot, which does not sort as text.
+witan only compares them for equality (the precondition), never for order.
 
 **Advisory lock** — a filesystem lock (`flock`) that serialises writers sharing
 a local store. It is deliberately **skipped for any store it cannot

@@ -139,16 +139,10 @@ dependencies = [
   # without sentry-sdk (or error on the unknown extra) rather than getting
   # Sentry reporting at all.
   #
-  # ★ >=0.25 IS A BEHAVIOURAL FLOOR, same category as >=0.22 above: 0.24's
-  # `change()` always returns `None` for the commit its own write produced.
-  # `task_claim`'s post-write verification uses that value as the floor its
-  # catch-up retry compares a fresh re-read against — with `None` the retry
-  # never engages, and verification silently falls back to a single
-  # unconstrained read with no freshness guarantee, i.e. exactly
-  # tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd's original
-  # failure mode. No AttributeError, no test failure — a published
-  # witan-council on 0.24 just quietly ships the bug this floor exists to
-  # keep fixed.
+  # (>=0.25 was a behavioural floor for `change()` returning the commit its
+  # write produced, which `task_claim`'s post-write verification compared a
+  # re-read against. That verification is gone and nothing reads the return
+  # value now; the higher floors below subsume the number.)
   #
   # ★ >=0.29 IS A BEHAVIOURAL FLOOR, the same quiet kind as >=0.22 and >=0.25.
   # `RemoteServerProxy._repo_means_detect` overrides a base method that 0.28
@@ -223,7 +217,13 @@ dependencies = [
   # api_contract_mismatch`, and `witan migrate storage`'s in-place upgrade
   # needs the 0.13 binary. 0.40 imports and runs, then fails on the first
   # request to the deployed graph.
-  "witan-core[cli,remote,observability,sentry]>=0.41,<1",
+  #
+  # ★ >=0.42 IS A RUNTIME FLOOR of the `strict` kind above: every task write
+  # goes through `_update_task`, which calls `change_many(..., if_commit=...)`,
+  # added in witan-core 0.42.0 in the same change. On 0.41 that is a TypeError
+  # on the first task write, after a clean import, so `just check-core-floor`
+  # cannot see it.
+  "witan-core[cli,remote,observability,sentry]>=0.42,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

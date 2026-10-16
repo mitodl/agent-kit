@@ -6,7 +6,7 @@
 
 # Tasks
 
-The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. `task_claim` is a **best-effort** compare-and-swap — it detects and rejects most lost races, but it is an advisory lease, not a hard lock. See [ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for what is and is not guaranteed.
+The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. `task_claim` is a compare-and-swap with a lease, and every task write is fenced on the row it read, so a granted claim changes only by a write meant to change it (`force`, an explicit `task_update` of assignee or status). See [ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for what is and is not guaranteed.
 
 ## `task_create`
 
@@ -153,6 +153,22 @@ correct the repo association (``repo``), or attach an ``external_uri``. To
 lease and refuses if someone else holds it); to close a task prefer
 ``task_close``; to add dependencies use ``task_link``.
 
+The write is fenced on the read it merged from: it applies only while the
+graph is unchanged since this call read the task, and a refusal re-reads
+and merges again, up to five attempts. That is what stops an edit from
+reverting a claim that landed after its read. The cost is availability.
+The fence is the whole branch head, so writes anywhere on the graph refuse
+it. Over the 7 days to 2026-10-16 the production graph peaked at about 9
+write-tool calls a minute (5-minute rate) and averaged 0.15, with p95 tool
+durations near 5s for ``task_update`` and 10s or more for ``task_close`` and
+``task_claim``. At that peak one attempt has roughly an even chance of
+being refused and all five a few percent; off-peak it is negligible.
+Running out raises ``WriteContention`` with nothing written, and retrying
+is safe. (A row-scoped guard, a mutation matching on ``slug`` and
+``updated_at``, would avoid refusals from unrelated writes; it is
+unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
+``task_close``.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug of the task to update. |
@@ -196,14 +212,20 @@ effect for them. It is reported rather than refused because the server has
 no way to supply the id itself, so refusing would break every caller that
 cannot send one.
 
-BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
-the claim write cannot be made atomic at the store. Instead we surface the
-Lance optimistic-concurrency conflict (rather than masking it with a retry)
-and re-read + post-write-verify ownership, so a lost race reports
-``{"claimed": false, "reason": "lost_race", "held_by": …}`` instead of
-silently clobbering the winner. The lease is the backstop for the residual
-simultaneous-post-read case. True atomic CAS awaits an upstream omnigraph
-conditional-write feature — see docs/adr/0003.
+The claim is a compare-and-swap. It is written only while the branch head
+is still the one the task was read at, and that read is where
+claimability is decided, so a granted claim means nobody else claimed,
+closed or blocked the task first. A lost race reports ``{"claimed": false,
+"reason": "lost_race", "held_by": …}``. Every other task write is fenced
+the same way and merged from the row it read, so an edit that read the
+task before the claim is refused and re-merged rather than reverting it.
+The holder can still change afterwards by a write meant to change it:
+``force``, a ``task_update`` that sets ``assignee`` or ``status``, a
+``task_release --force``, or a claim taken once the lease lapses. An error
+whose outcome is unknown (a lost response, a client timeout) may still have
+claimed the task, because the server finishes an admitted write after its
+caller disconnects, so re-read with ``task_get`` before retrying. See
+docs/adr/0003.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -236,6 +258,17 @@ Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 
 Closing a blocker is what unblocks its dependents — they become visible to
 ``task_ready`` once every blocker is closed.
+
+The close is fenced like ``task_update`` and has the same trade: under
+write load elsewhere on the graph it can run out of attempts and raise
+``WriteContention`` with nothing written (see ``task_update`` for the
+production rates as of 2026-10-16). Retrying is safe, and a retry of a
+close that did land keeps its original ``closed_at``. Reopening each
+dependent is a separate fenced write after the close has committed, so one
+that runs out of attempts does not fail the call: the closed task comes
+back with a ``warning`` naming the dependents still marked ``blocked``.
+``task_ready`` lists them anyway, since every blocker is closed, and the
+next close in the repo or a claim of one of them reopens it.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

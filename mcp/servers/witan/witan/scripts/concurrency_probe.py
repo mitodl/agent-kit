@@ -4,8 +4,8 @@ Phase-exit criterion 2 of wp-witan-multi-user-service-deployment-dcf6ee asks for
 concurrency to be *observed*, not argued from the design. The design argument is
 weak on purpose: ``acquire_store_flock`` is skipped for http(s) stores
 (``_UNLOCKABLE_SCHEMES``), so the advisory lock that serialises local writers
-does nothing here, and ``task_claim`` is documented best-effort CAS pending an
-upstream omnigraph conditional-write.
+does nothing here, and ``task_claim``'s exclusion rests on omnigraph's
+conditional write (``/mutate/if-graph-commit``) instead.
 
 Three probes, each run by N genuinely independent OS processes -- separate
 interpreters, separate MCP clients, separate connections -- released against the

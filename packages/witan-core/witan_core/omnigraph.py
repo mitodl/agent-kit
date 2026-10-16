@@ -1662,9 +1662,9 @@ def _commit_id_from_mutate_body(body: str) -> str | None:
     """Pull ``commit.graph_commit_id`` out of a raw mutate response body.
 
     Deliberately lenient rather than raising: an empty body, non-JSON body, or
-    a body with no ``commit`` (a pre-#470 server) are all just "no commit id
-    available", which callers already treat as a normal degrade — the same
-    posture as :meth:`OmnigraphClient.read_with_commit` returning ``None``.
+    a ``"commit": null`` (a write that matched nothing) are all just "no
+    commit id available" — the same posture as
+    :meth:`OmnigraphClient.read_with_commit` returning ``None``.
     A write itself must never fail because this one piece of BONUS
     information could not be parsed out of an otherwise-successful response.
     """
@@ -1744,10 +1744,9 @@ class OmnigraphClient:
         together rather than offering a separate "what is the head now" call —
         a head fetched independently is already stale by construction.
 
-        ``None`` when the server did not supply one: a pre-#470 omnigraph, or
-        the CLI path, which prints rows and discards the envelope. A caller must
-        treat ``None`` as "no precondition available" and fall back to the
-        best-effort path rather than passing it on — ``if_commit=None`` means an
+        ``None`` when the response carried none. omnigraph 0.13 reports it on
+        both transports whenever the branch has a head commit. A caller must
+        not pass ``None`` on as a precondition: ``if_commit=None`` means an
         UNCONDITIONAL write, which is exactly what you did not ask for.
         """
         rows, envelope = self._read_rows(query_file, query_name, params)
@@ -1868,19 +1867,15 @@ class OmnigraphClient:
         worth having — a refusal is now truthful — but a caller must expect to
         re-read and retry more often than the contention alone would suggest.
 
-        Returns the NEW ``graph_commit_id`` this write produced (omnigraph
-        #470's ``ChangeOutput.commit.graph_commit_id``), or ``None`` when the
-        tier does not supply one. Distinct from ``if_commit``, which is the
-        commit you fenced ON before the call — this is the commit that exists
-        AFTER it, and is a floor a caller can compare a later unconstrained
-        read's own reported commit against, to tell a genuinely fresher read
-        apart from one that is still stale. Do not order the two as strings:
-        from 0.12 an id is ``hb1.<block>.<slot>.<nonce>`` with a decimal slot,
-        so slot 10 sorts before slot 9 (council's ``witan.commit_ids`` parses
-        them).
-        Empirically confirmed via HTTP (2026-08-18): the server always answers
-        a mutate with the new commit inline, so no separate read is needed to
-        learn it.
+        Returns the NEW ``graph_commit_id`` this write produced (the mutate
+        response's ``commit.graph_commit_id``), or ``None`` when there is none:
+        the CLI path, or a write that matched nothing (0.13 answers those with
+        ``"commit": null``). Distinct from ``if_commit``, which is the commit
+        you fenced ON before the call. From 0.12 it is the exact commit this
+        write published, even when the acknowledgement was lost and the
+        server had to read it back. Do not order commit ids as strings: from
+        0.12 an id is ``hb1.<block>.<slot>.<nonce>`` with a decimal slot, so
+        slot 10 sorts before slot 9.
 
         ★ HTTP ONLY. The CLI path always returns ``None`` here, DELIBERATELY —
         see the paragraph in the CLI branch below before trying to close that
@@ -1913,9 +1908,7 @@ class OmnigraphClient:
         # precondition failure. It reads an error object off stdout now
         # (`_cli_failure`), but only the read shapes were measured that way on
         # 0.13, not a `mutate --json`. The CLI path stays without a returned
-        # commit id rather than
-        # risk that; a caller degrades to an unconstrained verification read,
-        # same as it already does when `if_commit` itself is unavailable.
+        # commit id rather than risk that.
         extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",
@@ -1935,6 +1928,7 @@ class OmnigraphClient:
         *,
         surface_conflict: bool = False,
         chunk_size: int | None = None,
+        if_commit: str | None = None,
     ) -> None:
         """Run several named mutations as ONE commit.
 
@@ -1952,9 +1946,13 @@ class OmnigraphClient:
         engine rejects a body mixing inserts/updates with deletes. Deletes batch
         freely with other deletes; just keep them in their own call.
 
-        NOT for a compare-and-swap. A batch commits or fails whole, so a
-        conflict cannot be attributed to one step — ``task_claim`` and anything
-        else that needs to detect losing a race must stay on ``change``.
+        ``if_commit`` fences the whole batch the way it fences :meth:`change`:
+        the commit applies only while that branch head is still current, and
+        a refusal means no step was applied. A conflict cannot be attributed to
+        one step, so a compare-and-swap caller re-reads everything it derived
+        the batch from. It cannot be combined with ``chunk_size``: chunks are
+        separate commits, and only the first could state the head it was read
+        at.
 
         ``chunk_size`` splits the work into that many statements per commit and
         must be >= 1.
@@ -1980,6 +1978,8 @@ class OmnigraphClient:
             # drop every write. Zero raises, but as an opaque "range() arg 3
             # must not be zero" far from the caller that chose the value.
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+        if chunk_size is not None and if_commit is not None:
+            raise ValueError("if_commit cannot fence a chunked batch")
         if chunk_size is not None and len(steps) > chunk_size:
             chunks = math.ceil(len(steps) / chunk_size)
             for index, start in enumerate(range(0, len(steps), chunk_size), start=1):
@@ -2018,7 +2018,13 @@ class OmnigraphClient:
             return
         if len(steps) == 1:
             query_file, name, params = steps[0]
-            self.change(query_file, name, params, surface_conflict=surface_conflict)
+            self.change(
+                query_file,
+                name,
+                params,
+                surface_conflict=surface_conflict,
+                if_commit=if_commit,
+            )
             return
         if self.guard is not None:
             steps = [(f, n, self.guard(n, p)) for f, n, p in steps]
@@ -2045,8 +2051,10 @@ class OmnigraphClient:
                 params,
                 "mutate",
                 surface_conflict=surface_conflict,
+                if_graph_commit=if_commit,
             )
             return
+        extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",
             "-e",
@@ -2054,6 +2062,7 @@ class OmnigraphClient:
             "witan_batch",
             "--params",
             json.dumps(params),
+            *extra,
             surface_conflict=surface_conflict,
         )
 
