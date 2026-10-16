@@ -780,7 +780,7 @@ Re-run after every upgrade to refresh installed files.
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
+* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
 * `--force, --no-force`: *[default: False]*
@@ -1814,7 +1814,7 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
+* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
 * `--force, --no-force`: *[default: False]*
