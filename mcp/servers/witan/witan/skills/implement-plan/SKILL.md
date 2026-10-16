@@ -68,6 +68,19 @@ Read the plan comment in full: the chunk order, each chunk's phases and
 done-conditions, the estimated sizes, and the tradeoff ledger including any
 accepted workaround.
 
+**Where the plan comment links a spec, the spec is the design** — the comment
+carries status and links, not the thinking. Read it before the first edit, and
+read it as a *current* document rather than a settled one: its `Dn.` sections
+carry their own state, and one marked `(open)` is a decision nobody has made
+yet. Building past an open `Dn.` is the same mistake as contradicting an ADR,
+except the record says outright that it is unresolved. Take it back to
+[`plan-technical-approach`](../plan-technical-approach/SKILL.md) instead.
+
+Check its commit anchor too. A spec pins its file and line references to a sha;
+if `origin/main` has moved a long way since, the paths it quotes may have moved
+with it, and the mismatch is the spec being stale rather than the code being
+wrong.
+
 **Then find the ADRs that govern this change.** Zero is normal, not an error:
 
 ```bash
@@ -245,6 +258,7 @@ Where it gets recorded depends on what changed:
 | What changed | Where it goes |
 |---|---|
 | A **decision** an ADR records | A dated `## Addendum` on that ADR — see [the revision protocol](../write-adr/references/revision-protocol.md) |
+| A **decision a spec records**, where one exists | Rewrite that `Dn.` section and update its state, in the same PR. Specs change in flight; they get no addendum protocol — see [`write-spec`](../write-spec/SKILL.md) |
 | Delivery: a chunk split, reordered, added, dropped | The plan comment's **Revisions** log |
 | Something that should have been an ADR and was not | Write one now via [`write-adr`](../write-adr/SKILL.md) |
 

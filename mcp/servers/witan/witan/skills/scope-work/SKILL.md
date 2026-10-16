@@ -30,9 +30,9 @@ how much process does it deserve?" — then hands off.
   |                     |
   +-- decision(s) ------+--> plan-technical-approach --> implement-plan --> shipped
   |                     |         |
-  +-- needs a spec -----+         +--> spec file in the repo
+  +-- needs a spec -----+         +--> write-spec
   |                               |    multi-PR, multi-session or multi-repo
-  |                               |    work; reviewed in a PR, not a comment
+  |                               |    work; a reviewed file in the repo
   |                               |         |
   |                               |         +--> write-adr (per settled decision)
   |                               |
@@ -163,7 +163,7 @@ anti-abuse framing are in
 |---|---|
 | **Trivial** — one obvious mechanism, contained, tens of lines, plain revert undoes it, not auth/payments/PII | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **fast path**: one approach, no scoring, no ADR |
 | **Has a decision worth recording** — one or two PRs, and a future reader will ask why | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **full path**: alternatives scored, then [`write-adr`](../write-adr/SKILL.md) records what was decided |
-| **Needs a spec** — several PRs across more than one session or repo, interlocking decisions, or open questions blocking the design | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **spec path**: the plan lands as a reviewed file where this repo already keeps them, and settled decisions are extracted to ADRs |
+| **Needs a spec** — several PRs across more than one session or repo, interlocking decisions, or open questions blocking the design | [`plan-technical-approach`](../plan-technical-approach/SKILL.md), **spec path**, then [`write-spec`](../write-spec/SKILL.md) writes it where this repo already keeps them; settled decisions are extracted to ADRs |
 | **Unknowable** — a load-bearing fact is missing, so it cannot be sized | Spike first, then re-enter here |
 | **Not ours to decide alone** — needs agreement from outside the team | `create-ol-rfc-discussion`, with an ADR recording the outcome |
 

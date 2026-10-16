@@ -84,7 +84,7 @@ downstream advance it with `workflow_project_advance` as they go:
 | Skill | Phase |
 |-------|-------|
 | `scope-work` | `discovery` |
-| `plan-technical-approach`, `write-adr` | `spec` |
+| `plan-technical-approach`, `write-spec`, `write-adr` | `spec` |
 | `implement-plan`, building chunks | `implementation` |
 | `implement-plan`, close-out | `delivery` |
 
