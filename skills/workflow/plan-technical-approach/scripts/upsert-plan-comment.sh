@@ -107,8 +107,20 @@ if [[ "$print_path" == true ]]; then
   exit 0
 fi
 
-raw="$(mktemp)"; payload="$(mktemp)"; all="$(mktemp)"
-trap 'rm -f "$raw" "$payload" "$all"' EXIT
+# One private directory for everything, rather than per-file mktemp.
+#
+# The assembly below needs intermediates as well as the payload itself. Under
+# per-file mktemp those were created beside it by plain redirection, so they
+# inherited the caller's umask -- commonly 022, which left the full plan
+# (private repo names, unreleased design detail, issue bodies) world-readable
+# on a shared machine, while paths.sh takes care to pin the draft cache of the
+# very same text to 700.
+#
+# mktemp -d is 700 by design, so anything written inside it is covered without
+# each site having to remember, and one `rm -rf` cleans up even a failed run.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+raw="$work/raw"; payload="$work/payload"; all="$work/all"
 
 if [[ "$body_file" == "-" ]]; then
   cat > "$raw"
@@ -122,25 +134,23 @@ fi
 
 [[ -s "$raw" ]] || { echo "Error: plan body is empty: ${body_file}" >&2; exit 1; }
 
-sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
-  else shasum -a 256 | cut -d' ' -f1
-  fi
-}
-
 # Strip any markers the caller included so re-running on an already-marked body
-# cannot double them, then rebuild: marker, body, digest over everything above.
-grep -v -F -e "$plan_marker" -e "$sha_marker_prefix" "$raw" > "$payload.stripped" || true
+# cannot double them, then rebuild: marker, body, digest.
+#
+# The digest comes from plan_digest (paths.sh), which hashes the canonical plan
+# TEXT rather than these assembled bytes -- that is what makes it recomputable
+# from a fetched comment instead of having to be taken on trust from the
+# comment's own footer. The footer is still written, as a human-readable
+# fingerprint and so --expect-sha has something to quote in an error, but
+# nothing verifies against it.
+grep -v -F -e "$plan_marker" -e "$retired_marker" -e "$sha_marker_prefix" \
+  "$raw" > "$work/stripped" || true
+new_sha="$(plan_digest < "$raw")"
 {
   printf '%s\n\n' "$plan_marker"
-  cat "$payload.stripped"
-} > "$payload.unsigned"
-new_sha="$(sha256_of < "$payload.unsigned")"
-{
-  cat "$payload.unsigned"
+  cat "$work/stripped"
   printf '\n%s%s -->\n' "$sha_marker_prefix" "$new_sha"
 } > "$payload"
-rm -f "$payload.stripped" "$payload.unsigned"
 
 # GitHub rejects an issue comment body over 65536 CHARACTERS. Measure
 # characters, not bytes: this house style is full of em dashes and arrows, and
@@ -209,18 +219,33 @@ if [[ -z "$target" && "$require_existing" == true ]]; then
   exit 5
 fi
 
-# ---- concurrency guard ------------------------------------------------------
+# ---- edit guard -------------------------------------------------------------
+#
+# NOT an atomic check-and-write. GitHub's PATCH ignores If-Match, so there is no
+# compare-and-swap to be had: this detects an edit made before the lookup a
+# moment ago, and a write landing between that lookup and the PATCH below still
+# wins silently. It is a guard against stale drafts, not a lock.
+#
+# The digest is computed FROM THE FETCHED BODY, not read out of the footer that
+# body carries. A GitHub UI edit rewrites the prose and leaves the footer
+# untouched, so trusting the footer meant an edited comment still reported the
+# pre-edit digest and a stale --expect-sha sailed through and overwrote it.
 
 if [[ -n "$expect_sha" && -n "$target" ]]; then
-  live_sha="$(jq -r --arg p "$sha_marker_prefix" '
+  live_sha="$(jq -r '.body' <<<"$target" | plan_digest)"
+  reported_sha="$(jq -r --arg p "$sha_marker_prefix" '
     [ (.body | split("\n")[]) | select(startswith($p)) ]
     | if length == 0 then "" else (.[-1] | ltrimstr($p) | rtrimstr(" -->") | rtrimstr("-->")) end
   ' <<<"$target")"
   if [[ "$live_sha" != "$expect_sha" ]]; then
     echo "Error: plan comment changed since it was read." >&2
     echo "  expected: ${expect_sha}" >&2
-    echo "  live:     ${live_sha:-(no digest)}" >&2
+    echo "  live:     ${live_sha}" >&2
     echo "  comment:  $(jq -r '.url' <<<"$target")" >&2
+    if [[ -n "$reported_sha" && "$reported_sha" != "$live_sha" ]]; then
+      echo "The comment's own footer still claims ${reported_sha}, so it was" >&2
+      echo "edited outside this tooling -- most likely in the GitHub UI." >&2
+    fi
     echo "Re-read it with fetch-plan-comment.sh and merge before writing again." >&2
     exit 4
   fi
@@ -258,7 +283,7 @@ post_new() {
 
 if [[ -n "$target" ]]; then
   comment_id="$(jq -r '.id' <<<"$target")"
-  patch_err="$(mktemp)"
+  patch_err="$work/patch_err"
   if url="$(jq -n --rawfile body "$payload" '{body: $body}' \
       | gh api --method PATCH "repos/${repo}/issues/comments/${comment_id}" \
           --input - --jq '.html_url' 2>"$patch_err")"; then
@@ -282,10 +307,43 @@ if [[ -n "$target" ]]; then
     exit 7
   fi
 
-  # Minimize rather than delete: deleting destroys the Revisions log the
-  # superseded comment carries, and minimized comments stay readable.
-  while read -r node_id loser_url; do
-    [[ -n "$node_id" ]] || continue
+  # Retire the losers, then minimize them. Both halves matter:
+  #
+  # Retiring swaps the live marker for retired_marker, which is what actually
+  # ends the duplicate. Minimizing alone did not: a minimized comment keeps its
+  # body and its marker in the issue-comments REST API that both lookups read,
+  # so fetch still returned two plans and the next ordinary upsert failed on the
+  # same "2 plan comments" error that --on-duplicate had just been run to clear.
+  # Recovery left the issue exactly as wedged as it found it.
+  #
+  # Minimizing stays because it is what collapses the comment in the UI, and
+  # neither step deletes: the superseded comment's Revisions log is often the
+  # only record of what it said, so it is kept readable, just no longer found.
+  loser_count="$(jq 'length' <<<"$losers")"
+  for (( i = 0; i < loser_count; i++ )); do
+    loser="$(jq -c --argjson i "$i" '.[$i]' <<<"$losers")"
+    loser_id="$(jq -r '.id' <<<"$loser")"
+    node_id="$(jq -r '.node_id' <<<"$loser")"
+    loser_url="$(jq -r '.url' <<<"$loser")"
+
+    # ltrimstr, not sub: the marker is matched literally here exactly as both
+    # lookups match it, with no regex in the path to disagree about.
+    retired_body="$(jq -r --arg m "$plan_marker" --arg r "$retired_marker" '
+      $r + "\n\n> Retired: superseded by the plan comment kept on this issue.\n"
+         + "> Left here for its history; it is no longer the plan of record.\n"
+         + (.body | ltrimstr($m))' <<<"$loser")"
+
+    if jq -n --arg body "$retired_body" '{body: $body}' \
+         | gh api --method PATCH "repos/${repo}/issues/comments/${loser_id}" \
+             --input - >/dev/null 2>&1; then
+      echo "Retired duplicate ${loser_url}" >&2
+    else
+      # Worth stopping for: the duplicate is still discoverable, so the next
+      # run hits --on-duplicate again. Say so rather than reporting success.
+      echo "Warning: could not retire ${loser_url} -- it still carries the live" >&2
+      echo "         marker, so the next upsert will see a duplicate again." >&2
+    fi
+
     # shellcheck disable=SC2016  # single-quoted on purpose: $id is a GraphQL variable
     if gh api graphql -f query='
          mutation($id: ID!) {
@@ -297,7 +355,7 @@ if [[ -n "$target" ]]; then
     else
       echo "Warning: could not minimize ${loser_url}" >&2
     fi
-  done < <(jq -r '.[] | "\(.node_id) \(.url)"' <<<"$losers")
+  done
 else
   url="$(post_new)"
   echo "Created plan comment on ${repo}#${issue}." >&2

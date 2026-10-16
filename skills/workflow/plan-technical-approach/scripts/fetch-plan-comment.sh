@@ -84,18 +84,31 @@ if [[ "$as_json" == true ]]; then
   exit 0
 fi
 
-jq -r --arg p "$sha_marker_prefix" '
-  .[] |
-  "id: \(.id)",
-  "node_id: \(.node_id)",
-  "author: \(.author)",
-  "url: \(.url)",
-  "sha: \(
-     [ (.body | split("\n")[]) | select(startswith($p)) ]
-     | if length == 0 then "(none)"
-       else (.[-1] | ltrimstr($p) | rtrimstr(" -->") | rtrimstr("-->"))
-       end
-   )",
-  "---",
-  .body
-' <<<"$matches"
+# The reported `sha` is COMPUTED from the body just fetched (plan_digest, in
+# paths.sh) -- it is not the digest the body claims about itself in its footer.
+# Returning the footer meant a comment edited in the GitHub UI handed back its
+# pre-edit digest, which the caller then passed to --expect-sha, which happily
+# matched the same stale footer and overwrote the edit. Hashing the text means
+# an edited body reports a different sha here, so the guard can see it.
+#
+# `footer_sha` is printed alongside only when the two disagree, which is the
+# signal that the comment was edited outside this tooling.
+count_idx=0
+while (( count_idx < count )); do
+  entry="$(jq -c --argjson i "$count_idx" '.[$i]' <<<"$matches")"
+  body="$(jq -r '.body' <<<"$entry")"
+  computed="$(plan_digest <<<"$body")"
+  footer="$(jq -r --arg p "$sha_marker_prefix" '
+    [ (.body | split("\n")[]) | select(startswith($p)) ]
+    | if length == 0 then "" else (.[-1] | ltrimstr($p) | rtrimstr(" -->") | rtrimstr("-->")) end
+  ' <<<"$entry")"
+
+  jq -r '"id: \(.id)", "node_id: \(.node_id)", "author: \(.author)", "url: \(.url)"' <<<"$entry"
+  printf 'sha: %s\n' "$computed"
+  if [[ -n "$footer" && "$footer" != "$computed" ]]; then
+    printf 'footer_sha: %s  (DISAGREES -- edited outside this tooling)\n' "$footer"
+  fi
+  printf -- '---\n%s\n' "$body"
+
+  count_idx=$(( count_idx + 1 ))
+done

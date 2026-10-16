@@ -42,3 +42,46 @@ draft_path() {
 plan_marker='<!-- ol-plan:v1 -->'
 # shellcheck disable=SC2034
 sha_marker_prefix='<!-- ol-plan:sha:'
+
+# The marker a RETIRED plan comment carries. When --on-duplicate oldest|newest
+# keeps one comment and minimizes the rest, the losers also get this marker in
+# place of the live one. Minimizing alone is not enough: a minimized comment
+# keeps its body and its marker in the issue-comments API, which both lookups
+# read, so the duplicate stayed discoverable and the next ordinary upsert failed
+# on the same "2 plan comments" error the recovery was supposed to clear.
+# Deliberately NOT a prefix of plan_marker, so `startswith($plan_marker)` in
+# both lookups stops selecting it.
+# shellcheck disable=SC2034  # consumed by the sourcing script
+retired_marker='<!-- ol-plan:v1:retired -->'
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+  else shasum -a 256 | cut -d' ' -f1
+  fi
+}
+
+# Digest of a plan comment, read from stdin, for --expect-sha.
+#
+# It covers the plan TEXT, not the assembled comment: every marker line is
+# removed, CRs are stripped, and leading and trailing blank lines are trimmed
+# before hashing. That canonical form is what lets BOTH sides compute the same
+# number -- the writer from the draft it is about to post, the reader from the
+# body it just fetched.
+#
+# The earlier definition hashed the assembled payload instead, which only the
+# writer could reproduce. So the guard had to read the digest the comment
+# reported about itself, out of its own footer, and a GitHub UI edit leaves that
+# footer untouched: a session holding the pre-edit sha passed the check and
+# overwrote the edit. Hashing the text closes that, because an edited body
+# hashes differently however the footer reads.
+#
+# Interior blank lines are preserved -- they are part of the markdown.
+plan_digest() {
+  sed 's/\r$//' \
+    | grep -v -F -e "$plan_marker" -e "$retired_marker" -e "$sha_marker_prefix" \
+    | awk '
+        /^[[:space:]]*$/ { if (seen) { pending++ } ; next }
+        { while (pending-- > 0) print ""; pending = 0; seen = 1; print }
+      ' \
+    | sha256_of
+}

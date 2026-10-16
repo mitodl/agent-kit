@@ -18,7 +18,7 @@ The comment opens with a marker line and closes with a digest line:
 ```text
 <!-- ol-plan:v1 -->
 ...plan body...
-<!-- ol-plan:sha:<sha256 of everything above this line> -->
+<!-- ol-plan:sha:<sha256 of the canonical plan text> -->
 ```
 
 **Both are written by `scripts/upsert-plan-comment.sh`, not by hand.** It
@@ -26,12 +26,31 @@ strips any markers in the body it is given before adding its own, so a body
 that was round-tripped through a read cannot end up with two.
 
 The marker is how the next run finds this comment instead of posting a second
-one. The digest is how a second session discovers it is about to overwrite an
-edit it never saw — GitHub's PATCH ignores `If-Match`, so the check has to
-travel inside the body.
+one. The digest is how a session discovers it is about to overwrite an edit it
+never saw.
+
+**The digest is computed, not read.** It covers the *canonical plan text* — the
+body with marker lines removed, CRs stripped, and leading and trailing blank
+lines trimmed — so both sides can derive the same number: the writer from the
+draft it is about to post, the reader from the body it just fetched. The digest
+line itself is a human-readable fingerprint; **nothing verifies against it.**
+That matters because an edit made in the GitHub UI rewrites the prose and
+leaves the footer alone, so a check that trusted the footer would see an
+unchanged digest and overwrite the edit.
+
+**`--expect-sha` is not an atomic check-and-write.** GitHub's PATCH ignores
+`If-Match`, so there is no compare-and-swap available. It detects an edit made
+*before* the lookup; a write landing between that lookup and the PATCH still
+wins silently. It guards against a stale draft, not against a race.
+
+A comment retired by `--on-duplicate oldest|newest` carries
+`<!-- ol-plan:v1:retired -->` instead. That marker is deliberately **not** a
+prefix of the live one, so neither lookup selects it — minimizing alone left
+the duplicate in the REST API that both lookups read, which is how a recovery
+run used to leave the issue as wedged as it found it.
 
 **The strip-HTML-comments rule does not apply here.**
-[`create-ol-github-issue`](../../../process/create-ol-github-issue/SKILL.md)
+`create-ol-github-issue`
 says to strip `<!-- ... -->` from a finished issue **body**, where those
 comments are leftover template instructions. This is a **comment**, and these
 two markers are load-bearing: strip them and the next update silently posts a
