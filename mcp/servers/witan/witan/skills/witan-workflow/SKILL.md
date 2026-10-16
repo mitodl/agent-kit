@@ -103,12 +103,13 @@ workflow_session_start(
 
 For the session id, read your own platform's variable in your shell tool:
 `echo $CLAUDE_SESSION_ID` on Claude Code, `echo $PI_SESSION_ID` on Pi (which
-sets it for commands its `bash` tool runs). Don't use a fallback chain like
-`${CLAUDE_SESSION_ID:-$PI_SESSION_ID}` — an agent launched from the other one
+sets it for commands its `bash` tool runs), `echo $CODEX_SESSION_ID` on Codex.
+Don't use a fallback chain like
+`${CLAUDE_SESSION_ID:-$PI_SESSION_ID}` — an agent launched from another one
 can inherit its id, and the chain would pick that. Use that value, not a
 made-up one — it is what
-the Stop hook (Claude Code) or the workflow extension's shutdown handler (Pi)
-looks the session up by to auto-close it. Only if both are empty (another
+the Stop hook (Claude Code, Codex) or the workflow extension's shutdown handler (Pi)
+looks the session up by to auto-close it. Only if all are empty (another
 agent), use any stable string unique to this session, and close the session
 yourself with `/witan-workflow end`, since nothing else can find it.
 
@@ -154,7 +155,7 @@ the `session_slug` from this session's state file in the system temp dir
 print(tempfile.gettempdir())"` if unsure): it is
 `workflow-session-<session id>.json`, where `<session id>` is the value passed
 to `workflow_session_start` (`$CLAUDE_SESSION_ID` on Claude Code,
-`$PI_SESSION_ID` on Pi). If you no
+`$PI_SESSION_ID` on Pi, `$CODEX_SESSION_ID` on Codex). If you no
 longer have the id, pick the newest matching `workflow-session-*.json` in that
 directory.
 
