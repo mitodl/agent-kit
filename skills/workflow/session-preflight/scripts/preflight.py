@@ -320,17 +320,11 @@ def check_witan(repo_root: Path | None) -> str | None:
     return f"witan: {health} is unreachable ({reason}); witan MCP tools will fail until it answers (VPN?). Run: curl -sS {health}"
 
 
-def main() -> int:
-    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
-    repo_root = _repo_root()
-    checks: dict[str, Callable[[], str | None]] = {
-        "gh": check_gh,
-        "vault": check_vault,
-        "kubectl": check_kubectl,
-        "docker": lambda: check_docker(repo_root),
-        "git": lambda: check_drift(repo_root),
-        "witan": lambda: check_witan(repo_root),
-    }
+def run_checks(
+    checks: dict[str, Callable[[], str | None]], deadline: float
+) -> list[str]:
+    """Run ``checks`` concurrently until ``deadline`` (``time.monotonic``) and
+    return their failure lines, in ``checks`` order."""
     results: dict[str, str | None] = {}
 
     def work(name: str, check: Callable[[], str | None]) -> None:
@@ -355,18 +349,39 @@ def main() -> int:
     for thread in threads.values():
         thread.join(max(0.0, deadline - time.monotonic()))
 
+    # Taken before the sweep: a check whose process is killed can return
+    # straight after, and its result (e.g. a killed git reads as "no drift",
+    # a killed kubectl as an auth failure) would hide that it ran out of time.
+    unfinished = {name for name, thread in threads.items() if thread.is_alive()}
     with _live_lock:
         _stopping.set()
         for proc in _live:
             _kill(proc)
 
-    for name, thread in threads.items():
-        if thread.is_alive():
-            print(
+    lines = []
+    for name in checks:
+        if name in unfinished:
+            lines.append(
                 f"{name}: check did not finish within {TOTAL_BUDGET_SECONDS:g}s and was stopped. Run: python3 {__file__}"
             )
         elif results.get(name):
-            print(results[name])
+            lines.append(results[name])
+    return lines
+
+
+def main() -> int:
+    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
+    repo_root = _repo_root()
+    checks: dict[str, Callable[[], str | None]] = {
+        "gh": check_gh,
+        "vault": check_vault,
+        "kubectl": check_kubectl,
+        "docker": lambda: check_docker(repo_root),
+        "git": lambda: check_drift(repo_root),
+        "witan": lambda: check_witan(repo_root),
+    }
+    for line in run_checks(checks, deadline):
+        print(line)
     sys.stdout.flush()
     # Daemon threads may still be blocked on a killed child's pipe; exit
     # without joining them.

@@ -8,6 +8,7 @@ Stdlib-only (``python3 -m unittest``) because the script itself is.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -324,6 +325,53 @@ class PreflightTest(unittest.TestCase):
             f"Run: python3 {SCRIPT}\n",
         )
         self.assertLess(elapsed, WALL_LIMIT_SECONDS)
+
+
+class RunChecksTest(unittest.TestCase):
+    """``run_checks`` in-process, where the order of the final sweep and a
+    worker's return can be forced rather than left to scheduling."""
+
+    def setUp(self) -> None:
+        spec = importlib.util.spec_from_file_location("preflight_under_test", SCRIPT)
+        self.preflight = importlib.util.module_from_spec(spec)
+        # dataclasses looks the module up by name while building Outcome.
+        sys.modules[spec.name] = self.preflight
+        self.addCleanup(sys.modules.pop, spec.name)
+        spec.loader.exec_module(self.preflight)
+
+    def test_a_check_killed_by_the_sweep_is_reported_as_unfinished(self) -> None:
+        preflight = self.preflight
+        returned = threading.Event()
+
+        class SweepThenLetTheWorkerReturn:
+            """``_live_lock``, except that the main thread, on leaving the
+            final sweep, waits for the killed check to return and its worker
+            to exit before the output is built."""
+
+            def __init__(self) -> None:
+                self.lock = threading.Lock()
+
+            def __enter__(self) -> None:
+                self.lock.acquire()
+
+            def __exit__(self, *exc: object) -> None:
+                self.lock.release()
+                if (
+                    preflight._stopping.is_set()
+                    and threading.current_thread() is threading.main_thread()
+                ):
+                    returned.wait(5)
+                    time.sleep(0.2)
+
+        def check() -> str | None:
+            out = preflight._run(["/bin/sleep", "30"])
+            returned.set()
+            return None if out is None else "looks like a real failure"
+
+        preflight._live_lock = SweepThenLetTheWorkerReturn()
+        lines = self.preflight.run_checks({"slow": check}, time.monotonic() + 0.5)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("slow: check did not finish"), lines)
 
 
 if __name__ == "__main__":
