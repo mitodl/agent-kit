@@ -74,6 +74,6 @@ it.
 ## Installing the hook
 
 `agent-config.toml` registers this skill in the `universal` profile with a
-`session_start` hook running `python3 {skill_dir}/scripts/preflight.py`, so
+`session_start` hook running `python3 "{skill_dir}/scripts/preflight.py"`, so
 `agent-kit apply` installs both. Codex runs the hook only after you trust it
 with `/hooks` in the Codex TUI; `agent-kit apply` prints that reminder.
