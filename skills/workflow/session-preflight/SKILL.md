@@ -25,16 +25,17 @@ seconds.
 
 | Check | Runs only when | Fails when |
 | ----- | -------------- | ---------- |
-| `gh auth status` | `gh` is on PATH | not logged in, or the token is invalid |
+| `gh auth status --active` | `gh` is on PATH | the active account is not logged in, or its token is invalid |
 | `vault token lookup` | `vault` is on PATH and `VAULT_ADDR` is set | no token, or it expired |
 | `kubectl auth can-i get pods` | `kubectl` is on PATH and a current context is set | the context cannot authenticate (a "no" answer is fine) |
 | witan `/health` | a remote witan is configured for this checkout | the deployment does not answer within 2s |
-| `docker info` | the repo root has a Dockerfile, compose file or Tiltfile | the daemon is not reachable |
+| `docker info` | the repo root has a Dockerfile, `*.Dockerfile`, compose file or Tiltfile, or `docker/` holds a Dockerfile | the daemon is not reachable |
 | `git rev-list HEAD...origin/HEAD` | the checkout has an `origin/HEAD` | more than 50 commits behind, as of the last fetch |
 
 The witan check resolves the remote the way witan does: `WITAN_REMOTE_URL`,
 then the `remote_url` of the `[targets.*]` block in `~/.config/witan/config.toml`
-(or `WITAN_CONFIG`) that matches this checkout, then the global `remote_url`. A
+(or `WITAN_CONFIG`) that `WITAN_TARGET` names or that matches this checkout,
+then the global `remote_url`. A
 checkout with no remote uses a local store, so the check is skipped. It needs
 Python 3.11 or later (for `tomllib`); on an older `python3` it is skipped.
 
