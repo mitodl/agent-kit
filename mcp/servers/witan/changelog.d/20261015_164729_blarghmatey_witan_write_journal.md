@@ -16,4 +16,4 @@
 
 ### Changed
 
-- Requires witan-core 0.42.
+- Requires witan-core 0.44.
