@@ -160,7 +160,10 @@ export function columns(board: Board, route: Route): Columns {
 	};
 }
 
-/** The blockers of `task` that are not closed, from the graph-wide read. */
+/**
+ * The blockers of `task` found in `live`, which holds only tasks that are not
+ * closed. A blocker missing from it is left out, whatever its status.
+ */
 export function openBlockers(
 	task: TaskRow,
 	live: Map<string, TaskRow>,
