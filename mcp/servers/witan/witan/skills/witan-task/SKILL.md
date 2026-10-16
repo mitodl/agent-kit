@@ -172,6 +172,16 @@ reusable knowledge about the repo, that is a `memory_store` (a project fact or
 lesson) — and it is fine to do both: store the fact, then comment with the
 correction and a pointer to it.
 
+## A `buffered: true` result
+
+When the deployed witan is unreachable, `task_comment`, `task_create`,
+`task_update`, `task_close` and `task_release` come back as
+`{"buffered": true, "journal_id": ..., "pending": n, "note": ...}`. The write
+is queued locally and replays in order on the next call that reaches the
+deployment. Don't retry it and don't keep your own scratchpad copy to replay
+by hand; `witan journal list` shows what is queued. Reads and `task_claim`
+still fail outright during an outage.
+
 ## When to use this vs. your built-in todo list
 
 Use `task_*` for **work that outlives the current session or is shared** — items

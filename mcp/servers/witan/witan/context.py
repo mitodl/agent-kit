@@ -1219,3 +1219,34 @@ def _detect_repo() -> str | None:
 # The Stop hook's session auto-close lives in ``witan.cli.hooks`` — it dispatches
 # through ``_srv()`` so it reaches the deployment when one is configured, which a
 # direct OmnigraphClient write here could not.
+
+
+def journal_line(remote_url: str, debug: bool = False) -> str:
+    """One line naming the writes queued for ``remote_url``, or ``""`` if none.
+
+    Separate from :func:`_render_context_block` because it has to show during
+    an outage, which is exactly when the render comes back empty, and because
+    the render is cached for ``_OUTPUT_CACHE_TTL`` while the journal can drain
+    on any call. Called after the render so a replay that the render's own
+    reads triggered is already reflected.
+    """
+    from datetime import datetime
+
+    from witan_core.remote.journal import WriteJournal, journal_path
+
+    journal = WriteJournal(journal_path(remote_url))
+    try:
+        if not journal.has_pending():
+            return ""
+        entries = journal.entries()
+    except Exception:  # noqa: BLE001 - the prompt hook must never crash
+        _dbg_exc(debug, "journal read failed (no queued-writes line)")
+        return ""
+    if not entries:
+        return ""
+    since = datetime.fromisoformat(entries[0].ts).astimezone().strftime("%H:%M")
+    return (
+        f"{len(entries)} witan write(s) queued since {since} while the "
+        "deployment was unreachable; they replay on the next successful call "
+        "(`witan journal`). Don't re-send them."
+    )

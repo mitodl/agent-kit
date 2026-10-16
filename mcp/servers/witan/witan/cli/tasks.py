@@ -306,6 +306,23 @@ app.command(task_app)
 task_app.command(_task_show, name="show")
 
 
+def _queued(result: object) -> bool:
+    """Report the proxy's "queued in the journal" answer, if that is what this is.
+
+    A deployed witan that cannot be reached answers a task write with a
+    ``buffered`` result instead of the tool's own (see ``witan journal``), so
+    the usual rendering would misreport it as a failure or crash on a missing
+    key.
+    """
+    if not (isinstance(result, dict) and result.get("buffered")):
+        return False
+    console.print(
+        f"[yellow]Queued[/yellow] as journal entry {result['journal_id']} "
+        f"({result['pending']} pending). {esc(result['note'])}"
+    )
+    return True
+
+
 @task_app.command(name="create")
 def task_create_cmd(
     title: str,
@@ -354,6 +371,8 @@ def task_create_cmd(
         symbol_refs=_split_csv(symbol_refs),
         tags=_split_csv(tags),
     )
+    if _queued(result):
+        return
     console.print(f"[green]Created task:[/green] [bold]{result['slug']}[/bold]")
     console.print(f"  status: {_styled(result['status'], _STATUS_STYLE)}")
     if result.get("repo"):
@@ -378,6 +397,8 @@ def task_comment_cmd(slug: str, text: str) -> None:
     text: The comment body.
     """
     result = _fn(_srv().task_comment)(slug=slug, text=text)
+    if _queued(result):
+        return
     if not result.get("commented"):
         print_error(result.get("reason") or "comment not recorded")
         raise SystemExit(1)
@@ -400,6 +421,8 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
     """
     s = _srv()
     result = _fn(s.task_close)(slug=slug, resolution=resolution)
+    if _queued(result):
+        return
     if not result:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)
@@ -468,6 +491,8 @@ def task_release_cmd(
     result = _fn(s.task_release)(
         slug=slug, assignee=assignee, status=status, force=force
     )
+    if _queued(result):
+        return
     if result is None:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)
@@ -537,6 +562,8 @@ def task_update_cmd(
         external_uri=external_uri,
         tags=_split_csv(tags),
     )
+    if _queued(result):
+        return
     if not result:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)

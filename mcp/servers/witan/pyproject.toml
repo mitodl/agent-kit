@@ -229,7 +229,11 @@ dependencies = [
   # line is an `InstallResult.notice` that `report_install` prints only from
   # 0.43.0. On 0.42 `--agent codex` is rejected as an invalid value, and
   # `--agent all` writes witan's hooks to Codex without the notice.
-  "witan-core[cli,remote,observability,sentry]>=0.43,<1",
+  #
+  # ★ >=0.44 IS AN IMPORT FLOOR: `remote/proxy.py` and `cli/journal.py` import
+  # `witan_core.remote.journal` and `RemoteNotSent`, added in witan-core 0.44.0
+  # in the same change (the write journal).
+  "witan-core[cli,remote,observability,sentry]>=0.44,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

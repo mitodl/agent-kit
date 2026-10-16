@@ -45,19 +45,23 @@ resolution, since the deployed server has no git checkout),
 :meth:`~RemoteMCPProxy._resolve_session_slug` (client-side workflow-session
 handle, since a deployed replica shares no filesystem with the agent),
 :meth:`~RemoteMCPProxy._resolve_session_id` (client-side agent-session id, for
-the same reason), and
+the same reason),
 :meth:`~RemoteMCPProxy._elicitation_handler` (who answers a prompt the
-deployment raises — a terminal by default). Requires the ``remote`` extra
-(``fastmcp``).
+deployment raises — a terminal by default), and
+:meth:`~RemoteMCPProxy._buffers` / :meth:`~RemoteMCPProxy._journal_holder` /
+:meth:`~RemoteMCPProxy._replay_plan` (which writes queue in the write journal
+while the deployment is unreachable, and how a queued one replays). Requires
+the ``remote`` extra (``fastmcp``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
@@ -67,6 +71,12 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+
+from ..identity import derive_actor_id
+from .journal import JournalEntry, WriteJournal, journal_path
+from .oidc import decode_claims
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteToolUnavailable(RuntimeError):
@@ -176,6 +186,21 @@ class RemoteUnreachable(RuntimeError):
     fallback would split the corpus across two graphs with no signal that it
     happened, leaving a merge nobody knew to run. This exception exists so that
     refusal reads as a sentence instead of a traceback.
+    """
+
+
+class RemoteNotSent(RemoteUnreachable):
+    """The connection to the deployment never opened, so the call was never sent.
+
+    A narrower :class:`RemoteUnreachable`, raised only from the connect step of
+    :meth:`RemoteMCPProxy._invoke_once`. That position is what makes it safe to
+    queue a write in the journal: fastmcp's ``Client.__aenter__`` returns only
+    once the session has negotiated, so a failure there means no ``tools/call``
+    went out. The same ``"Client failed to connect"`` text can also surface
+    from a session that dies mid-request (fastmcp's ``_connection_failure`` is
+    shared by both paths), so neither the type nor the message alone would
+    tell the two apart. A drop after the call went out stays a plain
+    :class:`RemoteUnreachable`, because the write may have landed.
     """
 
 
@@ -366,6 +391,26 @@ def _next_cursor(result: Any) -> str | None:
     return result.next_cursor
 
 
+# How a replayed call can fail, split by whether the deployment answered it.
+_REPLAY_REFUSED = (RemoteToolFailed, RemoteToolUnavailable, RemotePayloadTooLarge)
+_REPLAY_UNSENT = (
+    RemoteUnreachable,
+    RemoteCredentialRejected,
+    RemoteWriteIndeterminate,
+)
+
+
+def _outcome(entry: JournalEntry, outcome: str, detail: str) -> dict:
+    """One line of a journal replay's report."""
+    return {
+        "id": entry.id,
+        "tool": entry.tool,
+        "ts": entry.ts,
+        "outcome": outcome,
+        "detail": detail,
+    }
+
+
 class RemoteMCPProxy:
     """Mirror a FastMCP server's tool surface, dispatching each call over MCP."""
 
@@ -374,6 +419,8 @@ class RemoteMCPProxy:
         url: str,
         token_provider: Callable[[], str],
         token_refresher: Callable[[str], str] | None = None,
+        *,
+        buffer_writes: bool = True,
     ) -> None:
         """``token_refresher`` force-mints a credential, bypassing any cache.
 
@@ -392,8 +439,13 @@ class RemoteMCPProxy:
         Distinct from ``token_provider`` because that one is allowed to answer
         from cache — and on a rejected token it necessarily WOULD, handing back
         the same dead credential and turning a retry into a second 401.
+
+        ``buffer_writes=False`` turns off queueing in the write journal for a
+        caller that needs every failure raised, e.g. a probe that measures how
+        writes fail. Replaying what other callers queued is unaffected.
         """
         self._url = url
+        self._buffer_writes = buffer_writes
         self._token_provider = token_provider
         self._token_refresher = token_refresher
         self._param_names: dict[str, list[str]] | None = None
@@ -612,6 +664,53 @@ class RemoteMCPProxy:
         project.
         """
         return None
+
+    def _buffers(self, name: str, *, dispatched: bool) -> bool:
+        """Whether a failed call to ``name`` is queued in the journal. Default: never.
+
+        ``dispatched`` is False when the connection never opened (nothing was
+        sent, so any write is safe to queue) and True when a gateway cut the
+        call off after dispatch (it may have landed, so only a write that is
+        harmless to apply twice may be queued).
+        """
+        return False
+
+    def _journal_holder(self, token: str) -> str | None:
+        """Who a queued write is recorded as, for replay's ownership check.
+
+        The token's ``preferred_username``, else ``email``, else the
+        ``act-<sub>`` id derived from ``sub``: the same order the deployment
+        attributes the call in (``witan.server._current_author``). ``None``
+        when even ``sub`` is missing or unusable. A binding that qualifies its
+        claim holders (witan's ``#<session>``) extends this.
+        """
+        claims = decode_claims(token)
+        for claim in ("preferred_username", "email"):
+            value = claims.get(claim)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        try:
+            return derive_actor_id(claims.get("sub"))
+        except ValueError:
+            return None
+
+    async def _replay_plan(
+        self,
+        entry: JournalEntry,
+        call: Callable[..., Awaitable[Any]],
+    ) -> JournalEntry | None:
+        """What to send for a queued ``entry``: itself, a substitute, or nothing.
+
+        ``call(tool, args)`` runs a tool over the replay's open connection, so
+        a binding can re-read state the entry depends on before deciding.
+        Default: replay every entry as recorded.
+        """
+        return entry
+
+    @property
+    def journal(self) -> WriteJournal:
+        """This deployment's write journal."""
+        return WriteJournal(journal_path(self._url))
 
     # ── dispatch ───────────────────────────────────────────────────────────
     def __getattr__(self, name: str) -> Callable[..., Any]:
@@ -949,11 +1048,32 @@ class RemoteMCPProxy:
         client is closing would otherwise escape as exactly the traceback this
         exists to remove. It wraps the stack rather than sitting inside it for
         that reason. A non-transport cleanup error still propagates as itself.
+
+        A write the binding opts in (:meth:`_buffers`) that failed with
+        :class:`RemoteNotSent`, or with :class:`RemoteWriteIndeterminate` when
+        it is safe to apply twice, is queued in :attr:`journal` and answered
+        with a ``buffered`` result instead of raising.
         """
         # Bound before the attempt so the refresher below can be told exactly
         # which credential was refused, rather than re-reading a cache another
         # worker may already have replaced.
         token = self._token_provider()
+        try:
+            return await self._invoke_refreshing(name, args, kwargs, token)
+        except (RemoteNotSent, RemoteWriteIndeterminate) as exc:
+            dispatched = isinstance(exc, RemoteWriteIndeterminate)
+            if (
+                args
+                or not self._buffer_writes
+                or not self._buffers(name, dispatched=dispatched)
+            ):
+                raise
+            return self._buffer(name, kwargs, token)
+
+    async def _invoke_refreshing(
+        self, name: str, args: tuple, kwargs: dict, token: str
+    ) -> Any:
+        """One attempt, plus the single post-refresh retry a read is allowed."""
         try:
             return await self._invoke_once(name, args, kwargs, token)
         except RemoteCredentialRejected:
@@ -1012,17 +1132,239 @@ class RemoteMCPProxy:
                             name, rejected.response.status_code, refreshed=refreshed
                         )
                     ) from exc
-                raise RemoteUnreachable(self._unreachable_error(exc)) from exc
+                # RemoteNotSent, not plain RemoteUnreachable: this is the one
+                # position where the call provably never went out.
+                raise RemoteNotSent(self._unreachable_error(exc)) from exc
             if (
                 self._param_names is None
                 or time.monotonic() >= self._param_names_expiry
             ):
                 await self._refresh_param_names(client)
+            await self._replay_journal(client)
             arguments = self._map_args(name, args, kwargs)
             result = await client.call_tool(name, arguments)
             return result.data
 
-    def _map_args(self, name: str, args: tuple, kwargs: dict) -> dict:
+    # ── write journal ──────────────────────────────────────────────────────
+    def _client_context(self, name: str, kwargs: dict) -> dict[str, str | None]:
+        """The client-side values :meth:`_map_args` would inject, resolved now.
+
+        Resolved without the tool list (a queued call has none to consult), so
+        a value can be resolved for a tool that turns out not to declare it;
+        :meth:`_map_args` drops it then, exactly as it would have.
+        """
+        return {
+            "repo": (
+                self._resolve_repo()
+                if kwargs.get("repo") is None and self._repo_means_detect(name)
+                else None
+            ),
+            "branch": (
+                self._resolve_branch()
+                if kwargs.get("branch") is None and self._branch_means_checkout(name)
+                else None
+            ),
+            "session_slug": (
+                self._resolve_session_slug()
+                if kwargs.get("session_slug") is None
+                else None
+            ),
+            "session_id": (
+                self._resolve_session_id() if kwargs.get("session_id") is None else None
+            ),
+        }
+
+    def _buffer(self, name: str, kwargs: dict, token: str) -> dict:
+        """Queue ``name`` in the journal and tell the caller so, as a result."""
+        entry, pending = self.journal.append(
+            name,
+            {k: v for k, v in kwargs.items() if v is not None},
+            context=self._client_context(name, kwargs),
+            holder=self._journal_holder(token),
+        )
+        logger.warning(
+            "deployment unreachable; queued %s as journal entry %s (%d pending)",
+            name,
+            entry.id,
+            pending,
+        )
+        return {
+            "buffered": True,
+            "journal_id": entry.id,
+            "pending": pending,
+            "note": (
+                f"The deployed service at {self._url} is unreachable. This "
+                "write is queued and replays in order on the next successful "
+                "call. Don't retry it."
+            ),
+        }
+
+    def _client_value(
+        self, field: str, resolved: dict[str, str | None] | None
+    ) -> str | None:
+        """One client-side injection: from ``resolved`` if given, else resolved now."""
+        if resolved is not None:
+            return resolved[field]
+        resolver = {
+            "repo": self._resolve_repo,
+            "branch": self._resolve_branch,
+            "session_slug": self._resolve_session_slug,
+            "session_id": self._resolve_session_id,
+        }[field]
+        return resolver()
+
+    async def replay_journal(self) -> list[dict]:
+        """Open a connection and replay the journal now, reporting each entry.
+
+        What ``witan journal replay`` runs. Every other replay happens as a side
+        effect of the next call whose connection opens.
+
+        A credential rejected while connecting is refreshed once, exactly as
+        :meth:`remote_tools` does: nothing has been sent at that point, so the
+        retry cannot apply anything twice.
+        """
+        token = self._token_provider()
+        try:
+            return await self._replay_journal_once(token)
+        except RemoteCredentialRejected:
+            if self._token_refresher is None:
+                raise
+            return await self._replay_journal_once(
+                self._token_refresher(token), refreshed=True
+            )
+
+    async def _replay_journal_once(
+        self, token: str, *, refreshed: bool = False
+    ) -> list[dict]:
+        """One :meth:`replay_journal` attempt with an already-resolved ``token``."""
+        async with (
+            self._reclassifying("replay", refreshed=refreshed),
+            AsyncExitStack() as stack,
+        ):
+            try:
+                client = await stack.enter_async_context(self._new_client(token))
+            except Exception as exc:  # see _invoke_once
+                rejected = auth_failure(exc)
+                if rejected is not None:
+                    raise RemoteCredentialRejected(
+                        self._credential_rejected_error(
+                            "replay", rejected.response.status_code, refreshed=refreshed
+                        )
+                    ) from exc
+                raise RemoteNotSent(self._unreachable_error(exc)) from exc
+            if (
+                self._param_names is None
+                or time.monotonic() >= self._param_names_expiry
+            ):
+                await self._refresh_param_names(client)
+            return await self._replay_journal(client)
+
+    async def _replay_journal(self, client: Client) -> list[dict]:
+        """Send queued writes over ``client``, oldest first, before anything else.
+
+        Each entry has two steps, with different failure rules.
+
+        The binding's :meth:`_replay_plan` reads first. A failure there keeps
+        the entry and stops replay: nothing was written, so the entry is as
+        safe to send next time as it was this time.
+
+        Then the write. One that is safe to apply twice (``_buffers(...,
+        dispatched=True)``) stays in the journal until it succeeds, so a failed
+        send keeps it and stops replay. Any other write is removed BEFORE it is
+        sent. Once the request may have left, no failure (a reset, a gateway
+        cut-off, a cancelled replay) proves it did not land, and sending it
+        again writes a second comment or task, so those replay at most once
+        and a failed send is logged as lost. A refused write (a tool error, an
+        unknown tool, a 413) is dropped either way: a refusal is an answer, and
+        leaving it at the head would wedge every entry behind it.
+        """
+        journal = self.journal
+        if not journal.has_pending():
+            return []
+        report: list[dict] = []
+        with journal.replaying() as acquired:
+            if not acquired:
+                return []
+
+            async def call(
+                tool: str, args: dict, context: dict[str, str | None] | None = None
+            ) -> Any:
+                async with self._reclassifying(tool):
+                    arguments = self._map_args(tool, (), args, resolved=context)
+                    return (await client.call_tool(tool, arguments)).data
+
+            for entry in journal.entries():
+                # Another binding pointed at the same deployment (witan-code's
+                # proxy shares the URL) has neither the replay checks nor the
+                # retry rules for this entry. Leave it, and everything behind
+                # it, for a binding that queues it.
+                if not self._buffers(entry.tool, dispatched=False):
+                    break
+                try:
+                    plan = await self._replay_plan(entry, call)
+                except (*_REPLAY_REFUSED, *_REPLAY_UNSENT) as exc:
+                    report.append(_outcome(entry, "kept", str(exc)))
+                    break
+                if plan is None:
+                    journal.remove(entry.id)
+                    report.append(_outcome(entry, "skipped", ""))
+                    continue
+                retryable = self._buffers(plan.tool, dispatched=True)
+                if not retryable:
+                    journal.remove(entry.id)
+                try:
+                    await call(plan.tool, plan.args, plan.context)
+                except _REPLAY_REFUSED as exc:
+                    logger.warning(
+                        "dropped journal entry %s (%s from %s): refused: %s",
+                        entry.id,
+                        entry.tool,
+                        entry.ts,
+                        exc,
+                    )
+                    if retryable:
+                        journal.remove(entry.id)
+                    report.append(_outcome(entry, "dropped", str(exc)))
+                    continue
+                except _REPLAY_UNSENT as exc:
+                    if retryable:
+                        report.append(_outcome(entry, "kept", str(exc)))
+                    else:
+                        logger.warning(
+                            "lost journal entry %s (%s from %s): it may or may "
+                            "not have been applied, and sending it again could "
+                            "apply it twice: %s",
+                            entry.id,
+                            entry.tool,
+                            entry.ts,
+                            exc,
+                        )
+                        report.append(_outcome(entry, "lost", str(exc)))
+                    break
+                if retryable:
+                    journal.remove(entry.id)
+                outcome = "applied" if plan is entry else "substituted"
+                report.append(
+                    _outcome(entry, outcome, "" if plan is entry else plan.tool)
+                )
+        for line in report:
+            logger.info("journal replay: %s", line)
+        return report
+
+    def _map_args(
+        self,
+        name: str,
+        args: tuple,
+        kwargs: dict,
+        *,
+        resolved: dict[str, str | None] | None = None,
+    ) -> dict:
+        """Bind a call's arguments for the wire.
+
+        ``resolved`` supplies the client-side injections (see
+        :meth:`_client_context`) instead of resolving them now, for a queued
+        call replayed from somewhere other than where it was made.
+        """
         assert self._param_names is not None
         names = self._param_names.get(name)
         if names is None:
@@ -1063,7 +1405,7 @@ class RemoteMCPProxy:
             and arguments.get("repo") is None
             and self._repo_means_detect(name)
         ):
-            detected = self._resolve_repo()
+            detected = self._client_value("repo", resolved)
             if detected is not None:
                 arguments["repo"] = detected
             else:
@@ -1076,7 +1418,7 @@ class RemoteMCPProxy:
             and arguments.get("branch") is None
             and self._branch_means_checkout(name)
         ):
-            branch = self._resolve_branch()
+            branch = self._client_value("branch", resolved)
             if branch is not None:
                 arguments["branch"] = branch
             else:
@@ -1089,7 +1431,7 @@ class RemoteMCPProxy:
         # (``workflow_session_end``) callers already pass it explicitly, so this
         # only ever fills an omission.
         if "session_slug" in names and arguments.get("session_slug") is None:
-            active = self._resolve_session_slug()
+            active = self._client_value("session_slug", resolved)
             if active is not None:
                 arguments["session_slug"] = active
             else:
@@ -1101,7 +1443,7 @@ class RemoteMCPProxy:
         # onto the bare identity — precisely the case the claim qualifier
         # exists for, since concurrent users are what a shared deployment is.
         if "session_id" in names and arguments.get("session_id") is None:
-            sid = self._resolve_session_id()
+            sid = self._client_value("session_id", resolved)
             if sid is not None:
                 arguments["session_id"] = sid
             else:
