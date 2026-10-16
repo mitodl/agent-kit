@@ -1,20 +1,20 @@
 ---
 name: address-pr-feedback
 description: >
-  Fetch, categorize, and address GitHub pull request review feedback --
-  inline review comments, review threads, top-level discussion comments,
-  and failing status checks (GitHub Actions jobs such as the prek/autofix.ci
-  hook check, plus third-party checks like pre-commit.ci, GitGuardian, and
-  CodeQL) -- including paginating
-  through large or long-running PRs with many rounds of review. Applies
-  fixes, replies to reviewers with evidence (never a generic "noted"),
-  marks resolved review threads via the GraphQL API, and diagnoses/fixes
-  failing checks using their logs. Use this skill when asked to "address PR
+  Fetch, categorize, and address GitHub pull request review feedback (inline
+  review threads, discussion comments, failing checks such as prek/autofix.ci,
+  pre-commit.ci, GitGuardian, CodeQL), paginating through long-running PRs.
+  Applies fixes, replies to reviewers with evidence, resolves threads via
+  GraphQL, and diagnoses failing checks from their logs. Has a draft-only
+  mode that commits locally and shows a reply table but pushes, posts, and
+  resolves nothing until approved, and edits pending review comments without
+  clobbering the user's own changes. Use this skill when asked to "address PR
   feedback", "address the comments on <PR>", "resolve the review comments",
-  "mark addressed comments as resolved", "fix the failing checks", "the CI
-  is red on <PR>", or to triage feedback from bots (Copilot, Gemini, CodeQL,
-  Sentry), hook autofixers (autofix.ci, pre-commit.ci), third-party check
-  services (GitGuardian), or human reviewers on a specific pull request.
+  "check the Copilot comments", "fix the failing checks", "the CI is red on
+  <PR>", "draft replies without posting", "don't post anything", "leave it
+  pending", "show me first", or to triage feedback from bots (Copilot,
+  Gemini, CodeQL, Sentry), hook autofixers, or human reviewers on a specific
+  pull request.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -83,7 +83,11 @@ Resolve two things before running anything, asking if either is unclear:
    [`github-pr-triage`](../github-pr-triage/SKILL.md) which defaults to
    report-only. If the user says "review the feedback" or "give me a summary"
    without "address"/"fix"/"resolve", treat it as read-only: categorize and
-   report, but don't change code or touch thread state.
+   report, but don't change code or touch thread state. A third answer sits
+   between the two: "draft", "don't post", "leave pending", "show me first",
+   "dry run", or "nothing goes up until I say" means
+   [draft-only mode](#draft-only-mode). Fix locally, but push, post, and
+   resolve nothing until the user approves.
 
 ## Phase 1 — Fetch
 
@@ -100,7 +104,7 @@ an earlier session, or producing a final "here's everything, resolved and
 not" summary).
 
 Output shape: `{repo, pr, review_threads: [...], discussion_comments: [...],
-reviews: [...]}`. Each `review_threads[]` entry carries the GraphQL `id`
+reviews: [...], pending_review: {...} | null}`. Each `review_threads[]` entry carries the GraphQL `id`
 (pass this straight to `resolve-thread.sh`), `isResolved`, `isOutdated`,
 `path`/`line`, and its `comments`. Every comment, discussion comment, and
 review also carries `author_type` alongside `author` — GitHub's own actor
@@ -108,6 +112,13 @@ type (`User`, `Bot`, `Organization`, `Mannequin`), normalized from GraphQL's
 `__typename` and REST's `user.type` so it reads the same regardless of which
 call produced the record. Classify authorship from that field, not from
 whether you recognize the login.
+
+`pending_review` is the viewer's own unsubmitted review (`null` when there
+is none), with each comment's node `id` and a snapshot of its `body`. When
+it is set, the script also prints "You have a pending review with N
+comment(s)" to stderr. Pass that on to the user, and follow
+[Editing a pending review comment](#editing-a-pending-review-comment) before
+touching any of those comments.
 
 ## Phase 1b — Checks
 
@@ -172,6 +183,7 @@ reasoning for declining) to the operator before pushing and resolving, and
 use their framing in the reply rather than your paraphrase. Bot-authored
 threads (Copilot, Gemini, CodeQL, etc.) don't need that same checkpoint —
 address, reply, and resolve those directly per the rest of this skill.
+In [draft-only mode](#draft-only-mode), bot threads wait for approval too.
 
 Decide which branch applies from `author_type` (Phase 1's output), never
 from whether the login *looks* like a bot — an unfamiliar GitHub App or a
@@ -226,6 +238,20 @@ Phase 3 — tag each one on the way in:
 For each actionable item: make the code change, run the relevant
 tests/lint/build for that change before moving to the next one. Commit with
 a message that names what was addressed, not just "address PR feedback".
+
+"Relevant" means the tests that cover the files you changed, not the whole
+suite:
+
+- pytest: the touched modules' test files (`pytest tests/test_foo.py`), or
+  `-k` on the affected names.
+- vitest: `vitest related --run <changed files>`.
+- jest: `jest --findRelatedTests <changed files>`.
+- Lint and hooks: `prek run --files <changed files>` (or the repo's
+  equivalent) rather than `--all-files`.
+
+Run the full suite only when the repo's CI-equivalent finishes in a couple
+of minutes, or the user asks for it. Every reply that claims a fix names the
+tests that were run, so the reviewer can tell a scoped run from a full one.
 
 When the item is a genuine bug (not a style/naming nit), prefer proving the
 fix over asserting it: extend or add a test that fails against the unfixed
@@ -282,9 +308,86 @@ and may mask a real, intermittently-reproducing bug. Only use it once you've
 read the log and concluded the failure is genuinely unrelated to this PR's
 changes.
 
+## Draft-only mode
+
+Some users want to see every reply and fix before anything reaches GitHub,
+bot threads included. The request says so: "draft", "don't post", "leave
+pending", "show me first", "dry run", "nothing goes up until I say". Once
+set, the mode holds for the rest of the session, including later rounds of
+feedback on the same PR. The autonomous path above stays the default when
+none of those words appear.
+
+In draft-only mode:
+
+- Fetch, check, and categorize as usual (Phases 1, 1b, 2).
+- Make fixes as local commits, one per row, verified as in Phase 3, so each
+  row can be approved on its own. When one fix genuinely covers several
+  rows, give them the same commit in the table and treat them as one unit:
+  that commit goes up only when every row sharing it is approved.
+- Push nothing, post nothing, resolve nothing, and don't re-run checks. That
+  covers `git push`, `resolve-thread.sh`, `resolve-threads.sh`,
+  `reply-comment.sh`, `gh run rerun`, the pre-commit.ci autofix comment, and
+  any edit to a pending review comment.
+- End with one table, one row per thread, discussion comment, or failing
+  check:
+
+```text
+| Thread | Author | Verdict | Proposed reply | Local commit | Evidence |
+|--------|--------|---------|----------------|--------------|----------|
+| [a.py:42](https://github.com/o/r/pull/7#discussion_r1) | copilot-pull-request-reviewer | fix | Fixed in a1b2c3d: transport is now streamable-http (tests/test_config.py, 3 passed). | a1b2c3d | tests/test_config.py: 3 passed |
+| [b.py:10](https://github.com/o/r/pull/7#discussion_r2) | gemini-code-assist | disagree | Not adding the guard: ensure_bridge_store runs at every call site. | (none) | callers at x.py:12, y.py:40 |
+| [c.py:5](https://github.com/o/r/pull/7#discussion_r3) | tmacey | needs you | (your wording) | (none) | two defensible fixes, see below |
+```
+
+Verdict is one of `fix`, `reply only`, `disagree`, or `needs you`. The
+proposed reply is the exact text that would be posted, in Phase 4's reply
+style, so approving the row approves the words.
+
+When the user approves (all rows, some rows, or rows with edited wording),
+carry out only the approved rows.
+
+First confirm where the PR's head lives, since `origin` isn't it on a fork
+PR. `gh pr view <pr> --json headRepository,headRefName,isCrossRepository`
+names the head repo (`headRepository.nameWithOwner`) and branch; find the
+local remote whose URL matches it
+(`git remote -v`) and use that remote and branch below. Stop and ask if
+none matches.
+
+If every row with a local commit was approved, push the branch to that
+remote and branch as usual. Otherwise a plain `git push` would also send the
+unapproved commits sitting between the approved ones, so build the approved
+subset on its own:
+
+```bash
+git fetch <head-remote> <head-branch>
+git switch -c approved-push FETCH_HEAD
+git cherry-pick <approved sha> <approved sha> ...   # in their original order
+```
+
+Phase 3 verified the full draft branch, not this subset. An approved commit
+can apply cleanly yet depend on a helper from an unapproved one, so re-run
+the scoped tests on `approved-push` before pushing. If they fail because of
+a dependency on an unapproved commit, stop and tell the user which commit
+the approved fix needs. Then push and put the remaining commits back on
+top:
+
+```bash
+git push <head-remote> approved-push:<head-branch>
+git switch <local-branch>
+git rebase approved-push   # drops the already-pushed patches, leaves the unapproved commits on top
+git branch -D approved-push
+```
+
+Reply and resolve only after the push succeeds. Cherry-picking gives the
+approved commits new SHAs, so update the SHAs and the test evidence in the
+approved reply text to the pushed commits and the subset's test run before
+posting. Then reply and resolve with the usual scripts, `--dry-run` first
+for any batch. Rows that weren't approved stay as they are; say which ones
+remain and which local commits are still unpushed.
+
 ## Phase 4 — Reply & resolve
 
-**Reply style: one or two sentences.** Name the commit and what changed, or
+**Reply style: one or two sentences.** Name the commit, what changed, and the tests that ran, or
 the evidence and the conclusion. Nothing else — no thanks-for-the-review
 opener, no restating the reviewer's comment back at them, no closing offer to
 discuss further, no emoji. A reviewer reading twelve replies wants twelve
@@ -293,7 +396,7 @@ paragraph into a line break, so a hard-wrapped reply renders as ragged
 half-lines in the thread.
 
 ```text
-Fixed in a1b2c3d: transport is now streamable-http.
+Fixed in a1b2c3d: transport is now streamable-http (tests/test_config.py, 3 passed).
 Verified — ensure_bridge_store runs at every call site, so this path is unreachable. Not adding the guard.
 ```
 
@@ -312,7 +415,7 @@ posted.
 ./skills/process/address-pr-feedback/scripts/resolve-thread.sh \
   --thread-id PRRT_kwDORsi4Ac6PsuPQ \
   --comment-file - <<'REPLY'
-Fixed in a1b2c3d: switched transport to streamable-http per the schema.
+Fixed in a1b2c3d: switched transport to streamable-http per the schema (tests/test_config.py, 3 passed).
 REPLY
 ```
 
@@ -355,6 +458,28 @@ SUMMARY
 Always dry-run (`--dry-run` on both resolve scripts) first when acting on a
 batch you haven't manually reviewed thread-by-thread, and check the printed
 list before re-running for real.
+
+### Editing a pending review comment
+
+When `pending_review` is set and the user asks you to change one of its
+comments (reword it, add a suggestion block, fix a typo), they may have
+edited that comment in the browser since you last read it. GitHub's update
+mutation replaces the whole body, so writing back a body built from an
+earlier read silently discards their edits.
+
+1. Re-fetch the comment's current body by node ID immediately before
+   editing it (the `node(id:)` query in
+   [graphql-reference.md](references/graphql-reference.md#pending-reviews)).
+   Don't reuse the `body` from `fetch-feedback.sh` output or any earlier
+   read.
+2. Apply the requested change to that body as a patch: change the part
+   asked about and keep everything else byte-for-byte.
+3. Write it back with `updatePullRequestReviewComment`, passing the body
+   from a file.
+
+Never submit the pending review (`submitPullRequestReview`, or `gh pr
+review`). Submitting is the user's action, even when every comment in it is
+one you wrote.
 
 ## Phase 5 — Verify
 

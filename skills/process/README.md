@@ -14,7 +14,7 @@ Workflow skills for interacting with external services and developer processes
 | [`dependency-pruning`](./dependency-pruning/SKILL.md) | Audit dependencies to find unused ones to remove and underused ones to vendor or rewrite |
 | [`github-issue-triage`](./github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items by cross-referencing the codebase (parallel subagents where available, sequential batches otherwise) |
 | [`github-pr-triage`](./github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
-| [`address-pr-feedback`](./address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs |
+| [`address-pr-feedback`](./address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs and a draft-only mode that posts nothing until approved |
 | [`code-review`](./code-review/SKILL.md) | Review a diff, branch, path, or PR for correctness bugs, gaps against stated goals, security issues, and reuse/simplification/efficiency cleanups, with a verify-before-reporting pass and an optional skeptic pass that tries to refute each finding |
 | [`renovate-security-triage`](./renovate-security-triage/SKILL.md) | Rank open Renovate PRs in your active repos by security urgency using advisory severity, CVSS, and EPSS (read-only) |
 | [`deploy-verification`](./deploy-verification/SKILL.md) | Verify a merged config/infra change actually took effect — CD pipeline, pod rollout, running config, before/after metrics, and unintended-environment scope |
