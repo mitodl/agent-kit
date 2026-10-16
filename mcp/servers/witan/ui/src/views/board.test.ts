@@ -283,8 +283,8 @@ describe("the Blocked column", () => {
 	});
 
 	it("draws no blocker line on a blocked-status task that is ready", () => {
-		// Its blocker closed in another repo, which `_unblock_dependents` does
-		// not reach, so the status word is stale and the task is ready.
+		// Its blocker is closed, so the task is ready, but the stored status
+		// word still says `blocked`.
 		const unblocked = row({
 			slug: "tk-unblocked",
 			status: "blocked",

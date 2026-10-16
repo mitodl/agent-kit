@@ -6454,26 +6454,22 @@ def _task_statuses(slugs: Iterable[str]) -> dict[str, str | None]:
     return {r["slug"]: r.get("status") for r in rows}
 
 
-def _unblock_dependents(repo: str | None) -> list[str]:
+def _unblock_dependents() -> list[str]:
     """Flip ``blocked`` tasks back to ``open`` once all their blockers are closed.
 
-    Called after a task closes so ``task_list`` status stays truthful. Scoped to the
-    closed task's repo (blockers and dependents share a repo in practice).
+    Called after a task closes, so ``task_list`` status stays truthful, and
+    before ``task_claim`` refuses a ``blocked`` task. Sweeps every repo, because
+    a dependent often lives in a different repo from its blocker.
 
     Returns the slugs it could not sweep because their fenced write exhausted
     its retries. One dependent's contention must not abort the rest, and must
     not reach ``task_close``'s caller as an error: the close itself has already
     committed by the time this runs. A dependent left ``blocked`` with every
     blocker closed is still ready (``readiness.status_pickable``), and the next
-    sweep (any close in the repo, or a claim of that task) retries it.
+    sweep (any close, or a claim of that task) retries it.
     """
-    rows = (
-        client.read("read.gq", "list_tasks_by_repo", {"repo": repo, "status": None})
-        if repo
-        else client.read("read.gq", "list_tasks_uncapped", {"status": None})
-    )
-    status_by_slug = {r["slug"]: r.get("status") for r in rows}
-    blocked = [r for r in rows if r.get("status") == "blocked"]
+    blocked = client.read("read.gq", "list_blocked_tasks", {})
+    status_by_slug = {r["slug"]: r.get("status") for r in blocked}
     status_by_slug.update(
         _task_statuses(
             b
@@ -6519,7 +6515,7 @@ def _with_unswept_warning(task: dict, unswept: list[str]) -> dict:
             f"{task['slug']} is closed, but {len(unswept)} dependent(s) are still "
             f"marked blocked because concurrent writes refused the update: "
             f"{', '.join(unswept)}. Every blocker of each is closed, so task_ready "
-            "already lists them; the next close in this repo, or a claim of one "
+            "already lists them; the next close, or a claim of one "
             "of them, reopens it."
         ),
     }
@@ -7499,9 +7495,7 @@ def task_update(
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
-        updated = _with_unswept_warning(
-            updated, _unblock_dependents(updated.get("repo"))
-        )
+        updated = _with_unswept_warning(updated, _unblock_dependents())
 
     return updated
 
@@ -7523,7 +7517,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
     that runs out of attempts does not fail the call: the closed task comes
     back with a ``warning`` naming the dependents still marked ``blocked``.
     ``task_ready`` lists them anyway, since every blocker is closed, and the
-    next close in the repo or a claim of one of them reopens it.
+    next close anywhere or a claim of one of them reopens it.
 
     Parameters
     ----------
@@ -7539,7 +7533,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
         {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
     )
     if closed:
-        closed = _with_unswept_warning(closed, _unblock_dependents(closed.get("repo")))
+        closed = _with_unswept_warning(closed, _unblock_dependents())
     return closed
 
 
@@ -7645,7 +7639,7 @@ async def task_claim(
         # claiming. Contention on another dependent is that dependent's problem;
         # contention on this one means it is still blocked only because the
         # reopen was refused, which is load, not a reason to refuse the claim.
-        unswept = await _offload(_unblock_dependents, task.get("repo"))
+        unswept = await _offload(_unblock_dependents)
         if slug in unswept:
             return _claim_contention(
                 slug,
@@ -7841,7 +7835,10 @@ def task_release(
         return refused.result
     if released is None:
         return None
-    return {"slug": slug, "released": True, "status": status}
+    result = {"slug": slug, "released": True, "status": status}
+    if status == "closed":
+        result = _with_unswept_warning(result, _unblock_dependents())
+    return result
 
 
 @_tool(app=ui_widgets.app_for("task_ready"))
