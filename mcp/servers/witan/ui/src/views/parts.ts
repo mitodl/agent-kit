@@ -54,13 +54,21 @@ const copiedIcon = svg`
   </svg>
 `;
 
+const failedIcon = svg`
+  <svg class="icon-failed" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M4 4l8 8M12 4l-8 8" />
+  </svg>
+`;
+
 /**
  * A button that puts `value` on the clipboard, for pasting a slug into the CLI.
  *
  * The copied state is set on the button's own node rather than held in view
  * state: lit-html leaves an attribute it does not bind alone, so a re-render
  * from a poll in the next 1.5s does not cut the tick short, and nothing outside
- * the button has to know a copy happened.
+ * the button has to know a copy happened. The outcome is a shape as well as a
+ * colour (a tick or a cross), and is announced through the button's own live
+ * region, since the icons are hidden from assistive tech.
  */
 export function copyButton(value: string, label = value): TemplateResult {
 	return html`<button
@@ -74,12 +82,24 @@ export function copyButton(value: string, label = value): TemplateResult {
 			event.preventDefault();
 			event.stopPropagation();
 			const button = event.currentTarget as HTMLButtonElement;
+			const status = button.querySelector(".copy-status");
 			void copyText(value).then((copied) => {
 				button.dataset.copied = copied ? "yes" : "no";
-				setTimeout(() => delete button.dataset.copied, COPIED_MS);
+				if (status) {
+					status.textContent = copied ? "Copied" : "Copy failed";
+				}
+				setTimeout(() => {
+					delete button.dataset.copied;
+					if (status) {
+						status.textContent = "";
+					}
+				}, COPIED_MS);
 			});
 		}}
-  >${copyIcon}${copiedIcon}</button>`;
+  >${copyIcon}${copiedIcon}${failedIcon}<span
+      class="copy-status"
+      role="status"
+    ></span></button>`;
 }
 
 /**

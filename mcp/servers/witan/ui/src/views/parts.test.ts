@@ -62,6 +62,44 @@ describe("copyButton", () => {
 		expect(document.querySelector("textarea")).toBeNull();
 	});
 
+	it("falls back when the Clipboard API refuses, as an iframe without clipboard-write does", async () => {
+		// A permissions denial is a rejected promise, not a missing API.
+		const execCommand = vi.fn(() => true);
+		Object.defineProperty(document, "execCommand", {
+			value: execCommand,
+			configurable: true,
+		});
+		vi.stubGlobal("navigator", {
+			clipboard: {
+				writeText: async () => {
+					throw new DOMException("denied", "NotAllowedError");
+				},
+			},
+		});
+		render(copyButton("wp-x"), root);
+
+		button().click();
+
+		await vi.waitFor(() => expect(button().dataset.copied).toBe("yes"));
+		expect(execCommand).toHaveBeenCalledWith("copy");
+	});
+
+	it("announces a failed copy rather than only colouring it", async () => {
+		Object.defineProperty(document, "execCommand", {
+			value: () => false,
+			configurable: true,
+		});
+		vi.stubGlobal("navigator", {});
+		render(copyButton("wp-x"), root);
+
+		button().click();
+
+		await vi.waitFor(() => expect(button().dataset.copied).toBe("no"));
+		expect(button().querySelector('[role="status"]')?.textContent).toBe(
+			"Copy failed",
+		);
+	});
+
 	it("clears the copied mark after a moment", async () => {
 		vi.useFakeTimers();
 		vi.stubGlobal("navigator", { clipboard: { writeText: async () => {} } });
@@ -69,8 +107,12 @@ describe("copyButton", () => {
 
 		button().click();
 		await vi.waitFor(() => expect(button().dataset.copied).toBe("yes"));
+		expect(button().querySelector('[role="status"]')?.textContent).toBe(
+			"Copied",
+		);
 		vi.advanceTimersByTime(1500);
 
 		expect(button().dataset.copied).toBeUndefined();
+		expect(button().querySelector('[role="status"]')?.textContent).toBe("");
 	});
 });

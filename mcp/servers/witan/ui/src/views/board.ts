@@ -325,7 +325,7 @@ export function boardCard(
 					!route.project && task.project_slug
 						? html`· <a href=${routeHref(route, { project: task.project_slug })}
                   ><code>${task.project_slug}</code></a
-                >`
+                >${copyButton(task.project_slug)}`
 						: nothing
 				}
         ${

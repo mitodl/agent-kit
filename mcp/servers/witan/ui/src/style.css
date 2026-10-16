@@ -175,6 +175,7 @@ button:hover {
 /* Copy-a-slug button: an icon beside a project or task name, quiet until it is
    pointed at, so a table of them does not read as a column of buttons. */
 button.copy {
+	position: relative;
 	display: inline-flex;
 	align-items: center;
 	vertical-align: middle;
@@ -203,12 +204,24 @@ button.copy svg {
 }
 
 button.copy .icon-copied,
-button.copy[data-copied="yes"] .icon-copy {
+button.copy .icon-failed,
+button.copy[data-copied] .icon-copy {
 	display: none;
 }
 
-button.copy[data-copied="yes"] .icon-copied {
+button.copy[data-copied="yes"] .icon-copied,
+button.copy[data-copied="no"] .icon-failed {
 	display: inline;
+}
+
+/* Announced, never seen: the icon already shows the outcome. */
+button.copy .copy-status {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
 }
 
 button.copy[data-copied="no"] {
