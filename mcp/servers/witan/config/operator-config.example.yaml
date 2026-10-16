@@ -15,8 +15,8 @@ defaults:
 
 # With the profile set, common queries shorten to:
 #
-#   omnigraph --profile witan query --query queries/read.gq search_by_repo \
-#     --params '{"query":"uv","repo":"https://github.com/mitodl/ol-infrastructure"}'
+#   omnigraph --profile witan query --query queries/read.gq search_memories \
+#     --params '{"query":"uv","repo":"https://github.com/mitodl/ol-infrastructure","kind":null}'
 #
 #   omnigraph --profile witan query --query queries/read.gq get_memory \
 #     --params '{"slug":"pat-always-use-uv"}'

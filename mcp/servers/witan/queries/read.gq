@@ -1,67 +1,29 @@
 // Agent Memory — read queries
 //
-// Search dispatch strategy:
-//   The MCP server selects the query name based on which optional filters
-//   the caller provided. This avoids relying on undefined behavior for
-//   null param filtering in match bindings.
+// Optional filters:
+//   A filter the caller may leave off is a nullable param guarded as
+//   `$repo is null or $m.repo = $repo`, so one query covers every filter
+//   combination. The caller passes the key with `null` to mean "no filter",
+//   never `""`: an empty string is a value, and matches nothing. Checked
+//   against the per-combination queries this replaced, on omnigraph 0.13.0,
+//   row for row including order, limits and the bm25 score.
 //
 //   Every search comes as a pair: a `content` query and a `_title` twin with
-//   the same params. The query language will not `or` two search predicates in
-//   one match (`search($m.title, $q) or search($m.content, $q)` is a parse
-//   error), so the union happens in `_search_rows` instead. Keep the pairs in
-//   step — a `_title` twin that drifts from its content query silently makes
-//   title terms unfindable again for that filter combination.
+//   the same params. The query language will not put a search predicate under
+//   `or` at all (`search($m.title, $q) or search($m.content, $q)`, and even
+//   `$repo is null or search(…)`, fail lint with T38 on 0.13.0), so the union
+//   happens in `_search_rows` instead. The nullable-param guards are fine
+//   beside a standalone `search(…)`, since they are joined to it by `and`.
+//   Keep the pairs in step — a `_title` twin that drifts from its content
+//   query silently makes title terms unfindable again.
 
 // ── Search (BM25 on content) ─────────────────────────────────────
 
-query search_all($query: String) {
+query search_memories($query: String, $repo: String?, $kind: String?) {
     match {
         $m: Memory
-        search($m.content, $query)
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence,
-        bm25($m.content, $query) as score
-    }
-    order { bm25($m.content, $query) desc }
-    limit 20
-}
-
-query search_by_repo($query: String, $repo: String) {
-    match {
-        $m: Memory { repo: $repo }
-        search($m.content, $query)
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence,
-        bm25($m.content, $query) as score
-    }
-    order { bm25($m.content, $query) desc }
-    limit 20
-}
-
-query search_by_kind($query: String, $kind: String) {
-    match {
-        $m: Memory { kind: $kind }
-        search($m.content, $query)
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence,
-        bm25($m.content, $query) as score
-    }
-    order { bm25($m.content, $query) desc }
-    limit 20
-}
-
-query search_by_repo_and_kind($query: String, $repo: String, $kind: String) {
-    match {
-        $m: Memory { repo: $repo, kind: $kind }
+        $repo is null or $m.repo = $repo
+        $kind is null or $m.kind = $kind
         search($m.content, $query)
     }
     return {
@@ -81,54 +43,11 @@ query search_by_repo_and_kind($query: String, $repo: String, $kind: String) {
 // lives only in a title has to be findable. See the header note on why these
 // are separate queries rather than an `or` in the ones above.
 
-query search_all_title($query: String) {
+query search_memories_title($query: String, $repo: String?, $kind: String?) {
     match {
         $m: Memory
-        search($m.title, $query)
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence,
-        bm25($m.title, $query) as score
-    }
-    order { bm25($m.title, $query) desc }
-    limit 20
-}
-
-query search_by_repo_title($query: String, $repo: String) {
-    match {
-        $m: Memory { repo: $repo }
-        search($m.title, $query)
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence,
-        bm25($m.title, $query) as score
-    }
-    order { bm25($m.title, $query) desc }
-    limit 20
-}
-
-query search_by_kind_title($query: String, $kind: String) {
-    match {
-        $m: Memory { kind: $kind }
-        search($m.title, $query)
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence,
-        bm25($m.title, $query) as score
-    }
-    order { bm25($m.title, $query) desc }
-    limit 20
-}
-
-query search_by_repo_and_kind_title($query: String, $repo: String, $kind: String) {
-    match {
-        $m: Memory { repo: $repo, kind: $kind }
+        $repo is null or $m.repo = $repo
+        $kind is null or $m.kind = $kind
         search($m.title, $query)
     }
     return {
@@ -143,9 +62,11 @@ query search_by_repo_and_kind_title($query: String, $repo: String, $kind: String
 
 // ── Listing (no search; filtered by repo and/or kind) ─────────────
 
-query list_memories() {
+query list_memories($repo: String?, $kind: String?) {
     match {
         $m: Memory
+        $repo is null or $m.repo = $repo
+        $kind is null or $m.kind = $kind
     }
     return {
         $m.slug, $m.kind, $m.title, $m.content,
@@ -156,53 +77,16 @@ query list_memories() {
     limit 100
 }
 
-query list_memories_by_repo($repo: String) {
-    match {
-        $m: Memory { repo: $repo }
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 100
-}
-
-query list_memories_by_kind($kind: String) {
-    match {
-        $m: Memory { kind: $kind }
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 100
-}
-
-query list_memories_by_repo_kind($repo: String, $kind: String) {
-    match {
-        $m: Memory { repo: $repo, kind: $kind }
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 100
-}
-
-// The same four listings without the memories a newer one `Supersedes`.
+// The same listing without the memories a newer one `Supersedes`.
 // memory_list's default read. Pruning after the `limit 100` instead would
 // hand back fewer than 100 rows while more current memories exist past the
 // cap, and a short list is how a caller knows it has everything.
 
-query list_current_memories() {
+query list_current_memories($repo: String?, $kind: String?) {
     match {
         $m: Memory
+        $repo is null or $m.repo = $repo
+        $kind is null or $m.kind = $kind
         not { $_ supersedes $m }
     }
     return {
@@ -214,68 +98,14 @@ query list_current_memories() {
     limit 100
 }
 
-query list_current_memories_by_repo($repo: String) {
-    match {
-        $m: Memory { repo: $repo }
-        not { $_ supersedes $m }
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 100
-}
-
-query list_current_memories_by_kind($kind: String) {
-    match {
-        $m: Memory { kind: $kind }
-        not { $_ supersedes $m }
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 100
-}
-
-query list_current_memories_by_repo_kind($repo: String, $kind: String) {
-    match {
-        $m: Memory { repo: $repo, kind: $kind }
-        not { $_ supersedes $m }
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 100
-}
-
-// High-limit variants for the unscoped fallback path: the normal list_memories
+// High-limit variant for the unscoped fallback path: the normal list_memories
 // cap (100) is applied before Python filtering by repo=null, so unscoped
 // memories can be pushed out when many repo-scoped ones are newer.
 
-query list_memories_unbounded() {
+query list_memories_unbounded($kind: String?) {
     match {
         $m: Memory
-    }
-    return {
-        $m.slug, $m.kind, $m.title, $m.content,
-        $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
-    }
-    order { $m.created_at desc }
-    limit 10000
-}
-
-query list_memories_by_kind_unbounded($kind: String) {
-    match {
-        $m: Memory { kind: $kind }
+        $kind is null or $m.kind = $kind
     }
     return {
         $m.slug, $m.kind, $m.title, $m.content,
@@ -758,9 +588,10 @@ query patterns_by_repo($repo: String) {
 // after filtering. Safe to leave unbounded — corpus size is WorkflowProject
 // count, not Task/Memory count, so orders of magnitude smaller.
 
-query search_projects_all($query: String) {
+query search_projects($query: String, $status: String?) {
     match {
         $p: WorkflowProject
+        $status is null or $p.status = $status
         search($p.description, $query)
     }
     return {
@@ -771,35 +602,10 @@ query search_projects_all($query: String) {
     limit 1000000
 }
 
-query search_projects_by_status($query: String, $status: String) {
-    match {
-        $p: WorkflowProject { status: $status }
-        search($p.description, $query)
-    }
-    return {
-        $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
-        $p.tags, $p.github_issue, $p.updated_at
-    }
-    order { bm25($p.description, $query) desc }
-    limit 1000000
-}
-
-query search_projects_all_title($query: String) {
+query search_projects_title($query: String, $status: String?) {
     match {
         $p: WorkflowProject
-        search($p.title, $query)
-    }
-    return {
-        $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
-        $p.tags, $p.github_issue, $p.updated_at
-    }
-    order { bm25($p.title, $query) desc }
-    limit 1000000
-}
-
-query search_projects_by_status_title($query: String, $status: String) {
-    match {
-        $p: WorkflowProject { status: $status }
+        $status is null or $p.status = $status
         search($p.title, $query)
     }
     return {
@@ -1025,9 +831,11 @@ query list_all_traces() {
 // Memory search pairs above; same reasoning applies here (no `or` across
 // two `search` predicates, so `_search_task_rows` unions the two runs).
 
-query search_tasks_all($query: String) {
+query search_tasks($query: String, $repo: String?, $status: String?) {
     match {
         $t: Task
+        $repo is null or $t.repo = $repo
+        $status is null or $t.status = $status
         search($t.description, $query)
     }
     return {
@@ -1039,93 +847,11 @@ query search_tasks_all($query: String) {
     limit 20
 }
 
-query search_tasks_by_repo($query: String, $repo: String) {
-    match {
-        $t: Task { repo: $repo }
-        search($t.description, $query)
-    }
-    return {
-        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
-        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
-        $t.external_uri, $t.tags, $t.updated_at
-    }
-    order { bm25($t.description, $query) desc }
-    limit 20
-}
-
-query search_tasks_by_status($query: String, $status: String) {
-    match {
-        $t: Task { status: $status }
-        search($t.description, $query)
-    }
-    return {
-        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
-        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
-        $t.external_uri, $t.tags, $t.updated_at
-    }
-    order { bm25($t.description, $query) desc }
-    limit 20
-}
-
-query search_tasks_by_repo_and_status($query: String, $repo: String, $status: String) {
-    match {
-        $t: Task { repo: $repo, status: $status }
-        search($t.description, $query)
-    }
-    return {
-        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
-        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
-        $t.external_uri, $t.tags, $t.updated_at
-    }
-    order { bm25($t.description, $query) desc }
-    limit 20
-}
-
-query search_tasks_all_title($query: String) {
+query search_tasks_title($query: String, $repo: String?, $status: String?) {
     match {
         $t: Task
-        search($t.title, $query)
-    }
-    return {
-        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
-        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
-        $t.external_uri, $t.tags, $t.updated_at
-    }
-    order { bm25($t.title, $query) desc }
-    limit 20
-}
-
-query search_tasks_by_repo_title($query: String, $repo: String) {
-    match {
-        $t: Task { repo: $repo }
-        search($t.title, $query)
-    }
-    return {
-        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
-        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
-        $t.external_uri, $t.tags, $t.updated_at
-    }
-    order { bm25($t.title, $query) desc }
-    limit 20
-}
-
-query search_tasks_by_status_title($query: String, $status: String) {
-    match {
-        $t: Task { status: $status }
-        search($t.title, $query)
-    }
-    return {
-        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
-        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
-        $t.external_uri, $t.tags, $t.updated_at
-    }
-    order { bm25($t.title, $query) desc }
-    limit 20
-}
-
-query search_tasks_by_repo_and_status_title($query: String, $repo: String, $status: String) {
-    match {
-        $t: Task { repo: $repo, status: $status }
+        $repo is null or $t.repo = $repo
+        $status is null or $t.status = $status
         search($t.title, $query)
     }
     return {
@@ -1162,9 +888,10 @@ query task_statuses($slugs: [String]) {
     return { $t.slug, $t.status }
 }
 
-query list_tasks_by_repo($repo: String) {
+query list_tasks_by_repo($repo: String, $status: String?) {
     match {
         $t: Task { repo: $repo }
+        $status is null or $t.status = $status
     }
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
@@ -1176,23 +903,10 @@ query list_tasks_by_repo($repo: String) {
     order { $t.updated_at desc }
 }
 
-query list_tasks_by_repo_status($repo: String, $status: String) {
+query list_tasks($status: String?) {
     match {
-        $t: Task { repo: $repo, status: $status }
-    }
-    return {
-        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
-        $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
-    }
-    order { $t.updated_at desc }
-}
-
-query list_tasks_by_status($status: String) {
-    match {
-        $t: Task { status: $status }
+        $t: Task
+        $status is null or $t.status = $status
     }
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
@@ -1205,44 +919,15 @@ query list_tasks_by_status($status: String) {
     limit 50
 }
 
-// The uncapped twin of `list_tasks_by_status`, for an explicit `task_list`
-// limit. omnigraph 0.11 cannot take `limit` as a query parameter (`limit
-// $limit` fails `omnigraph lint` with "expected integer"), so the cap is a
-// literal here and the caller slices in Python — the same shape the memory
-// reads use. `list_all_tasks`'s twin is `list_unscoped_tasks` below.
-query list_tasks_by_status_uncapped($status: String) {
-    match {
-        $t: Task { status: $status }
-    }
-    return {
-        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
-        $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
-    }
-    order { $t.updated_at desc }
-    limit 10000
-}
-
-query list_all_tasks() {
+// The uncapped twin of `list_tasks`, for an explicit `task_list` limit and
+// for the reads that need every task. omnigraph cannot take `limit` as a
+// query parameter (`limit $limit` still fails `omnigraph lint` with "expected
+// integer" on 0.13.0), so the cap is a literal here and the caller slices in
+// Python — the same shape the memory reads use.
+query list_tasks_uncapped($status: String?) {
     match {
         $t: Task
-    }
-    return {
-        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
-        $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
-    }
-    order { $t.updated_at desc }
-    limit 50
-}
-
-query list_unscoped_tasks() {
-    match {
-        $t: Task
+        $status is null or $t.status = $status
     }
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,

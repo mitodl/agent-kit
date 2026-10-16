@@ -3274,24 +3274,17 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     Returns up to 2× each query's ``limit 20``. Callers cap; see
     ``_SEARCH_LIMIT``.
     """
-    detected = repo_module.detect(override=repo)
-    if detected and kind:
-        name = "search_by_repo_and_kind"
-        params = {"query": query, "repo": detected, "kind": kind}
-    elif detected:
-        name = "search_by_repo"
-        params = {"query": query, "repo": detected}
-    elif kind:
-        name = "search_by_kind"
-        params = {"query": query, "kind": kind}
-    else:
-        name = "search_all"
-        params = {"query": query}
-
-    rows = _with_relevance(list(client.read("read.gq", name, params)), _CONTENT_BAND)
+    params = {
+        "query": query,
+        "repo": repo_module.detect(override=repo) or None,
+        "kind": kind or None,
+    }
+    rows = _with_relevance(
+        list(client.read("read.gq", "search_memories", params)), _CONTENT_BAND
+    )
     seen = {r["slug"] for r in rows}
     title_rows = _with_relevance(
-        list(client.read("read.gq", f"{name}_title", params)), _TITLE_BAND
+        list(client.read("read.gq", "search_memories_title", params)), _TITLE_BAND
     )
     rows.extend(r for r in title_rows if r["slug"] not in seen)
     return rows
@@ -3557,12 +3550,7 @@ def memory_list(
         # Filters the capped reads cannot apply before their `limit 100`, so
         # read every memory and filter here: a filter after the cap would
         # shorten the list without anything saying more matches exist.
-        if kind:
-            rows = client.read(
-                "read.gq", "list_memories_by_kind_unbounded", {"kind": kind}
-            )
-        else:
-            rows = client.read("read.gq", "list_memories_unbounded", {})
+        rows = client.read("read.gq", "list_memories_unbounded", {"kind": kind or None})
         superseded = set() if include_superseded else _superseded_slugs()
         rows = [r for r in rows if r["slug"] not in superseded]
         if slim:
@@ -3577,17 +3565,12 @@ def memory_list(
 
     # The capped reads exclude superseded rows in the query, so a full page
     # means the cap was hit rather than that pruning ate into it.
-    prefix = "list_memories" if include_superseded else "list_current_memories"
-    if detected and kind:
-        return client.read(
-            "read.gq", f"{prefix}_by_repo_kind", {"repo": detected, "kind": kind}
-        )
-    if detected:
-        return client.read("read.gq", f"{prefix}_by_repo", {"repo": detected})
-    # Explicit all-repos opt-in (repo="") — return full content.
-    if kind:
-        return client.read("read.gq", f"{prefix}_by_kind", {"kind": kind})
-    return client.read("read.gq", prefix, {})
+    # No repo detected here means the explicit all-repos opt-in (repo=""),
+    # which returns full content.
+    name = "list_memories" if include_superseded else "list_current_memories"
+    return client.read(
+        "read.gq", name, {"repo": detected or None, "kind": kind or None}
+    )
 
 
 def _update_memory(slug: str, changes: dict) -> dict | None:
@@ -4975,22 +4958,16 @@ def _search_project_rows(query: str, status: str | None) -> list[dict]:
     ``_search_rows``. No by-repo dispatch: ``repos`` is a list, so repo
     membership is filtered in Python by the caller, same as
     ``workflow_project_list``. The underlying queries are unbounded (see the
-    read.gq comment above ``search_projects_all``) precisely so that
+    read.gq comment above ``search_projects``) precisely so that
     post-fetch repo filtering can't silently drop a real match that scored
     below some small query-level cap.
     """
-    if status:
-        name = "search_projects_by_status"
-        params = {"query": query, "status": status}
-    else:
-        name = "search_projects_all"
-        params = {"query": query}
-
-    rows = list(client.read("read.gq", name, params))
+    params = {"query": query, "status": status or None}
+    rows = list(client.read("read.gq", "search_projects", params))
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in client.read("read.gq", f"{name}_title", params)
+        for r in client.read("read.gq", "search_projects_title", params)
         if r["slug"] not in seen
     )
     return rows
@@ -6311,9 +6288,9 @@ def _unblock_dependents(repo: str | None) -> None:
     closed task's repo (blockers and dependents share a repo in practice).
     """
     rows = (
-        client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
+        client.read("read.gq", "list_tasks_by_repo", {"repo": repo, "status": None})
         if repo
-        else client.read("read.gq", "list_unscoped_tasks", {})
+        else client.read("read.gq", "list_tasks_uncapped", {"status": None})
     )
     status_by_slug = {r["slug"]: r.get("status") for r in rows}
     blocked = [r for r in rows if r.get("status") == "blocked"]
@@ -6951,38 +6928,26 @@ def task_list(
             # Include repo-scoped tasks and unscoped (repo=null) tasks. Unscoped
             # tasks were created without git context (e.g. via MCP from a global
             # server) and should be visible regardless of which repo you're in.
-            if status:
-                repo_rows = client.read(
-                    "read.gq",
-                    "list_tasks_by_repo_status",
-                    {"repo": detected, "status": status},
-                )
-            else:
-                repo_rows = client.read(
-                    "read.gq", "list_tasks_by_repo", {"repo": detected}
-                )
-            all_rows = client.read("read.gq", "list_unscoped_tasks", {})
+            repo_rows = client.read(
+                "read.gq",
+                "list_tasks_by_repo",
+                {"repo": detected, "status": status or None},
+            )
+            all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
             seen = {r["slug"] for r in repo_rows}
             unscoped = [
                 r for r in all_rows if not r.get("repo") and r["slug"] not in seen
             ]
             rows = repo_rows + unscoped
-        elif status:
-            # The unscoped reads are the only ones capped in the query, at 50
-            # rows — which is why "all repos" silently truncated. An explicit
-            # limit swaps in the uncapped twin and slices below.
-            rows = client.read(
-                "read.gq",
-                "list_tasks_by_status_uncapped" if limit else "list_tasks_by_status",
-                {"status": status},
-            )
         else:
-            # `list_unscoped_tasks` IS `list_all_tasks` uncapped: same
-            # projection, same order, `limit 10000` instead of 50.
+            # The all-repos read is the only one capped in the query, at 50
+            # rows — which is why "all repos" silently truncated. An explicit
+            # limit swaps in the uncapped twin (same projection and order,
+            # `limit 10000`) and slices below.
             rows = client.read(
                 "read.gq",
-                "list_unscoped_tasks" if limit else "list_all_tasks",
-                {},
+                "list_tasks_uncapped" if limit else "list_tasks",
+                {"status": status or None},
             )
 
     if status:
@@ -6999,15 +6964,15 @@ def task_list(
     return [_with_lease_flag(r) for r in rows]
 
 
-def _search_task_bm25(name: str, params: dict) -> list[dict]:
-    """One content-then-title BM25 union for a Task search query pair. Same
+def _search_task_bm25(params: dict) -> list[dict]:
+    """One content-then-title BM25 union for the Task search query pair. Same
     reasoning as the Memory search pairs (§ header note in read.gq).
     """
-    rows = list(client.read("read.gq", name, params))
+    rows = list(client.read("read.gq", "search_tasks", params))
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in client.read("read.gq", f"{name}_title", params)
+        for r in client.read("read.gq", "search_tasks_title", params)
         if r["slug"] not in seen
     )
     return rows
@@ -7019,28 +6984,19 @@ def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[
     primary matched field.
     """
     detected = repo_module.detect(override=repo)
+    global_params = {"query": query, "repo": None, "status": status or None}
     if not detected:
-        name = "search_tasks_by_status" if status else "search_tasks_all"
-        params = {"query": query, **({"status": status} if status else {})}
-        return _search_task_bm25(name, params)
+        return _search_task_bm25(global_params)
 
-    if status:
-        name = "search_tasks_by_repo_and_status"
-        params = {"query": query, "repo": detected, "status": status}
-    else:
-        name = "search_tasks_by_repo"
-        params = {"query": query, "repo": detected}
-    rows = _search_task_bm25(name, params)
+    rows = _search_task_bm25(global_params | {"repo": detected})
 
-    # Merge in unscoped (repo=None) matches — task_list's convention
-    # (server.py:5518): unscoped tasks were created without git context and
-    # should stay visible regardless of which repo you're searching from.
-    global_name = "search_tasks_by_status" if status else "search_tasks_all"
-    global_params = {"query": query, **({"status": status} if status else {})}
+    # Merge in unscoped (repo=None) matches — task_list's convention:
+    # unscoped tasks were created without git context and should stay visible
+    # regardless of which repo you're searching from.
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in _search_task_bm25(global_name, global_params)
+        for r in _search_task_bm25(global_params)
         if not r.get("repo") and r["slug"] not in seen
     )
     return rows
@@ -7736,7 +7692,7 @@ def task_ready(
     """
     # The candidate set and the blocker-status lookup are built from different
     # row sets on purpose. A task in ANOTHER repo is never a candidate here,
-    # but it is routinely a blocker of one — and ``list_unscoped_tasks`` is an
+    # but it is routinely a blocker of one — and ``list_tasks_uncapped`` is an
     # all-Task scan, so it has already been fetched. Narrowing the lookup to
     # the candidates threw those rows away and then re-read them one blocker at
     # a time: ~3.0s of a 4.2s ``task_ready`` against the deployed service,
@@ -7749,8 +7705,10 @@ def task_ready(
     else:
         detected = repo_module.detect(override=repo)
         if detected:
-            repo_rows = client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
-            all_rows = client.read("read.gq", "list_unscoped_tasks", {})
+            repo_rows = client.read(
+                "read.gq", "list_tasks_by_repo", {"repo": detected, "status": None}
+            )
+            all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
             seen = {r["slug"] for r in repo_rows}
             unscoped = [
                 r for r in all_rows if not r.get("repo") and r["slug"] not in seen
@@ -7758,7 +7716,7 @@ def task_ready(
             rows = repo_rows + unscoped
             known = all_rows
         else:
-            rows = client.read("read.gq", "list_unscoped_tasks", {})
+            rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
 
     # ``rows`` last: where a slug appears in both, the candidate row is the one
     # the readiness decision is about, so its status wins.

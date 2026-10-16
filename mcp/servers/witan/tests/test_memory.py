@@ -179,12 +179,12 @@ def test_superseded_content_hits_do_not_crowd_out_a_title_match(server, monkeypa
 
 @requires_omnigraph
 def test_title_search_on_the_unscoped_query_paths(server):
-    """Cover `search_all_title` and `search_by_kind_title`.
+    """Cover `search_memories_title` with a null `$repo`.
 
-    The `server` fixture sets `WITAN_REPO`, so every other test here dispatches
-    to the `_by_repo` twins and these two would never run — a typo in one of
-    the four hand-duplicated queries would ship silently. `repo=""` is the
-    documented way to ask for no repo scope.
+    The `server` fixture sets `WITAN_REPO`, so every other test here passes a
+    repo and the `$repo is null` arm would never run. `repo=""` is the
+    documented way to ask for no repo scope, and must reach the query as
+    null: as `""` it would match no memory at all.
     """
     lesson = server.memory_store(
         kind="lesson", title="zebrafish quokka", content="unrelated prose"
@@ -193,13 +193,60 @@ def test_title_search_on_the_unscoped_query_paths(server):
         kind="pattern", title="zebrafish narwhal", content="also unrelated"
     )
 
-    # search_all_title — no repo, no kind.
+    # No repo, no kind.
     found = {h["slug"] for h in server.memory_search("zebrafish", repo="")}
     assert {lesson["slug"], pattern["slug"]} <= found
 
-    # search_by_kind_title — no repo, with kind.
+    # No repo, with kind.
     hits = server.memory_search("zebrafish", repo="", kind="lesson")
     assert [h["slug"] for h in hits] == [lesson["slug"]]
+
+
+@requires_omnigraph
+def test_nullable_filters_match_every_combination(server):
+    """Each optional-filter read returns exactly the rows its filters select.
+
+    One query per read now covers every combination, with `$repo is null or
+    …` guards, where there used to be a query per combination. The expected
+    rows come from the unfiltered read, so this checks the guards rather than
+    how memory_store spells a repo.
+    """
+    from witan import server as srv
+
+    repos = ["https://github.com/test/one", "https://github.com/test/two", ""]
+    for repo in repos:
+        for kind in ("pattern", "lesson"):
+            server.memory_store(
+                kind=kind, title=f"{kind} note", content="zorblat body", repo=repo
+            )
+    every = srv.client.read("read.gq", "list_memories_unbounded", {"kind": None})
+    stored = {r["repo"] for r in every}
+    assert None in stored
+    assert len(stored) == 3
+
+    for repo in stored:
+        for kind in (None, "pattern", "lesson"):
+
+            def want(r, repo=repo, kind=kind):
+                return (repo is None or r["repo"] == repo) and (
+                    kind is None or r["kind"] == kind
+                )
+
+            expected = {r["slug"] for r in every if want(r)}
+            params = {"repo": repo, "kind": kind}
+            for name, extra in (
+                ("search_memories", {"query": "zorblat"}),
+                ("search_memories_title", {"query": "note"}),
+                ("list_memories", {}),
+                ("list_current_memories", {}),
+            ):
+                rows = srv.client.read("read.gq", name, params | extra)
+                assert {r["slug"] for r in rows} == expected, (name, params)
+
+    lessons = srv.client.read("read.gq", "list_memories_unbounded", {"kind": "lesson"})
+    assert {r["slug"] for r in lessons} == {
+        r["slug"] for r in every if r["kind"] == "lesson"
+    }
 
 
 @requires_omnigraph
