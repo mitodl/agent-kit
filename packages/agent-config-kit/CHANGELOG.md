@@ -8,6 +8,54 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.13.0] - 2026-10-16
+
+### Added
+
+- A `codex` platform for Codex CLI, detected by `~/.codex` (or `$CODEX_HOME`).
+  `apply`, `validate`, and `apply --prune` manage its MCP servers in the
+  `[mcp_servers]` tables of `config.toml` (`.codex/config.toml` at project
+  scope), and install skills to `~/.agents/skills` (`.agents/skills` at
+  project scope). Remote servers' `headers` become `http_headers`, and `oauth`
+  keys are renamed to Codex's snake_case (`client_id`, `callback_port`), with
+  a `callback_url` of `http://localhost:<port>/callback` derived from
+  `callbackPort` so Codex's redirect URI matches a fixed loopback
+  registration.
+- When Pi and Codex are targeted together, Pi's skills are skipped, since Pi
+  also reads the `~/.agents/skills` (and project `.agents/skills`) that Codex
+  installs into; installing both made Pi warn about a "skill collision" for
+  every skill. `apply --prune` removes the copies an earlier run left in
+  `~/.pi/agent/skills`.
+- TOML config targets. A `.toml` target is edited in place with `tomlkit`, so
+  hand-written settings and comments survive. This adds a `tomlkit` runtime
+  dependency.
+
+- Declarative hooks for Codex CLI, written to `$CODEX_HOME/hooks.json`
+  (global scope only) and merged, deduped and pruned the same way as Claude
+  Code's. Timeouts are rounded up to whole seconds, since Codex rejects a
+  fractional one, and a hook's `timeout_seconds` must now be finite, not
+  negative, and below 2^64, since anything else makes Codex drop the whole
+  file. Codex runs a hook only after the user trusts it, and
+  agent-config-kit never writes that trust state, so `agent-kit apply` prints
+  one line per Codex hook it adds or changes, telling the user to trust it
+  with `/hooks` in the Codex TUI (`InstallResult.notices`). Codex keys that
+  trust by a hook's group and handler index, so `apply --prune` leaves an
+  emptied matcher group in place, and reports any hook a removal still moved. Hooks are on by
+  default from Codex 0.124.0; an older Codex needs `[features] codex_hooks =
+  true`.
+- An optional `skill` field on a declarative hook. `{skill_dir}` in its
+  `command` is replaced with the directory each platform installs that skill
+  into, so one manifest entry runs a skill's script on Claude Code and Codex
+  alike. A hook naming a skill that isn't in `[skills]` fails to load, as do
+  two hooks sharing one command for different skills, and
+  `apply`/`validate` exit `2` before writing anything when the run doesn't
+  install that skill for a platform the hook goes to (`HookSkillError`).
+
+### Changed
+
+- `apply_all` (and so `witan setup`) now writes a bundle's declarative hooks
+  to Codex's `hooks.json` when Codex is detected, where before it wrote none.
+
 ## [0.12.0] - 2026-10-02
 
 ### Changed
