@@ -70,6 +70,16 @@ def test_report_install_plain(capsys):
     assert "[green]" not in out  # plain branch: no rich markup
 
 
+def test_report_install_prints_removed_paths(capsys):
+    result = SimpleNamespace(planned=[], skipped=[], removed=["old/SKILL.md"])
+
+    report_install("pi", result, dry_run=False)
+    assert "removed old/SKILL.md" in capsys.readouterr().out
+
+    report_install("pi", result, dry_run=True)
+    assert "would remove old/SKILL.md" in capsys.readouterr().out
+
+
 def test_report_install_dry_run_tag(capsys):
     report_install("pi", _result(planned=["x"], skipped=[]), dry_run=True)
     assert "(dry-run)" in capsys.readouterr().out

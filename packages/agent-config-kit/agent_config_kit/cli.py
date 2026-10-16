@@ -48,6 +48,7 @@ from .plan import (
     RegistrationBundle,
     bundle_for,
     check_hook_skills,
+    remove_shadowed_skills,
     skills_shadowed_by,
 )
 from .plan import apply as apply_bundle
@@ -937,6 +938,19 @@ def apply_command(
             results = apply_all_bundle(
                 bundle, scope=resolved_scope, dry_run=dry_run, force=force
             )
+        # apply_all already removes the copies it shadows; the per-platform
+        # branches above have to do it themselves, after every target ran.
+        if prune or platforms is not None:
+            for name, result in results.items():
+                result.removed.extend(
+                    remove_shadowed_skills(
+                        name,
+                        bundle,
+                        target_platforms,
+                        resolved_scope,
+                        dry_run=dry_run,
+                    )
+                )
     except ConflictingPathError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc

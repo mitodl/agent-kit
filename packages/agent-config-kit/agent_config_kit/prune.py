@@ -19,7 +19,12 @@ from pathlib import Path
 
 from . import registry
 from .configio import load_config_object, write_config
-from .installers import hook_content_hash, skill_content_hash, skill_files
+from .installers import (
+    _prune_empty_dirs,
+    hook_content_hash,
+    skill_content_hash,
+    skill_files,
+)
 from .jsonio import json_diff
 from .models import (
     SKILL_NAME_PATTERN,
@@ -390,16 +395,6 @@ def _remove_hooks(
                     removed.append(identity)
 
     return removed
-
-
-def _prune_empty_dirs(start: Path, *, stop_above: Path) -> None:
-    """Remove ``start`` and any now-empty ancestor directories, stopping
-    before (never removing) ``stop_above`` itself — e.g. a platform's shared
-    ``skills/`` dir must survive even after every skill under it is gone."""
-    current = start
-    while current != stop_above and current.is_dir() and not any(current.iterdir()):
-        current.rmdir()
-        current = current.parent
 
 
 def _is_safe_relative_path(rel: str) -> bool:
