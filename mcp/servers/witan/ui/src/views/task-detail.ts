@@ -3,7 +3,7 @@ import { absolute, ago, branchUrl, repoLabel } from "../format.js";
 import { markdown } from "../markdown.js";
 import { type Route, routeHref } from "../route.js";
 import type { CodeBranchRef, TaskDetail } from "../types.js";
-import { slugLinks, uriFact } from "./parts.js";
+import { copyButton, slugLinks, uriFact } from "./parts.js";
 
 /**
  * The task detail pane (spec §6.3).
@@ -25,7 +25,7 @@ export function taskDetail(
 	return html`
     <div class="task-detail">
       <p class="crumbs">
-        <code>${task.slug}</code>
+        <code>${task.slug}</code>${copyButton(task.slug)}
         <span class="badge">${task.type}</span>
         <span class="badge status-${task.status}">${task.status}</span>
         <span class="badge priority">${task.priority}</span>
@@ -154,7 +154,7 @@ function neighbours(
 									find: "",
 								})}
                 ><code>${task.project_slug}</code></a
-              >
+              >${copyButton(task.project_slug)}
             </p>`
 					: nothing
 			}

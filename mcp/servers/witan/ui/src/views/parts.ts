@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit-html";
+import { html, nothing, svg, type TemplateResult } from "lit-html";
 import { isLinkable } from "../format.js";
 import { type Route, routeHref } from "../route.js";
 
@@ -36,6 +36,80 @@ export function slugLinks(
 			)}
     </p>
   `;
+}
+
+/** How long the copied tick shows before the button reverts to its icon. */
+const COPIED_MS = 1500;
+
+const copyIcon = svg`
+  <svg class="icon-copy" viewBox="0 0 16 16" aria-hidden="true">
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+    <path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5" />
+  </svg>
+`;
+
+const copiedIcon = svg`
+  <svg class="icon-copied" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M3 8.5l3 3 7-7" />
+  </svg>
+`;
+
+/**
+ * A button that puts `value` on the clipboard, for pasting a slug into the CLI.
+ *
+ * The copied state is set on the button's own node rather than held in view
+ * state: lit-html leaves an attribute it does not bind alone, so a re-render
+ * from a poll in the next 1.5s does not cut the tick short, and nothing outside
+ * the button has to know a copy happened.
+ */
+export function copyButton(value: string, label = value): TemplateResult {
+	return html`<button
+    type="button"
+    class="copy"
+    title=${`Copy ${label}`}
+    aria-label=${`Copy ${label}`}
+    @click=${(event: MouseEvent) => {
+			// A copy button inside a link or a clickable row must not also
+			// navigate it.
+			event.preventDefault();
+			event.stopPropagation();
+			const button = event.currentTarget as HTMLButtonElement;
+			void copyText(value).then((copied) => {
+				button.dataset.copied = copied ? "yes" : "no";
+				setTimeout(() => delete button.dataset.copied, COPIED_MS);
+			});
+		}}
+  >${copyIcon}${copiedIcon}</button>`;
+}
+
+/**
+ * Write `text` to the clipboard, saying whether it worked.
+ *
+ * The async Clipboard API is absent outside a secure context and refused in an
+ * MCP Apps iframe the host did not grant `clipboard-write`, so it falls back to
+ * the selection-and-`copy` route, which a sandboxed frame usually still allows
+ * from inside a click.
+ */
+export async function copyText(text: string): Promise<boolean> {
+	try {
+		await navigator.clipboard.writeText(text);
+		return true;
+	} catch {
+		const area = document.createElement("textarea");
+		area.value = text;
+		area.setAttribute("readonly", "");
+		area.style.position = "fixed";
+		area.style.opacity = "0";
+		document.body.append(area);
+		area.select();
+		try {
+			return document.execCommand("copy");
+		} catch {
+			return false;
+		} finally {
+			area.remove();
+		}
+	}
 }
 
 /**
