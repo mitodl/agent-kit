@@ -51,7 +51,7 @@ def test_unscoped_list_still_stops_at_fifty_without_a_limit(server):
 def test_an_explicit_limit_reads_past_the_fifty_row_cap(server):
     """The defect: 51 tasks exist and no argument could see the 51st.
 
-    The cap is a literal in `list_all_tasks`, so this is not a slice the
+    The cap is a literal in `list_tasks`, so this is not a slice the
     server was choosing — a limit has to select the uncapped query.
     """
     for i in range(51):
@@ -62,7 +62,7 @@ def test_an_explicit_limit_reads_past_the_fifty_row_cap(server):
 
 @requires_omnigraph
 def test_an_explicit_limit_reads_past_the_cap_with_a_status_filter(server):
-    """The other capped query. `list_tasks_by_status` had the same literal 50."""
+    """The same cap with the `$status` filter set on `list_tasks`."""
     for i in range(51):
         server.task_create(title=f"task {i}", description="x")
 

@@ -281,6 +281,28 @@ def test_project_search_bm25_ranked(server):
 
 
 @requires_omnigraph
+def test_project_search_status_filter_is_optional(server):
+    """`search_projects` covers both the filtered and unfiltered read with a
+    `$status is null or …` guard, where there used to be a query for each."""
+    from witan import server as srv
+
+    active = server.workflow_project_create(title="zorblat a", description="zorblat")
+    done = server.workflow_project_create(title="zorblat b", description="zorblat")
+    server.workflow_project_complete(done["slug"], outcome="delivered")
+
+    for name in ("search_projects", "search_projects_title"):
+        for status, expected in (
+            (None, {active["slug"], done["slug"]}),
+            ("active", {active["slug"]}),
+            ("completed", {done["slug"]}),
+        ):
+            rows = srv.client.read(
+                "read.gq", name, {"query": "zorblat", "status": status}
+            )
+            assert {r["slug"] for r in rows} == expected, (name, status)
+
+
+@requires_omnigraph
 def test_project_search_finds_title_only_terms(server):
     proj = server.workflow_project_create(
         title="zebrafish quokka narwhal",

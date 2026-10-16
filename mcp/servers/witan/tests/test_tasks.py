@@ -29,6 +29,53 @@ def test_task_search_bm25_ranked(server):
 
 
 @requires_omnigraph
+def test_nullable_filters_match_every_combination(server):
+    """Each optional-filter task read returns exactly the rows its filters select.
+
+    Same check as the memory one in test_memory.py: one query per read with
+    `$repo is null or …` / `$status is null or …` guards replaced a query per
+    combination, and the expected rows come from the unfiltered read.
+    """
+    from witan import server as srv
+
+    for repo in ("https://github.com/test/one", "https://github.com/test/two", ""):
+        for n in range(2):
+            t = server.task_create(
+                title=f"zorblat title {n}", description="zorblat body", repo=repo
+            )
+            if n:
+                server.task_close(t["slug"], resolution="done")
+    every = srv.client.read("read.gq", "list_tasks_uncapped", {"status": None})
+    stored = {r["repo"] for r in every}
+    assert None in stored
+    assert len(stored) == 3
+
+    for status in (None, "open", "closed"):
+        for repo in stored:
+            expected = {
+                r["slug"]
+                for r in every
+                if (repo is None or r["repo"] == repo)
+                and (status is None or r["status"] == status)
+            }
+            params = {"query": "zorblat", "repo": repo, "status": status}
+            for name in ("search_tasks", "search_tasks_title"):
+                rows = srv.client.read("read.gq", name, params)
+                assert {r["slug"] for r in rows} == expected, (name, params)
+            if repo is not None:
+                rows = srv.client.read(
+                    "read.gq", "list_tasks_by_repo", {"repo": repo, "status": status}
+                )
+                assert {r["slug"] for r in rows} == expected, (repo, status)
+        by_status = {
+            r["slug"] for r in every if status is None or r["status"] == status
+        }
+        for name in ("list_tasks", "list_tasks_uncapped"):
+            rows = srv.client.read("read.gq", name, {"status": status})
+            assert {r["slug"] for r in rows} == by_status, (name, status)
+
+
+@requires_omnigraph
 def test_task_search_finds_title_only_terms(server):
     t = server.task_create(
         title="zebrafish quokka narwhal",

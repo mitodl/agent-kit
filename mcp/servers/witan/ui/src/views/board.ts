@@ -373,7 +373,7 @@ function claimLine(
  * text names both rather than rendering an empty line: the parallel reads
  * raced a close, which the next poll settles, or `task_ready` never scanned
  * the task. Its candidates for an all-repos or repo scope come from
- * `list_unscoped_tasks`, which stops at 10,000 tasks by `updated_at`, closed
+ * `list_tasks_uncapped`, which stops at 10,000 tasks by `updated_at`, closed
  * ones included, and none of the rows this page receives can show that.
  */
 function blockerLine(blockers: TaskRow[], route: Route): TemplateResult {

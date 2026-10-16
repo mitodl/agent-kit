@@ -365,12 +365,12 @@ def inject_context(
             s3_region=s3_region,
         )
 
-        # The "list_unscoped_tasks" query is an all-tasks scan (capped at the
+        # The "list_tasks_uncapped" query is an all-tasks scan (capped at the
         # query's own limit 10000). Derive both the unscoped and the repo-scoped
         # sets from that one result rather than issuing a second
         # list_tasks_by_repo read — each omnigraph read is fixed overhead
         # regardless of row count, so fewer reads is the win, not narrower results.
-        all_rows = client.read("read.gq", "list_unscoped_tasks", {})
+        all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
         unscoped = [r for r in all_rows if not r.get("repo")]
 
         projects: list[dict] = []
@@ -818,15 +818,15 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         # active projects, not "none" — see its docstring), but ready tasks
         # still fall through to the unscoped set either way (task_ready's own
         # repo_module.detect(override="") resolves to "no repo", matching
-        # list_unscoped_tasks locally). limit=10000 matches the local path's
-        # list_unscoped_tasks cap so a busy graph's header count isn't
+        # list_tasks_uncapped locally). limit=10000 matches the local path's
+        # list_tasks_uncapped cap so a busy graph's header count isn't
         # silently truncated by task_ready's own default limit=20.
         #
         # `repo=""` on the held-task read is load-bearing, not decoration. An
         # OMITTED repo is filled in client-side by `RemoteMCPProxy._map_args`
         # (`task_list` is in `_REPO_IS_SCOPE_OR_STAMP`), which would scope this
         # to whichever checkout the hook fired in — while the local path
-        # answers from an all-repos `list_unscoped_tasks` scan. The sentinel
+        # answers from an all-repos `list_tasks_uncapped` scan. The sentinel
         # makes both transports answer the same question: which tasks do I
         # hold, anywhere.
         first: dict[str, Callable[[], object]] = {
