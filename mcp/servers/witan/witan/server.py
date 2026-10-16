@@ -6951,15 +6951,16 @@ def task_list(
     return [_with_lease_flag(r) for r in rows]
 
 
-def _search_task_bm25(params: dict) -> list[dict]:
-    """One content-then-title BM25 union for the Task search query pair. Same
-    reasoning as the Memory search pairs (§ header note in read.gq).
+def _search_task_bm25(params: dict, name: str = "search_tasks") -> list[dict]:
+    """One content-then-title BM25 union for the Task search query pair
+    ``name`` / ``{name}_title``. Same reasoning as the Memory search pairs
+    (§ header note in read.gq).
     """
-    rows = list(client.read("read.gq", "search_tasks", params))
+    rows = list(client.read("read.gq", name, params))
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in client.read("read.gq", "search_tasks_title", params)
+        for r in client.read("read.gq", f"{name}_title", params)
         if r["slug"] not in seen
     )
     return rows
@@ -7007,10 +7008,10 @@ def _filtered_task_search_rows(
         assignee = _holder_identity(_current_author())
     if project_slug:
         rows = _search_task_bm25(
-            "search_tasks_by_project", {"query": query, "project_slug": project_slug}
+            {"query": query, "project_slug": project_slug}, "search_tasks_by_project"
         )
     else:
-        rows = _search_task_bm25("search_tasks_all_uncapped", {"query": query})
+        rows = _search_task_bm25({"query": query}, "search_tasks_all_uncapped")
         detected = repo_module.detect(override=repo)
         if detected:
             # This repo's matches, then unscoped ones, as in _search_task_rows.
