@@ -167,6 +167,12 @@ node WorkflowProject {
     github_issue: String?
     github_pr:    String?
     blocked_by:  [String]?              // denormalized blocker project slugs (drives ready-work)
+    // The autonomy envelope. Fields rather than description prose, so a
+    // historical note can't be read as a rule, or a rule lost in an edit.
+    preauthorized:      [String]?       // actions an agent may take on this project without asking
+    reserved_decisions: [String]?       // decisions kept for a human; agents batch these into one list
+    preauthorized_set_by:      String?  // server-resolved actor who last set preauthorized (every item in it)
+    reserved_decisions_set_by: String?  // server-resolved actor who last set reserved_decisions
 }
 
 // WorkflowSession tracks a single Claude Code session contributing to

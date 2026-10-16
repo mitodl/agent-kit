@@ -123,6 +123,8 @@ async def _seed(srv) -> dict[str, str]:
         "workflow_project_create",
         title="Witan UI",
         description="A human-readable surface for the graph.",
+        preauthorized=["Rebuild the UI bundle"],
+        reserved_decisions=["Publishing a release"],
     )
     epic = await call(
         "task_create",

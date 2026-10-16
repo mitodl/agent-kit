@@ -13,11 +13,20 @@
       "summary": "Recorded the fixtures."
     },
     "project": {
+      "author": "fixtures",
       "github_pr": null,
       "phase": "discovery",
+      "preauthorized": [
+        "Rebuild the UI bundle"
+      ],
+      "preauthorized_set_by": "fixtures",
       "repos": [
         "https://github.com/mitodl/agent-kit"
       ],
+      "reserved_decisions": [
+        "Publishing a release"
+      ],
+      "reserved_decisions_set_by": "fixtures",
       "slug": "wp-fixture-001",
       "status": "active",
       "title": "Witan UI"

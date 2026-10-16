@@ -20,7 +20,7 @@ from pathlib import Path
 
 from witan_core.observability import get_logger
 
-from . import readiness, session_state
+from . import envelope, readiness, session_state
 from . import repo as repo_module
 from .graph import OmnigraphClient
 
@@ -745,6 +745,7 @@ def _render_context_block(
             lines.append(f"  Phase: {p['phase']}")
             if p.get("github_issue"):
                 lines.append(f"  Issue: {p['github_issue']}")
+            lines.extend(envelope.context_lines(p))
             lines.extend(
                 _project_session_lines(sessions_by_project.get(p["slug"], []), p)
             )

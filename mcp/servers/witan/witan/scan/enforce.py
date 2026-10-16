@@ -9,6 +9,8 @@ that turns detector findings into policy, for every node type.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from witan_core.observability import get_logger
 from witan_core.refusal import Refusal
 
@@ -21,9 +23,11 @@ from .registry import ScannerRegistry
 
 logger = get_logger("witan.scan")
 
-# query_name → (node_type, scalar free-text params to scan). Only scalar string
-# fields are scanned; list fields (tags, symbol_refs, files_changed, …) and
-# structured/enum params are intentionally out of scope for now. Branch names
+# query_name → (node_type, free-text params to scan). A string param is scanned
+# as one value; a list param named here is scanned element by element, for the
+# prose lists (the autonomy envelope) that are injected into agent context.
+# Identifier lists (tags, symbol_refs, files_changed, …) and structured/enum
+# params are intentionally out of scope for now. Branch names
 # (insert_code_branch) are deliberately excluded — witan never sanitises them.
 # Keep this aligned with queries/mutations.gq when free-text fields are added.
 #
@@ -44,7 +48,16 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
     "link_contradicts": ("Contradicts", ("role",)),
     "link_related_to": ("RelatedTo", ("role",)),
     "link_tagged": ("Tagged", ("role",)),
-    "insert_workflow_project": ("WorkflowProject", ("title", "description")),
+    "insert_workflow_project": (
+        "WorkflowProject",
+        ("title", "description", "preauthorized", "reserved_decisions"),
+    ),
+    "update_workflow_project_fields": ("WorkflowProject", ("title", "description")),
+    "update_workflow_project_preauthorized": ("WorkflowProject", ("preauthorized",)),
+    "update_workflow_project_reserved_decisions": (
+        "WorkflowProject",
+        ("reserved_decisions",),
+    ),
     "update_workflow_project_description": ("WorkflowProject", ("description",)),
     "insert_workflow_session": ("WorkflowSession", ("summary",)),
     "update_workflow_session_end": ("WorkflowSession", ("summary",)),
@@ -84,6 +97,25 @@ class WriteBlocked(RuntimeError, Refusal):
             f"witan refused a {query_name} write — sensitive content detected "
             f"({detail}). Remove it and retry."
         )
+
+
+def _scannable(
+    params: dict, fields: tuple[str, ...]
+) -> Iterator[tuple[str, int | None, str]]:
+    """``(field, index, value)`` for every non-empty string to scan.
+
+    A string param yields itself with ``index`` ``None``; a list param yields
+    each string element with its position, so a redaction can rewrite that
+    element alone."""
+    for field in fields:
+        value = params.get(field)
+        if isinstance(value, str):
+            if value:
+                yield field, None, value
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, str) and item:
+                    yield field, index, item
 
 
 def _repo_of(params: dict) -> str | None:
@@ -149,14 +181,21 @@ class WriteGuard:
         # it can never contribute to `blocked` or `redactions` below —
         # allowlisting always wins over the category/per-finding policy.
         # Each resolved tuple is (finding, action, suppressed_by).
+        # Each entry is (field, index, label, value, resolved): `index` is the
+        # element's position when `field` is a list, and `label` is what the
+        # audit trail, the redaction notice and a block message name.
         per_field: list[
-            tuple[str, str, list[tuple[Finding, ScanAction, str | None]]]
+            tuple[
+                str,
+                int | None,
+                str,
+                str,
+                list[tuple[Finding, ScanAction, str | None]],
+            ]
         ] = []
         blocked: list[tuple[str, Finding]] = []
-        for field in fields:
-            value = params.get(field)
-            if not isinstance(value, str) or not value:
-                continue
+        for field, index, value in _scannable(params, fields):
+            label = field if index is None else f"{field}[{index}]"
             findings = self._scan(value, field, node_type, config)
             if not findings:
                 continue
@@ -169,17 +208,17 @@ class WriteGuard:
                     else f.action or self._action_for(f.category, config)
                 )
                 resolved.append((f, action, reason))
-            per_field.append((field, value, resolved))
-            blocked.extend((field, f) for f, a, _ in resolved if a == "block")
+            per_field.append((field, index, label, value, resolved))
+            blocked.extend((label, f) for f, a, _ in resolved if a == "block")
 
         write_blocked = bool(blocked)
-        redactions: dict[str, str] = {}
-        for field, value, resolved in per_field:
+        redactions: dict[str, str | list[str]] = {}
+        for field, index, label, value, resolved in per_field:
             for finding, action, reason in resolved:
                 audit.emit(
                     query_name=query_name,
                     node_type=node_type,
-                    field=field,
+                    field=label,
                     slug=slug,
                     finding=finding,
                     action=action,
@@ -189,13 +228,18 @@ class WriteGuard:
             if not write_blocked:
                 to_redact = [f for f, a, _ in resolved if a == "redact"]
                 if to_redact:
-                    redactions[field] = redact_spans(value, to_redact)
+                    rewritten = redact_spans(value, to_redact)
+                    if index is None:
+                        redactions[field] = rewritten
+                    else:
+                        items = redactions.setdefault(field, list(params[field]))
+                        items[index] = rewritten
                     # Recorded HERE, next to the rewrite, rather than left to
                     # the audit log: the audit trail tells an operator what the
                     # detectors did, and tells the caller nothing. A redaction
                     # the caller never hears about is an unrecoverable edit to
                     # their data reported as a clean success — see notice.py.
-                    notice.record(query_name, slug, field, to_redact)
+                    notice.record(query_name, slug, label, to_redact)
 
         if write_blocked:
             raise WriteBlocked(query_name, blocked)

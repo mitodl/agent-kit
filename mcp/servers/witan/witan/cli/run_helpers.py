@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 
+from .. import envelope
 from ..readiness import CLAIM_LEASE_SECONDS
 from ._common import (
     _fn,
@@ -199,6 +200,23 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
         "Description:",
         p.get("description") or "(none)",
     ]
+    if p.get("preauthorized"):
+        how = ", do these without asking" if envelope.owner_granted(p) else ""
+        lines += [
+            "",
+            f"{envelope.describe(p, 'preauthorized')}{how}:",
+            *(f"  - {item}" for item in p["preauthorized"]),
+        ]
+    if p.get("reserved_decisions"):
+        lines += [
+            "",
+            (
+                f"{envelope.describe(p, 'reserved_decisions')}. Don't act on "
+                "these; collect them into one numbered list with a "
+                "recommendation each, at the next natural stop:"
+            ),
+            *(f"  - {item}" for item in p["reserved_decisions"]),
+        ]
     if tasks:
         lines += ["", "Ready tasks:"]
         for t in tasks:

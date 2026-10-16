@@ -349,3 +349,63 @@ def test_task_comment_overlay_keys_on_the_tasks_repo():
         "repo": "github.com/example/legacy",
     }
     assert guard("insert_task_comment", params) == params
+
+
+# ── list fields: the autonomy envelope ──────────────────────────────────────────
+# The envelope is prose injected into agent context on every prompt, so its
+# lists are scanned element by element on every write path that carries them.
+
+
+@pytest.mark.parametrize(
+    ("query_name", "field"),
+    [
+        ("insert_workflow_project", "preauthorized"),
+        ("insert_workflow_project", "reserved_decisions"),
+        ("update_workflow_project_preauthorized", "preauthorized"),
+        ("update_workflow_project_reserved_decisions", "reserved_decisions"),
+    ],
+)
+def test_an_envelope_item_carrying_a_secret_blocks_the_write(query_name, field):
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked) as exc:
+        guard(query_name, {"slug": "wp-1", field: ["fine", "use AKIASECRET here"]})
+    msg = str(exc.value)
+    assert f"{field}[1]" in msg
+    assert "AKIASECRET" not in msg
+
+
+def test_an_envelope_item_is_redacted_alone():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")])
+    items = ["deploy to QA", "ping a@b.com first"]
+    out = guard(
+        "update_workflow_project_preauthorized",
+        {"slug": "wp-1", "preauthorized": items},
+    )
+    assert out["preauthorized"] == ["deploy to QA", "ping «redacted:email» first"]
+    # The caller's list is not rewritten in place.
+    assert items == ["deploy to QA", "ping a@b.com first"]
+
+
+def test_an_envelope_item_warning_passes_through():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")], secret_action="warn")
+    params = {"slug": "wp-1", "reserved_decisions": ["AKIA stays"]}
+    assert guard("update_workflow_project_reserved_decisions", params) == params
+
+
+def test_identifier_lists_are_still_not_scanned():
+    """Only the prose lists named in FIELD_MAP are scanned; tags are not."""
+    guard = _guard([MatchScanner("s", "secret", "SECRET")])
+    params = {"title": "t", "description": "d", "tags": ["SECRET"]}
+    assert guard("insert_workflow_project", params) == params
+
+
+def test_workflow_project_update_scans_title_and_description():
+    """`workflow_project_update` writes through `update_workflow_project_fields`,
+    which had no FIELD_MAP entry, so a title or description edit skipped the
+    scanner that the same text met on create."""
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked):
+        guard(
+            "update_workflow_project_fields",
+            {"slug": "wp-1", "title": "t", "description": "key AKIASECRET"},
+        )

@@ -641,7 +641,9 @@ query search_projects($query: String, $status: String?) {
     }
     return {
         $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
-        $p.tags, $p.github_issue, $p.updated_at
+        $p.tags, $p.github_issue, $p.updated_at,
+        $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
     order { bm25($p.description, $query) desc }
     limit 1000000
@@ -655,7 +657,9 @@ query search_projects_title($query: String, $status: String?) {
     }
     return {
         $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
-        $p.tags, $p.github_issue, $p.updated_at
+        $p.tags, $p.github_issue, $p.updated_at,
+        $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
     order { bm25($p.title, $query) desc }
     limit 1000000
@@ -670,7 +674,8 @@ query get_workflow_project($slug: String) {
         $p.status, $p.phase, $p.author, $p.tags,
         $p.github_issue, $p.github_pr,
         $p.created_at, $p.updated_at, $p.completed_at,
-        $p.blocked_by
+        $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
 }
 
@@ -682,9 +687,10 @@ query list_projects_by_status($status: String) {
         $p: WorkflowProject { status: $status }
     }
     return {
-        $p.slug, $p.title, $p.repos, $p.phase,
+        $p.slug, $p.title, $p.repos, $p.phase, $p.author,
         $p.status, $p.updated_at, $p.github_issue, $p.tags,
-        $p.blocked_by
+        $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
     order { $p.updated_at desc }
     // Unbounded: repo membership is filtered in Python (repos is a list), so the
@@ -698,9 +704,10 @@ query list_all_projects() {
         $p: WorkflowProject
     }
     return {
-        $p.slug, $p.title, $p.repos, $p.phase,
+        $p.slug, $p.title, $p.repos, $p.phase, $p.author,
         $p.status, $p.updated_at, $p.github_issue, $p.tags,
-        $p.blocked_by
+        $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
     order { $p.updated_at desc }
     // Unbounded: repo membership is filtered in Python (repos is a list), so the
@@ -718,7 +725,9 @@ query get_workflow_project_by_slug($slug: String) {
     }
     return {
         $p.slug, $p.title, $p.status, $p.phase,
-        $p.repos, $p.updated_at, $p.blocked_by
+        $p.repos, $p.updated_at, $p.blocked_by,
+        $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
 }
 
@@ -729,7 +738,9 @@ query get_workflow_projects_by_slugs($slugs: [String]) {
     }
     return {
         $p.slug, $p.title, $p.status, $p.phase,
-        $p.repos, $p.updated_at, $p.blocked_by
+        $p.repos, $p.updated_at, $p.blocked_by,
+        $p.preauthorized, $p.reserved_decisions,
+        $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
 }
 
