@@ -9,8 +9,9 @@ description: >
   Copilot, OpenCode) — needs only `git diff` and a rubric, no MCP or witan
   dependency. Use this skill when asked to "review this diff", "review my
   branch", "code review PR #N", "review the changes", "check this for
-  bugs", "security review this", "deep review", "does this actually do what the ticket
-  asks", or to review staged/unstaged changes before opening a PR.
+  bugs", "security review this", "deep review", "does this actually do what
+  the ticket asks", "is X addressed in this PR", or to review
+  staged/unstaged changes before opening a PR.
   Report-only by default; only edits code when the request explicitly says
   to fix the findings too.
 license: BSD-3-Clause
