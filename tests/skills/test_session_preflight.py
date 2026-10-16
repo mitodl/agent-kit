@@ -228,6 +228,16 @@ class PreflightTest(unittest.TestCase):
                 self.assertEqual(stdout, "")
 
     @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
+    def test_a_check_that_raises_is_reported(self) -> None:
+        self.stub_all_passing()
+        self.witan_config.write_text("remote_url = [\n")
+        stdout, _ = self.run_preflight()
+        self.assertTrue(
+            stdout.startswith("witan: the check raised TOMLDecodeError: "), stdout
+        )
+        self.assertEqual(len(stdout.splitlines()), 1)
+
+    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_reads_remotes_through_git(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text(

@@ -332,10 +332,22 @@ def main() -> int:
         "witan": lambda: check_witan(repo_root),
     }
     results: dict[str, str | None] = {}
+
+    def work(name: str, check: Callable[[], str | None]) -> None:
+        # A check that raises (e.g. a malformed witan config) has not passed,
+        # so it gets a line like any other failure instead of a traceback on
+        # stderr that the session never shows.
+        try:
+            results[name] = check()
+        except Exception as exc:  # noqa: BLE001 - reported as this check's failure line
+            reason = (str(exc).splitlines() or [""])[0]
+            results[name] = (
+                f"{name}: the check raised {type(exc).__name__}: {reason}. "
+                f"Run: python3 {__file__}"
+            )
+
     threads = {
-        name: threading.Thread(
-            target=lambda n=name, c=check: results.__setitem__(n, c()), daemon=True
-        )
+        name: threading.Thread(target=work, args=(name, check), daemon=True)
         for name, check in checks.items()
     }
     for thread in threads.values():
