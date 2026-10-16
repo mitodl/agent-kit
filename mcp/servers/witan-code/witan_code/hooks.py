@@ -45,10 +45,14 @@ _LOG_MAX_BYTES = 1024 * 1024
 # patch text (`tool_input.command`) rather than a path; its `Edit|Write`
 # matcher selects that tool by alias. These are the patch grammar's
 # file-header lines that name a file left on disk (codex-rs/apply-patch
-# parser.rs: ADD_FILE_MARKER, UPDATE_FILE_MARKER, MOVE_TO_MARKER). Hunk body
-# lines all start with ` `, `-` or `+`, so a header can't be forged by content.
+# parser.rs: ADD_FILE_MARKER, UPDATE_FILE_MARKER, MOVE_TO_MARKER). Codex
+# accepts an indented Add/Update header (streaming_parser.rs trims the line
+# outside an update hunk) but only a column-0 Move to. Added content starts
+# with `+`, so it can't name a file; an update hunk's context line that quotes
+# a header can, and at worst reindexes an unchanged file.
 _APPLY_PATCH_TARGET = re.compile(
-    r"^\*\*\* (?:Add File|Update File|Move to): (.+)$", re.MULTILINE
+    r"^(?:[ \t]*\*\*\* (?:Add File|Update File)|\*\*\* Move to): (.+)$",
+    re.MULTILINE,
 )
 
 

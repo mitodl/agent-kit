@@ -991,9 +991,10 @@ def _drain_pending_cmd(checkout: Path, lock_fd: int) -> None:
 def reindex_hook_cmd() -> None:
     """Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
 
-    Reads the Claude Code hook payload from stdin, extracts
-    ``tool_input.file_path`` (or ``path``/``filename``), and queues it for
-    reindexing if it exists. One detached drainer per checkout applies the
+    Reads the hook payload from stdin, extracts ``tool_input.file_path`` (or
+    ``path``/``filename``) from Claude Code's, or every file a Codex
+    ``apply_patch`` adds, updates or moves to, and queues each for reindexing
+    if it exists. One detached drainer per checkout applies the
     queue, so parallel agents editing one worktree do not race each other's
     writes to its branch view. Logs from the last drainer are kept in
     ``$TMPDIR/witan-code-<uid>/``. Best-effort: a missing or

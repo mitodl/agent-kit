@@ -213,7 +213,7 @@ def test_reindex_hook_reads_every_file_a_codex_patch_leaves(
     (tmp_path / "forged.py").write_text("def f(): pass")
     patch = (
         "*** Begin Patch\n"
-        "*** Add File: added.py\n"
+        "  *** Add File: added.py\n"
         "+def a(): pass\n"
         "+*** Add File: forged.py\n"
         "*** Update File: updated.py\n"
