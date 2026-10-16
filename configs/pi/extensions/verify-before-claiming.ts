@@ -9,7 +9,9 @@
  * Reads the installed skill rather than carrying its own copy, so the rules
  * have one source. agent-kit installs Pi's skills to .pi/skills, or to
  * .agents/skills when Codex is also targeted (Pi reads both), at project or
- * global scope. The first file found wins; none found means no block.
+ * global scope. Global wins, so a repo can't replace or blank the rules a
+ * global install injects; the project copies (cwd only, not its parents) are
+ * the fallback for a project-scope install. None found means no block.
  *
  * Install: `agent-kit apply agent-config.toml` (registered as a plugin hook).
  */
@@ -23,14 +25,14 @@ const SKILL = join("verify-before-claiming", "SKILL.md");
 
 function readRules(cwd: string | undefined): string | undefined {
 	const candidates = [
+		join(homedir(), ".pi", "agent", "skills", SKILL),
+		join(homedir(), ".agents", "skills", SKILL),
 		...(cwd
 			? [
 					join(cwd, ".pi", "skills", SKILL),
 					join(cwd, ".agents", "skills", SKILL),
 				]
 			: []),
-		join(homedir(), ".pi", "agent", "skills", SKILL),
-		join(homedir(), ".agents", "skills", SKILL),
 	];
 	for (const path of candidates) {
 		try {

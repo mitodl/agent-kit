@@ -102,7 +102,7 @@ verify-before-claiming          = "skills/workflow/verify-before-claiming/SKILL.
 [[hooks]]
 kind = "declarative"
 event = "session_start"
-command = "cat {skill_dir}/SKILL.md"
+command = "cat \"{skill_dir}/SKILL.md\""
 skill = "verify-before-claiming"
 
 [[hooks]]
@@ -121,7 +121,7 @@ skills = [
     "verify-before-claiming",
 ]
 hooks = [
-    "declarative:session_start:cat {skill_dir}/SKILL.md",
+    "declarative:session_start:cat \"{skill_dir}/SKILL.md\"",
     "plugin:verify-before-claiming.ts",
 ]
 
