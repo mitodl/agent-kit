@@ -27,7 +27,7 @@ build:
       # ships behaviour changes between patch releases; an unpinned install here
       # would let the published site diverge from what CI verified. Renovate
       # bumps both together.
-      - pip install "zensical==0.0.67"
+      - pip install "zensical==0.0.69"
     build:
       html:
         - zensical build
