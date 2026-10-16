@@ -63,6 +63,28 @@ approach and the rejected alternatives to [`write-adr`](../write-adr/SKILL.md),
 which turns them into `## Decision` and `## Options Considered`. An ADR written
 before the alternatives were scored records a preference, not a decision.
 
+## Asking the user
+
+Steps 1 and 5 ask the user to choose or type something, and Step 5's answer is
+the approval the whole skill waits on. Ask the same way on every agent — the
+same contract `witan-task` and `witan-workflow` use, because `witan setup`
+installs all of them into agents that have no such tool:
+
+- **If a structured question tool is actually available to you** (e.g. Claude
+  Code's `AskUserQuestion`, or a question tool a Pi extension registers), use
+  it with the question and options given. Where a step also needs free text,
+  use whatever free-text entry that tool offers; if it offers none, ask for the
+  text in a plain message.
+- **Otherwise**, ask the same question in a normal message — number the
+  options, say what free-text answer is accepted — and **end your turn and
+  wait** for the reply. Do not guess an answer or pick a default on the user's
+  behalf.
+
+Never add an option the step does not list just to get a free-text box. Nothing
+is recorded, no issue is opened and no code is written until the user has
+answered: on this skill the cost of improvising is an approach approved by
+nobody.
+
 ---
 
 ## Step 1 — Ask the engineer first
@@ -88,9 +110,7 @@ Ask once. **"No view" is a valid answer** — record "no approach offered" and
 move on. Never invent one and attribute it to them: Step 3 scores it as theirs,
 which launders your own idea into their column.
 
-Ask in one message. If a structured question tool is available (Claude Code's
-`AskUserQuestion`, or a Pi extension that registers one), use it; otherwise ask
-in plain prose and end your turn and wait for the reply.
+Ask in one message, the way [Asking the user](#asking-the-user) describes.
 
 ---
 
@@ -236,9 +256,8 @@ rubric makes the Follow-up URL mandatory for exactly this row, and Step 6 opens
 the issue before the plan is recorded, so an "accepted untracked" workaround
 would be approved against a ledger it cannot satisfy.
 
-Then confirm. With a structured question tool, use the options approve /
-revise / pick another / cancel; otherwise ask the same in plain prose, number
-the options, and end your turn and wait.
+Then confirm, with the options approve / revise / pick another / cancel, asked
+the way [Asking the user](#asking-the-user) describes.
 
 **Nothing is recorded and no code is written until the engineer approves.**
 "Revise" goes back to Step 2, 3 or 4 — or, on the fast path, to Step 1 if they
