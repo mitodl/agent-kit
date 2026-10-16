@@ -8,6 +8,7 @@ so the omnigraph trackers work the same under Pi.
 |---|---|---|
 | `extensions/codegraph.ts` | `session_start`, `tool_call`/`tool_result` (`edit`/`write`), `before_agent_start`, `session_shutdown` | codegraph-session-init + codegraph-reindex + codegraph-context + codegraph-checkpoint |
 | `extensions/workflow-context.ts` | `before_agent_start`, `session_shutdown` | workflow-context-inject + workflow-session-checkpoint |
+| `extensions/verify-before-claiming.ts` | `before_agent_start` | the `session_start` hook in `agent-config.toml` that injects `verify-before-claiming` |
 
 - **codegraph.ts** (owned by witan-code; see
   [mcp/servers/witan-code/witan_code/extensions/pi/codegraph.ts](../../mcp/servers/witan-code/witan_code/extensions/pi/codegraph.ts),
@@ -69,7 +70,11 @@ event loop, so with both extensions installed a prompt can wait up to their
 sum (60s) against Claude's 45s. Every other handler (`session_start` indexing, edit reindexing,
 `session_shutdown`) runs detached and never blocks.
 
-The copies in `extensions/` must stay byte-identical to the package files
+`verify-before-claiming.ts` belongs to this repo, not a package: `agent-kit apply
+agent-config.toml` installs it as a plugin hook, and it appends the installed
+`verify-before-claiming` skill's `SKILL.md` to the system prompt each turn.
+
+The witan copies in `extensions/` must stay byte-identical to the package files
 linked above; edit the package file, copy it here, and `tests/test_setup.py`
 in each package fails if they drift.
 
