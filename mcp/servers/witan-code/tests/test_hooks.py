@@ -6,6 +6,7 @@ the lock handoff, stdin-JSON parsing, path resolution), not the real indexer
 or a real detached drainer. The lock itself is real: a kernel flock.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -169,6 +170,78 @@ def test_reindex_hook_swallows_index_failure(tmp_path, monkeypatch):
     hooks.reindex_hook(
         f'{{"tool_input": {{"filename": "{target}"}}}}'
     )  # must not raise
+
+
+# ── Codex apply_patch payloads ────────────────────────────────────────────────
+
+
+def _codex_post_tool_use(cwd, patch: str) -> str:
+    """A Codex ``PostToolUse`` payload for its ``apply_patch`` tool.
+
+    Field set from ``PostToolUseCommandInput`` (codex-rs/hooks/src/schema.rs at
+    rust-v0.162.1); ``tool_input``/``tool_response`` from
+    ``ApplyPatchHandler::post_tool_use_payload``
+    (codex-rs/core/src/tools/handlers/apply_patch.rs). Codex's ``Edit|Write``
+    matcher selects this tool by alias, but the payload names it
+    ``apply_patch`` and carries the patch, not a path.
+    """
+    return json.dumps(
+        {
+            "session_id": "019a1b2c-3d4e-7f00-8a9b-0c1d2e3f4a5b",
+            "turn_id": "1",
+            "transcript_path": None,
+            "cwd": str(cwd),
+            "hook_event_name": "PostToolUse",
+            "model": "gpt-5-codex",
+            "permission_mode": "default",
+            "tool_name": "apply_patch",
+            "tool_input": {"command": patch},
+            "tool_response": "Success. Updated the following files:",
+            "tool_use_id": "call-apply-patch",
+        }
+    )
+
+
+def test_reindex_hook_reads_every_file_a_codex_patch_leaves(
+    tmp_path, monkeypatch, _indexed
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "added.py").write_text("def a(): pass")
+    (tmp_path / "updated.py").write_text("def u(): pass")
+    (tmp_path / "moved.py").write_text("def m(): pass")
+    # Present on disk, but only named inside an added file's content.
+    (tmp_path / "forged.py").write_text("def f(): pass")
+    patch = (
+        "*** Begin Patch\n"
+        "*** Add File: added.py\n"
+        "+def a(): pass\n"
+        "+*** Add File: forged.py\n"
+        "*** Update File: updated.py\n"
+        "@@\n"
+        "-def u(): return 1\n"
+        "+def u(): pass\n"
+        "*** Update File: old.py\n"
+        "*** Move to: moved.py\n"
+        "*** Delete File: deleted.py\n"
+        "*** End Patch\n"
+    )
+
+    hooks.reindex_hook(_codex_post_tool_use(tmp_path, patch))
+
+    assert _indexed == [
+        tmp_path / "added.py",
+        tmp_path / "updated.py",
+        tmp_path / "moved.py",
+    ]
+
+
+def test_reindex_hook_noop_on_a_codex_payload_without_a_patch(tmp_path, _indexed):
+    payload = json.loads(_codex_post_tool_use(tmp_path, ""))
+    payload["tool_input"] = {"command": None}
+
+    hooks.reindex_hook(json.dumps(payload))
+
+    assert _indexed == []
 
 
 # ── reindex_hook inside a repo ────────────────────────────────────────────────
