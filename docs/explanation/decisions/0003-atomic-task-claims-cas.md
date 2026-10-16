@@ -158,3 +158,50 @@ removed.
 Re-run the measurement above to decide whether (b) ever becomes worth it. The
 signal is an assignee with no `#` that is identity-shaped rather than
 `cfg.author`-shaped.
+
+## Addendum (2026-10-16): the claim is a store-level compare-and-swap
+
+The premise above no longer holds. omnigraph #470 added
+`/mutate/if-graph-commit` (the CLI's `--if-commit`): the write applies only
+while the branch head still equals the `graph_commit_id` the caller read, and
+otherwise answers 412 having written nothing. Upstream compares against the
+same pinned view the write executes on and re-checks under the branch gate
+before effects (`mutate_as_with_expected_head`,
+`crates/omnigraph/src/exec/mutation.rs`, v0.13.0). Against a local 0.13.0
+server, a write fenced on the current head returned 200 with
+`commit.parent_commit_id` equal to the fence, and the same write fenced on the
+previous head returned 412 with `precondition_failure {expected, actual}`.
+
+`task_claim` has stated that precondition since it landed, but it still decided
+claimability on an earlier, unfenced read, and it kept part 3 plus a loop that
+retried the verification read until its commit caught up with the claim's own.
+That left a gap: a rival that claimed between the first read and the fenced one
+was overwritten by a write whose precondition held, and both callers could be
+told `claimed: true`. The verification read could not see it, because our claim
+was by then the last write.
+
+The claim now decides claimability on the row its conditional write is fenced
+on (`_update_task`'s `require`), so a successful write proves nobody claimed,
+closed or blocked the task between that read and the commit. Part 3 and the
+catch-up loop are gone. A rival whose claim lands later either read ours and is
+refused, or fenced on an older head and gets a 412. A read with no
+`graph_commit_id` now raises rather than falling back to an unconditional
+write, since both transports report one on 0.13.
+
+Outside the guarantee:
+
+- Writes that skip the check: `force`, a `task_update` of `assignee` or
+  `status`, and a claim taken once the lease lapses.
+- Holders that compare equal (the missing `session_id` case above).
+- A claim whose response never arrives. From 0.12 the server keeps running an
+  admitted write after its caller disconnects. Against the local 0.13.0
+  server, a mutate whose connection was reset 2 ms after sending still landed,
+  and one reset before the server routed it did not, so a client timeout or a
+  lost response leaves the outcome unknown. The transport does not re-send a
+  write that failed mid-flight, and upstream has no durable request-result
+  lookup in 0.13, so the caller re-reads before retrying.
+- An in-doubt publish. The 0.12 publisher reads a commit back when its
+  acknowledgement is lost and returns success if it landed. Only a read-back
+  that cannot complete surfaces, as a 500 `internal` whose message names the
+  commit ("manifest publish outcome is in doubt: graph commit … may be
+  durable"), and it is not retried.

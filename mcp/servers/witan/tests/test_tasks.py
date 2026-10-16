@@ -1227,7 +1227,7 @@ def test_unleased_stale_in_progress_is_still_reclaimable(server, monkeypatch):
     assert c["claimed"] is True
 
 
-# ── Best-effort CAS: conflict detection & post-write verification ───────
+# ── CAS claims: conflict detection ──────────────────────────────────────
 
 
 @requires_omnigraph
@@ -1267,38 +1267,93 @@ def test_claim_conflict_reports_lost_race_without_clobber(server, monkeypatch):
     assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
+async def _instant_sleep(_seconds):
+    """Stand-in for ``anyio.sleep``: the claim loop's backoff is about attempt
+    count, not real time."""
+
+
+def _rival_claim(srv, slug: str) -> None:
+    srv._update_task(
+        slug,
+        {"status": "in_progress", "assignee": "agentB", "claimed_at": srv.now_iso()},
+    )
+
+
 @requires_omnigraph
-def test_claim_post_write_verification_catches_last_writer(server, monkeypatch):
-    """Our claim write succeeds, but a rival commits *after* it (last-write-wins
-    with no store CAS). Post-write verification must detect that we no longer
-    hold the task and report ``lost_race`` rather than a false success."""
+def test_claim_decides_on_the_row_it_fences_on(server, monkeypatch):
+    """A rival claims after `task_claim`'s first read but before the read its
+    write is fenced on. That fenced read is where claimability is decided, so
+    agentA reports ``lost_race`` and writes nothing. Deciding on the first read
+    instead wrote agentA's claim over agentB's with a precondition that held,
+    and both callers were told they had the task."""
     from witan import server as srv
 
-    t = server.task_create(title="clobbered", description="x")
+    t = server.task_create(title="claimed-in-between", description="x")
+    real_read = srv.client.read_with_commit
     real_change = srv.client.change
-    calls = {"n": 0}
+    injected = {"done": False}
 
-    def clobber_after(*args, surface_conflict=False, **kwargs):
-        result = real_change(*args, surface_conflict=surface_conflict, **kwargs)
-        if surface_conflict and calls["n"] == 0:
-            calls["n"] += 1
-            # rival's claim lands immediately after ours committed
-            srv._update_task(
-                t["slug"],
-                {
-                    "status": "in_progress",
-                    "assignee": "agentB",
-                    "claimed_at": srv.now_iso(),
-                },
-            )
-        return result
+    def rival_then_read(*args, **kwargs):
+        if not injected["done"]:
+            injected["done"] = True
+            _rival_claim(srv, t["slug"])
+        return real_read(*args, **kwargs)
 
-    monkeypatch.setattr(srv.client, "change", clobber_after)
+    def no_claim_write(*args, surface_conflict=False, **kwargs):
+        if surface_conflict:
+            raise AssertionError("agentA's claim must not be written")
+        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+
+    monkeypatch.setattr(srv.client, "read_with_commit", rival_then_read)
+    monkeypatch.setattr(srv.client, "change", no_claim_write)
 
     res = server.task_claim(t["slug"], assignee="agentA")
+
     assert res["claimed"] is False
     assert res["reason"] == "lost_race"
     assert res["held_by"] == "agentB"
+    assert server.task_get(t["slug"])["assignee"] == "agentB"
+
+
+@requires_omnigraph
+def test_claim_fenced_on_a_moved_head_is_refused_by_the_store(server, monkeypatch):
+    """A rival commits between the fenced read and agentA's write. Nothing is
+    stubbed on the write path: the real store refuses the stale precondition,
+    and the retry's own read finds agentB holding the task."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    t = server.task_create(title="fenced-on-a-moved-head", description="x")
+    real_read = srv.client.read_with_commit
+    real_change = srv.client.change
+    injected = {"done": False}
+    conflicts = {"n": 0}
+
+    def read_then_rival(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        if not injected["done"]:
+            injected["done"] = True
+            _rival_claim(srv, t["slug"])
+        return result
+
+    def counting_change(*args, **kwargs):
+        try:
+            return real_change(*args, **kwargs)
+        except graph_mod.OmnigraphConflict:
+            conflicts["n"] += 1
+            raise
+
+    monkeypatch.setattr(srv.client, "read_with_commit", read_then_rival)
+    monkeypatch.setattr(srv.client, "change", counting_change)
+    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert conflicts["n"] == 1, "the store did not refuse the stale precondition"
+    assert res["claimed"] is False
+    assert res["reason"] == "lost_race"
+    assert res["held_by"] == "agentB"
+    assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
 @requires_omnigraph
@@ -1509,15 +1564,6 @@ def test_claim_states_the_precondition_from_its_own_read(server, monkeypatch):
 
     def spy_read(*args, **kwargs):
         rows, commit = real_read(*args, **kwargs)
-        # setdefault, not assignment: `task_claim` calls `read_with_commit`
-        # MORE THAN ONCE — `_update_task`'s own read, and then the post-write
-        # verification. Only the FIRST is the one the precondition must match,
-        # and recording every call let a later one overwrite it.
-        #
-        # This assertion silently changed meaning when the verification read
-        # was switched from `read` to `read_with_commit`: it began comparing
-        # the precondition against the VERIFICATION commit, which legitimately
-        # differs, and failed. The invariant under test never changed.
         seen.setdefault("read_commit", commit)
         return rows, commit
 
@@ -1530,266 +1576,35 @@ def test_claim_states_the_precondition_from_its_own_read(server, monkeypatch):
 
     server.task_claim(t["slug"], assignee="agentA")
 
-    assert "if_commit" in seen, "the claim write stated no precondition at all"
+    assert seen["if_commit"] is not None, "the claim write stated no precondition"
     assert seen["if_commit"] == seen["read_commit"]
 
 
 @requires_omnigraph
-def test_claim_still_works_when_the_tier_supplies_no_commit(server, monkeypatch):
-    """The degraded path must stay a working claim, not an exception.
-
-    A pre-#470 server (and the CLI path) returns no `graph_commit_id`. That is a
-    supported state — it is exactly today's best-effort claim, with the
-    post-write verification as the backstop — so it must not raise, and it must
-    not send a precondition it does not have.
-    """
+def test_conditional_update_refuses_a_read_with_no_commit(server, monkeypatch):
+    """Both transports report the read's commit on omnigraph 0.13. A read that
+    does not leaves no precondition to state, and sending the claim without one
+    would make it an unconditional write, so it raises and writes nothing."""
     from witan import server as srv
 
-    t = server.task_create(title="no-commit-tier", description="x")
+    t = server.task_create(title="no-commit-read", description="x")
     real_read = srv.client.read_with_commit
-    real_change = srv.client.change
-    sent = {}
 
     def read_without_commit(*args, **kwargs):
         rows, _ = real_read(*args, **kwargs)
         return rows, None
 
-    def spy_change(*args, if_commit=None, **kwargs):
-        sent.setdefault("if_commit", if_commit)
-        return real_change(*args, **kwargs)
+    def no_write(*args, **kwargs):
+        raise AssertionError("an unconditional write was attempted")
 
     monkeypatch.setattr(srv.client, "read_with_commit", read_without_commit)
-    monkeypatch.setattr(srv.client, "change", spy_change)
+    monkeypatch.setattr(srv.client, "change", no_write)
 
-    res = server.task_claim(t["slug"], assignee="agentA")
-
-    assert res["claimed"] is True
-    assert sent["if_commit"] is None
-
-
-async def _instant_sleep(_seconds):
-    """Stand-in for ``anyio.sleep`` in the catch-up-retry tests below — the
-    loop's correctness is about attempt COUNT and comparison, not real time,
-    and there is no reason a unit test should actually wait out the backoff."""
-
-
-# Two commits of one 0.12+ history block, slots 9 and 10. Compared as strings
-# the older one sorts last, so a catch-up check that does that trusts the
-# stale read.
-_HISTORY_BLOCK = "01M4E8BJQ4NRAGQJE0B36BDV5N"
-_STALE_COMMIT = f"hb1.{_HISTORY_BLOCK}.9.01M4E8BKX6DYM327NMQRDXB4B2"
-_WRITE_COMMIT = f"hb1.{_HISTORY_BLOCK}.10.01M4E8BKZGE3C8Q4Y5GY9FMKXB"
-_OLDEST_COMMIT = "0" * 26
-
-
-@requires_omnigraph
-def test_claim_verification_retries_until_caught_up(server, monkeypatch):
-    """★ THE CATCH-UP LOOP, THE ACTUAL FIX FOR
-    tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd. The proven bug
-    was a verification read reporting a genuinely OLDER commit than a write
-    that had already landed — not a lie about its own content, an honestly
-    stale read. A read reporting an older commit than our own write must be
-    retried, not trusted, until it reports one that is at least as new.
-
-    An earlier version of this fix PINNED the verification read to our own
-    write's commit instead of retrying an unconstrained one — review (Copilot,
-    agent-kit#248) caught that a pinned read can never see a later write from
-    someone else, defeating `test_claim_post_write_verification_catches_last_
-    writer` on any transport where the pin actually engages. This test is the
-    replacement design's regression guard: unconstrained, but not trusted
-    until caught up.
-    """
-    from witan import server as srv
-
-    t = server.task_create(title="catch-up", description="x")
-    real_read_with_commit = srv.client.read_with_commit
-    real_change = srv.client.change
-
-    def fake_change(*args, **kwargs):
-        # The real write still happens — this only substitutes the returned
-        # commit id, so the row content read back afterwards is genuine.
-        real_change(*args, **kwargs)
-        return _WRITE_COMMIT
-
-    calls = {"n": 0}
-    verify_calls = {"n": 0}
-
-    def staggered_read(*args, **kwargs):
-        rows, real_commit = real_read_with_commit(*args, **kwargs)
-        calls["n"] += 1
-        if calls["n"] == 1:
-            # `_update_task`'s own precondition read — must stay real, or the
-            # write's CAS precondition would be fenced against a fabricated
-            # commit the real store never had.
-            return rows, real_commit
-        verify_calls["n"] += 1
-        if verify_calls["n"] < 3:
-            return rows, _STALE_COMMIT
-        return rows, _WRITE_COMMIT
-
-    monkeypatch.setattr(srv.client, "change", fake_change)
-    monkeypatch.setattr(srv.client, "read_with_commit", staggered_read)
-    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
-
-    res = server.task_claim(t["slug"], assignee="agentA")
-
-    assert res["claimed"] is True
-    assert verify_calls["n"] == 3, "must retry past the two stale reads"
-
-
-@requires_omnigraph
-def test_claim_verification_gives_up_after_max_attempts(server, monkeypatch):
-    """A verification read that never catches up must not retry forever — the
-    loop is bounded and exits, trusting whatever it last saw, rather than
-    hanging the claim on a genuinely wedged read path."""
-    from witan import server as srv
-
-    t = server.task_create(title="never-catches-up", description="x")
-    real_read_with_commit = srv.client.read_with_commit
-    real_change = srv.client.change
-
-    def fake_change(*args, **kwargs):
-        real_change(*args, **kwargs)
-        return _WRITE_COMMIT
-
-    calls = {"n": 0}
-
-    def always_stale_read(*args, **kwargs):
-        rows, real_commit = real_read_with_commit(*args, **kwargs)
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return rows, real_commit
-        return rows, _STALE_COMMIT
-
-    monkeypatch.setattr(srv.client, "change", fake_change)
-    monkeypatch.setattr(srv.client, "read_with_commit", always_stale_read)
-    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
-
-    res = server.task_claim(t["slug"], assignee="agentA")
-
-    # 1 for `_update_task`'s own read, plus every bounded verify attempt.
-    assert calls["n"] == 1 + srv._VERIFY_CAUGHT_UP_MAX_ATTEMPTS
-    # No rival ever wrote, so even the still-stale last read shows agentA —
-    # the point here is termination, not this particular outcome.
-    assert res["claimed"] is True
-
-
-@requires_omnigraph
-def test_a_commit_id_of_unknown_shape_does_not_fail_a_claim_already_written(
-    server, monkeypatch
-):
-    """The comparison runs after the claim is written. An id it cannot place
-    (a future omnigraph format) must cost the bounded retry loop, not turn a
-    claim the caller holds into a tool error on every call."""
-    from witan import server as srv
-
-    t = server.task_create(title="unknown-commit-shape", description="x")
-    real_read_with_commit = srv.client.read_with_commit
-    real_change = srv.client.change
-
-    def fake_change(*args, **kwargs):
-        real_change(*args, **kwargs)
-        return "hb2.some-future-shape"
-
-    calls = {"n": 0}
-
-    def counting_read(*args, **kwargs):
-        calls["n"] += 1
-        return real_read_with_commit(*args, **kwargs)
-
-    monkeypatch.setattr(srv.client, "change", fake_change)
-    monkeypatch.setattr(srv.client, "read_with_commit", counting_read)
-    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
-
-    res = server.task_claim(t["slug"], assignee="agentA")
-
-    assert res["claimed"] is True
-    assert calls["n"] == 1 + srv._VERIFY_CAUGHT_UP_MAX_ATTEMPTS
-
-
-def _verify_events(capfd):
-    """The ``witan.task_claim.verify`` payloads the server emitted on stderr.
-
-    Read off the real JSON log stream rather than through ``caplog``, which
-    does not see these once ``configure_logging(force=True)`` has
-    reconfigured logging. Parsing the JSON the server actually writes is the
-    stronger assertion anyway: it pins the shape production emits.
-    """
-    import json
-
-    events = []
-    for line in capfd.readouterr().err.splitlines():
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("event") == "witan.task_claim.verify":
-            events.append(payload)
-    return events
-
-
-@requires_omnigraph
-def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
-    server, monkeypatch, capfd
-):
-    """``caught_up`` alone cannot tell the healthy case from the degraded one.
-
-    It is ``True`` both when the catch-up check ran and passed and when
-    ``write_commit is None`` short-circuited it, and ``verify_attempts`` is 1
-    in both — so a log carrying only those two fields reads as "no staleness"
-    on a tier that never supplied a commit to catch up to. Investigating the
-    deployed service against exactly these fields is what surfaced the gap:
-    the healthy reading had to be argued from a *neighbouring* call's
-    ``witan.task_update.conditional`` line rather than read off this one.
-
-    ``write_graph_commit_id`` is what settles it, so both directions are
-    pinned here rather than only the happy one. The commit-supplying tier is
-    simulated because the CLI transport these tests run over never returns a
-    ``graph_commit_id`` — the same reason the neighbouring catch-up tests
-    stub ``change``.
-    """
-    import logging
-
-    from witan import server as srv
-    from witan_core.observability import configure_logging, reset_logging
-
-    real_change = srv.client.change
-
-    # Older than any commit a real store reports, so the catch-up comparison
-    # is satisfied on the first read. A sentinel newer than one would exhaust
-    # the retry loop and report caught_up=False — correctly, which is the
-    # ordering this id is chosen for.
-    def change_returning_a_commit(*args, **kwargs):
-        real_change(*args, **kwargs)
-        return _OLDEST_COMMIT
-
-    configure_logging(log_format="json", level="INFO", force=True)
-    try:
-        t = server.task_create(title="commit-supplying-tier", description="x")
-        monkeypatch.setattr(srv.client, "change", change_returning_a_commit)
-        capfd.readouterr()
+    with pytest.raises(RuntimeError, match="graph_commit_id"):
         server.task_claim(t["slug"], assignee="agentA")
-        [supplied] = _verify_events(capfd)
 
-        monkeypatch.setattr(srv.client, "change", real_change)
-        t2 = server.task_create(title="no-commit-tier", description="x")
-        capfd.readouterr()
-        server.task_claim(t2["slug"], assignee="agentA")
-        [degraded] = _verify_events(capfd)
-    finally:
-        reset_logging()
-        # `reset_logging` clears structlog's guard and re-pins its stderr
-        # default, but the root handler `configure_logging`'s dictConfig
-        # installed survives it — leaking JSON logging into later tests. Same
-        # cleanup as tests/test_audit.py and tests/test_context.py.
-        logging.getLogger().handlers.clear()
-
-    # Both look identical on the two fields that used to be the whole story.
-    assert supplied["caught_up"] is degraded["caught_up"] is True
-    assert supplied["verify_attempts"] == degraded["verify_attempts"] == 1
-    # The new field is the only thing that separates them.
-    assert supplied["write_graph_commit_id"] == _OLDEST_COMMIT
-    assert degraded["write_graph_commit_id"] is None
+    [row], _ = real_read("read.gq", "get_task", {"slug": t["slug"]})
+    assert row["status"] == "open"
 
 
 @requires_omnigraph

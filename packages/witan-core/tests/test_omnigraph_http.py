@@ -300,6 +300,27 @@ def test_repair_still_wins_over_a_conflict_status():
     assert ogh.classify_status(409, message) == ogh.NEEDS_REPAIR
 
 
+def test_an_in_doubt_publish_is_not_retried():
+    """From 0.12 the publisher reads a commit back when its acknowledgement is
+    lost and answers success if it landed. Only a read-back that cannot
+    complete reaches the client: a 500 ``internal`` whose message names the
+    commit (upstream ``omnigraph-catalog`` ``publish_outcome_in_doubt``,
+    v0.13.0). The write may be durable, so nothing may re-send it."""
+    body = json.dumps(
+        {
+            "error": (
+                "manifest publish outcome is in doubt: graph commit "
+                "hb1.01M52GVAKWPB0MSGP9MTPJMR1Z.2.01M52GVAMZ8HEBWP8PGNGD0JZS may "
+                "be durable but it could not be confirmed (connection reset); "
+                "reopen the graph and look that commit up before retrying a "
+                "non-idempotent write. original error: storage: connection reset"
+            ),
+            "code": "internal",
+        }
+    )
+    assert ogh.classify_status(500, ogh.error_message(500, body)) == ogh.FATAL
+
+
 def test_full_text_rebuild_required_is_terminal_not_a_retryable_conflict():
     """omnigraph 0.10.0 (upstream #581) answers a stale full-text index with a
     409 carrying `full_text_index_rebuild_required`. The bare-409 rule below it

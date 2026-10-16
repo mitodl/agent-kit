@@ -1662,9 +1662,9 @@ def _commit_id_from_mutate_body(body: str) -> str | None:
     """Pull ``commit.graph_commit_id`` out of a raw mutate response body.
 
     Deliberately lenient rather than raising: an empty body, non-JSON body, or
-    a body with no ``commit`` (a pre-#470 server) are all just "no commit id
-    available", which callers already treat as a normal degrade — the same
-    posture as :meth:`OmnigraphClient.read_with_commit` returning ``None``.
+    a ``"commit": null`` (a write that matched nothing) are all just "no
+    commit id available" — the same posture as
+    :meth:`OmnigraphClient.read_with_commit` returning ``None``.
     A write itself must never fail because this one piece of BONUS
     information could not be parsed out of an otherwise-successful response.
     """
@@ -1744,10 +1744,9 @@ class OmnigraphClient:
         together rather than offering a separate "what is the head now" call —
         a head fetched independently is already stale by construction.
 
-        ``None`` when the server did not supply one: a pre-#470 omnigraph, or
-        the CLI path, which prints rows and discards the envelope. A caller must
-        treat ``None`` as "no precondition available" and fall back to the
-        best-effort path rather than passing it on — ``if_commit=None`` means an
+        ``None`` when the response carried none. omnigraph 0.13 reports it on
+        both transports whenever the branch has a head commit. A caller must
+        not pass ``None`` on as a precondition: ``if_commit=None`` means an
         UNCONDITIONAL write, which is exactly what you did not ask for.
         """
         rows, envelope = self._read_rows(query_file, query_name, params)
@@ -1868,19 +1867,15 @@ class OmnigraphClient:
         worth having — a refusal is now truthful — but a caller must expect to
         re-read and retry more often than the contention alone would suggest.
 
-        Returns the NEW ``graph_commit_id`` this write produced (omnigraph
-        #470's ``ChangeOutput.commit.graph_commit_id``), or ``None`` when the
-        tier does not supply one. Distinct from ``if_commit``, which is the
-        commit you fenced ON before the call — this is the commit that exists
-        AFTER it, and is a floor a caller can compare a later unconstrained
-        read's own reported commit against, to tell a genuinely fresher read
-        apart from one that is still stale. Do not order the two as strings:
-        from 0.12 an id is ``hb1.<block>.<slot>.<nonce>`` with a decimal slot,
-        so slot 10 sorts before slot 9 (council's ``witan.commit_ids`` parses
-        them).
-        Empirically confirmed via HTTP (2026-08-18): the server always answers
-        a mutate with the new commit inline, so no separate read is needed to
-        learn it.
+        Returns the NEW ``graph_commit_id`` this write produced (the mutate
+        response's ``commit.graph_commit_id``), or ``None`` when there is none:
+        the CLI path, or a write that matched nothing (0.13 answers those with
+        ``"commit": null``). Distinct from ``if_commit``, which is the commit
+        you fenced ON before the call. From 0.12 it is the exact commit this
+        write published, even when the acknowledgement was lost and the
+        server had to read it back. Do not order commit ids as strings: from
+        0.12 an id is ``hb1.<block>.<slot>.<nonce>`` with a decimal slot, so
+        slot 10 sorts before slot 9.
 
         ★ HTTP ONLY. The CLI path always returns ``None`` here, DELIBERATELY —
         see the paragraph in the CLI branch below before trying to close that
@@ -1913,9 +1908,7 @@ class OmnigraphClient:
         # precondition failure. It reads an error object off stdout now
         # (`_cli_failure`), but only the read shapes were measured that way on
         # 0.13, not a `mutate --json`. The CLI path stays without a returned
-        # commit id rather than
-        # risk that; a caller degrades to an unconstrained verification read,
-        # same as it already does when `if_commit` itself is unavailable.
+        # commit id rather than risk that.
         extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",

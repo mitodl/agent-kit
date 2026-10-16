@@ -96,9 +96,9 @@ or an HTTP server. Three properties made it the right substrate:
   own view, so an index built on a feature branch is invisible to everyone else
   until it is not.
 
-The costs are real and worth naming. omnigraph offers **no conditional-write
-primitive**, which is why task claims are best-effort. Stores are also **not
-relocatable** — a Lance store embeds absolute paths, so moving one means
+The costs are real and worth naming. A write's precondition is the whole
+**branch head**, not one row, so any concurrent write refuses a task claim and
+it has to retry. Stores are also **not relocatable** — a Lance store embeds absolute paths, so moving one means
 export → init → load, never `mv`. And the client shells out to a pinned
 `omnigraph` binary, which must be on `PATH` for the server to even start.
 

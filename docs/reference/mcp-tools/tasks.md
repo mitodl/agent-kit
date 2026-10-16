@@ -6,7 +6,7 @@
 
 # Tasks
 
-The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. `task_claim` is a **best-effort** compare-and-swap — it detects and rejects most lost races, but it is an advisory lease, not a hard lock. See [ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for what is and is not guaranteed.
+The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. `task_claim` is a compare-and-swap with a lease: it excludes rival claims, but not writes that skip the check (`force`, `task_update`). See [ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for what is and is not guaranteed.
 
 ## `task_create`
 
@@ -196,14 +196,17 @@ effect for them. It is reported rather than refused because the server has
 no way to supply the id itself, so refusing would break every caller that
 cannot send one.
 
-BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
-the claim write cannot be made atomic at the store. Instead we surface the
-Lance optimistic-concurrency conflict (rather than masking it with a retry)
-and re-read + post-write-verify ownership, so a lost race reports
-``{"claimed": false, "reason": "lost_race", "held_by": …}`` instead of
-silently clobbering the winner. The lease is the backstop for the residual
-simultaneous-post-read case. True atomic CAS awaits an upstream omnigraph
-conditional-write feature — see docs/adr/0003.
+The claim is a compare-and-swap. It is written only while the branch head
+is still the one the task was read at, and that read is where
+claimability is decided, so a granted claim means nobody else claimed,
+closed or blocked the task first. A lost race reports ``{"claimed": false,
+"reason": "lost_race", "held_by": …}``. Writes that skip that check can
+still change the holder afterwards: ``force``, a ``task_update`` of
+``assignee`` or ``status``, or a claim taken once the lease lapses. An error
+whose outcome is unknown (a lost response, a client timeout) may still have
+claimed the task, because the server finishes an admitted write after its
+caller disconnects, so re-read with ``task_get`` before retrying. See
+docs/adr/0003.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

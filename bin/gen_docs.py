@@ -273,9 +273,9 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
         "Tasks",
         (
             "The work-coordination layer: what needs doing, what blocks what, and who "
-            "holds which piece of work right now. `task_claim` is a **best-effort** "
-            "compare-and-swap — it detects and rejects most lost races, but it is an "
-            "advisory lease, not a hard lock. See "
+            "holds which piece of work right now. `task_claim` is a compare-and-swap "
+            "with a lease: it excludes rival claims, but not writes that skip the "
+            "check (`force`, `task_update`). See "
             "[ADR 0003](../../explanation/decisions/0003-atomic-task-claims-cas.md) for "
             "what is and is not guaranteed."
         ),

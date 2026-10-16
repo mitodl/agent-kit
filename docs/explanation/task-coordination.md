@@ -41,72 +41,61 @@ reason the task exists at all.
 Here is the honest version, because a confident wrong answer here causes real
 double-work.
 
-**A claim is an advisory lease with a best-effort compare-and-swap. It is not a
-mutex.**
+**A claim is a compare-and-swap with a lease. It excludes other claims, not
+every write.**
 
-### Why it cannot be more
+### How it works
 
 On a local `.omni` store, `OmnigraphClient` serialises writes with a per-store
-advisory `flock`, and claiming is effectively safe.
+advisory `flock`. A shared deployment cannot: a `flock` is a local-filesystem
+lock and cannot coordinate across pods. What makes a claim safe there is the
+store itself.
 
-A shared deployment removes that. A `flock` is a local-filesystem lock; it
-cannot coordinate across pods. And omnigraph — this is the crux — offers **no
-conditional-write primitive**. There is no `--if-version`, no
-`--expected-commit`, and the query engine cannot express a
-`... WHERE status = 'open'` guard inside the mutation. You cannot ask the store
-to "set this claim only if it is still unclaimed" and have the store reject the
-loser.
+omnigraph accepts a precondition on a write: `/mutate/if-graph-commit` over
+HTTP, `--if-commit` on the CLI. The write applies only while the branch head is
+still the `graph_commit_id` the caller read, and otherwise is refused with a
+412, having written nothing. `task_claim` reads the task, decides on that row
+whether it may take it (not closed, not blocked, not held by someone else's
+live lease), and writes its claim fenced on the commit of that same read. A
+claim that succeeds therefore proves nobody claimed, closed or blocked the task
+in between. A rival whose claim lands later either read yours and is refused,
+or fenced on an older head and is refused by the store.
 
-So a naive read-check-write lets two agents both read a task as `open`, both
-write their own claim, and the last write silently clobbers the first.
-
-### What witan does instead
-
-Three mechanisms, reconstructing as much of a CAS as the storage layer permits:
+Two details make the loop work:
 
 1. **Conflict-surfacing writes.** `task_claim` opts into raising a typed
-   `OmnigraphConflict` on a Lance optimistic-concurrency conflict, rather than
-   retrying. Every other write keeps transparent retry, which idempotent upserts
-   rely on — but for a claim, a blind retry re-reads the updated state and
-   re-applies the claim *over* whoever won, turning a should-fail claim into a
-   clobbering success.
+   `OmnigraphConflict` on a refused precondition or a write conflict, rather
+   than retrying. Every other write keeps transparent retry, which idempotent
+   upserts rely on, but for a claim a blind retry would re-apply the claim
+   *over* whoever won.
 
-2. **Conflict-aware retry.** On conflict, `task_claim` re-reads rather than
-   re-applying. If someone else now holds a live claim, it returns
-   `{"claimed": false, "reason": "lost_race", "held_by": …}`. If the conflicting
-   write was unrelated, or the rival's lease has lapsed, it retries — in a
-   bounded loop that keeps surfacing conflicts, so a consecutive conflict never
-   falls back to the clobbering path.
+2. **Bounded retry.** The precondition covers the whole branch head, not this
+   task, so any concurrent write to the graph refuses it. On a conflict,
+   `task_claim` backs off and tries again, and the next attempt's read decides
+   whether a rival won (`{"claimed": false, "reason": "lost_race", "held_by":
+   …}`) or the conflict was unrelated. A budget that runs out reports
+   `"reason": "contention"`.
 
-3. **Post-write verification.** Because the last writer still wins, `task_claim`
-   re-reads after writing and confirms it is still the assignee. A claim that
-   was overwritten by a rival landing later is reported as `lost_race`, not as a
-   false success.
+### What it does not cover
 
-Together these collapse the common double-claim race to at most one
-`claimed: true`, and never a silent clobber.
+- Writes that skip the check. `force` steals on purpose, `task_update` can set
+  `assignee` or `status` directly, and a claim taken after the lease lapses is
+  a legitimate takeover.
+- Two sessions that claim under the same holder string. Pass `session_id`, or
+  they cannot be told apart (the claim reports `"qualified": false`).
+- A claim whose response is lost. The server finishes an admitted write after
+  its caller disconnects, so a timeout or a dropped connection can leave a claim
+  that landed. witan does not re-send it. Re-read with `task_get` before
+  retrying.
 
-### The residual window
-
-A small window remains: if both callers run their verification read after both
-writes commit and before either observes the other, both can see the last writer
-and one of them is wrong.
-
-This is not merely theoretical — it has been observed under concurrent write
-load. Treat `claimed: true` as **"you almost certainly hold this"**, not as a
-hard mutex, and design work so that a brief overlap between two agents is
-wasteful rather than destructive.
-
-A true single-round-trip guarantee needs omnigraph to accept a manifest-version
-or commit-id precondition on `mutate`. Until that exists upstream, this is the
-ceiling. [ADR 0003](decisions/0003-atomic-task-claims-cas.md) has the full
-analysis.
+[ADR 0003](decisions/0003-atomic-task-claims-cas.md) has the history, including
+the best-effort design this replaced.
 
 ### Leases
 
 Claims carry `claimed_at` and expire. A task held by a session that crashed does
 not stay held forever, and the lease is also the backstop that recovers any task
-that ends up mis-owned through the window above. `task_release` hands one back
+that ends up mis-owned through the cases above. `task_release` hands one back
 deliberately.
 
 ## Saying something about a task
