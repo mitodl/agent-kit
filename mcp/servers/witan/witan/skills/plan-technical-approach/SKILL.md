@@ -294,29 +294,20 @@ consistent by hand with a digest is rebuilding a versioned file the hard way,
 and the thing readers need — what was decided, in what order, and what is still
 open — is exactly what a diff and a PR review handle well.
 
-Put it where the repo already keeps them rather than inventing a location:
+Hand off to [`write-spec`](../write-spec/SKILL.md), which detects where this
+repo already keeps them and matches that convention. Pass what this skill
+produced: the chosen approach, the rejected ones with the condition that would
+flip each, the chunk boundaries and their `Touches` paths, the measured
+baseline from scoping, and **which decisions are still open** — those become
+its numbered `Dn. (open)` sections, and knowing them up front is what keeps the
+spec honest about what it has settled.
 
-```bash
-git ls-files | grep -iE '(^|/)docs/(plans|specs|design)/|(^|/)docs/internals/design/' \
-  | sed 's|/[^/]*$||' | sort -u
-```
-
-`docs/plans/`, `docs/specs/`, `docs/design/` and `docs/internals/design/` are
-all in use across the org's repos. Follow whichever you find, and only create
-one when there is none — the same rule
-[`write-adr`](../write-adr/SKILL.md) applies to ADR directories, for the same
-reason.
-
-Shape it like the ones already there: problem, numbered decisions, measured
-facts, phases, sequence, open questions. It changes while the work is in flight
-and becomes history when the work ships.
+The plan comment still gets written, and shrinks to what it is good at: chunk
+status, PR links, and a link to the spec. The design does not live in both.
 
 **Extract each decision into its own ADR as it settles, not up front.** A
 decision still moving is a spec section; an ADR written over it would be
-amended before the work shipped. The spec links to each ADR as it is written.
-
-Then advance the project to `spec`, which on this route means exactly "the spec
-exists and is under review".
+amended before the work shipped. `write-spec` owns that handoff too.
 
 Write the comment body to the draft path with your file-writing tool — never a
 heredoc, which drops and splices lines mid-sentence. The path is derived from

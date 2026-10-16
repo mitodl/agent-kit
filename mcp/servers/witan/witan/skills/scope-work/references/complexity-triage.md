@@ -85,11 +85,12 @@ The work is one *body* of work rather than one decision. Any of:
   constrains the next, and recording them separately would lose the ordering.
 
 **Route:** [`plan-technical-approach`](../../plan-technical-approach/SKILL.md),
-full path, then a **spec** in the repo's existing location —
-`docs/plans/`, `docs/specs/`, `docs/design/` or `docs/internals/design/`,
-whichever that repo already uses. It is a reviewed file in a pull request, not
-an issue comment: at the size these reach, a comment kept consistent by hand
-with a digest is rebuilding a versioned file the hard way.
+full path, then [`write-spec`](../../write-spec/SKILL.md) writes the spec into
+the repo's existing location — `docs/plans/`, `docs/specs/`, `docs/design/` or
+`docs/internals/design/`, whichever that repo already uses. It is a reviewed
+file in a pull request, not an issue comment: at the size these reach, a comment
+kept consistent by hand with a digest is rebuilding a versioned file the hard
+way.
 
 Each decision in it that will outlive the project is extracted into its own
 [ADR](../../write-adr/SKILL.md) **once it settles**, and linked from the spec.

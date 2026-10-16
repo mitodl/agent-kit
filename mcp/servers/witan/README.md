@@ -19,13 +19,14 @@ for the full `witan` command surface.
 ## Bundled Skills
 
 `witan setup` installs these into every detected agent, alongside the MCP
-server. The first four are the issue-to-implementation workflow; the rest
+server. The first five are the issue-to-implementation workflow; the rest
 expose the graph directly.
 
 | Skill | What it does |
 |---|---|
 | [`scope-work`](./witan/skills/scope-work/SKILL.md) | Establish the issue, ground it in the code, and route by how much process the work deserves — trivial, a decision worth recording, a spec, a spike, or an RFC |
 | [`plan-technical-approach`](./witan/skills/plan-technical-approach/SKILL.md) | Decide how it gets built: the engineer's approach elicited first, alternatives scored blind to authorship, delivery chunked under a size budget |
+| [`write-spec`](./witan/skills/write-spec/SKILL.md) | Write the design document for work spanning several PRs, sessions or repos, in the location and shape that repo already uses |
 | [`write-adr`](./witan/skills/write-adr/SKILL.md) | Record one decision as an ADR in the repo's existing convention, scoped with `applies_to` to the files it governs |
 | [`implement-plan`](./witan/skills/implement-plan/SKILL.md) | Execute the approved plan chunk by chunk, honouring the governing ADRs, confirming and recording any deviation |
 | [`witan-task`](./witan/skills/witan-task/SKILL.md) | Triage, claim, create and close tasks; checkpoints and resume |
@@ -33,7 +34,7 @@ expose the graph directly.
 | [`witan-project-tracker`](./witan/skills/witan-project-tracker/SKILL.md) | Project lifecycle across sessions: phases, parallel sessions, corpus traces |
 | [`witan-memory`](./witan/skills/witan-memory/SKILL.md) | Read and write the shared agent memory graph |
 
-The workflow four live here rather than in agent-kit's `skills/` catalog
+These workflow skills live here rather than in agent-kit's `skills/` catalog
 because they stop outright without the `task_*` and `workflow_*` tools, and
 `agent-kit apply` deliberately does not install witan — in the `universal`
 profile they were four skills that refused to run. Anyone who installed witan

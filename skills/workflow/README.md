@@ -16,11 +16,12 @@ not by `agent-kit apply`:
 | ----- | ----------- |
 | `scope-work` | Establish the issue, ground it in the code, and route by how much process the work deserves |
 | `plan-technical-approach` | Decide how to build it: engineer's approach elicited first, alternatives scored blind to authorship, delivery chunked under a size budget |
+| `write-spec` | Write the design document for work spanning several PRs, sessions or repos, in the location and shape that repo already uses |
 | `write-adr` | Record a significant decision as an ADR in the repo's existing convention, scoped to the files it governs |
 | `implement-plan` | Execute the approved plan chunk by chunk, honouring the ADRs that govern the changed files, confirming and recording any deviation |
 | `witan-task`, `witan-workflow`, `witan-project-tracker`, `witan-memory` | The task, project, session and memory graph these four drive |
 
-The first four moved out of this directory deliberately. They stop outright
+Those moved out of this directory deliberately. They stop outright
 when the `task_*` and `workflow_*` tools are missing, and `agent-kit apply`
 does not install witan — so shipping them in the `universal` profile handed a
 `universal`-only consumer four skills that refuse to run. Everyone who
