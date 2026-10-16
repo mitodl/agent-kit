@@ -1,0 +1,41 @@
+diff --git a/reports/urls.py b/reports/urls.py
+index 5b1e0c2..9a4f7d3 100644
+--- a/reports/urls.py
++++ b/reports/urls.py
+@@ -4,4 +4,5 @@ from reports import views
+
+ urlpatterns = [
+     path("health", views.health),
++    path("api/v1/reports/export", views.export_enrollments),
+ ]
+diff --git a/reports/views.py b/reports/views.py
+index 3f1c2a4..8b7e9d1 100644
+--- a/reports/views.py
++++ b/reports/views.py
+@@ -1,7 +1,26 @@
++import base64
++import json
++from datetime import timedelta
++
+ from django.http import JsonResponse
++from django.utils import timezone
+
+ from reports.models import EnrollmentReport
+
+
+ def health(request):
+     return JsonResponse({"status": "ok"})
++
++
++def _userinfo(request):
++    return json.loads(base64.b64decode(request.headers["X-Userinfo"]))
++
++
++def export_enrollments(request):
++    user = _userinfo(request)
++    days = request.GET.get("days", 7)
++    since = timezone.now() - timedelta(days=days)
++    rows = EnrollmentReport.objects.filter(
++        org_id=user["org_id"], created_on__gte=since
++    ).values("course_id", "enrolled", "completed")
++    return JsonResponse({"rows": list(rows)})
