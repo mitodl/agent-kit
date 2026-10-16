@@ -115,7 +115,7 @@ entry_path = "configs/pi/extensions/verify-before-claiming.ts"
 [[hooks]]
 kind = "declarative"
 event = "session_start"
-command = "python3 {skill_dir}/scripts/preflight.py"
+command = "python3 \"{skill_dir}/scripts/preflight.py\""
 skill = "session-preflight"
 timeout_seconds = 10
 
@@ -134,7 +134,7 @@ skills = [
 hooks = [
     "declarative:session_start:cat \"{skill_dir}/SKILL.md\"",
     "plugin:verify-before-claiming.ts",
-    "declarative:session_start:python3 {skill_dir}/scripts/preflight.py",
+    "declarative:session_start:python3 \"{skill_dir}/scripts/preflight.py\"",
 ]
 
 [profiles.python]
