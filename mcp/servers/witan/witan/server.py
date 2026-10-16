@@ -902,8 +902,9 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
 
     The environment is still consulted as the local-stdio fallback, via
     ``session_state.current_session_id`` (``$CLAUDE_SESSION_ID``, else
-    ``$PI_SESSION_ID``; Pi does not export the latter to MCP servers it
-    launches, so under Pi the explicit argument is the path that works). The id is
+    ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``; Pi and Codex export theirs
+    only to the commands their shell tools run, not to the MCP servers they
+    launch, so under either the explicit argument is the path that works). The id is
     condensed to 8 hex chars by ``readiness.session_suffix`` — short because
     the holder string is read by humans in refusal messages and task listings,
     and a digest rather than a prefix because the id's shape varies by caller
@@ -4723,7 +4724,7 @@ def _active_session_slug() -> str | None:
 
     Reads the handle stored locally under the agent session id
     (``session_state.current_session_id``: ``$CLAUDE_SESSION_ID``, else
-    ``$PI_SESSION_ID``). Fails soft on
+    ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``). Fails soft on
     any missing-env/read/parse error — provenance is best-effort and must never
     block a memory write.
 
@@ -7612,9 +7613,11 @@ async def task_claim(
         state), and without it every one of your concurrent sessions claims
         under the same name. The CLI's remote proxy fills it in automatically;
         under local stdio the server falls back to its own
-        ``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``), inherited from the
-        agent. Pi does not export ``$PI_SESSION_ID`` to the MCP servers it
-        launches, so under Pi pass the value from ``echo $PI_SESSION_ID``.
+        ``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``, else
+        ``$CODEX_SESSION_ID``), inherited from the agent. Pi and Codex do not
+        export their ids to the MCP servers they launch, so under Pi pass the
+        value from ``echo $PI_SESSION_ID``, and under Codex from
+        ``echo $CODEX_SESSION_ID``.
     force:
         Steal the task even if another holder's lease is still valid.
     repo:

@@ -47,7 +47,7 @@ the Pi workflow extension's shutdown handler find the session to auto-close by
 that same id. Read only your own platform's variable:
 an agent launched from another one can inherit its id, and a fallback chain
 would pick that instead.
-Only on an agent that sets neither, use any stable per-session string and close
+Only on an agent that sets none of them, use any stable per-session string and close
 the session explicitly.
 
 Link the session before doing substantive work. The phase should reflect what

@@ -41,8 +41,9 @@ STATE_FILE_PREFIX = "workflow-session-"
 # before, even in a Claude session started from inside a Pi bash command.
 # Codex exports CODEX_SESSION_ID to the commands its shell tool runs
 # (codex-rs/core/src/exec_env.rs `inject_session_env`), and it is the same id
-# Codex puts in a hook's stdin `session_id`. Its hooks get no session variable
-# at all, which is why `witan session-checkpoint` reads that id from stdin.
+# Codex puts in a hook's stdin `session_id`. Codex doesn't put that id in a
+# hook's environment (a hook only inherits whatever launched Codex), which is
+# why `witan session-checkpoint` reads it from stdin.
 SESSION_ID_ENV_VARS = ("CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID")
 
 
