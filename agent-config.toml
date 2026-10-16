@@ -35,11 +35,10 @@
 #
 # Profiles mirror the skills/ category layout (see AGENTS.md) so a
 # consumer picks up just the skills relevant to their work, instead of
-# the whole catalog. `universal` (validate-before-commit, creating-skills,
-# create-ol-pull-request) is what every other profile inherits — it's the
-# baseline useful regardless of specialty. Selecting no profile installs
-# everything, including the ToolHive SWE tiers (profiles are opt-in
-# filters, not gates).
+# the whole catalog. `universal` is what every other profile inherits —
+# it's the baseline useful regardless of specialty. Selecting no profile
+# installs everything, including the ToolHive SWE tiers (profiles are
+# opt-in filters, not gates).
 #
 # Usage (from the repo root):
 #   uv tool install 'agent-config-kit[cli]'
@@ -94,6 +93,21 @@ screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
 uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
 validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.md"
 vault-k8s-auth                  = "skills/infrastructure/vault-k8s-auth/SKILL.md"
+verify-before-claiming          = "skills/workflow/verify-before-claiming/SKILL.md"
+
+# Puts verify-before-claiming's rules in context at session start, where a
+# skill alone only loads when a request matches its description. Codex runs
+# this only after you trust it with /hooks in its TUI, and asks again if the
+# command changes, so keep it stable. Pi gets the same file from the plugin.
+[[hooks]]
+kind = "declarative"
+event = "session_start"
+command = "cat {skill_dir}/SKILL.md"
+skill = "verify-before-claiming"
+
+[[hooks]]
+kind = "plugin"
+entry_path = "configs/pi/extensions/verify-before-claiming.ts"
 
 [profiles.universal]
 skills = [
@@ -104,6 +118,11 @@ skills = [
     "create-ol-github-issue",
     "create-ol-rfc-discussion",
     "generate-standup",
+    "verify-before-claiming",
+]
+hooks = [
+    "declarative:session_start:cat {skill_dir}/SKILL.md",
+    "plugin:verify-before-claiming.ts",
 ]
 
 [profiles.python]
