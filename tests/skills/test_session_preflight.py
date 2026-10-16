@@ -32,7 +32,9 @@ case "$*" in
   "rev-parse --show-toplevel") echo "$REPO_ROOT" ;;
   "rev-parse --abbrev-ref origin/HEAD") echo origin/main ;;
   "rev-list --left-right --count HEAD...origin/main") echo "0 ${BEHIND:-3}" ;;
-  "remote get-url origin") echo https://github.com/mitodl/agent-kit.git ;;
+  "config --get-regexp"*)
+    echo remote.fork.url git@github.com:someone/agent-kit.git
+    echo remote.origin.url "${ORIGIN_URL:-https://github.com/mitodl/agent-kit.git}" ;;
   *) exit 1 ;;
 esac
 """
@@ -196,6 +198,54 @@ class PreflightTest(unittest.TestCase):
             f'remote_url = "{self.health_url}"\n'
             'match_orgs = ["mitodl"]\n'
         )
+        stdout, _ = self.run_preflight()
+        self.assertEqual(stdout, "")
+
+    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
+    def test_witan_normalises_the_remote_like_witan(self) -> None:
+        self.stub_all_passing()
+        self.witan_config.write_text(
+            f'remote_url = "{self.dead_url}"\n'
+            "[targets.work]\n"
+            f'remote_url = "{self.health_url}"\n'
+            'match_orgs = ["18f"]\n'
+        )
+        for origin in (
+            "git@github.com:18F/site.git",
+            "https://user@GitHub.com/18F/Site/",
+            "ssh://git@github.com/18f/site.git",
+        ):
+            with self.subTest(origin=origin):
+                stdout, _ = self.run_preflight(ORIGIN_URL=origin)
+                self.assertEqual(stdout, "")
+
+    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
+    def test_witan_target_env_selects_the_target(self) -> None:
+        self.stub_all_passing()
+        self.witan_config.write_text(
+            "[targets.work]\n"
+            f'remote_url = "{self.health_url}"\n'
+            'match_orgs = ["mitodl"]\n'
+            "[targets.other]\n"
+            f'remote_url = "{self.dead_url}"\n'
+        )
+        stdout, _ = self.run_preflight(WITAN_TARGET="other")
+        self.assertTrue(stdout.startswith("witan: "), stdout)
+        stdout, _ = self.run_preflight(WITAN_TARGET="missing")
+        self.assertEqual(stdout, "")
+
+    def test_docker_is_checked_for_a_dockerfile_under_docker_dir(self) -> None:
+        self.stub_all_passing()
+        (self.repo / "Dockerfile").unlink()
+        (self.repo / "docker").mkdir()
+        (self.repo / "docker" / "app.Dockerfile").write_text("FROM scratch\n")
+        self.stub("docker", "exit 1\n")
+        stdout, _ = self.run_preflight()
+        self.assertTrue(stdout.startswith("docker: "), stdout)
+
+    def test_gh_checks_only_the_active_account(self) -> None:
+        self.stub_all_passing()
+        self.stub("gh", '[ "$*" = "auth status --active" ]\n')
         stdout, _ = self.run_preflight()
         self.assertEqual(stdout, "")
 

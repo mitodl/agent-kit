@@ -34,19 +34,22 @@ CHECK_TIMEOUT_SECONDS = 3.0
 HTTP_TIMEOUT_SECONDS = 2.0
 TOTAL_BUDGET_SECONDS = 5.0
 DRIFT_THRESHOLD_COMMITS = 50
-CONTAINER_FILES = (
-    "Dockerfile",
-    "docker-compose.yml",
-    "docker-compose.yaml",
-    "compose.yml",
-    "compose.yaml",
+CONTAINER_GLOBS = (
+    "Dockerfile*",
+    "*.Dockerfile",
+    "docker/*Dockerfile*",
+    "compose.y*ml",
+    "docker-compose*.y*ml",
     "Tiltfile",
 )
 NONINTERACTIVE_ENV = {"GH_PROMPT_DISABLED": "1", "GIT_TERMINAL_PROMPT": "0"}
 WITAN_CONFIG_PATH = Path("~/.config/witan/config.toml")
+# witan_core.repo_key._CASE_INSENSITIVE_PATH_HOSTS
+CASE_INSENSITIVE_PATH_HOSTS = frozenset({"github.com", "gitlab.com"})
 
 _live: set[subprocess.Popen] = set()
 _live_lock = threading.Lock()
+_stopping = threading.Event()
 
 
 @dataclass(frozen=True)
@@ -73,19 +76,23 @@ def _run(args: list[str], cwd: Path | None = None) -> Outcome | None:
     """Run ``args`` in its own process group; ``None`` when it timed out.
 
     A timeout kills the whole group, so a child the tool spawned (a kubectl
-    exec credential plugin, a docker context helper) cannot outlive it.
+    exec credential plugin, a docker context helper) cannot outlive it. Once
+    ``main`` has swept the live processes nothing new starts, so a chained
+    check's next step can't escape the sweep.
     """
-    proc = subprocess.Popen(
-        args,
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env={**os.environ, **NONINTERACTIVE_ENV},
-        start_new_session=True,
-    )
     with _live_lock:
+        if _stopping.is_set():
+            return None
+        proc = subprocess.Popen(
+            args,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, **NONINTERACTIVE_ENV},
+            start_new_session=True,
+        )
         _live.add(proc)
     try:
         stdout, stderr = proc.communicate(timeout=CHECK_TIMEOUT_SECONDS)
@@ -110,12 +117,14 @@ def _repo_root() -> Path | None:
 def check_gh() -> str | None:
     if not shutil.which("gh"):
         return None
-    out = _run(["gh", "auth", "status"])
+    # --active: without it, one stale secondary account or host fails the
+    # whole command even when the account in use works.
+    out = _run(["gh", "auth", "status", "--active"])
     if out is None:
         return f"gh: `gh auth status` did not answer within {CHECK_TIMEOUT_SECONDS:g}s. Run: gh auth status"
     if out.returncode == 0:
         return None
-    return "gh: not logged in, or the token is invalid. Run: gh auth login"
+    return f"gh: the active account is not logged in or its token is invalid ({out.detail()}). Run: gh auth login"
 
 
 def check_vault() -> str | None:
@@ -153,7 +162,7 @@ def check_kubectl() -> str | None:
 def check_docker(repo_root: Path | None) -> str | None:
     if repo_root is None or not shutil.which("docker"):
         return None
-    if not any((repo_root / name).exists() for name in CONTAINER_FILES):
+    if not any(next(repo_root.glob(pattern), None) for pattern in CONTAINER_GLOBS):
         return None
     out = _run(["docker", "info", "--format", "{{.ServerVersion}}"])
     if out is None:
@@ -185,21 +194,36 @@ def check_drift(repo_root: Path | None) -> str | None:
     )
 
 
-def _origin_key(repo_root: Path | None) -> str | None:
-    """``host/org/repo`` for the checkout, as witan's ``repo.detect`` keys it."""
-    if env_repo := os.environ.get("WITAN_REPO"):
-        raw = env_repo
-    elif repo_root is not None:
-        out = _run(["git", "remote", "get-url", "origin"], cwd=repo_root)
-        if out is None or out.returncode != 0:
-            return None
-        raw = out.stdout.strip()
-    else:
+def _remote_url(repo_root: Path) -> str | None:
+    """``origin``'s URL, else the first remote's (``witan.repo.git_remote_url``)."""
+    out = _run(["git", "config", "--get-regexp", r"^remote\..*\.url$"], cwd=repo_root)
+    if out is None or out.returncode != 0:
         return None
-    raw = re.sub(r"^[a-z+]+://", "", raw)
-    raw = re.sub(r"^[^@/]+@", "", raw)
-    raw = re.sub(r"^([^/:]+):(?!\d)", r"\1/", raw)
-    return re.sub(r"\.git$", "", raw.rstrip("/"))
+    urls = dict(line.split(" ", 1) for line in out.stdout.splitlines() if " " in line)
+    return urls.get("remote.origin.url") or next(iter(urls.values()), None)
+
+
+def _repo_key(repo_root: Path | None) -> str | None:
+    """``host/path`` for the checkout: witan's ``repo.detect`` and
+    ``repo_key.normalise``, without the ``https://`` that ``match_target``
+    strips anyway."""
+    env_repo = os.environ.get("WITAN_REPO")
+    if env_repo is not None:
+        raw = env_repo or None
+    else:
+        raw = _remote_url(repo_root) if repo_root is not None else None
+    if not raw:
+        return None
+    url = re.sub(r"\.git$", "", raw.strip().rstrip("/"))
+    m = re.match(r"(?:ssh://)?[^@]+@([^:/]+)[:/](.+)", url) or re.match(
+        r"https?://(?:[^@/]+@)?([^/]+)/(.+)", url
+    )
+    if not m:
+        return url
+    host, path = m.group(1).lower(), m.group(2)
+    if host in CASE_INSENSITIVE_PATH_HOSTS:
+        path = path.lower()
+    return f"{host}/{path}"
 
 
 def _as_list(value: object) -> list[str]:
@@ -211,9 +235,11 @@ def _as_list(value: object) -> list[str]:
 def _witan_remote_url(repo_root: Path | None) -> str | None:
     """The deployed witan this checkout talks to, or ``None`` when it uses a
     local store. Mirrors witan's ``load_remote_config``: ``WITAN_REMOTE_URL``,
-    then the matched target's ``remote_url``, then the global one, with
-    targets matched by ``match_paths`` > ``match_repos`` > ``match_hosts`` >
-    ``match_orgs`` (``witan_core.target_config.match_target``)."""
+    then the selected target's ``remote_url``, then the global one. The target
+    is the one ``WITAN_TARGET`` names, else the first matched by
+    ``match_paths`` > ``match_repos`` > ``match_hosts`` > ``match_orgs``
+    (``witan_core.target_config.match_target``). witan fails on an unknown
+    ``WITAN_TARGET``; here that skips the check."""
     if url := os.environ.get("WITAN_REMOTE_URL"):
         return url
     try:
@@ -229,6 +255,10 @@ def _witan_remote_url(repo_root: Path | None) -> str | None:
     except FileNotFoundError:
         return None
     targets = cfg.get("targets", {})
+    if name := os.environ.get("WITAN_TARGET"):
+        return targets.get(name, {}).get("remote_url") or (
+            cfg.get("remote_url") if name in targets else None
+        )
     selected = None
     local = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd()).resolve()
     for target in targets.values():
@@ -239,7 +269,7 @@ def _witan_remote_url(repo_root: Path | None) -> str | None:
                 break
         if selected:
             break
-    key = None if selected else _origin_key(repo_root)
+    key = None if selected else _repo_key(repo_root)
     if key:
         host, _, rest = key.partition("/")
         org = rest.split("/")[0]
@@ -301,6 +331,7 @@ def main() -> int:
         thread.join(max(0.0, deadline - time.monotonic()))
 
     with _live_lock:
+        _stopping.set()
         for proc in _live:
             _kill(proc)
 
