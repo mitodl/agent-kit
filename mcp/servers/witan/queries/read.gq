@@ -1006,6 +1006,15 @@ query task_statuses($slugs: [String]) {
     return { $t.slug, $t.status }
 }
 
+// Every `blocked` Task in the graph, for `_unblock_dependents`. No `limit`:
+// a dependent this read leaves out is never moved back to `open`.
+query list_blocked_tasks() {
+    match {
+        $t: Task { status: "blocked" }
+    }
+    return { $t.slug, $t.status, $t.blocked_by }
+}
+
 query list_tasks_by_repo($repo: String, $status: String?) {
     match {
         $t: Task { repo: $repo }
