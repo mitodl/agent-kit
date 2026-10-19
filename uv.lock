@@ -23,7 +23,7 @@ prek = [{ name = "prek", specifier = "==0.5.5" }]
 
 [[package]]
 name = "agent-config-kit"
-version = "0.13.0"
+version = "0.13.1"
 source = { editable = "packages/agent-config-kit" }
 dependencies = [
     { name = "pydantic" },
@@ -2213,7 +2213,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.43.0"
+version = "0.43.1"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
