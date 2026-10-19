@@ -140,7 +140,16 @@ jobs:
         run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
       - name: Run tests
-        run: uv run pytest -v
+        # Parallel across the runner's cores (4 on ubuntu-latest). Nearly all of
+        # this suite's time is spent waiting on `omnigraph` subprocesses against
+        # a per-test store, so the tests are independent and run serially they
+        # took 5-8 minutes. Each xdist worker imports testsupport/hermetic.py
+        # itself and gets its own fake HOME. The controller's leak check still
+        # watches the real home for writes from every worker. worksteal rather
+        # than the default `load` because per-test cost ranges from
+        # milliseconds to ~15s, and stealing keeps one slow chunk from setting
+        # the wall time.
+        run: uv run pytest -v -n auto --dist worksteal
 
   witan-policy:
     name: witan (Cedar policy bundle)

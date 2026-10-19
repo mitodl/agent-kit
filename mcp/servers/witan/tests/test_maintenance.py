@@ -294,11 +294,14 @@ def test_resolve_store_expands_user(tmp_path, monkeypatch):
     assert "~" not in resolved
 
 
-def test_mark_run_atomic_roundtrip(tmp_path, monkeypatch):
+def test_mark_run_atomic_roundtrip(tmp_state_dir):
     from witan import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    store = str(tmp_path / "g.omni")
+    # tmp_state_dir, not a bare TMPDIR setenv: tempfile caches gettempdir(), so
+    # without the reset this wrote to and globbed the shared system temp dir,
+    # where another test's in-flight atomic write (witan/context.py) can leave
+    # a `*.tmp` for an instant.
+    store = str(tmp_state_dir / "g.omni")
     maintenance._mark_run(store, 12345.0)
     assert maintenance._last_run(store) == 12345.0
     # no leftover temp files from the atomic write
