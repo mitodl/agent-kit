@@ -21,12 +21,13 @@ from witan_core.cli import (
 )
 
 
-def _result(planned, skipped, prerequisites=(), notices=()):
+def _result(planned, skipped, prerequisites=(), notices=(), removed=()):
     # A stub stands in for agent_config_kit.InstallResult, carrying only the
     # fields report_install reads (keeps the base test deps light).
     return SimpleNamespace(
         planned=planned,
         skipped=skipped,
+        removed=list(removed),
         prerequisites=list(prerequisites),
         notices=list(notices),
     )
@@ -73,6 +74,16 @@ def test_report_install_plain(capsys):
     assert "-> a.json" in out
     assert "skip b.json — exists" in out
     assert "[green]" not in out  # plain branch: no rich markup
+
+
+def test_report_install_prints_removed_paths(capsys):
+    result = _result(planned=[], skipped=[], removed=["old/SKILL.md"])
+
+    report_install("pi", result, dry_run=False)
+    assert "removed old/SKILL.md" in capsys.readouterr().out
+
+    report_install("pi", result, dry_run=True)
+    assert "would remove old/SKILL.md" in capsys.readouterr().out
 
 
 def test_report_install_dry_run_tag(capsys):

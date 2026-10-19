@@ -107,6 +107,9 @@ def report_install(
             console.print(f"  [green]→[/green] {path}{tag}")
         for path, reason in result.skipped:
             console.print(f"  [yellow]skip[/yellow] {path} — {reason}")
+        for path in result.removed:
+            verb = "would remove" if dry_run else "removed"
+            console.print(f"  [red]✗[/red] {verb} {path}")
         for prereq in result.prerequisites:
             text = prereq.message(dry_run=dry_run)
             if prereq.needs_attention:
@@ -125,6 +128,9 @@ def report_install(
             print(f"  -> {path}{tag}")
         for path, reason in result.skipped:
             print(f"  skip {path} — {reason}")
+        for path in result.removed:
+            verb = "would remove" if dry_run else "removed"
+            print(f"  {verb} {path}")
         for prereq in result.prerequisites:
             tag = "WARNING" if prereq.needs_attention else "note"
             print(f"  {tag}: {prereq.message(dry_run=dry_run)}")

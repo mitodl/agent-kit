@@ -24,6 +24,7 @@ from agent_config_kit.plan import (
     apply,
     apply_all,
     platform_hooks,
+    remove_shadowed_skills,
     skills_shadowed_by,
 )
 from agent_config_kit.prune import PlatformState, apply_with_prune
@@ -777,6 +778,193 @@ def test_apply_all_skips_pi_skills_when_codex_is_detected(tmp_path, monkeypatch)
 
     assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
     assert not (tmp_path / ".pi" / "agent" / "skills" / "my-skill").exists()
+
+
+def _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch) -> RegistrationBundle:
+    """Pi and Codex detected, and a Pi-only run already wrote my-skill into
+    Pi's own dir — the state `witan setup --agent all` left behind once Codex
+    got installed after an earlier run."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".pi").mkdir()
+    skill_md = tmp_path / "src" / "my-skill" / "SKILL.md"
+    (skill_md.parent / "scripts").mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+    (skill_md.parent / "scripts" / "run.sh").write_text("echo hi\n")
+    bundle = _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)])
+    apply("pi", bundle)
+    (tmp_path / ".codex").mkdir()
+    return bundle
+
+
+def test_apply_all_removes_a_pi_skill_copy_codex_now_shadows(tmp_path, monkeypatch):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    assert (pi_copy / "scripts" / "run.sh").is_file()
+
+    results = apply_all(bundle)
+
+    assert not pi_copy.exists()
+    assert (tmp_path / ".pi" / "agent" / "skills").is_dir()
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+    assert set(results["pi"].removed) == {
+        pi_copy / "SKILL.md",
+        pi_copy / "scripts" / "run.sh",
+    }
+    assert results["codex"].removed == []
+
+
+def test_apply_all_dry_run_reports_shadowed_pi_skills_without_removing(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+
+    results = apply_all(bundle, dry_run=True)
+
+    assert pi_copy / "SKILL.md" in results["pi"].removed
+    assert (pi_copy / "SKILL.md").is_file()
+
+
+def test_remove_shadowed_skills_keeps_files_the_bundle_does_not_own(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    notes = tmp_path / ".pi" / "agent" / "skills" / "my-skill" / "NOTES.md"
+    notes.write_text("mine\n")
+
+    apply_all(bundle)
+
+    assert notes.is_file()
+    assert not (notes.parent / "SKILL.md").exists()
+
+
+def test_remove_shadowed_skills_waits_for_the_shared_copy(tmp_path, monkeypatch):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+
+    # Codex is targeted but has not written ~/.agents/skills yet.
+    removed = remove_shadowed_skills("pi", bundle, ["pi", "codex"], Scope.GLOBAL)
+
+    assert removed == []
+    assert (tmp_path / ".pi" / "agent" / "skills" / "my-skill" / "SKILL.md").is_file()
+
+
+def test_remove_shadowed_skills_leaves_a_pi_dir_symlinked_to_the_shared_one(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    shared = tmp_path / ".agents" / "skills"
+    shared.mkdir(parents=True)
+    (tmp_path / ".pi" / "agent").mkdir(parents=True)
+    (tmp_path / ".pi" / "agent" / "skills").symlink_to(shared)
+    skill_md = tmp_path / "src" / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+    bundle = _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)])
+
+    results = apply_all(bundle)
+
+    assert results["pi"].removed == []
+    assert (shared / "my-skill" / "SKILL.md").is_file()
+
+
+def test_remove_shadowed_skills_never_deletes_through_a_symlinked_skill_dir(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_skills = tmp_path / ".pi" / "agent" / "skills"
+    checkout = tmp_path / "checkout" / "my-skill"
+    checkout.parent.mkdir()
+    (pi_skills / "my-skill").rename(checkout)
+    (pi_skills / "my-skill").symlink_to(checkout)
+
+    results = apply_all(bundle)
+
+    assert results["pi"].removed == []
+    assert (checkout / "SKILL.md").is_file()
+
+
+def test_remove_shadowed_skills_never_deletes_a_source_kept_in_pis_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    skill_md = tmp_path / ".pi" / "agent" / "skills" / "my-notes" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-notes\n---\n")
+    bundle = _bundle(skills=[SkillSource(name="my-notes", skill_md_path=skill_md)])
+
+    results = apply_all(bundle)
+
+    assert results["pi"].removed == []
+    assert skill_md.is_file()
+    assert (tmp_path / ".agents" / "skills" / "my-notes" / "SKILL.md").is_file()
+
+
+def test_remove_shadowed_skills_never_deletes_through_a_pi_dir_symlinked_to_sources(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".codex").mkdir()
+    sources = tmp_path / "checkout" / "skills"
+    skill_md = sources / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\n---\n")
+    (tmp_path / ".pi" / "agent").mkdir(parents=True)
+    (tmp_path / ".pi" / "agent" / "skills").symlink_to(sources)
+    bundle = _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)])
+
+    results = apply_all(bundle)
+
+    assert results["pi"].removed == []
+    assert skill_md.is_file()
+
+
+def test_remove_shadowed_skills_keeps_pi_files_the_shared_copy_links_to(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    shared_copy = tmp_path / ".agents" / "skills" / "my-skill"
+    shared_copy.mkdir(parents=True)
+    (shared_copy / "SKILL.md").symlink_to(pi_copy / "SKILL.md")
+    (shared_copy / "scripts").symlink_to(pi_copy / "scripts")
+
+    removed = remove_shadowed_skills("pi", bundle, ["pi"], Scope.GLOBAL)
+
+    assert removed == []
+    assert (shared_copy / "SKILL.md").is_file()
+    assert (shared_copy / "scripts" / "run.sh").is_file()
+
+
+def test_remove_shadowed_skills_keeps_supporting_files_the_shared_copy_links_to(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    shared_copy = tmp_path / ".agents" / "skills" / "my-skill"
+    shared_copy.mkdir(parents=True)
+    (shared_copy / "SKILL.md").write_text("---\nname: my-skill\n---\n")
+    (shared_copy / "scripts").symlink_to(pi_copy / "scripts")
+
+    removed = remove_shadowed_skills("pi", bundle, ["pi"], Scope.GLOBAL)
+
+    assert removed == [pi_copy / "SKILL.md"]
+    assert (shared_copy / "scripts" / "run.sh").is_file()
+
+
+def test_remove_shadowed_skills_stops_pruning_at_a_symlinked_supporting_dir(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    (pi_copy / "scripts").rename(pi_copy / "real-scripts")
+    (pi_copy / "scripts").symlink_to(pi_copy / "real-scripts")
+
+    results = apply_all(bundle)
+
+    assert pi_copy / "scripts" / "run.sh" in results["pi"].removed
+    assert (pi_copy / "scripts").is_symlink()
 
 
 def test_skills_shadowed_by_applies_at_project_scope_too():
