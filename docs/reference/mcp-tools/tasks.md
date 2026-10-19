@@ -268,7 +268,7 @@ dependent is a separate fenced write after the close has committed, so one
 that runs out of attempts does not fail the call: the closed task comes
 back with a ``warning`` naming the dependents still marked ``blocked``.
 ``task_ready`` lists them anyway, since every blocker is closed, and the
-next close in the repo or a claim of one of them reopens it.
+next close anywhere or a claim of one of them reopens it.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
