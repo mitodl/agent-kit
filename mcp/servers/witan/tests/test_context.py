@@ -425,6 +425,33 @@ def test_the_ready_task_list_says_to_claim_before_working(tmp_path, monkeypatch)
     assert text.index("task_claim") < text.index("task_close")
 
 
+@requires_omnigraph
+def test_codex_gets_the_block_for_its_cwd_as_plain_text(tmp_path, monkeypatch):
+    """Codex runs the UserPromptSubmit hook in the session's cwd, with no
+    ``CLAUDE_PROJECT_DIR`` and no repo override, so the repo comes from that
+    checkout's remote. It takes plain stdout as context, but reads stdout that
+    starts with ``{`` or ``[`` as JSON and fails the hook when it isn't valid
+    hook output (``looks_like_json`` in codex-rs/hooks/src/events/
+    user_prompt_submit.rs, rust-v0.162.1), so the block must never start
+    with either."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-codex"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    _unwrap(srv.task_create)(title="codex ready task", description="x")
+    monkeypatch.delenv("WITAN_REPO")
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "remote", "add", "origin", f"{repo}.git")
+    monkeypatch.chdir(base)
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+
+    assert "codex ready task" in text
+    assert text.startswith("## ")
+
+
 # ── PR #85 hardening: hook must never raise ──────────────────────────────────
 
 

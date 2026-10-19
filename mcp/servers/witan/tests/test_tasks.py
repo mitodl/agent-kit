@@ -370,12 +370,9 @@ def test_ready_resolves_a_cross_repo_blocker_without_re_reading_it(server, monke
     assert "get_task" not in reads
 
 
-def test_close_keeps_a_dependent_blocked_by_an_open_blocker_in_another_repo(server):
-    """Closing one blocker re-checks the dependent's others, wherever they live.
-
-    `_unblock_dependents` reads only the closed task's repo, so a remaining
-    blocker in another repo is looked up separately (`task_statuses`).
-    """
+def test_closing_blockers_unblocks_a_dependent_in_another_repo(server):
+    """A dependent stays blocked while any blocker is open, and opens when the
+    last one closes, whichever repo that blocker is in."""
     here = "https://github.com/test/repo"
     elsewhere = "https://github.com/test/other"
     local = server.task_create(title="local blocker", description="x", repo=here)
@@ -391,10 +388,7 @@ def test_close_keeps_a_dependent_blocked_by_an_open_blocker_in_another_repo(serv
     server.task_close(local["slug"])
     assert server.task_get(dependent["slug"])["status"] == "blocked"
 
-    # Closing `remote` runs the pass for ITS repo, which does not see the
-    # dependent, so run the local one again as the next local close would.
     server.task_close(remote["slug"])
-    server._unblock_dependents(here)
     assert server.task_get(dependent["slug"])["status"] == "open"
 
 
@@ -423,6 +417,14 @@ def test_blocker_statuses_are_read_in_bounded_chunks(server, monkeypatch):
 
     assert [len(chunk) for chunk in sent] == [2, 2, 2]
     assert statuses == {blockers[0]: "closed", **dict.fromkeys(blockers[1:], "open")}
+
+
+@requires_omnigraph
+def test_release_to_closed_unblocks_dependents(server):
+    a = server.task_create(title="blocker", description="x")
+    b = server.task_create(title="dependent", description="x", blocked_by=[a["slug"]])
+    server.task_release(a["slug"], status="closed")
+    assert server.task_get(b["slug"])["status"] == "open"
 
 
 @requires_omnigraph

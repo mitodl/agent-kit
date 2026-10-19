@@ -39,14 +39,20 @@ STATE_FILE_PREFIX = "workflow-session-"
 # the `witan session-checkpoint` child it spawns at shutdown. Claude comes first
 # so every existing Claude-keyed handle and holder string resolves exactly as
 # before, even in a Claude session started from inside a Pi bash command.
-SESSION_ID_ENV_VARS = ("CLAUDE_SESSION_ID", "PI_SESSION_ID")
+# Codex exports CODEX_SESSION_ID to the commands its shell tool runs
+# (codex-rs/core/src/exec_env.rs `inject_session_env`), and it is the same id
+# Codex puts in a hook's stdin `session_id`. Codex doesn't put that id in a
+# hook's environment (a hook only inherits whatever launched Codex), which is
+# why `witan session-checkpoint` reads it from stdin.
+SESSION_ID_ENV_VARS = ("CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID")
 
 
 def current_session_id(explicit: str | None = None) -> str:
     """The calling agent session's id, or ``""`` when none is known.
 
     Precedence: ``explicit`` (a caller-supplied value, e.g. an MCP tool's
-    ``session_id`` argument) > ``$CLAUDE_SESSION_ID`` > ``$PI_SESSION_ID``.
+    ``session_id`` argument) > ``$CLAUDE_SESSION_ID`` > ``$PI_SESSION_ID`` >
+    ``$CODEX_SESSION_ID``.
     Empty strings are treated as unset at every level, so an exported-but-empty
     variable falls through to the next source rather than masking it.
 

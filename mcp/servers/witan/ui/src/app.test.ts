@@ -1182,6 +1182,27 @@ describe("App", () => {
 		expect(labels).toEqual(["tk-outside-open", "tk-in", "tk-waits"]);
 	});
 
+	it("reads a rollup's outside blockers, so an open one counts", async () => {
+		const [base] = tasks;
+		if (!base) {
+			throw new Error("task_list fixture is empty");
+		}
+		vi.mocked(mcp.taskList).mockResolvedValue([
+			{ ...base, status: "open", blocked_by: ["tk-outside-open"] },
+		]);
+		vi.mocked(mcp.taskGet).mockResolvedValue({
+			...task,
+			slug: "tk-outside-open",
+			status: "open",
+		});
+
+		await open(`#projects?project=${projectDetail.slug}`);
+		await vi.waitFor(() => expect(text()).toContain("Sessions"));
+
+		expect(mcp.taskGet).toHaveBeenCalledWith("tk-outside-open");
+		expect(root.querySelector(".badge.blocked")?.textContent).toBe("1 blocker");
+	});
+
 	it("hands focus back to the link that opened the panel", async () => {
 		await open("");
 		await vi.waitFor(() =>

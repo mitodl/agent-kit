@@ -125,9 +125,11 @@ _CLEARED = (
     # Identity of the calling agent session, which several code paths record
     # as provenance. Pi's is a fallback for Claude's (see
     # witan.session_state.current_session_id), so a suite run from inside a Pi
-    # bash command would otherwise pick up the live Pi session.
+    # bash command would otherwise pick up the live Pi session. Codex's is the
+    # last fallback, and is set in every command a Codex shell tool runs.
     "CLAUDE_SESSION_ID",
     "PI_SESSION_ID",
+    "CODEX_SESSION_ID",
     # agent-config-kit resolves Codex's config dir from this, ahead of HOME.
     "CODEX_HOME",
     # Observability: an exporter endpoint set on a developer's box would have

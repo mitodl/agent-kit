@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.41.0"
+version = "0.42.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -223,7 +223,13 @@ dependencies = [
   # added in witan-core 0.42.0 in the same change. On 0.41 that is a TypeError
   # on the first task write, after a clean import, so `just check-core-floor`
   # cannot see it.
-  "witan-core[cli,remote,observability,sentry]>=0.42,<1",
+  #
+  # ★ >=0.43 IS A BEHAVIOUR FLOOR: `witan setup --agent codex` needs `codex`
+  # in `witan_core.cli.AgentName`, and the Codex hooks' "trust it with /hooks"
+  # line is an `InstallResult.notice` that `report_install` prints only from
+  # 0.43.0. On 0.42 `--agent codex` is rejected as an invalid value, and
+  # `--agent all` writes witan's hooks to Codex without the notice.
+  "witan-core[cli,remote,observability,sentry]>=0.43,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -290,7 +296,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.41.0"
+current_version = "0.42.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

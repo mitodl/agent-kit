@@ -1,6 +1,6 @@
 [project]
 name = "witan-core"
-version = "0.42.0"
+version = "0.43.0"
 description = "Shared core for the witan MCP servers (witan-council + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -18,8 +18,10 @@ dependencies = []
 # cli.py (make_app/report_install/resolve_author) + the omnigraph installer's
 # styled output. agent-config-kit supplies resolve_version (--version wiring)
 # and the InstallResult type report_install prints; it is a sibling leaf package
-# both servers already depend on, so this stays a valid leaf→leaf edge.
-cli = ["cyclopts>=4,<6", "rich>=13", "agent-config-kit>=0.4,<1"]
+# both servers already depend on, so this stays a valid leaf→leaf edge. 0.13 is
+# the first release whose InstallResult carries `notices` (the Codex /hooks
+# trust line, agent-kit#493) and whose registry knows the `codex` platform.
+cli = ["cyclopts>=4,<6", "rich>=13", "agent-config-kit>=0.13,<1"]
 # elicit.py (fastmcp.server.elicitation.AcceptedElicitation).
 mcp = ["fastmcp>=4,<5"]
 # remote/ — the OIDC device-auth + token cache (httpx2) and the MCP-client proxy
@@ -64,7 +66,7 @@ build-backend = "hatchling.build"
 packages = ["witan_core"]
 
 [tool.bumpversion]
-current_version = "0.42.0"
+current_version = "0.43.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
@@ -95,7 +97,7 @@ test = [
     "rich>=13",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
-    "agent-config-kit>=0.4,<1",
+    "agent-config-kit>=0.13,<1",
     "httpx2>=2.5",
     "structlog>=25",
     "opentelemetry-api>=1.31",

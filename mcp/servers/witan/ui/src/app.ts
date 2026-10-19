@@ -689,8 +689,9 @@ export class App {
 		}
 		// With no filter the list does not need the tasks, so it is not held up
 		// by them; with one, a list drawn before they land would be unfiltered.
+		const all = this.projectsSnapshot.data ?? [];
 		if (this.route.assignees.length === 0) {
-			return projectList(inScope, this.route);
+			return projectList(inScope, this.route, [], all);
 		}
 		const taskSnapshot = this.projectTasks.snapshot;
 		const waitingTasks = taskSnapshot
@@ -706,7 +707,7 @@ export class App {
               filter may be missing projects.
             </p>`
 					: nothing
-			}${projectList(inScope, this.route, read?.tasks ?? [])}`
+			}${projectList(inScope, this.route, read?.tasks ?? [], all)}`
 		);
 	}
 
@@ -860,7 +861,7 @@ async function readRollup(slug: string): Promise<Rollup> {
 		taskList({ repo: "", project_slug: slug }),
 		workflowSessionList({ project_slug: slug }),
 	]);
-	return { detail, status, tasks, sessions };
+	return { detail, status, tasks, sessions, outside: await openOutside(tasks) };
 }
 
 /** What the project list reads: the tasks, and whether a read hit its limit. */
@@ -976,14 +977,8 @@ async function readTimeline(scope: TimelineScope): Promise<Timeline> {
 }
 
 /**
- * The reads behind one project's waves (spec §6.5).
- *
- * `task_list` and `task_ready` in parallel, then one `task_get` per blocker
- * from outside the project, because the chart has to know whether each is
- * still open and `task_list` by project cannot say. Outside blockers are few
- * by construction, where the board's graph-wide status reads would drag every
- * live task along for them. A `null` (deleted) or closed one is dropped: it
- * holds nothing back, by `task_ready`'s own resolver.
+ * The reads behind one project's waves (spec §6.5): `task_list` and
+ * `task_ready` in parallel, then the project's open outside blockers.
  */
 async function readWaves(slug: string): Promise<Waves> {
 	const [tasks, ready] = await Promise.all([
@@ -993,6 +988,18 @@ async function readWaves(slug: string): Promise<Waves> {
 		// report most of wave 0 as disagreeing with it.
 		taskReady({ repo: "", project_slug: slug, limit: TASK_LIMIT }),
 	]);
+	return { tasks, ready, outside: await openOutside(tasks) };
+}
+
+/**
+ * The open blockers of a project's live `tasks` that are not in the project,
+ * one `task_get` each, because `task_list` by project cannot say whether they
+ * are still open. Outside blockers are few by construction, where the board's
+ * graph-wide status reads would drag every live task along for them. A `null`
+ * (deleted) or closed one is dropped: it holds nothing back, by `task_ready`'s
+ * own resolver.
+ */
+async function openOutside(tasks: TaskRow[]): Promise<TaskRow[]> {
 	const inProject = new Set(tasks.map((task) => task.slug));
 	const elsewhere = new Set(
 		tasks
@@ -1003,10 +1010,9 @@ async function readWaves(slug: string): Promise<Waves> {
 	const fetched = await Promise.all(
 		[...elsewhere].map((blocker) => taskGet(blocker)),
 	);
-	const outside = fetched.filter(
+	return fetched.filter(
 		(task): task is TaskDetail => task !== null && task.status !== "closed",
 	);
-	return { tasks, ready, outside };
 }
 
 /** The route fields that are arguments to the search's read. */
