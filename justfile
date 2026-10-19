@@ -274,7 +274,7 @@ changelog package:
 bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
-    BUMP_TOOL="bump-my-version@1.5.1"   # keep in step with AGENTS.md
+    BUMP_TOOL="bump-my-version@1.6.3"   # keep in step with AGENTS.md
     SCRIV_TOOL="scriv@1.8.0"            # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
