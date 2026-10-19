@@ -1,16 +1,20 @@
-"""The agent session id under Claude Code and under Pi.
+"""The agent session id under Claude Code, Pi and Codex.
 
 Everything that keys on "the current agent session" — the parked workflow
 session handle, the Stop hook's auto-close, the local-stdio provenance and
 task-claim fallbacks, the remote proxy's injected ``session_id`` — resolves it
 through ``session_state.current_session_id``: an explicit value, else
-``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``. Claude-keyed behaviour must be
-byte-identical to what it was before Pi was a source; Pi must get the same
-auto-close Claude does.
+``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``.
+Claude-keyed behaviour must be byte-identical to what it was before Pi was a
+source; Pi and Codex must get the same auto-close Claude does. Codex's Stop hook
+has no session variable, so ``witan session-checkpoint`` reads the id from the
+hook's stdin there.
 """
 
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +25,7 @@ from .conftest import requires_omnigraph
 
 PI_SID = "019a1b2c-3d4e-7f00-8a9b-0c1d2e3f4a5b"
 CLAUDE_SID = "aaaaaaaa-1111-2222-3333-444444444444"
+CODEX_SID = "019a2f3e-5c6d-7e8f-9a0b-1c2d3e4f5a6b"
 
 
 # ── precedence ───────────────────────────────────────────────────────────────
@@ -50,6 +55,16 @@ def test_explicit_value_beats_both(monkeypatch):
     monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
     monkeypatch.setenv("PI_SESSION_ID", PI_SID)
     assert session_state.current_session_id("explicit-1") == "explicit-1"
+
+
+def test_codex_id_is_the_last_fallback(monkeypatch):
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("PI_SESSION_ID", raising=False)
+    monkeypatch.setenv("CODEX_SESSION_ID", CODEX_SID)
+    assert session_state.current_session_id() == CODEX_SID
+
+    monkeypatch.setenv("PI_SESSION_ID", PI_SID)
+    assert session_state.current_session_id() == PI_SID
 
 
 def test_empty_values_fall_through(monkeypatch):
@@ -271,3 +286,151 @@ def test_pi_extension_mirror_is_byte_identical():
     if not _MIRROR_EXT.exists():
         pytest.skip("configs/pi mirror not present (installed package)")
     assert _MIRROR_EXT.read_bytes() == _PACKAGE_EXT.read_bytes()
+
+
+# ── the Codex Stop hook ──────────────────────────────────────────────────────
+
+
+def _codex_stop_payload(cwd) -> str:
+    """A Codex ``Stop`` payload, field for field.
+
+    ``StopCommandInput`` in codex-rs/hooks/src/schema.rs at rust-v0.162.1, as
+    ``events/stop.rs`` fills it. ``session_id`` is ``Session::session_id``,
+    the same id Codex exports to its shell tool as ``$CODEX_SESSION_ID``.
+    ``turn_id`` is the Codex extension that tells this payload apart.
+    """
+    return json.dumps(
+        {
+            "session_id": CODEX_SID,
+            "turn_id": "1",
+            "transcript_path": None,
+            "cwd": str(cwd),
+            "hook_event_name": "Stop",
+            "model": "gpt-5-codex",
+            "permission_mode": "default",
+            "stop_hook_active": False,
+            "last_assistant_message": "Done.",
+        }
+    )
+
+
+def _claude_stop_payload(cwd, session_id: str) -> str:
+    return json.dumps(
+        {
+            "session_id": session_id,
+            "transcript_path": str(Path(cwd) / "t.jsonl"),
+            "cwd": str(cwd),
+            "permission_mode": "default",
+            "hook_event_name": "Stop",
+            "stop_hook_active": False,
+        }
+    )
+
+
+@requires_omnigraph
+def test_codex_checkpoint_closes_the_session_named_on_stdin(
+    server, monkeypatch, tmp_path, capsys
+):
+    """The Codex flow end to end: the agent passes ``$CODEX_SESSION_ID`` to
+    ``workflow_session_start``, and the Stop hook, whose environment has no
+    session variable, finds the handle by the payload's ``session_id``.
+
+    A ``$CLAUDE_SESSION_ID`` inherited from a Claude session that launched
+    Codex must not win: the payload names the session the hook fired for.
+    Codex reads a Stop hook's non-JSON stdout as a failed hook, so the
+    checkpoint must print nothing.
+    """
+    from witan import server as srv
+    from witan.cli import _common, hooks
+
+    monkeypatch.setattr(_common, "_server", srv)
+    proj = server.workflow_project_create(title="codex stop", description="d")
+    codex = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=CODEX_SID, phase="implementation"
+    )
+    claude = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=CLAUDE_SID, phase="implementation"
+    )
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+    monkeypatch.setattr("sys.stdin", io.StringIO(_codex_stop_payload(tmp_path)))
+
+    hooks.session_checkpoint()
+
+    assert _closed(srv, proj["slug"], codex["session_slug"])
+    assert session_state.read_handle(CODEX_SID) is None
+    assert not _closed(srv, proj["slug"], claude["session_slug"])
+    assert capsys.readouterr().out == ""
+
+
+@requires_omnigraph
+def test_claude_stop_payload_leaves_the_env_id_in_charge(server, monkeypatch, tmp_path):
+    """Claude Code also writes a payload with a ``session_id``; it is not
+    read, so the Claude path resolves ``$CLAUDE_SESSION_ID`` as before."""
+    from witan import server as srv
+    from witan.cli import _common, hooks
+
+    monkeypatch.setattr(_common, "_server", srv)
+    proj = server.workflow_project_create(title="claude stop", description="d")
+    claude = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=CLAUDE_SID, phase="spec"
+    )
+    other = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=CODEX_SID, phase="spec"
+    )
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO(_claude_stop_payload(tmp_path, CODEX_SID))
+    )
+
+    hooks.session_checkpoint()
+
+    assert _closed(srv, proj["slug"], claude["session_slug"])
+    assert not _closed(srv, proj["slug"], other["session_slug"])
+
+
+class _Tty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+@pytest.mark.parametrize(
+    "stdin",
+    [
+        _Tty('{"session_id": "x", "turn_id": "1"}'),
+        io.StringIO(""),
+        io.StringIO("not json"),
+        io.StringIO('["session_id"]'),
+    ],
+    ids=["terminal", "empty", "not-json", "not-an-object"],
+)
+def test_hook_payload_is_empty_without_a_json_object_on_a_pipe(monkeypatch, stdin):
+    from witan.cli import hooks
+
+    monkeypatch.setattr("sys.stdin", stdin)
+    assert hooks._hook_payload() == {}
+
+
+def test_codex_checkpoint_keeps_a_config_error_off_stdout(
+    tmp_state_dir, no_background_optimize, monkeypatch, tmp_path, capsys
+):
+    """A half-configured remote makes ``_srv()`` print its error, and Codex
+    fails a Stop hook whose stdout isn't a JSON decision. The error belongs
+    on stderr, and the handle stays for the next Stop to retry."""
+    from witan.cli import _common, hooks
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("")
+    monkeypatch.setenv("WITAN_CONFIG", str(cfg_file))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.invalid/mcp")
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.setattr(_common, "_server", None)
+    assert session_state.write_handle(CODEX_SID, {"session_slug": "ws-codex"})
+    monkeypatch.setattr("sys.stdin", io.StringIO(_codex_stop_payload(tmp_path)))
+
+    hooks.session_checkpoint()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "OIDC" in captured.err
+    assert session_state.read_handle(CODEX_SID) == {"session_slug": "ws-codex"}

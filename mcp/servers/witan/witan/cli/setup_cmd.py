@@ -80,7 +80,7 @@ def setup(
 
     Parameters
     ----------
-    agent: Target agent — claude | pi | copilot | opencode | all. (Kilo Code is
+    agent: Target agent — claude | pi | copilot | opencode | codex | all. (Kilo Code is
         pending a config-path verification fix — tracked separately.)
     author: Name written to graph nodes (default: git config user.name or $USER).
     dry_run: Print what would happen without writing anything.

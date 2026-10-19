@@ -35,18 +35,19 @@ When the hook injects context showing an active project that matches your work:
 ```text
 workflow_session_start(
     project_slug="wp-add-vault-k8s-auth-a3f912",
-    session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi>",
+    session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi, $CODEX_SESSION_ID on Codex>",
     phase="implementation",
 )
 ```
 
 Read the id in your shell tool rather than inventing one — `echo
-$CLAUDE_SESSION_ID` on Claude Code, `echo $PI_SESSION_ID` on Pi — since the
-Claude Code Stop hook and the Pi workflow extension's shutdown handler find the
-session to auto-close by that same id. Read only your own platform's variable:
-an agent launched from the other one can inherit its id, and a fallback chain
+$CLAUDE_SESSION_ID` on Claude Code, `echo $PI_SESSION_ID` on Pi, `echo
+$CODEX_SESSION_ID` on Codex — since the Claude Code and Codex Stop hooks and
+the Pi workflow extension's shutdown handler find the session to auto-close by
+that same id. Read only your own platform's variable:
+an agent launched from another one can inherit its id, and a fallback chain
 would pick that instead.
-Only on an agent that sets neither, use any stable per-session string and close
+Only on an agent that sets none of them, use any stable per-session string and close
 the session explicitly.
 
 Link the session before doing substantive work. The phase should reflect what
@@ -77,7 +78,7 @@ Then immediately start a session:
 ```text
 workflow_session_start(
     project_slug="<slug returned above>",
-    session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi>",
+    session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi, $CODEX_SESSION_ID on Codex>",
     phase="discovery",
 )
 ```

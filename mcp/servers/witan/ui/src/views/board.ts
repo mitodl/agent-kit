@@ -161,7 +161,10 @@ export function columns(board: Board, route: Route): Columns {
 	};
 }
 
-/** The blockers of `task` that are not closed, from the graph-wide read. */
+/**
+ * The blockers of `task` found in `live`, which holds only tasks that are not
+ * closed. A blocker missing from it is left out, whatever its status.
+ */
 export function openBlockers(
 	task: TaskRow,
 	live: Map<string, TaskRow>,
@@ -288,9 +291,9 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
  * disagree.
  *
  * `inBlocked` is the column, not the status. A `blocked`-status task whose
- * blockers have all closed is READY by `task_ready`'s rule (and stays marked
- * `blocked` when its blocker closed in another repo, since
- * `_unblock_dependents` only looks within one), so keying the blocker line on
+ * blockers have all closed is READY by `task_ready`'s rule, and the stored
+ * status word can lag that rule (`_unblock_dependents` rewrites it only when a
+ * task closes or a `blocked` task is claimed), so keying the blocker line on
  * the status word would tell a person to refresh a task that is ready.
  */
 export function boardCard(

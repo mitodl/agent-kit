@@ -29,6 +29,7 @@ import {
 	projectRollup,
 	projectsWithAssignee,
 	type Rollup,
+	taskGroups,
 } from "./projects.js";
 
 /**
@@ -57,7 +58,7 @@ const sessions = unwrap<WorkflowSession[]>(
 	sessionListFixture,
 );
 
-const rollup: Rollup = { detail, status, tasks, sessions };
+const rollup: Rollup = { detail, status, tasks, sessions, outside: [] };
 
 let root: HTMLElement;
 
@@ -212,7 +213,7 @@ describe("projectRollup", () => {
 		const route: Route = { ...DEFAULT_ROUTE, project: "wp-gone" };
 		render(
 			projectRollup(
-				{ detail: null, status: null, tasks: [], sessions: [] },
+				{ detail: null, status: null, tasks: [], sessions: [], outside: [] },
 				route,
 			),
 			root,
@@ -321,6 +322,97 @@ describe("projectRollup with an assignee filter", () => {
 		expect(text()).toContain("matches the filter");
 		expect(text()).toContain("150 tasks are");
 		expect(text()).toContain("the filter only sees the capped rows");
+	});
+});
+
+describe("blocker badges", () => {
+	const row = (slug: string, patch: Partial<TaskRow> = {}): TaskRow => ({
+		...(tasks[0] as TaskRow),
+		slug,
+		status: "open",
+		blocked_by: null,
+		...patch,
+	});
+	const badges = () =>
+		[...root.querySelectorAll(".badge.blocked")].map((b) => b.textContent);
+
+	it("drops the badge once every blocker has closed", () => {
+		const done = row("tk-done", { status: "closed" });
+		const waits = row("tk-waits", { blocked_by: [done.slug] });
+		render(
+			projectRollup({ ...rollup, tasks: [done, waits] }, DEFAULT_ROUTE),
+			root,
+		);
+
+		expect(badges()).toEqual([]);
+	});
+
+	it("counts only the blockers still open", () => {
+		const live = row("tk-live");
+		const done = row("tk-done", { status: "closed" });
+		const waits = row("tk-waits", { blocked_by: [live.slug, done.slug] });
+		render(
+			projectRollup({ ...rollup, tasks: [live, done, waits] }, DEFAULT_ROUTE),
+			root,
+		);
+
+		expect(badges()).toEqual(["1 blocker"]);
+	});
+
+	it("counts an open outside blocker, and leaves out one it cannot resolve", () => {
+		const elsewhere = row("tk-elsewhere", { project_slug: "wp-elsewhere" });
+		const waits = row("tk-waits", {
+			blocked_by: [elsewhere.slug, "tk-unknown"],
+		});
+		render(
+			projectRollup(
+				{ ...rollup, tasks: [waits], outside: [elsewhere] },
+				DEFAULT_ROUTE,
+			),
+			root,
+		);
+
+		expect(badges()).toEqual(["1 blocker"]);
+	});
+
+	it("draws no badge on a closed task", () => {
+		const live = row("tk-live");
+		const done = row("tk-done", { status: "closed", blocked_by: [live.slug] });
+		render(
+			projectRollup(
+				{ ...rollup, tasks: [live, done] },
+				{ ...DEFAULT_ROUTE, closed: true },
+			),
+			root,
+		);
+
+		expect(badges()).toEqual([]);
+	});
+
+	it("counts a project's blockers that are still active, in any repo", () => {
+		const [shown] = projects as [WorkflowProjectSummary];
+		const blocked = { ...shown, blocked_by: ["wp-other-repo", "wp-done"] };
+		const unblocked = { ...shown, slug: "wp-free", blocked_by: ["wp-done"] };
+		const other = { ...shown, slug: "wp-other-repo" };
+		render(
+			projectList(
+				[blocked, unblocked],
+				DEFAULT_ROUTE,
+				[],
+				[blocked, unblocked, other],
+			),
+			root,
+		);
+
+		expect(badges()).toEqual(["blocked by 1"]);
+	});
+
+	it("counts a blocker the task_list widget holds in the same result", () => {
+		const live = row("tk-live");
+		const waits = row("tk-waits", { blocked_by: [live.slug] });
+		render(taskGroups([live, waits], DEFAULT_ROUTE, 0), root);
+
+		expect(badges()).toEqual(["1 blocker"]);
 	});
 });
 
