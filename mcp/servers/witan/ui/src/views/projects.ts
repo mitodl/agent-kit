@@ -14,7 +14,7 @@ import type {
 	WorkflowSession,
 } from "../types.js";
 import { openBlockers } from "./board.js";
-import { slugLinks, uriFact } from "./parts.js";
+import { copyButton, slugLinks, uriFact } from "./parts.js";
 
 /**
  * The Projects view: the list, and the rollup for one project (spec §6.2).
@@ -101,7 +101,7 @@ export function projectList(
               <td>
                 <a href=${routeHref(route, { project: project.slug })}
                   >${project.title}</a
-                >
+                >${copyButton(project.slug)}
                 ${blockedByBadge(project, live)}
               </td>
               <td>${project.phase}</td>
@@ -174,7 +174,7 @@ export function projectRollup(
       <header>
         <p class="crumbs">
           <a href=${routeHref(route, { project: null })}>Projects</a> /
-          <code>${detail.slug}</code>
+          <code>${detail.slug}</code>${copyButton(detail.slug)}
         </p>
         <h2>${detail.title}</h2>
         <dl class="facts">
@@ -346,7 +346,7 @@ function readyTasks(
                     <span class="badge priority">${task.priority}</span>
                     <a href=${routeHref(route, { slug: task.slug })}
                       >${task.title}</a
-                    >
+                    >${copyButton(task.slug)}
                     ${
 											task.assignee
 												? html`<span class="assignee">${task.assignee}</span>`
@@ -400,7 +400,9 @@ export function statusRollup(
 	return html`
     <article class="rollup">
       <header>
-        <p class="crumbs"><code>${project.slug}</code></p>
+        <p class="crumbs">
+          <code>${project.slug}</code>${copyButton(project.slug)}
+        </p>
         <h2>${project.title}</h2>
         <dl class="facts">
           <dt>Phase</dt>
@@ -540,7 +542,8 @@ export function taskTable(
 					(task) => html`
             <tr class=${task.status === "closed" ? "closed" : ""}>
               <td>
-                <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a>
+                <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a
+                >${copyButton(task.slug)}
                 ${blockerBadge(task, live)}
               </td>
               <td>${task.type}</td>

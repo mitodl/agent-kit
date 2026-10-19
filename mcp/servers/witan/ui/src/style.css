@@ -172,6 +172,61 @@ button:hover {
 	color: var(--accent);
 }
 
+/* Copy-a-slug button: an icon beside a project or task name, quiet until it is
+   pointed at, so a table of them does not read as a column of buttons. */
+button.copy {
+	display: inline-flex;
+	align-items: center;
+	vertical-align: middle;
+	margin-left: 0.3rem;
+	padding: 0.15rem;
+	border-color: transparent;
+	background: transparent;
+	color: var(--muted);
+	line-height: 0;
+}
+
+button.copy:hover,
+button.copy:focus-visible {
+	border-color: var(--rule);
+	color: var(--accent);
+}
+
+button.copy svg {
+	width: 0.95em;
+	height: 0.95em;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.4;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+button.copy .icon-copied,
+button.copy .icon-failed,
+button.copy[data-copied] .icon-copy {
+	display: none;
+}
+
+button.copy[data-copied="yes"] .icon-copied,
+button.copy[data-copied="no"] .icon-failed {
+	display: inline;
+}
+
+/* Announced, never seen: the icon already shows the outcome. */
+.copy-status {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+button.copy[data-copied="no"] {
+	color: var(--bad);
+}
+
 /* ── Shell ──────────────────────────────────────────────────────── */
 
 .shell-header {
