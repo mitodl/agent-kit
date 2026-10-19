@@ -1,4 +1,5 @@
 import { html, nothing, svg, type TemplateResult } from "lit-html";
+import { keyed } from "lit-html/directives/keyed.js";
 import { isLinkable } from "../format.js";
 import { type Route, routeHref } from "../route.js";
 
@@ -41,6 +42,9 @@ export function slugLinks(
 /** How long the copied tick shows before the button reverts to its icon. */
 const COPIED_MS = 1500;
 
+/** Each button's pending reset, so a second copy's result gets its full time. */
+const resets = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();
+
 const copyIcon = svg`
   <svg class="icon-copy" viewBox="0 0 16 16" aria-hidden="true">
     <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
@@ -70,9 +74,17 @@ const failedIcon = svg`
  * colour (a tick or a cross), and is announced through a live region beside
  * the button: the icons are hidden from assistive tech, and a region inside a
  * button may be too, since ARIA makes a button's children presentational.
+ *
+ * That mark belongs to `value`, so the fragment is keyed by it: an unkeyed
+ * list re-rendered after a reorder hands this DOM to whatever row lands here,
+ * and the key makes lit-html draw a fresh button rather than leave a tick
+ * beside a slug that was never copied. A copy still in flight then marks the
+ * detached button, which nobody sees.
  */
-export function copyButton(value: string, label = value): TemplateResult {
-	return html`<button
+export function copyButton(value: string, label = value) {
+	return keyed(
+		value,
+		html`<button
     type="button"
     class="copy"
     title=${`Copy ${label}`}
@@ -89,16 +101,22 @@ export function copyButton(value: string, label = value): TemplateResult {
 				if (status) {
 					status.textContent = copied ? "Copied" : "Copy failed";
 				}
-				setTimeout(() => {
-					delete button.dataset.copied;
-					if (status) {
-						status.textContent = "";
-					}
-				}, COPIED_MS);
+				clearTimeout(resets.get(button));
+				resets.set(
+					button,
+					setTimeout(() => {
+						resets.delete(button);
+						delete button.dataset.copied;
+						if (status) {
+							status.textContent = "";
+						}
+					}, COPIED_MS),
+				);
 			});
 		}}
   >${copyIcon}${copiedIcon}${failedIcon}</button
-  ><span class="copy-status" role="status"></span>`;
+  ><span class="copy-status" role="status"></span>`,
+	);
 }
 
 /**
@@ -107,13 +125,15 @@ export function copyButton(value: string, label = value): TemplateResult {
  * The async Clipboard API is absent outside a secure context and refused in an
  * MCP Apps iframe the host did not grant `clipboard-write`, so it falls back to
  * the selection-and-`copy` route, which a sandboxed frame usually still allows
- * from inside a click.
+ * from inside a click. Selecting the textarea moves focus to it in Chromium,
+ * so focus goes back to where it was, or a keyboard user is left on the body.
  */
 export async function copyText(text: string): Promise<boolean> {
 	try {
 		await navigator.clipboard.writeText(text);
 		return true;
 	} catch {
+		const focused = document.activeElement;
 		const area = document.createElement("textarea");
 		area.value = text;
 		area.setAttribute("readonly", "");
@@ -127,6 +147,9 @@ export async function copyText(text: string): Promise<boolean> {
 			return false;
 		} finally {
 			area.remove();
+			if (focused instanceof HTMLElement && focused.isConnected) {
+				focused.focus({ preventScroll: true });
+			}
 		}
 	}
 }
