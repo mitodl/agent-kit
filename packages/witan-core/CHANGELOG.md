@@ -8,6 +8,14 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.43.1] - 2026-10-19
+
+### Changed
+
+- `report_install` now prints the paths in `InstallResult.removed`, so
+  `witan setup` and `witan-code setup` show the duplicate Pi skill copies they
+  remove ("would remove" under `--dry-run`).
+
 ## [0.43.0] - 2026-10-16
 
 ### Added
