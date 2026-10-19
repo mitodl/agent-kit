@@ -469,6 +469,10 @@ def remove_shadowed_skills(
         shared_dir = shared.path / skill.name
         if not dry_run and not (shared_dir / "SKILL.md").is_file():
             continue
+        rel_files = skill_files(skill)
+        # The files the shared copy actually reads: a symlink there (to a
+        # file, or a supporting dir) may point back into Pi's copy.
+        shared_files = {(shared_dir / rel).resolve() for rel in rel_files}
         for dest_base in skill_dest_dirs(platform, own.path):
             skill_dir = dest_base / skill.name
             # A symlinked skill dir points at files this run never wrote
@@ -480,13 +484,13 @@ def remove_shadowed_skills(
             # dir may be a symlink to the source tree).
             if skill_dir.resolve() in (shared_dir.resolve(), src_dir.resolve()):
                 continue
-            for rel in skill_files(skill):
+            for rel in rel_files:
                 dest = skill_dir / rel
                 if not (dest.is_file() or dest.is_symlink()):
                     continue
                 if not dest.parent.resolve().is_relative_to(skill_dir.resolve()):
                     continue
-                if dest.resolve() == (src_dir / rel).resolve():
+                if dest.resolve() in shared_files | {(src_dir / rel).resolve()}:
                     continue
                 if not dry_run:
                     dest.unlink()

@@ -920,6 +920,53 @@ def test_remove_shadowed_skills_never_deletes_through_a_pi_dir_symlinked_to_sour
     assert skill_md.is_file()
 
 
+def test_remove_shadowed_skills_keeps_pi_files_the_shared_copy_links_to(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    shared_copy = tmp_path / ".agents" / "skills" / "my-skill"
+    shared_copy.mkdir(parents=True)
+    (shared_copy / "SKILL.md").symlink_to(pi_copy / "SKILL.md")
+    (shared_copy / "scripts").symlink_to(pi_copy / "scripts")
+
+    removed = remove_shadowed_skills("pi", bundle, ["pi"], Scope.GLOBAL)
+
+    assert removed == []
+    assert (shared_copy / "SKILL.md").is_file()
+    assert (shared_copy / "scripts" / "run.sh").is_file()
+
+
+def test_remove_shadowed_skills_keeps_supporting_files_the_shared_copy_links_to(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    shared_copy = tmp_path / ".agents" / "skills" / "my-skill"
+    shared_copy.mkdir(parents=True)
+    (shared_copy / "SKILL.md").write_text("---\nname: my-skill\n---\n")
+    (shared_copy / "scripts").symlink_to(pi_copy / "scripts")
+
+    removed = remove_shadowed_skills("pi", bundle, ["pi"], Scope.GLOBAL)
+
+    assert removed == [pi_copy / "SKILL.md"]
+    assert (shared_copy / "scripts" / "run.sh").is_file()
+
+
+def test_remove_shadowed_skills_stops_pruning_at_a_symlinked_supporting_dir(
+    tmp_path, monkeypatch
+):
+    bundle = _pi_and_codex_with_stale_pi_skill(tmp_path, monkeypatch)
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    (pi_copy / "scripts").rename(pi_copy / "real-scripts")
+    (pi_copy / "scripts").symlink_to(pi_copy / "real-scripts")
+
+    results = apply_all(bundle)
+
+    assert pi_copy / "scripts" / "run.sh" in results["pi"].removed
+    assert (pi_copy / "scripts").is_symlink()
+
+
 def test_skills_shadowed_by_applies_at_project_scope_too():
     assert skills_shadowed_by("pi", ["pi", "codex"], Scope.PROJECT) == "codex"
     assert skills_shadowed_by("pi", ["pi", "claude"], Scope.PROJECT) is None

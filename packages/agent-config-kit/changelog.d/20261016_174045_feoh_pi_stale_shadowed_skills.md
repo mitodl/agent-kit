@@ -9,5 +9,8 @@
   Codex's copy exists. Only the files the skill itself ships are deleted, and
   nothing is deleted through a symlinked skill directory, from a Pi skills
   directory that points at `~/.agents/skills`, or from the skill's own source
-  (a manifest entry that points into `~/.pi/agent/skills`). The removals are listed in
-  `InstallResult.removed`.
+  (a manifest entry that points into `~/.pi/agent/skills`). A file that a
+  symlink in `~/.agents/skills` resolves to is kept too. The removals are
+  listed in `InstallResult.removed`.
+- Pruning empty directories after a removal now stops at a symlinked
+  directory instead of raising `NotADirectoryError`.
