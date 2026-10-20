@@ -1297,9 +1297,10 @@ def _tag_memory_steps(
     ]
 
 
-# Statements per commit in the topic backfill. Bounds the inline GQ body — the
-# composed query is passed as an argv element, so this trades a handful of extra
-# commits for staying well clear of ARG_MAX and any server payload cap.
+# Statements per commit in the topic backfill. Bounds the composed GQ body,
+# trading a handful of extra commits for staying well clear of the server's
+# mutate body cap (about 1 MiB). The CLI transport passes it as a file since
+# witan-core 0.44.1, so argv no longer limits it.
 #
 # A SOFT threshold, checked between memories rather than between statements: a
 # chunk may overshoot by up to one memory's worth of steps. Keeping each
@@ -1307,10 +1308,11 @@ def _tag_memory_steps(
 # bounded by how many tags one memory can carry.
 _MIGRATE_BATCH_SIZE = 100
 
-# Slugs per read for a query that takes a `$slugs` list. On the local transport
-# the params travel as ONE `--params` argument, and Linux refuses a single
-# argument of 128 KiB or more with E2BIG before the CLI even starts. 200 slugs
-# of about 60 characters is roughly 14 KB.
+# Slugs per read for a query that takes a `$slugs` list. Before witan-core
+# 0.44.1 the local transport passed params as ONE `--params` argument, which
+# Linux refuses at 128 KiB (E2BIG); they now go as `--params-file`. The cap
+# still bounds each read's request body: 200 slugs of about 60 characters is
+# roughly 14 KB.
 _SLUG_LIST_READ_BATCH_SIZE = 200
 
 

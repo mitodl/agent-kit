@@ -349,7 +349,7 @@ def _step_params(step: dict) -> dict:
     """A step's params, refusing anything that is not a mapping.
 
     Omitted and null both mean "no params". Anything else has to be a dict: the
-    value is handed to ``change_many`` and ends up as the ``--params`` JSON of a
+    value is handed to ``change_many`` and ends up as the params JSON of a
     composed mutation, so a string or a list would surface as an opaque omnigraph
     CLI failure several layers below the caller that sent it.
     """

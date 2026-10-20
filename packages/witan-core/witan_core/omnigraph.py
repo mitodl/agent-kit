@@ -1695,14 +1695,33 @@ def _cli_payload(
     as ``--params``, and a composed batch of 128 ``merge_task`` statements did
     as ``-e``. A private directory under ``TMPDIR``, removed once the call,
     retries included, is done.
+
+    :raises RuntimeError: when the payload cannot be written (``TMPDIR`` full
+        or unwritable). Every local call now needs that space, so it is raised
+        as the error callers already handle for a CLI that could not run.
     """
-    with tempfile.TemporaryDirectory(prefix="witan-omnigraph-") as tmp:
-        params_file = Path(tmp) / "params.json"
-        params_file.write_text(json.dumps(params), encoding="utf-8")
-        source_file = None
-        if source is not None:
-            source_file = Path(tmp) / "batch.gq"
-            source_file.write_text(source, encoding="utf-8")
+
+    def unwritable(exc: OSError) -> RuntimeError:
+        return RuntimeError(
+            "omnigraph could not run: its payload could not be written under "
+            f"{tempfile.gettempdir()} ({exc}). Point TMPDIR at a writable "
+            "directory with free space."
+        )
+
+    try:
+        tmp = tempfile.TemporaryDirectory(prefix="witan-omnigraph-")
+    except OSError as exc:
+        raise unwritable(exc) from exc
+    with tmp as tmp_dir:
+        try:
+            params_file = Path(tmp_dir) / "params.json"
+            params_file.write_text(json.dumps(params), encoding="utf-8")
+            source_file = None
+            if source is not None:
+                source_file = Path(tmp_dir) / "batch.gq"
+                source_file.write_text(source, encoding="utf-8")
+        except OSError as exc:
+            raise unwritable(exc) from exc
         yield str(params_file), None if source_file is None else str(source_file)
 
 

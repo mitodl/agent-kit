@@ -20,6 +20,9 @@ a MINOR bump may include breaking changes).
   `read`, `change` and `change_many` now write them to files in a private
   temporary directory (under `TMPDIR`, removed when the call returns) and pass
   `--params-file` and `--query <path>`. The HTTP transport is unchanged.
+  Every local call therefore needs a little space in `TMPDIR`. When the
+  payload cannot be written there, the call raises `RuntimeError` naming the
+  directory, the same error a CLI that could not run raises.
 
 ## [0.44.0] - 2026-10-20
 
