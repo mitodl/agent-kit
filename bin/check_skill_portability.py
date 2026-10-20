@@ -30,6 +30,11 @@ SCOPE. Markdown files (SKILL.md, references/, any other .md) under each skill
 directory registered in agent-config.toml's ``[skills]`` table. The Witan-owned
 skills shipped inside the witan packages are not registered there and are not
 checked. Scripts are not scanned: their strings are output, not instructions.
+Neither are ``evals/files/`` fixtures: those are input handed TO an agent under
+test, not instructions agent-kit ships for an agent to follow, and the rule
+above is about the latter. Keeping them in scope would force an in-band
+``portability: ok`` marker into a fixture, which tells the agent under test it
+is being tested -- and an eval that announces itself measures nothing.
 
 Standard library only (Python 3.11+ for tomllib) so it runs as a plain
 pre-commit hook with no environment to build, like bin/gen_llms.py. Run it
@@ -43,6 +48,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "agent-config.toml"
+# Path, relative to a skill directory, holding eval fixtures; see SCOPE above.
+FIXTURES = ("evals", "files")
 
 # Claude Code capabilities that agent-kit does not provide on other platforms.
 CLAUDE_ONLY: dict[str, re.Pattern[str]] = {
@@ -162,6 +169,8 @@ def main() -> int:
     for name, skill_md in sorted(skills.items()):
         skill_dir = (ROOT / skill_md).parent
         for md in sorted(skill_dir.rglob("*.md")):
+            if md.relative_to(skill_dir).parts[: len(FIXTURES)] == FIXTURES:
+                continue  # input to an agent under test, not shipped instructions
             for line, label, match in violations(md.read_text()):
                 failures += 1
                 rel = md.relative_to(ROOT)

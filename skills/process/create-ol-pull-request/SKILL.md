@@ -198,8 +198,8 @@ instruction. If the spawn is refused or errors, say so and why, then review
 inline under the rule below — never silently.
 
 Fall back to an inline review in two cases only: the platform has no
-subagent facility, or the spawn was refused. A standing instruction that
-discourages delegation is not one of them. In either case take each goal
+subagent facility, or the spawn was refused, errored, or timed out. A
+standing instruction that discourages delegation is not one of them. In either case take each goal
 from the ticket text rather than from memory of the implementation, and say
 plainly — in the report and to the user at 4d — that the review wasn't
 independent and why. A self-review is the weaker artifact; the user has to
