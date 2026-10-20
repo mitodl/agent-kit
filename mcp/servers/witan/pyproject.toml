@@ -233,7 +233,13 @@ dependencies = [
   # ★ >=0.44 IS AN IMPORT FLOOR: `remote/proxy.py` and `cli/journal.py` import
   # `witan_core.remote.journal` and `RemoteNotSent`, added in witan-core 0.44.0
   # in the same change (the write journal).
-  "witan-core[cli,remote,observability,sentry]>=0.44,<1",
+  #
+  # ★ >=0.44.1 IS A BEHAVIOUR FLOOR: `witan migrate merge` writes a task the
+  # target already holds as a `merge_task` mutation, and one past 128 KiB is a
+  # batch of its own. Before 0.44.1 the CLI transport put its params on argv,
+  # so on a local or s3 target that write failed with `Argument list too long`
+  # after the load had committed, and every re-run failed the same way.
+  "witan-core[cli,remote,observability,sentry]>=0.44.1,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

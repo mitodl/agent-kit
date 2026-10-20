@@ -30,7 +30,7 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
-- Requires witan-core 0.44.
+- Requires witan-core 0.44.1.
 
 - Breaks older clients: upgrade witan-council before merging into a
   deployment running this release. One `store_merge` call now writes at most 32 tasks
@@ -65,7 +65,10 @@ a MINOR bump may include breaking changes).
   `kept-target` with a `fenced` reason (`claim_changed`, or `target_newer` when
   re-running newest-record-wins against the fresh row keeps the target).
   Those writes go in fenced commits of at most 32 tasks and 96 KiB, sized from
-  measurements against omnigraph 0.13.0 (`witan/merge_bounds.py`).
+  measurements against omnigraph 0.13.0 (`witan/merge_bounds.py`). A single
+  task past 128 KiB gets a commit of its own, which on a local or s3 target
+  needs witan-core 0.44.1 (it no longer passes params on the command line), so
+  the witan-core floor is now `>=0.44.1`.
 
 ## [0.42.0] - 2026-10-16
 

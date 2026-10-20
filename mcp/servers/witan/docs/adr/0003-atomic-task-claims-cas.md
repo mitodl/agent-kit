@@ -234,9 +234,13 @@ the window. The cost is a commit per batch of collisions, and a batch can run
 out of attempts like any fenced write (`WriteContention`; re-running the merge
 is safe). Those bounds come from measurements on 0.13.0 (`witan/merge_bounds.py`
 has them): a local omnigraph-server took 0.6s for a fenced commit of 32
-statements and 2.7s for 128, the CLI could not pass 128 at all (the composed
-source outgrew Linux's 128 KiB argument cap), and the server refused a mutate
-body over about 1 MiB. `store_merge` runs inside one request the gateway cuts
+statements and 2.7s for 128, and refused a mutate body over about 1 MiB. The
+CLI could not pass 128 at all at first, because the composed source outgrew
+Linux's 128 KiB cap on one argv element, and a single task with a 200 KiB
+description failed the same way as `--params`. witan-core 0.44.1 hands the CLI
+its source and params as files (`--query <path>`, `--params-file`), so argv no
+longer bounds a batch and the caps rest on commit time and the server's body
+limit. `store_merge` runs inside one request the gateway cuts
 off at 120s, so one call writes at most one such batch: the client splits its
 batches to fit, and the server refuses a batch that does not, before writing
 anything and on a dry run too (`MergeBatchTooLarge`, a refusal rather than an

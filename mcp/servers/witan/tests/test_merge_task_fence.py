@@ -391,6 +391,45 @@ def test_the_splitting_version_is_the_release_that_ships_the_split():
     assert "MergeBatchTooLarge" in section
 
 
+@requires_omnigraph
+def test_oversized_task_collisions_merge_over_the_cli_transport(
+    server, monkeypatch, tmp_path
+):
+    """A collision past 128 KiB is a batch of its own, and on the CLI transport
+    its params used to exceed the per-argv-element cap (`Argument list too
+    long`) after the load had committed. Two of them beside a loadable row: the
+    claimed one keeps the target's row, the other is written whole."""
+    big = "d" * (200 * 1024)
+    claimed, written = (
+        server.task_create(title=f"oversized {i}", description="x")["slug"]
+        for i in range(2)
+    )
+    rows = [
+        _new_memory_row(tmp_path),
+        _source_copy(claimed, description=big),
+        _source_copy(written, description=big),
+    ]
+    export = tmp_path / "source.jsonl"
+    export.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setattr(
+        srv.OmnigraphClient, "hold_write_lock", lambda self: nullcontext()
+    )
+    granted = _claim_after_target_export(server, monkeypatch, claimed, "agentA")
+
+    result = srv.merge_store(str(export))
+
+    assert granted["claimed"] is True
+    fenced = {d["slug"]: d.get("fenced") for d in result["decisions"]}
+    assert fenced[claimed] == "claim_changed"
+    assert fenced[written] is None
+    assert result["rows_loaded"] == 2
+    assert result["batches"] == result["batches_applied"] == 3
+    assert server.task_get(claimed)["assignee"] == "agentA"
+    assert server.task_get(claimed)["description"] == "x"
+    assert server.task_get(written)["description"] == big
+    assert server.memory_get("mem-new-in-merge-aaaaaa") is not None
+
+
 def test_split_by_task_budget_bounds_task_rows_and_keeps_order(monkeypatch):
     monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
 

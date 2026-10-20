@@ -2,7 +2,7 @@
 
 A merge writes a winning Task row the target already holds as a ``merge_task``
 statement in a composed mutation fenced on a fresh read (see
-``witan.server._write_task_batch``), not as part of a load. Three ceilings
+``witan.server._write_task_batch``), not as part of a load. Two ceilings
 bound that mutation, measured against omnigraph 0.13.0 on 2026-10-19 with
 2,000 tasks in the graph and ~800 bytes of prose per row:
 
@@ -13,25 +13,28 @@ bound that mutation, measured against omnigraph 0.13.0 on 2026-10-19 with
   measured here; witan-code's caps assume 362ms per statement there plus a
   commit of about 4s, which puts 32 statements near 16s an attempt and five
   refused attempts with their backoff near 82s.
-- The CLI's argument size. The CLI transport passes the composed source and
-  its params as one argv element each, and Linux caps one at 128 KiB
-  (``MAX_ARG_STRLEN``). The source costs about 1.45 KB a statement, so 128
-  statements (186 KB) failed with ``Argument list too long`` where 64 (93 KB)
-  passed. Params cost each row's JSON plus about 80 bytes.
 - The HTTP body. A local omnigraph-server refused a mutate body above about
-  1 MiB with 413.
+  1 MiB with 413. The composed source costs about 1.45 KB a statement and the
+  params each row's JSON plus about 80 bytes, so 32 statements of 96 KiB of
+  row data come to about 150 KB.
+
+The CLI transport used to bind too: it passed the source and params as one
+argv element each, which Linux caps at 128 KiB, and 128 statements failed with
+``Argument list too long``. witan-core 0.44.1 passes them as files, so argv no
+longer limits a batch, and a single task past 128 KiB on its own (which gets a
+batch to itself) writes on that path as it does over HTTP.
 
 ``store_merge`` runs inside one MCP request, which APISIX cuts off at 120s
 (``WITAN_REQUEST_TIMEOUT``), after it has already exported the deployed graph
 and loaded the rest of the batch. So one call writes at most ONE fenced
 commit, of at most ``TASKS_PER_COMMIT`` statements and ``TASK_BYTES_PER_COMMIT``
 of row data, and the client splits its batches so a call never carries more
-Task rows than fit in one (:func:`split_by_task_budget`). At 32 the source is
-about 46 KB and the params stay under 96 KiB, both clear of the 128 KiB
-argument cap, and the worst case estimated above stays under the gateway
-budget with room for the export and the load. The cost is more calls for a
-source heavy in tasks: every Task row counts, not only collisions, because
-the client cannot tell which rows collide until the server reconciles them.
+Task rows than fit in one (:func:`split_by_task_budget`). At 32 the body stays
+far under the server's 1 MiB, and the worst case estimated above stays under
+the gateway budget with room for the export and the load. The cost is more
+calls for a source heavy in tasks: every Task row counts, not only
+collisions, because the client cannot tell which rows collide until the
+server reconciles them.
 """
 
 from __future__ import annotations
@@ -42,9 +45,9 @@ import json
 #: ``store_merge`` call.
 TASKS_PER_COMMIT = 32
 
-#: Row data in one fenced commit, counted by :func:`task_cost`. Under the CLI's
-#: 128 KiB argument cap with room for the timestamp rewriting
-#: ``merge_task``'s params do.
+#: Row data in one fenced commit, counted by :func:`task_cost`. Keeps the
+#: composed mutate body far under the server's ~1 MiB with room for the
+#: timestamp rewriting ``merge_task``'s params do.
 TASK_BYTES_PER_COMMIT = 96 * 1024
 
 #: The byte budget the client splits a ``store_merge`` batch's Task rows to.
