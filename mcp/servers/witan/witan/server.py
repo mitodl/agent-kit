@@ -2765,6 +2765,32 @@ def _write_task_batch_once(
     return kept
 
 
+class MergeBatchTooLarge(RuntimeError, Refusal):
+    """A ``store_merge`` batch whose collisions need more than one fenced commit.
+
+    Refused before anything is written, because one call may spend only one
+    fenced commit inside the gateway's 120s (:mod:`witan.merge_bounds`). A
+    client from before the split sends 2 MiB batches, so it reaches this on
+    any re-merge of more than 32 tasks the deployment already holds.
+    """
+
+    # Built from a count and this module's constants.
+    log_safe_message = True
+
+    def __init__(self, collisions: int) -> None:
+        super().__init__(
+            f"store_merge refused this batch: it would overwrite {collisions} "
+            "tasks the graph already holds, and one call writes at most "
+            f"{merge_bounds.TASKS_PER_COMMIT} (and "
+            f"{merge_bounds.TASK_BYTES_PER_COMMIT // 1024} KiB of them). Nothing "
+            "was written. witan-council "
+            f"{merge_bounds.SPLITTING_CLIENT_VERSION} and later split "
+            "`witan migrate merge` batches to fit: upgrade with `uv tool "
+            "upgrade ol-agent-kit` (or `uv tool upgrade witan-council`) and "
+            "re-run the merge."
+        )
+
+
 def _keep_target(
     decisions: list[dict], collisions: list[dict], kept: dict[str, str]
 ) -> list[dict]:
@@ -3242,8 +3268,10 @@ def store_merge(
     any edge** (``witan_core.chunking.chunk_records`` does both), **with no more
     Task rows than one fenced commit takes**
     (``witan.merge_bounds.split_by_task_budget``). A batch whose collisions
-    would need more than one fenced commit is refused before anything is
-    written, so one call stays inside the gateway's request budget.
+    would need more than one fenced commit is refused with
+    ``MergeBatchTooLarge`` before anything is written, so one call stays
+    inside the gateway's request budget. A dry run is refused the same way,
+    so it predicts the real run.
 
     One call is up to two commits: the load, then the fenced write of the
     tasks this graph already holds. A call that fails after its load (the
@@ -3327,6 +3355,15 @@ def store_merge(
             if (row.get("type"), (row.get("data") or {}).get("slug")) in stamped_keys
         )
 
+    # Checked before the dry-run return, so a dry run predicts the refusal the
+    # real run would get. Reporting it as a key in the dry-run result instead
+    # would reach nobody: the only callers that can hit it are clients older
+    # than the split, and their proxy drops keys it does not know.
+    collisions, loadable = _split_task_collisions(winners, target_nodes)
+    task_batches = _task_batches(collisions)
+    if len(task_batches) > 1:
+        raise MergeBatchTooLarge(len(collisions))
+
     if dry_run:
         return {
             "dry_run": True,
@@ -3338,20 +3375,6 @@ def store_merge(
             **counts,
         }
 
-    collisions, loadable = _split_task_collisions(winners, target_nodes)
-    task_batches = _task_batches(collisions)
-    if len(task_batches) > 1:
-        # Before anything is written: one fenced commit is all a call may
-        # spend inside the gateway's 120s (see `witan.merge_bounds`).
-        msg = (
-            f"this batch would overwrite {len(collisions)} tasks the graph "
-            "already holds, more than one store_merge call writes (at most "
-            f"{merge_bounds.TASKS_PER_COMMIT}, and "
-            f"{merge_bounds.TASK_BYTES_PER_COMMIT // 1024} KiB of them). Nothing "
-            "was written. Send fewer Task rows per batch; `witan migrate merge` "
-            "from a current witan-council splits them for you."
-        )
-        raise RuntimeError(msg)
     to_load = loadable + edge_winners + source_passthrough
     kept: dict[str, str] = {}
     with _data_tier_outage_reads_as_retryable():

@@ -199,7 +199,17 @@ def _collisions(server, count: int) -> tuple[list[str], list[dict]]:
         server.task_create(title=f"collision {i}", description="x")["slug"]
         for i in range(count)
     ]
-    return slugs, [_source_copy(slug, description="from the source") for slug in slugs]
+    exported = {
+        r["data"]["slug"]: r
+        for r in _export_rows(srv.client)
+        if r.get("type") == "Task"
+    }
+    rows = []
+    for slug in slugs:
+        row = copy.deepcopy(exported[slug])
+        row["data"].update(updated_at=_FAR_FUTURE, description="from the source")
+        rows.append(row)
+    return slugs, rows
 
 
 def _fenced_writes(monkeypatch) -> list[list[str]]:
@@ -249,10 +259,30 @@ def test_collisions_past_one_commit_go_in_several_fenced_batches(
         assert server.task_get(slug)["description"] == "from the source"
 
 
+def _new_memory_row(tmp_path) -> dict:
+    """An export row for a Memory the target does not hold, so it is loaded."""
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+
+    from .test_migrate import _init_store, _insert_memory
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "memory-source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source, slug="mem-new-in-merge-aaaaaa", content="new", updated_at=_FAR_FUTURE
+    )
+    [row] = _export_rows(source)
+    return row
+
+
 @requires_omnigraph
-def test_store_merge_refuses_more_collisions_than_one_commit(server, monkeypatch):
+def test_store_merge_refuses_more_collisions_than_one_commit(
+    server, monkeypatch, tmp_path
+):
     """One call writes at most one fenced commit, so a batch needing more is
-    refused before its load, not part-way through."""
+    refused before its load, not part-way through. The new Memory row is what
+    the load would have written first."""
     slugs, rows = _collisions(server, 3)
     monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
 
@@ -261,10 +291,35 @@ def test_store_merge_refuses_more_collisions_than_one_commit(server, monkeypatch
 
     monkeypatch.setattr(srv.OmnigraphClient, "load_batch", no_load)
 
-    with pytest.raises(RuntimeError, match="Nothing was written"):
-        srv.store_merge(rows)
+    with pytest.raises(srv.MergeBatchTooLarge, match="Nothing was written"):
+        srv.store_merge([_new_memory_row(tmp_path), *rows])
     for slug in slugs:
         assert server.task_get(slug)["description"] == "x"
+
+
+@requires_omnigraph
+def test_an_old_client_batch_is_refused_with_the_version_that_splits(server, tmp_path):
+    """A client from before the split sends `chunk_records(rows,
+    MCP_LOAD_MAX_BYTES)` whole, so 33 newer copies of tasks the deployment
+    holds arrive in one call. The refusal is a `Refusal` (a warning, not a
+    Sentry error), names the version to upgrade to, and a dry run gets it
+    too, so it predicts the real run."""
+    from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records
+    from witan_core.refusal import Refusal
+
+    _, rows = _collisions(server, srv.merge_bounds.TASKS_PER_COMMIT + 1)
+    [batch] = list(
+        chunk_records([_new_memory_row(tmp_path), *rows], MCP_LOAD_MAX_BYTES)
+    )
+
+    for dry_run in (True, False):
+        with pytest.raises(srv.MergeBatchTooLarge) as excinfo:
+            srv.store_merge(batch, dry_run=dry_run)
+        assert isinstance(excinfo.value, Refusal)
+        message = str(excinfo.value)
+        assert f"witan-council {srv.merge_bounds.SPLITTING_CLIENT_VERSION}" in message
+        assert "uv tool upgrade" in message
+    assert server.memory_get("mem-new-in-merge-aaaaaa") is None
 
 
 @requires_omnigraph
@@ -274,22 +329,13 @@ def test_contention_part_way_reports_what_the_merge_wrote(
     """The load and the first task batch commit; the second batch runs out of
     attempts. The partial report counts exactly what landed, and the WRITTEN
     accounting shows the two tasks that did not."""
-    from witan import config as cfg_mod
     from witan import graph as graph_mod
     from witan import merge_report
 
-    from .test_migrate import _init_store, _insert_memory
-
     slugs, rows = _collisions(server, 3)
-    source = graph_mod.OmnigraphClient(
-        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
-    )
-    _insert_memory(
-        source, slug="mem-new-in-merge-aaaaaa", content="new", updated_at=_FAR_FUTURE
-    )
     export = tmp_path / "source.jsonl"
     export.write_text(
-        "".join(json.dumps(row) + "\n" for row in [*_export_rows(source), *rows])
+        "".join(json.dumps(row) + "\n" for row in [_new_memory_row(tmp_path), *rows])
     )
     monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 1)
     monkeypatch.setattr(srv, "_task_write_pause", lambda _attempt: None)
@@ -335,3 +381,22 @@ def test_split_by_task_budget_bounds_task_rows_and_keeps_order(monkeypatch):
     assert srv.merge_bounds.split_by_task_budget(
         [task("a"), big, task("e")], max_bytes=srv.merge_bounds.task_cost(big)
     ) == [[task("a")], [big], [task("e")]]
+
+
+def test_split_reads_the_byte_budget_when_called(monkeypatch):
+    """A row over the budget on its own still gets a part, alone, and the
+    budget is the module's value at call time, not at import."""
+
+    def task(slug):
+        return {"type": "Task", "data": {"slug": slug}}
+
+    big = task("d" * 100)
+    monkeypatch.setattr(
+        srv.merge_bounds, "TASK_BYTES_PER_COMMIT", srv.merge_bounds.task_cost(big) - 1
+    )
+
+    assert srv.merge_bounds.split_by_task_budget([task("a"), big, task("e")]) == [
+        [task("a")],
+        [big],
+        [task("e")],
+    ]

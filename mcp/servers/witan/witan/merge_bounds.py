@@ -54,6 +54,10 @@ TASK_BYTES_PER_COMMIT = 96 * 1024
 #: refuses.
 CLIENT_TASK_BYTES_PER_CALL = 64 * 1024
 
+#: The first witan-council whose ``witan migrate merge`` splits batches this
+#: way. Named in the server's refusal of a batch from an older client.
+SPLITTING_CLIENT_VERSION = "0.43.0"
+
 
 def task_cost(row: dict) -> int:
     """The bytes a Task export row counts against a byte budget here."""
@@ -61,22 +65,23 @@ def task_cost(row: dict) -> int:
 
 
 def split_by_task_budget(
-    rows: list[dict], max_bytes: int = TASK_BYTES_PER_COMMIT
+    rows: list[dict], max_bytes: int | None = None
 ) -> list[list[dict]]:
     """``rows`` in order, split so no part holds more than ``TASKS_PER_COMMIT``
-    Task rows or ``max_bytes`` of them. Other rows stay in whichever part they
-    fall in.
+    Task rows or ``max_bytes`` of them (``TASK_BYTES_PER_COMMIT`` when
+    omitted). Other rows stay in whichever part they fall in.
 
     A Task row over ``max_bytes`` on its own still gets a part, by itself: it
     cannot be split, and ``task_update`` would send it whole too.
     """
+    budget = TASK_BYTES_PER_COMMIT if max_bytes is None else max_bytes
     parts: list[list[dict]] = []
     part: list[dict] = []
     count = size = 0
     for row in rows:
         if row.get("type") == "Task":
             cost = task_cost(row)
-            if count and (count + 1 > TASKS_PER_COMMIT or size + cost > max_bytes):
+            if count and (count + 1 > TASKS_PER_COMMIT or size + cost > budget):
                 parts.append(part)
                 part, count, size = [], 0, 0
             count += 1
