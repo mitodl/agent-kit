@@ -34,7 +34,9 @@ Neither are ``evals/files/`` fixtures: those are input handed TO an agent under
 test, not instructions agent-kit ships for an agent to follow, and the rule
 above is about the latter. Keeping them in scope would force an in-band
 ``portability: ok`` marker into a fixture, which tells the agent under test it
-is being tested -- and an eval that announces itself measures nothing.
+is being tested -- and an eval that announces itself measures nothing. This
+covers every registered skill's ``evals/files/`` tree, not only the fixture
+that prompted it.
 
 Standard library only (Python 3.11+ for tomllib) so it runs as a plain
 pre-commit hook with no environment to build, like bin/gen_llms.py. Run it

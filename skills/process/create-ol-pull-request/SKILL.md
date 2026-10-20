@@ -297,7 +297,11 @@ If 4a–4c changed anything, left a finding the user hasn't decided on, or
 ran 4b inline, show the user before Step 5: the new commits (`git show`),
 the final title and body, any open findings, and which changes landed after
 the last review run. Label those as not independently reviewed; don't
-present them as reviewed, and label an inline 4b review the same way. Then wait for explicit approval. Showing the changes is not
+present them as reviewed. Label an inline 4b review the same way, and name
+why it ran inline — the platform was without a subagent facility, or the
+spawn was refused, errored, or timed out — since "not independently
+reviewed" without the reason doesn't tell the user whether to ask for
+another pass. Then wait for explicit approval. Showing the changes is not
 consent, and the user confirmed a body in Step 3, not code or claims
 changed after it. Don't paste findings tables into the PR body.
 
