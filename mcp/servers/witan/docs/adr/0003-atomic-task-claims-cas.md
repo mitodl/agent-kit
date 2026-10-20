@@ -214,6 +214,25 @@ next sweep retries it). A retried close keeps the original `closed_at`.
 whenever the row still names that parent, so re-running it repairs a sync that
 ran out.
 
+`store_merge` (`witan migrate merge`) was the last task writer outside the
+fence. It exports the target, reconciles newest-record-wins, then writes, and
+on a served store its write lock is a no-op, so a claim landing between the
+export and the write was overwritten by a winning source row. `omnigraph load`
+takes no precondition in 0.13, so a winning Task row the target already holds
+is no longer loaded. It is written by the `merge_task` mutation (every field,
+`author` and `created_at` included), in batches of up to 128 tasks, each
+fenced on a re-read of its tasks through the same retry as `_update_task`. On
+that read a task whose `status`, `assignee` or `claimed_at` changed since the
+export keeps the target's row (its decision becomes `kept-target` with
+`fenced: claim_changed`), and any other task has newest-record-wins re-run
+against it (`fenced: target_newer` when the target now wins). A Task the target
+did not hold at the export, and every other row type, is still loaded
+unfenced. Nobody can hold a task the target does not have, and slugs carry a
+random suffix, so only another merge of the same row can write that slug in
+the window. The cost is a commit per batch of collisions, and a batch can run
+out of attempts like any fenced write (`WriteContention`; re-running the merge
+is safe).
+
 Outside the guarantee:
 
 - Writes meant to change the holder: `force`, a `task_update` that sets
@@ -222,11 +241,7 @@ Outside the guarantee:
   deliberately rather than by accident.
 - Holders that compare equal (the missing `session_id` case above).
 - Writes that bypass `_update_task`. The partial `set_task_author` update sets
-  only `author` and `updated_at`, so it cannot revert a claim. `store_merge`
-  (`witan migrate merge`) is not fenced: it exports the target, reconciles,
-  and loads the winning rows with `load --mode merge`, and on a served store
-  its write lock is a no-op, so a claim that lands between the export and the
-  load can be overwritten by a winning row from the source.
+  only `author` and `updated_at`, so it cannot revert a claim.
 - A claim whose response never arrives. From 0.12 the server keeps running an
   admitted write after its caller disconnects. Against the local 0.13.0
   server, a mutate whose connection was reset 2 ms after sending still landed,
