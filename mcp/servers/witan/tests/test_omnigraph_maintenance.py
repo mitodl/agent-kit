@@ -12,11 +12,13 @@ the pinned omnigraph has persisted locks (storage format 14).
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import os
 import signal
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 import yaml
@@ -126,7 +128,7 @@ class FakeCli(FakeOmnigraph):
         self.fails: set[str] = set()
         self.during: dict[str, object] = {}
         self.status_output: str | None = None
-        self._op_ids = iter(f"01GRAPHOP{n}" for n in range(1, 50))
+        self._op_ids = (f"01GRAPHOP{n}" for n in itertools.count(1))
 
     def __call__(
         self, args: list[str], lease, timeout_seconds=None, interrupt=None
@@ -217,34 +219,109 @@ def test_cleanup_follows_optimize_on_its_day(kube, cli, env):
     assert cli.lock is None
 
 
-def test_the_cleanup_pass_starts_one_graph_further_each_week(
-    kube, cli, env, monkeypatch
-):
-    """A window that keeps running out must not skip the same graphs weekly."""
-
-    class Week(datetime):
-        week = 0
-
-        @classmethod
-        def now(cls, tz=None):
-            # 2026-01-05 is the Monday of ISO week 2.
-            return datetime(2026, 1, 5 + 7 * cls.week, tzinfo=tz)
-
-    monkeypatch.setattr(maintenance, "datetime", Week)
-    first_cleaned = []
-    for Week.week in range(2):
-        cli.maintained.clear()
-        cli.lock = {"id": f"01SERVE{Week.week}", "operation": "serve"}
-        kube.pods = [pod(SERVER_POD)]
-        assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": "1"}) == 0
-        first_cleaned.append(cli.maintained[2][1])
-    assert sorted(first_cleaned) == sorted(GRAPHS)
+def test_cleanup_runs_on_a_day_in_a_list(kube, cli, env):
+    today = datetime.now(UTC).isoweekday()
+    days = ",".join(str(day) for day in {today, today % 7 + 1})
+    assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": days}) == 0
+    assert [step[0] for step in cli.maintained] == ["optimize"] * 2 + ["cleanup"] * 2
 
 
 def test_cleanup_does_not_run_on_another_day(kube, cli, env):
-    other_day = str(datetime.now(UTC).isoweekday() % 7 + 1)
-    assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": other_day}) == 0
+    today = datetime.now(UTC).isoweekday()
+    others = ",".join(str(day) for day in range(1, 8) if day != today)
+    assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": others}) == 0
     assert [step[0] for step in cli.maintained] == ["optimize", "optimize"]
+
+
+def test_cleanup_never_runs_without_a_day(kube, cli, env):
+    assert maintenance.main(env) == 0
+    assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": ""}) == 0
+    assert [step[0] for step in cli.maintained] == ["optimize"] * 4
+
+
+@pytest.mark.parametrize(
+    ("value", "weekdays"),
+    [
+        ("7", {7}),
+        ("1,2,3,4,5,6,7", set(range(1, 8))),
+        ("6, 7", {6, 7}),
+        ("", set()),
+        (" ", set()),
+    ],
+)
+def test_cleanup_weekdays_parse(value, weekdays):
+    assert maintenance.parse_iso_weekdays(value) == weekdays
+
+
+@pytest.mark.parametrize("value", ["0", "8", "x", "1,1", "1,,2", "-1"])
+def test_an_invalid_cleanup_weekday_fails_before_the_server_stops(
+    kube, cli, env, value
+):
+    with pytest.raises(ValueError, match="ISO weekday"):
+        maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": value})
+    assert kube.scaled == []
+    assert cli.calls == []
+
+
+def _first_cleaned_on(days, weekdays, kube, cli, env, monkeypatch) -> list[str]:
+    class Day(datetime):
+        day = days[0]
+
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.combine(cls.day, datetime.min.time(), tzinfo=tz)
+
+    monkeypatch.setattr(maintenance, "datetime", Day)
+    first_cleaned = []
+    for night, Day.day in enumerate(days):
+        cli.maintained.clear()
+        cli.lock = {"id": f"01SERVE{night}", "operation": "serve"}
+        kube.pods = [pod(SERVER_POD)]
+        assert maintenance.main({**env, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": weekdays}) == 0
+        first_cleaned.append(next(s[1] for s in cli.maintained if s[0] == "cleanup"))
+    return first_cleaned
+
+
+def test_the_cleanup_pass_starts_one_graph_further_each_night(
+    kube, cli, env, monkeypatch
+):
+    """A night that runs out must not leave the same graph uncleaned again.
+
+    Two nights in one ISO week (Monday and Tuesday of week 43), so a rotation
+    keyed on the ISO week would start both at the same graph and fail this.
+    """
+    first_cleaned = _first_cleaned_on(
+        [date(2026, 10, 19), date(2026, 10, 20)],
+        "1,2,3,4,5,6,7",
+        kube,
+        cli,
+        env,
+        monkeypatch,
+    )
+    assert sorted(first_cleaned) == sorted(GRAPHS)
+
+
+def test_a_weekly_cleanup_still_rotates(kube, cli, env, monkeypatch):
+    """Seven graphs and a step of 7 days would start at the same one weekly."""
+    graphs = [f"g{n}" for n in range(7)]
+    (Path(env["OMNIGRAPH_CLUSTER_DIR"]) / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {graph: {} for graph in graphs}})
+    )
+    sundays = [date(2026, 10, 18) + timedelta(weeks=week) for week in range(7)]
+    first_cleaned = _first_cleaned_on(sundays, "7", kube, cli, env, monkeypatch)
+    assert sorted(first_cleaned) == sorted(graphs)
+
+
+def test_consecutive_cleanup_nights_are_counted_one_apart():
+    weekdays = frozenset({1, 4})
+    nights = [
+        maintenance.cleanup_nights_before(
+            date(2026, 10, 19) + timedelta(days=n), weekdays
+        )
+        for n in range(14)
+        if (date(2026, 10, 19) + timedelta(days=n)).isoweekday() in weekdays
+    ]
+    assert nights == list(range(nights[0], nights[0] + 4))
 
 
 # ── Windows that do not open ─────────────────────────────────────────────────

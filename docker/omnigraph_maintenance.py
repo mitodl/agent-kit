@@ -12,7 +12,7 @@ maintenance needs the server stopped. This command owns that window:
     wait until no live pod matches the Deployment's own selector
     status  -> force-unlock the `serve` lock; any other lock: stop
     per graph: optimize, force-unlock
-    on the cleanup day, per graph: cleanup, force-unlock
+    on a cleanup day, per graph: cleanup, force-unlock
     restore the replica count, release the Lease
 
 The last line also runs when the window is cut short: by SIGTERM (the Job's
@@ -54,7 +54,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -92,8 +92,8 @@ class Settings:
     """What the CronJob supplies through the environment.
 
     :param cleanup_older_than: the retention passed to `cleanup --older-than`.
-    :param cleanup_iso_weekday: the UTC day `cleanup` also runs on (1 is
-        Monday, 7 is Sunday), or ``None`` to never run it.
+    :param cleanup_iso_weekdays: the UTC days `cleanup` also runs on (1 is
+        Monday, 7 is Sunday). Empty, it never runs.
     :param window_seconds: how long after the start a new command may still
         begin. The Job's ``activeDeadlineSeconds`` has to be longer, by one
         command's timeout and the restore.
@@ -104,14 +104,13 @@ class Settings:
     lease_name: str
     pod_name: str
     cleanup_older_than: str
-    cleanup_iso_weekday: int | None
+    cleanup_iso_weekdays: frozenset[int]
     window_seconds: float
     command_timeout_seconds: float
     server_stop_seconds: float
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> Settings:
-        weekday = env.get("OMNIGRAPH_CLEANUP_ISO_WEEKDAY")
         return cls(
             config_dir=Path(
                 env.get("OMNIGRAPH_CLUSTER_DIR", handoff.DEFAULT_CLUSTER_DIR)
@@ -120,7 +119,9 @@ class Settings:
             lease_name=env["OMNIGRAPH_UNLOCK_LEASE"],
             pod_name=env.get("POD_NAME") or env["HOSTNAME"],
             cleanup_older_than=env["OMNIGRAPH_CLEANUP_OLDER_THAN"],
-            cleanup_iso_weekday=int(weekday) if weekday else None,
+            cleanup_iso_weekdays=parse_iso_weekdays(
+                env.get("OMNIGRAPH_CLEANUP_ISO_WEEKDAY", "")
+            ),
             window_seconds=float(env["OMNIGRAPH_WINDOW_SECONDS"]),
             command_timeout_seconds=float(
                 env.get(
@@ -132,6 +133,45 @@ class Settings:
                 env.get("OMNIGRAPH_SERVER_STOP_SECONDS", DEFAULT_SERVER_STOP_SECONDS)
             ),
         )
+
+
+def parse_iso_weekdays(value: str) -> frozenset[int]:
+    """The ISO weekdays in a comma-separated list such as ``1,3,5``.
+
+    A single day (``7``) is a one-element set. The deployed CronJob sets one,
+    and this image can ship before that config changes.
+
+    :raises ValueError: on a day outside 1-7, one that is not a number, or one
+        listed twice. Settings are read before the server is stopped, so a
+        mistyped list fails the run without opening a window.
+    """
+    if not value.strip():
+        return frozenset()
+    days = [item.strip() for item in value.split(",")]
+    # A membership test, not isdigit(): that accepts "²" and the non-ASCII
+    # digits int() then parses or rejects with a message that is not this one.
+    if not all(day in {"1", "2", "3", "4", "5", "6", "7"} for day in days):
+        msg = f"ISO weekdays are 1 (Monday) to 7 (Sunday), not {value!r}"
+        raise ValueError(msg)
+    weekdays = frozenset(int(day) for day in days)
+    if len(weekdays) != len(days):
+        msg = f"an ISO weekday is listed twice in {value!r}"
+        raise ValueError(msg)
+    return weekdays
+
+
+def cleanup_nights_before(day: date, weekdays: frozenset[int]) -> int:
+    """How many of ``weekdays`` fell before ``day``, counted from 0001-01-01.
+
+    Consecutive cleanup nights differ by one whichever days are listed. A
+    plain day number would step by 7 under a single weekly day, which never
+    moves the start point when there are 7 graphs.
+    """
+    # Ordinal 1, 0001-01-01, is a Monday.
+    weeks = (day.toordinal() - 1) // 7
+    return weeks * len(weekdays) + sum(
+        1 for weekday in weekdays if weekday < day.isoweekday()
+    )
 
 
 def cluster_layout(config_dir: Path) -> tuple[str, list[str]]:
@@ -294,15 +334,22 @@ class Window:
         maintenance. The failures are collected in ``failed``.
 
         Every graph is optimized before any is cleaned, and the cleanup pass
-        starts one graph further along each ISO week. A window that runs out
-        then delays a graph's cleanup to a later week, where a fixed order
-        would skip the same graphs at the end of the list every time.
+        starts one graph further along each cleanup night. A window that runs
+        out then delays a graph's cleanup to a later night, where a fixed
+        order would skip the same graphs at the end of the list every time.
+        That only helps a graph whose cleanup fits inside the command timeout.
+        omnigraph 0.13 plans every table version before deleting any, and a
+        cleanup stopped while planning deletes nothing, so one that outlasts
+        the timeout fails wherever the pass starts.
         """
         for graph in self._graphs:
             self._maintain(graph, "optimize")
         if not cleanup:
             return
-        first = datetime.now(UTC).isocalendar().week % len(self._graphs)
+        night = cleanup_nights_before(
+            datetime.now(UTC).date(), self._settings.cleanup_iso_weekdays
+        )
+        first = night % len(self._graphs)
         for graph in self._graphs[first:] + self._graphs[:first]:
             # `--yes` because an s3:// root is a non-local scope, and a
             # destructive write there refuses without a TTY.
@@ -414,7 +461,7 @@ def main(env: dict[str, str]) -> int:
     if not deployment["spec"].get("replicas"):
         log(f"{settings.deployment} is at 0 replicas; skipping this window")
         return 0
-    cleanup = datetime.now(UTC).isoweekday() == settings.cleanup_iso_weekday
+    cleanup = datetime.now(UTC).isoweekday() in settings.cleanup_iso_weekdays
 
     lease = UnlockLease(api, settings.lease_name, settings.pod_name)
     try:

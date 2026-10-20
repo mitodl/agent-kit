@@ -152,10 +152,10 @@ stub in tests). See `witan_code/github_app.py`.
     maintenance window. `optimize` and `cleanup` are refused while the server
     holds its lock, so it scales the server Deployment to 0, takes over the
     `serve` lock, maintains each graph in `cluster.yaml` (every `optimize`
-    before any `cleanup`, whose pass starts at a different graph each week),
-    and restores the
-    replica count. It also restores on SIGTERM. The module docstring has the
-    cases where it leaves the server down on purpose.
+    before any `cleanup`, whose pass starts one graph further along each
+    cleanup night), and restores the replica count. It also restores on
+    SIGTERM. The module docstring has the cases where it leaves the server
+    down on purpose.
 - `ENTRYPOINT` is the bootstrap wrapper; the default `CMD`
   (`--cluster /etc/omnigraph/cluster --bind 0.0.0.0:8080`) matches the stack's
   `args`.
@@ -182,7 +182,7 @@ ServiceAccount needs `list` on pods too.
 | `OMNIGRAPH_SERVER_DEPLOYMENT` | yes | Name of the server Deployment. The ServiceAccount needs `get` on it and `get` and `update` on its `scale`. |
 | `OMNIGRAPH_WINDOW_SECONDS` | yes | How long after the start a new command may still begin. The Job's `activeDeadlineSeconds` has to be longer by one command's timeout and the restore. |
 | `OMNIGRAPH_CLEANUP_OLDER_THAN` | yes | Retention passed to `cleanup --older-than`, e.g. `30d`. |
-| `OMNIGRAPH_CLEANUP_ISO_WEEKDAY` | no | UTC day `cleanup` also runs on (1 is Monday, 7 is Sunday). Unset, it never runs. |
+| `OMNIGRAPH_CLEANUP_ISO_WEEKDAY` | no | Comma-separated UTC days `cleanup` also runs on (1 is Monday, 7 is Sunday), e.g. `7` for Sundays or `1,2,3,4,5,6,7` for every night. Unset or empty, it never runs. A day outside 1-7 or listed twice fails the run before the server is stopped. |
 | `OMNIGRAPH_COMMAND_TIMEOUT_SECONDS` | no | Longest one `optimize` or `cleanup` may run before it is stopped (default 600). |
 | `OMNIGRAPH_SERVER_STOP_SECONDS` | no | How long to wait for the server pods to exit after the scale-down (default 90). |
 
