@@ -376,6 +376,21 @@ def test_the_splitting_version_is_not_ahead_of_this_release():
     assert parts(srv.merge_bounds.SPLITTING_CLIENT_VERSION) <= parts(installed)
 
 
+def test_the_splitting_version_is_the_release_that_ships_the_split():
+    """The reverse of the check above: a constant left behind by a later
+    rebase and re-bump would name a release that does not split, and still
+    pass it. The release the refusal names has to be the one whose changelog
+    introduces the refusal."""
+    from pathlib import Path
+
+    changelog = (Path(__file__).parents[1] / "CHANGELOG.md").read_text()
+    version = srv.merge_bounds.SPLITTING_CLIENT_VERSION
+    heading = f"## [{version}] - "
+    assert heading in changelog
+    section = changelog.split(heading, 1)[1].split("\n## [", 1)[0]
+    assert "MergeBatchTooLarge" in section
+
+
 def test_split_by_task_budget_bounds_task_rows_and_keeps_order(monkeypatch):
     monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
 

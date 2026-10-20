@@ -2770,8 +2770,9 @@ class MergeBatchTooLarge(RuntimeError, Refusal):
 
     Refused before anything is written, because one call may spend only one
     fenced commit inside the gateway's 120s (:mod:`witan.merge_bounds`). A
-    client from before the split sends 2 MiB batches, so it reaches this on
-    any re-merge of more than 32 tasks the deployment already holds.
+    client from before the split sends 2 MiB batches, so it reaches this
+    whenever one batch carries newer copies of more than 32 tasks the
+    deployment already holds, or more than 96 KiB of them.
     """
 
     # Built from a count and this module's constants.

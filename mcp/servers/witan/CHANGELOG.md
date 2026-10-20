@@ -39,8 +39,8 @@ a MINOR bump may include breaking changes).
   anything. A dry run is refused the same way. `witan migrate merge` from this
   release splits its batches to at most 32 Task rows per call, so it never
   hits the refusal. Older clients send batches of up to 2 MiB, so they are
-  refused on every run that would overwrite more than 32 tasks with newer
-  copies; the refusal names this version and the upgrade command
+  refused whenever one batch would overwrite more than 32 tasks, or more than
+  96 KiB of them, with newer copies; the refusal names this version and the upgrade command
   (`uv tool upgrade ol-agent-kit`, or `uv tool upgrade witan-council`).
 
 ### Fixed

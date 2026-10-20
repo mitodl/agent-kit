@@ -241,7 +241,8 @@ off at 120s, so one call writes at most one such batch: the client splits its
 batches to fit, and the server refuses a batch that does not, before writing
 anything and on a dry run too (`MergeBatchTooLarge`, a refusal rather than an
 error). A client older than witan-council 0.43.0 sends 2 MiB batches, so it is
-refused whenever a batch would overwrite more than 32 tasks, and the refusal
+refused whenever a batch would overwrite more than 32 tasks or more than
+96 KiB of them, and the refusal
 tells it to upgrade. A call is then a load and a fenced write, two commits, and one that
 fails after its load leaves the load applied.
 
