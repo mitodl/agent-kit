@@ -363,6 +363,19 @@ def test_contention_part_way_reports_what_the_merge_wrote(
     assert server.task_get(slugs[2])["description"] == "x"
 
 
+def test_the_splitting_version_is_not_ahead_of_this_release():
+    """The refusal tells old clients which version splits. Naming one later
+    than the package that ships the split would send them to a release that
+    does not exist."""
+    import importlib.metadata
+
+    def parts(version):
+        return tuple(int(p) for p in version.split(".")[:3])
+
+    installed = importlib.metadata.version("witan-council")
+    assert parts(srv.merge_bounds.SPLITTING_CLIENT_VERSION) <= parts(installed)
+
+
 def test_split_by_task_budget_bounds_task_rows_and_keeps_order(monkeypatch):
     monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
 
