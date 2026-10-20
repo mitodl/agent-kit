@@ -322,7 +322,7 @@ symlink alternative:
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
-| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` (weekly) | throttle window (seconds) for the `cleanup --older-than 30d` that rides a `checkpoint` compaction; `0` disables it |
+| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` (weekly) | throttle window (seconds) for the `cleanup --older-than 2d` that rides a `checkpoint` compaction; `0` disables it |
 | `WITAN_CODE_INDEX_ROLE` | `client` | `ci` designates this process the writer of a shared graph's default-branch view. Only meaningful against a shared cluster graph; local stores are unaffected. See [Branch indexing](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view) |
 | `WITAN_ACTOR` | derived from the `witan login` session | the identity that owns the branch views this process writes; an `act-…` id or a raw OIDC `sub`. For a non-interactive writer (CI, a maintenance job). See [Branch indexing](docs/BRANCH_INDEXING.md#per-writer-branch-views) |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |

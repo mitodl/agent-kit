@@ -17,11 +17,10 @@ cron / systemd-timer driven maintenance.
 From omnigraph 0.11 ``optimize`` no longer reclaims the storage of deleted
 branches; only ``cleanup`` does. So on a slower cadence the same detached run
 also cleans up (``--cleanup-older-than``), after optimize and in the same
-process so the two never race. Retention matches the deployed weekly
-``omnigraph-cleanup`` CronJob: age only, never a version count. The window
-applies to a deleted branch too: on omnigraph 0.11.0 a freshly deleted fork
-survives ``cleanup --older-than 30d`` and is reclaimed by ``--older-than 1s``,
-so its storage goes at the first cleanup after its versions age past 30 days.
+process so the two never race. Retention follows the deployed stop-window
+cleanup (nightly, ``--older-than 2d``): age only, never a version count. The
+window applies to a deleted branch too: its storage goes at the first cleanup
+after its versions age past :data:`CLEANUP_OLDER_THAN`.
 
 The throttle window, atomic last-run stamp, and due-check live in
 ``witan_core.maintenance``; this module supplies witan's own env var, stamp-file
@@ -51,9 +50,12 @@ _OPTIMIZE_INTERVAL = _throttle.DEFAULT_OPTIMIZE_INTERVAL
 # Override with WITAN_CLEANUP_INTERVAL (seconds; 0 disables).
 _CLEANUP_INTERVAL = 7 * 24 * 3600.0
 
-# Versions younger than this survive a cleanup, so time-travel reads over the
-# recent past keep working.
-CLEANUP_OLDER_THAN = "30d"
+# Versions younger than this survive a cleanup. Nothing in witan reads history
+# (no time-travel reads); the window only leaves an operator time to undelete
+# with ``omnigraph query --snapshot``. Kept short because on omnigraph 0.13 a
+# cleanup opens every version still present before it deletes any, so its cost
+# grows with the window (https://github.com/ModernRelay/omnigraph/issues/1095).
+CLEANUP_OLDER_THAN = "2d"
 
 
 def optimize_interval() -> float:
