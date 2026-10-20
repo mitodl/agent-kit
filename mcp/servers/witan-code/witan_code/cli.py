@@ -759,7 +759,7 @@ def cleanup(
     reclaims the storage of deleted branches (``branches --prune``,
     ``reap-views --apply``). Irreversible, so it requires ``--yes``.
 
-    With neither bound given it keeps the last 30 days, the same policy the
+    With neither bound given it keeps the last 2 days, the same policy the
     Stop hook and the deployed maintenance job use.
 
     Parameters

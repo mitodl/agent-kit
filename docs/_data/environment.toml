@@ -225,7 +225,7 @@ desc = "Minimum seconds between throttled background `optimize` runs on the code
 
 [section.vars.WITAN_CODE_CLEANUP_INTERVAL]
 default = "604800"
-desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
+desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 2 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
 
 # ── CI indexer ───────────────────────────────────────────────────────────────
 
@@ -377,7 +377,7 @@ desc = "Minimum seconds between throttled background `optimize` runs on the memo
 
 [section.vars.WITAN_CLEANUP_INTERVAL]
 default = "604800"
-desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
+desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 2 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
 
 [section.vars.WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL]
 default = "86400"

@@ -384,7 +384,7 @@ bound keeps it. From omnigraph 0.11 it is also the only thing that
 reclaims the storage of deleted branches. Irreversible, so it requires
 ``--yes``.
 
-With neither bound given it keeps the last 30 days, the same policy the
+With neither bound given it keeps the last 2 days, the same policy the
 Stop hook and the deployed maintenance job use.
 
 **Parameters**:
@@ -1743,7 +1743,7 @@ bound keeps it. From omnigraph 0.11 it is also the only thing that
 reclaims the storage of deleted branches (``branches --prune``,
 ``reap-views --apply``). Irreversible, so it requires ``--yes``.
 
-With neither bound given it keeps the last 30 days, the same policy the
+With neither bound given it keeps the last 2 days, the same policy the
 Stop hook and the deployed maintenance job use.
 
 **Parameters**:

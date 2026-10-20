@@ -553,7 +553,7 @@ graph):
   reclaim disk by GC'ing old Lance versions (**destructive**; requires
   `--yes`). `--keep N` retains the newest N graph commits of every live
   branch (omnigraph 0.12+; versions per table on 0.11); with neither bound it
-  keeps the last 30 days.
+  keeps the last 2 days.
 - `checkpoint` — opportunistically compact the current repo's store and the
   bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
   not usually run by hand.
@@ -613,7 +613,7 @@ mechanisms keep this in check, mirroring that module (deliberately duplicated
   the shared bridge store, at most once per `WITAN_CODE_OPTIMIZE_INTERVAL`
   (default daily; `0` disables) each — see [Hooks](#hooks). At most once per
   `WITAN_CODE_CLEANUP_INTERVAL` (default weekly) the run also cleans up
-  versions older than 30 days. On omnigraph 0.11 that is the only thing that
+  versions older than 2 days. On omnigraph 0.11 that is the only thing that
   reclaims the storage of branches deleted by `branches --prune` or
   `reap-views --apply`; `optimize` no longer does.
 - **Scheduled**: `witan-code optimize [--store PATH | --bridge]
