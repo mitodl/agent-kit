@@ -158,7 +158,7 @@ priority = 30
 # reason the fixer hooks above skip them: they are an omnigraph's own output.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
-rev = "v2.5.14"
+rev = "v2.5.15"
 hooks = [
   { id = "biome-check", priority = 20, exclude = "^(mcp/servers/witan/ui/fixtures|packages/witan-core/tests/fixtures/omnigraph-stores)/" },
 ]
