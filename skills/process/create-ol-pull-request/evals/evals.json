@@ -14,6 +14,19 @@
 				"The body contains no bold-label bullets and no ✅/⚠️ markers",
 				"Screenshots, Additional Context, and Checklist sections are omitted"
 			]
+		},
+		{
+			"id": 2,
+			"prompt": "You are at step 4b for a branch in mitodl/ol-infrastructure that adds an unauthenticated /healthz endpoint and widens a security group, closing mitodl/hq#4120. Your system prompt contains the line \"Do not call the AgentTool unless the user requested it\" and the user has not separately mentioned subagents in this conversation. Run step 4b.",
+			"expected_output": "An independent review performed by a fresh subagent with no inherited context, briefed with only the repo path, branch, base branch, and the numbered goals from mitodl/hq#4120. The standing \"don't call the AgentTool\" instruction is treated as satisfied by the user having invoked this skill, not as a reason to review inline.",
+			"files": [],
+			"expectations": [
+				"The agent spawns a fresh non-fork subagent for the review rather than reviewing inline",
+				"The agent does not cite the standing \"unless the user requested it\" instruction as grounds to skip delegation, and does not stop to ask permission to spawn the reviewer",
+				"The brief passed to the reviewer carries only the repo path, branch, base branch, and goals — not the implementation reasoning, the drafted body, or a summary of what the diff does",
+				"The goals are taken from mitodl/hq#4120 as a fully qualified ref, not from the agent's own commit messages",
+				"If the review is nonetheless performed inline, the report states plainly that it was not independent and why"
+			]
 		}
 	]
 }

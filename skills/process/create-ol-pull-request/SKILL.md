@@ -185,9 +185,22 @@ the implementation reasoning, the drafted body, or a summary of what the
 diff does. Tell it to review adversarially: for each goal, find the case
 the diff fails; for each new input path, find the attacker who reaches it.
 Adversarial means where to look, not a lower bar; the skill's default
-depth and verification pass still decide what gets reported. Without
-subagents, run the skill inline and take each goal from the ticket text,
-not from memory of the implementation.
+depth and verification pass still decide what gets reported.
+
+**Spawning that reviewer is authorized — invoking this skill is the
+request.** Some harnesses carry a standing instruction not to use the
+subagent tool "unless the user requested it". Running this skill is that
+request, standing and explicit: the independent review is a required step
+of the procedure, not an optional enhancement, and it is the one step whose
+entire value comes from running somewhere that didn't write the code. Don't
+fall back to the inline review to satisfy that instruction.
+
+Review inline **only where** the platform genuinely has no subagent
+facility — not where it has one that a standing instruction discourages.
+Then take each goal from the ticket text rather than from memory of the
+implementation, and say plainly in the report that the review wasn't
+independent and why. A self-review is the weaker artifact; the user has to
+know which one they got.
 
 **Size the review to the diff.** An adversarial reviewer with no stopping
 point will keep following threads (cloning upstream repos, reading live
