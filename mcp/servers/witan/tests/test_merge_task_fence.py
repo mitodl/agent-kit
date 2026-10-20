@@ -12,6 +12,8 @@ import copy
 import json
 from contextlib import nullcontext
 
+import pytest
+
 from witan import server as srv
 
 from .conftest import requires_omnigraph
@@ -189,3 +191,147 @@ def test_a_winning_task_collision_is_written_whole(server, monkeypatch):
     assert srv._parse_ts(row["updated_at"]) == srv._parse_ts(_FAR_FUTURE)
     assert srv._parse_ts(row["closed_at"]) == srv._parse_ts("2098-12-31T00:00:00Z")
     assert srv._parse_ts(row["created_at"]) == srv._parse_ts(before["created_at"])
+
+
+def _collisions(server, count: int) -> tuple[list[str], list[dict]]:
+    """``count`` tasks in the target, and a newer source copy of each."""
+    slugs = [
+        server.task_create(title=f"collision {i}", description="x")["slug"]
+        for i in range(count)
+    ]
+    return slugs, [_source_copy(slug, description="from the source") for slug in slugs]
+
+
+def _fenced_writes(monkeypatch) -> list[list[str]]:
+    """The slugs of each fenced composed write, in order, attempts included."""
+    real = srv.OmnigraphClient.change_many
+    seen: list[list[str]] = []
+
+    def record(self, steps, **kwargs):
+        if kwargs.get("if_commit") is not None and steps[0][1] == "merge_task":
+            seen.append([params["slug"] for _, _, params in steps])
+        return real(self, steps, **kwargs)
+
+    monkeypatch.setattr(srv.OmnigraphClient, "change_many", record)
+    return seen
+
+
+@requires_omnigraph
+def test_collisions_in_one_batch_are_one_composed_commit(server, monkeypatch):
+    slugs, rows = _collisions(server, 3)
+    writes = _fenced_writes(monkeypatch)
+
+    result = srv.store_merge(rows)
+
+    assert writes == [slugs]
+    assert result["updated"] == result["rows_loaded"] == 3
+    for slug in slugs:
+        assert server.task_get(slug)["description"] == "from the source"
+
+
+@requires_omnigraph
+def test_collisions_past_one_commit_go_in_several_fenced_batches(
+    server, monkeypatch, tmp_path
+):
+    """The in-process merge has no gateway budget, so it writes every batch."""
+    slugs, rows = _collisions(server, 5)
+    export = tmp_path / "source.jsonl"
+    export.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
+    writes = _fenced_writes(monkeypatch)
+
+    result = srv.merge_store(str(export))
+
+    assert writes == [slugs[0:2], slugs[2:4], slugs[4:5]]
+    assert result["batches"] == result["batches_applied"] == 3
+    assert result["updated"] == result["rows_loaded"] == 5
+    for slug in slugs:
+        assert server.task_get(slug)["description"] == "from the source"
+
+
+@requires_omnigraph
+def test_store_merge_refuses_more_collisions_than_one_commit(server, monkeypatch):
+    """One call writes at most one fenced commit, so a batch needing more is
+    refused before its load, not part-way through."""
+    slugs, rows = _collisions(server, 3)
+    monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
+
+    def no_load(self, records, mode="merge"):
+        raise AssertionError("the batch was loaded before it was refused")
+
+    monkeypatch.setattr(srv.OmnigraphClient, "load_batch", no_load)
+
+    with pytest.raises(RuntimeError, match="Nothing was written"):
+        srv.store_merge(rows)
+    for slug in slugs:
+        assert server.task_get(slug)["description"] == "x"
+
+
+@requires_omnigraph
+def test_contention_part_way_reports_what_the_merge_wrote(
+    server, monkeypatch, tmp_path
+):
+    """The load and the first task batch commit; the second batch runs out of
+    attempts. The partial report counts exactly what landed, and the WRITTEN
+    accounting shows the two tasks that did not."""
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import merge_report
+
+    from .test_migrate import _init_store, _insert_memory
+
+    slugs, rows = _collisions(server, 3)
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source, slug="mem-new-in-merge-aaaaaa", content="new", updated_at=_FAR_FUTURE
+    )
+    export = tmp_path / "source.jsonl"
+    export.write_text(
+        "".join(json.dumps(row) + "\n" for row in [*_export_rows(source), *rows])
+    )
+    monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 1)
+    monkeypatch.setattr(srv, "_task_write_pause", lambda _attempt: None)
+    real = srv.OmnigraphClient.change_many
+
+    def refuse_the_second(self, steps, **kwargs):
+        if kwargs.get("if_commit") is not None and steps[0][2]["slug"] == slugs[1]:
+            raise graph_mod.OmnigraphConflict("refused")
+        return real(self, steps, **kwargs)
+
+    monkeypatch.setattr(srv.OmnigraphClient, "change_many", refuse_the_second)
+
+    with pytest.raises(srv.WriteContention) as excinfo:
+        srv.merge_store(str(export))
+
+    partial = merge_report.partial_of(excinfo.value)
+    assert partial["batches"] == 4
+    assert partial["batches_applied"] == 2
+    assert partial["rows_loaded"] == 2
+    written = merge_report.accounting(partial)
+    assert written["expected_loaded"] == 4
+    assert written["unwritten"] == 2
+    assert server.task_get(slugs[0])["description"] == "from the source"
+    assert server.task_get(slugs[1])["description"] == "x"
+    assert server.task_get(slugs[2])["description"] == "x"
+
+
+def test_split_by_task_budget_bounds_task_rows_and_keeps_order(monkeypatch):
+    monkeypatch.setattr(srv.merge_bounds, "TASKS_PER_COMMIT", 2)
+
+    def task(slug):
+        return {"type": "Task", "data": {"slug": slug}}
+
+    memory = {"type": "Memory", "data": {"slug": "mem-a"}}
+    edge = {"edge": "Blocks", "from": "a", "to": "b"}
+    rows = [task("a"), memory, task("b"), task("c"), edge]
+
+    assert srv.merge_bounds.split_by_task_budget(rows) == [
+        [task("a"), memory, task("b")],
+        [task("c"), edge],
+    ]
+    big = task("d" * 100)
+    assert srv.merge_bounds.split_by_task_budget(
+        [task("a"), big, task("e")], max_bytes=srv.merge_bounds.task_cost(big)
+    ) == [[task("a")], [big], [task("e")]]

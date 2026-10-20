@@ -220,8 +220,9 @@ on a served store its write lock is a no-op, so a claim landing between the
 export and the write was overwritten by a winning source row. `omnigraph load`
 takes no precondition in 0.13, so a winning Task row the target already holds
 is no longer loaded. It is written by the `merge_task` mutation (every field,
-`author` and `created_at` included), in batches of up to 128 tasks, each
-fenced on a re-read of its tasks through the same retry as `_update_task`. On
+`author` and `created_at` included), in batches of up to 32 tasks and 96 KiB,
+each fenced on a re-read of its tasks through the same retry as
+`_update_task`. On
 that read a task whose `status`, `assignee` or `claimed_at` changed since the
 export keeps the target's row (its decision becomes `kept-target` with
 `fenced: claim_changed`), and any other task has newest-record-wins re-run
@@ -231,7 +232,15 @@ unfenced. Nobody can hold a task the target does not have, and slugs carry a
 random suffix, so only another merge of the same row can write that slug in
 the window. The cost is a commit per batch of collisions, and a batch can run
 out of attempts like any fenced write (`WriteContention`; re-running the merge
-is safe).
+is safe). Those bounds come from measurements on 0.13.0 (`witan/merge_bounds.py`
+has them): a local omnigraph-server took 0.6s for a fenced commit of 32
+statements and 2.7s for 128, the CLI could not pass 128 at all (the composed
+source outgrew Linux's 128 KiB argument cap), and the server refused a mutate
+body over about 1 MiB. `store_merge` runs inside one request the gateway cuts
+off at 120s, so one call writes at most one such batch: the client splits its
+batches to fit, and the server refuses a batch that does not, before writing
+anything. A call is then a load and a fenced write, two commits, and one that
+fails after its load leaves the load applied.
 
 Outside the guarantee:
 

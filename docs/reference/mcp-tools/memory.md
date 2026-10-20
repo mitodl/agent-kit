@@ -376,7 +376,8 @@ A winning Task row this graph already holds is not loaded. It is written by
 a mutation fenced on a fresh read of that task (``_write_task_batch``), so
 a claim, release or close that lands after the export keeps the target's
 row (its decision becomes ``kept-target`` with a ``fenced`` reason) rather
-than being overwritten by the source.
+than being overwritten by the source. That write is a second commit after
+the load; see the batching note below.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

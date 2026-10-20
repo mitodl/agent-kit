@@ -53,6 +53,7 @@ from witan_core.refusal import Refusal
 from . import config as cfg_module
 from . import (
     elicit,
+    merge_bounds,
     merge_report,
     readiness,
     scan,
@@ -2634,11 +2635,6 @@ _TASK_DATETIME_FIELDS = (
     "first_claimed_at",
 )
 
-#: Task collisions written per fenced commit. Each is one statement of a
-#: composed mutation and a commit's cost grows with its statements, so this is
-#: the order of witan-code's per-commit statement caps (128).
-_MERGE_TASK_BATCH = 128
-
 
 def _split_task_collisions(
     winners: list[dict], target_nodes: dict[tuple[str, str], dict]
@@ -2661,14 +2657,12 @@ def _split_task_collisions(
     return collisions, rest
 
 
-def _task_kept_by(source: dict, exported: dict, current: dict | None) -> str | None:
+def _task_kept_by(source: dict, exported: dict, current: dict) -> str | None:
     """Why the target's task must be kept over ``source``, or ``None`` to write it.
 
     ``exported`` is the target row reconciliation compared ``source`` against;
     ``current`` is the same row as the fenced read just returned it.
     """
-    if current is None:
-        return "target_missing"
     for field in _CLAIM_FIELDS:
         before, after = exported.get(field), current.get(field)
         if field == "claimed_at":
@@ -2701,12 +2695,9 @@ def _merge_task_params(data: dict) -> dict:
 
 
 def _task_batches(collisions: list[dict]) -> list[list[dict]]:
-    """``collisions`` in batches of at most ``_MERGE_TASK_BATCH``, one fenced
-    commit each."""
-    return [
-        collisions[start : start + _MERGE_TASK_BATCH]
-        for start in range(0, len(collisions), _MERGE_TASK_BATCH)
-    ]
+    """``collisions`` in batches of one fenced commit each, bounded by
+    :mod:`witan.merge_bounds`."""
+    return merge_bounds.split_by_task_budget(collisions)
 
 
 def _write_task_batch(
@@ -2763,7 +2754,9 @@ def _write_task_batch_once(
         data = row["data"]
         slug = data["slug"]
         exported = target_nodes[("Task", slug)]["data"]
-        reason = _task_kept_by(data, exported, current.get(slug))
+        # Every slug here was in the export, and a Task is never deleted
+        # (mutations.gq has no `delete Task`), so the read has each one.
+        reason = _task_kept_by(data, exported, current[slug])
         if reason is None:
             steps.append(("mutations.gq", "merge_task", _merge_task_params(data)))
         else:
@@ -3207,7 +3200,8 @@ def store_merge(
     a mutation fenced on a fresh read of that task (``_write_task_batch``), so
     a claim, release or close that lands after the export keeps the target's
     row (its decision becomes ``kept-target`` with a ``fenced`` reason) rather
-    than being overwritten by the source.
+    than being overwritten by the source. That write is a second commit after
+    the load; see the batching note below.
 
     Parameters
     ----------
@@ -3245,11 +3239,20 @@ def store_merge(
         batch.
 
     **Batching is the caller's job, and the caller must send every node before
-    any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
-    independently, so a failure part-way leaves earlier ones applied — which is
-    safe to recover from by simply re-running, since reconciliation makes a
-    re-sent row lose to its own already-applied copy. It is not, however,
-    atomic, and a caller needing all-or-nothing has to arrange that itself.
+    any edge** (``witan_core.chunking.chunk_records`` does both), **with no more
+    Task rows than one fenced commit takes**
+    (``witan.merge_bounds.split_by_task_budget``). A batch whose collisions
+    would need more than one fenced commit is refused before anything is
+    written, so one call stays inside the gateway's request budget.
+
+    One call is up to two commits: the load, then the fenced write of the
+    tasks this graph already holds. A call that fails after its load (the
+    fenced write ran out of attempts with ``WriteContention``, say) leaves the
+    load applied and returns no result. Batches commit independently too, so
+    a failure part-way leaves earlier ones applied. Both are safe to recover
+    from by re-running, since reconciliation makes a re-sent row lose to its
+    own already-applied copy. It is not, however, atomic, and a caller needing
+    all-or-nothing has to arrange that itself.
 
     Returns this batch's per-row ``decisions`` plus ``added``/``updated``/
     ``kept_target``/``diverged`` counts, ``rows_loaded``, and the running
@@ -3336,12 +3339,25 @@ def store_merge(
         }
 
     collisions, loadable = _split_task_collisions(winners, target_nodes)
+    task_batches = _task_batches(collisions)
+    if len(task_batches) > 1:
+        # Before anything is written: one fenced commit is all a call may
+        # spend inside the gateway's 120s (see `witan.merge_bounds`).
+        msg = (
+            f"this batch would overwrite {len(collisions)} tasks the graph "
+            "already holds, more than one store_merge call writes (at most "
+            f"{merge_bounds.TASKS_PER_COMMIT}, and "
+            f"{merge_bounds.TASK_BYTES_PER_COMMIT // 1024} KiB of them). Nothing "
+            "was written. Send fewer Task rows per batch; `witan migrate merge` "
+            "from a current witan-council splits them for you."
+        )
+        raise RuntimeError(msg)
     to_load = loadable + edge_winners + source_passthrough
     kept: dict[str, str] = {}
     with _data_tier_outage_reads_as_retryable():
         if to_load:
             client.load_batch(to_load, "merge")
-        for batch in _task_batches(collisions):
+        for batch in task_batches:
             kept |= _write_task_batch(client, batch, target_nodes)
     written = loadable + _keep_target(decisions, collisions, kept)
     return {
