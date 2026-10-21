@@ -271,3 +271,24 @@ Outside the guarantee:
   that cannot complete surfaces, as a 500 `internal` whose message names the
   commit ("manifest publish outcome is in doubt: graph commit … may be
   durable"), and it is not retried.
+
+## Addendum (2026-10-21): fenced writes under group commit
+
+witan-core now commits concurrent remote writes from one actor to one graph
+together (`witan_core.group_commit`). A group carries at most one fenced write,
+puts it first, and is fenced on that write's head. The fenced write therefore
+commits as if alone at the head it read, and the unfenced upserts after it
+behave as later commits would have. A granted claim still means nobody claimed,
+closed or blocked first. Two fenced writes never share a commit, because a
+request carries one precondition and the client does not know a write's read
+set.
+
+Grouping does not raise the fenced write ceiling. A fenced write that queues
+behind a commit in flight read the head that commit replaces, so it is refused
+(locally, without a round trip, when this process made that commit), and it
+lands only once it reaches an idle lane. Under group commit a fenced write is
+refused for the same reason as before, a publish between its read and its
+write. Group commit publishes no more often than one commit per write did, and
+less often whenever writes queue. Letting a fenced write lead the next group
+would need `_update_task` to hold the lane across its read, merge and write.
+That is not done.
