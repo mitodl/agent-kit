@@ -322,7 +322,7 @@ symlink alternative:
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
-| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` (weekly) | throttle window (seconds) for the `cleanup --older-than 30d` that rides a `checkpoint` compaction; `0` disables it |
+| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` (weekly) | throttle window (seconds) for the `cleanup --older-than 2d` that rides a `checkpoint` compaction; `0` disables it |
 | `WITAN_CODE_INDEX_ROLE` | `client` | `ci` designates this process the writer of a shared graph's default-branch view. Only meaningful against a shared cluster graph; local stores are unaffected. See [Branch indexing](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view) |
 | `WITAN_ACTOR` | derived from the `witan login` session | the identity that owns the branch views this process writes; an `act-…` id or a raw OIDC `sub`. For a non-interactive writer (CI, a maintenance job). See [Branch indexing](docs/BRANCH_INDEXING.md#per-writer-branch-views) |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
@@ -553,7 +553,7 @@ graph):
   reclaim disk by GC'ing old Lance versions (**destructive**; requires
   `--yes`). `--keep N` retains the newest N graph commits of every live
   branch (omnigraph 0.12+; versions per table on 0.11); with neither bound it
-  keeps the last 30 days.
+  keeps the last 2 days.
 - `checkpoint` — opportunistically compact the current repo's store and the
   bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
   not usually run by hand.
@@ -613,7 +613,7 @@ mechanisms keep this in check, mirroring that module (deliberately duplicated
   the shared bridge store, at most once per `WITAN_CODE_OPTIMIZE_INTERVAL`
   (default daily; `0` disables) each — see [Hooks](#hooks). At most once per
   `WITAN_CODE_CLEANUP_INTERVAL` (default weekly) the run also cleans up
-  versions older than 30 days. On omnigraph 0.11 that is the only thing that
+  versions older than 2 days. On omnigraph 0.11 that is the only thing that
   reclaims the storage of branches deleted by `branches --prune` or
   `reap-views --apply`; `optimize` no longer does.
 - **Scheduled**: `witan-code optimize [--store PATH | --bridge]
