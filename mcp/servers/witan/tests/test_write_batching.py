@@ -213,23 +213,56 @@ def test_task_claim_is_one_commit(server, tmp_path, monkeypatch, commits):
 
 
 @requires_omnigraph
-def test_a_refused_claim_builds_no_branch_steps(server, tmp_path, monkeypatch, commits):
-    """The CodeBranch steps are built after `require` decides the claim, so a
-    claim lost on the fenced read neither writes them nor pays for the reads
-    behind them."""
+def test_branch_reads_stay_outside_the_fence_window(
+    server, tmp_path, monkeypatch, commits
+):
+    """The fence is the whole graph head, so a read between the fenced read
+    and the commit widens the window in which any write refuses the claim.
+    The CodeBranch reads therefore run before the fenced read."""
+    from witan import server as srv
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/window")
+    monkeypatch.chdir(base)
+    task = server.task_create(title="window", description="d", repo=REPO)
+    order: list[str] = []
+    real_read = srv.client.read
+    real_read_with_commit = srv.client.read_with_commit
+
+    def read(query_file, query_name, *args, **kwargs):
+        order.append(query_name)
+        return real_read(query_file, query_name, *args, **kwargs)
+
+    def read_with_commit(query_file, query_name, *args, **kwargs):
+        order.append(f"fenced:{query_name}")
+        return real_read_with_commit(query_file, query_name, *args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "read", read)
+    monkeypatch.setattr(srv.client, "read_with_commit", read_with_commit)
+    commits.clear()
+
+    assert server.task_claim(task["slug"])["claimed"] is True
+    fenced = order.index("fenced:get_task")
+    assert {"get_code_branch", "code_branch_works_on_edge"} <= set(order[:fenced])
+    assert not {"get_code_branch", "code_branch_works_on_edge"} & set(order[fenced:]), (
+        order
+    )
+    assert commits == ["update_task+insert_code_branch+link_works_on"], commits
+
+
+@requires_omnigraph
+def test_a_claim_lost_on_the_fenced_read_writes_no_branch_steps(
+    server, tmp_path, monkeypatch, commits
+):
+    """The branch steps are built before the fenced read, but they are only
+    ever written in the claim's commit, so a claim that `require` refuses
+    leaves no CodeBranch and no WorksOn edge behind."""
     from witan import server as srv
 
     base = _git_repo(tmp_path / "r")
     _git(base, "checkout", "-q", "-b", "feature/held")
     monkeypatch.chdir(base)
     task = server.task_create(title="held", description="d", repo=REPO)
-    built = []
-    real_steps = srv._code_branch_steps
-    monkeypatch.setattr(
-        srv,
-        "_code_branch_steps",
-        lambda *a, **kw: built.append(a) or real_steps(*a, **kw),
-    )
     real_read = srv.client.read_with_commit
 
     def rival_claims_first(*args, **kwargs):
@@ -252,7 +285,8 @@ def test_a_refused_claim_builds_no_branch_steps(server, tmp_path, monkeypatch, c
     result = server.task_claim(task["slug"], assignee="agentA")
     assert result["claimed"] is False and result["held_by"] == "agentB"
     assert commits == ["update_task"], "only the rival's claim may be written"
-    assert built == []
+    branch_slug = srv._code_branch_slug(REPO, "feature/held")
+    assert not srv.client.read("read.gq", "get_code_branch", {"slug": branch_slug})
 
 
 @requires_omnigraph

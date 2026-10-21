@@ -6843,13 +6843,18 @@ def _update_task(
     half-applied now, which is the more important half: the edge and the
     ``parent_slug`` field are two encodings of one fact.
 
-    ``extra_steps`` may also be a function of no arguments, called on each
-    attempt after ``require`` passes. ``task_claim`` passes one: its CodeBranch
-    steps are built from reads (insert vs. touch, whether the WorksOn edge
-    exists), and a retry after a rival's commit has to decide those again
-    rather than replay an ``insert_code_branch`` for a branch the rival just
-    created. Building them after ``require`` also keeps a refused claim from
-    paying for those reads.
+    ``extra_steps`` may also be a function of no arguments, called at the
+    start of each attempt, BEFORE the fenced read. ``task_claim`` passes one:
+    its CodeBranch steps are built from reads (insert vs. touch, whether the
+    WorksOn edge exists). Those reads stay outside the fence window on
+    purpose. The precondition is the whole graph head, so every read between
+    the fenced read and the commit widens the interval in which any write
+    anywhere refuses the attempt. The cost is that the steps can be one
+    commit staler than the row: a rival that creates the same CodeBranch in
+    between makes our ``insert_code_branch`` land on an existing key, which
+    omnigraph 0.13 upserts (``created_at`` moves by that gap), and a WorksOn
+    re-insert upserts the same way. A refused attempt rebuilds them, so the
+    reads are repeated only when the fence refuses.
 
     A missing task still writes NOTHING, extras included — the early return
     below happens before any step is issued.
@@ -6883,6 +6888,8 @@ def _update_task_once(
 ) -> dict | None:
     """One fenced attempt of :func:`_update_task`. Raises ``OmnigraphConflict``
     when the store refuses the precondition or another writer moved the head."""
+    if callable(extra_steps):
+        extra_steps = extra_steps()
     rows, read_commit = client.read_with_commit("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -6890,8 +6897,6 @@ def _update_task_once(
     read_commit = _fence_on(read_commit, slug)
     if require is not None:
         require(current)
-    if callable(extra_steps):
-        extra_steps = extra_steps()
     if callable(changes):
         changes = changes(current)
     if changes is None:
