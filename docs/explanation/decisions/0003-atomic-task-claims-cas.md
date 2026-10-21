@@ -224,6 +224,42 @@ next sweep retries it). A retried close keeps the original `closed_at`.
 whenever the row still names that parent, so re-running it repairs a sync that
 ran out.
 
+`store_merge` (`witan migrate merge`) was the last task writer outside the
+fence. It exports the target, reconciles newest-record-wins, then writes, and
+on a served store its write lock is a no-op, so a claim landing between the
+export and the write was overwritten by a winning source row. `omnigraph load`
+takes no precondition in 0.13, so a winning Task row the target already holds
+is no longer loaded. It is written by the `merge_task` mutation (every field,
+`author` and `created_at` included), in batches of up to 32 tasks and 96 KiB,
+each fenced on a re-read of its tasks through the same retry as
+`_update_task`. On
+that read a task whose `status`, `assignee` or `claimed_at` changed since the
+export keeps the target's row (its decision becomes `kept-target` with
+`fenced: claim_changed`), and any other task has newest-record-wins re-run
+against it (`fenced: target_newer` when the target now wins). A Task the target
+did not hold at the export, and every other row type, is still loaded
+unfenced. Nobody can hold a task the target does not have, and slugs carry a
+random suffix, so only another merge of the same row can write that slug in
+the window. The cost is a commit per batch of collisions, and a batch can run
+out of attempts like any fenced write (`WriteContention`; re-running the merge
+is safe). Those bounds come from measurements on 0.13.0 (`witan/merge_bounds.py`
+has them): a local omnigraph-server took 0.6s for a fenced commit of 32
+statements and 2.7s for 128, and refused a mutate body over about 1 MiB. The
+CLI could not pass 128 at all at first, because the composed source outgrew
+Linux's 128 KiB cap on one argv element, and a single task with a 200 KiB
+description failed the same way as `--params`. witan-core 0.44.1 hands the CLI
+its source and params as files (`--query <path>`, `--params-file`), so argv no
+longer bounds a batch and the caps rest on commit time and the server's body
+limit. `store_merge` runs inside one request the gateway cuts
+off at 120s, so one call writes at most one such batch: the client splits its
+batches to fit, and the server refuses a batch that does not, before writing
+anything and on a dry run too (`MergeBatchTooLarge`, a refusal rather than an
+error). A client older than witan-council 0.43.0 sends 2 MiB batches, so it is
+refused whenever a batch would overwrite more than 32 tasks or more than
+96 KiB of them, and the refusal
+tells it to upgrade. A call is then a load and a fenced write, two commits, and one that
+fails after its load leaves the load applied.
+
 Outside the guarantee:
 
 - Writes meant to change the holder: `force`, a `task_update` that sets
@@ -232,11 +268,7 @@ Outside the guarantee:
   deliberately rather than by accident.
 - Holders that compare equal (the missing `session_id` case above).
 - Writes that bypass `_update_task`. The partial `set_task_author` update sets
-  only `author` and `updated_at`, so it cannot revert a claim. `store_merge`
-  (`witan migrate merge`) is not fenced: it exports the target, reconciles,
-  and loads the winning rows with `load --mode merge`, and on a served store
-  its write lock is a no-op, so a claim that lands between the export and the
-  load can be overwritten by a winning row from the source.
+  only `author` and `updated_at`, so it cannot revert a claim.
 - A claim whose response never arrives. From 0.12 the server keeps running an
   admitted write after its caller disconnects. Against the local 0.13.0
   server, a mutate whose connection was reset 2 ms after sending still landed,

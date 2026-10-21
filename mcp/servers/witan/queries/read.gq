@@ -1006,6 +1006,25 @@ query task_statuses($slugs: [String]) {
     return { $t.slug, $t.status }
 }
 
+// Every field of each task in `$slugs`, as `get_task` returns one. A merge
+// re-reads the tasks it is about to overwrite in one read, so the batch of
+// writes can be fenced on that read's commit.
+query get_tasks_by_slugs($slugs: [String]) {
+    match {
+        $t: Task
+        $t.slug in $slugs
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo,
+        $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.resolution,
+        $t.symbol_refs, $t.tags, $t.author,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
+    }
+}
+
 // Every `blocked` Task in the graph, for `_unblock_dependents`. No `limit`:
 // a dependent this read leaves out is never moved back to `open`.
 query list_blocked_tasks() {

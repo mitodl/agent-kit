@@ -1683,6 +1683,48 @@ def _commit_id_from_mutate_body(body: str) -> str | None:
     return graph_commit_id if isinstance(graph_commit_id, str) else None
 
 
+@contextmanager
+def _cli_payload(
+    params: dict, source: str | None = None
+) -> Iterator[tuple[str, str | None]]:
+    """``(params file, source file or None)`` for one CLI query or mutation.
+
+    Passed as files (``--params-file``, ``--query <path>``) rather than argv,
+    because Linux caps a single argv element at 128 KiB (``MAX_ARG_STRLEN``):
+    a task with a 200 KiB description failed with ``Argument list too long``
+    as ``--params``, and a composed batch of 128 ``merge_task`` statements did
+    as ``-e``. A private directory under ``TMPDIR``, removed once the call,
+    retries included, is done.
+
+    :raises RuntimeError: when the payload cannot be written (``TMPDIR`` full
+        or unwritable). Every local call now needs that space, so it is raised
+        as the error callers already handle for a CLI that could not run.
+    """
+
+    def unwritable(exc: OSError) -> RuntimeError:
+        return RuntimeError(
+            "omnigraph could not run: its payload could not be written under "
+            f"{tempfile.gettempdir()} ({exc}). Point TMPDIR at a writable "
+            "directory with free space."
+        )
+
+    try:
+        tmp = tempfile.TemporaryDirectory(prefix="witan-omnigraph-")
+    except OSError as exc:
+        raise unwritable(exc) from exc
+    with tmp as tmp_dir:
+        try:
+            params_file = Path(tmp_dir) / "params.json"
+            params_file.write_text(json.dumps(params), encoding="utf-8")
+            source_file = None
+            if source is not None:
+                source_file = Path(tmp_dir) / "batch.gq"
+                source_file.write_text(source, encoding="utf-8")
+        except OSError as exc:
+            raise unwritable(exc) from exc
+        yield str(params_file), None if source_file is None else str(source_file)
+
+
 class OmnigraphClient:
     """Subprocess wrapper for the omnigraph CLI (shared base)."""
 
@@ -1801,16 +1843,17 @@ class OmnigraphClient:
                 "query",
             )
         else:
-            result = self._run(
-                "query",
-                "--query",
-                str(self.queries_dir / query_file),
-                query_name,
-                "--params",
-                json.dumps(params),
-                "--format",
-                "json",
-            )
+            with _cli_payload(params) as (params_file, _):
+                result = self._run(
+                    "query",
+                    "--query",
+                    str(self.queries_dir / query_file),
+                    query_name,
+                    "--params-file",
+                    params_file,
+                    "--format",
+                    "json",
+                )
         if not result.strip():
             return [], None
         try:
@@ -1910,16 +1953,17 @@ class OmnigraphClient:
         # 0.13, not a `mutate --json`. The CLI path stays without a returned
         # commit id rather than risk that.
         extra = ["--if-commit", if_commit] if if_commit is not None else []
-        self._run(
-            "mutate",
-            "--query",
-            str(self.queries_dir / query_file),
-            query_name,
-            "--params",
-            json.dumps(params),
-            *extra,
-            surface_conflict=surface_conflict,
-        )
+        with _cli_payload(params) as (params_file, _):
+            self._run(
+                "mutate",
+                "--query",
+                str(self.queries_dir / query_file),
+                query_name,
+                "--params-file",
+                params_file,
+                *extra,
+                surface_conflict=surface_conflict,
+            )
         return None
 
     def change_many(
@@ -1956,9 +2000,9 @@ class OmnigraphClient:
 
         ``chunk_size`` splits the work into that many statements per commit and
         must be >= 1.
-        The composed query is passed as a single argv element, so a caller with
-        an unbounded number of steps (a repo reindex, a store-wide backfill)
-        must cap it or eventually exceed ARG_MAX / a server payload limit. It is
+        The composed query is one request body over HTTP, so a caller with an
+        unbounded number of steps (a repo reindex, a store-wide backfill) must
+        cap it or eventually exceed the server's payload limit. It is
         opt-in because it TRADES AWAY ATOMICITY: chunks commit independently and
         a failure part-way leaves the earlier ones applied. A chunk failure is
         re-raised naming its position, the batch size and the elapsed time, so
@@ -2055,16 +2099,17 @@ class OmnigraphClient:
             )
             return
         extra = ["--if-commit", if_commit] if if_commit is not None else []
-        self._run(
-            "mutate",
-            "-e",
-            source,
-            "witan_batch",
-            "--params",
-            json.dumps(params),
-            *extra,
-            surface_conflict=surface_conflict,
-        )
+        with _cli_payload(params, source) as (params_file, source_file):
+            self._run(
+                "mutate",
+                "--query",
+                source_file,
+                "witan_batch",
+                "--params-file",
+                params_file,
+                *extra,
+                surface_conflict=surface_conflict,
+            )
 
     def optimize(self) -> str:
         """Compact small Lance fragments across every table (non-destructive).

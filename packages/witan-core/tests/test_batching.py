@@ -44,8 +44,14 @@ def _client(monkeypatch, tmp_path, **kwargs):
 
 
 def _record(monkeypatch, calls):
+    """Record each CLI command, with the payload files the client wrote for it
+    (`--params-file`, a composed `--query`) replaced by their contents: the
+    files are gone once the call returns."""
+
     def fake_run(cmd, **kwargs):
-        calls.append(cmd)
+        calls.append(
+            [Path(arg).read_text() if "witan-omnigraph-" in arg else arg for arg in cmd]
+        )
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -163,7 +169,7 @@ def test_change_many_issues_one_mutate_for_many_steps(monkeypatch, tmp_path):
         ]
     )
     assert len(calls) == 1
-    inline = calls[0][calls[0].index("-e") + 1]
+    inline = calls[0][calls[0].index("--query") + 1]
     assert inline.count("insert ") == 2
 
 
@@ -237,7 +243,7 @@ def test_change_many_preserves_step_order(monkeypatch, tmp_path):
             ("m.gq", "link_to", {"from": "a", "to": "a"}),
         ]
     )
-    inline = calls[0][calls[0].index("-e") + 1]
+    inline = calls[0][calls[0].index("--query") + 1]
     assert inline.index("insert Thing") < inline.index("insert LinksTo")
 
 
@@ -247,7 +253,7 @@ def test_change_many_passes_a_single_step_through_to_change(monkeypatch, tmp_pat
     _record(monkeypatch, calls)
     client.change_many([("m.gq", "link_to", {"from": "a", "to": "b"})])
     # the named-query path, not the spliced one: keeps the name in any error
-    assert "-e" not in calls[0]
+    assert calls[0][calls[0].index("--query") + 1].endswith("m.gq")
     assert "link_to" in calls[0]
 
 
@@ -291,7 +297,7 @@ def test_change_many_persists_what_the_guard_rewrote(monkeypatch, tmp_path):
             ("m.gq", "insert_thing", {"slug": "b", "tags": None, "note": "sekrit"}),
         ]
     )
-    params = calls[0][calls[0].index("--params") + 1]
+    params = calls[0][calls[0].index("--params-file") + 1]
     assert "sekrit" not in params
     assert params.count("[redacted]") == 2
 

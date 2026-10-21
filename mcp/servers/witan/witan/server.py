@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
@@ -53,6 +53,7 @@ from witan_core.refusal import Refusal
 from . import config as cfg_module
 from . import (
     elicit,
+    merge_bounds,
     merge_report,
     readiness,
     scan,
@@ -1105,6 +1106,45 @@ def _task_write_pause(attempt: int) -> None:
     time.sleep(_task_write_backoff(attempt))
 
 
+_T = TypeVar("_T")
+
+
+def _fence_on(read_commit: str | None, what: str) -> str:
+    """The precondition a fenced write states: its read's ``graph_commit_id``.
+
+    Both transports report one on omnigraph 0.13. ``if_commit=None`` would send
+    the write unconditionally, so a read without one raises instead.
+    """
+    if read_commit is None:
+        msg = (
+            f"the read of {what} reported no graph_commit_id, so there is no "
+            "precondition to state; refusing to write it unconditionally"
+        )
+        raise RuntimeError(msg)
+    return read_commit
+
+
+def _retry_fenced(attempt_once: Callable[[], _T], exhausted: str) -> _T:
+    """Run one fenced read-decide-write until the store accepts it.
+
+    ``attempt_once`` reads with :meth:`~witan.graph.OmnigraphClient.read_with_commit`,
+    decides on that read, and writes with ``if_commit`` set to its commit and
+    ``surface_conflict=True``, so a head that moved in between arrives here as
+    an ``OmnigraphConflict`` with nothing written. Each refusal backs off and
+    runs the whole attempt again, so the decision is remade on a fresh read.
+    After ``_TASK_WRITE_MAX_ATTEMPTS`` refusals it raises
+    :class:`~witan_core.omnigraph.WriteContention` carrying ``exhausted``.
+    """
+    for attempt in range(1, _TASK_WRITE_MAX_ATTEMPTS + 1):
+        try:
+            return attempt_once()
+        except OmnigraphConflict as exc:
+            if attempt == _TASK_WRITE_MAX_ATTEMPTS:
+                raise WriteContention(exhausted) from exc
+            _task_write_pause(attempt)
+    raise AssertionError("unreachable: the loop returns or raises")
+
+
 def _project_repos(row: dict) -> list[str]:
     """The repo set of a project/trace row (empty list when floating)."""
     return list(row.get("repos") or [])
@@ -1257,9 +1297,10 @@ def _tag_memory_steps(
     ]
 
 
-# Statements per commit in the topic backfill. Bounds the inline GQ body — the
-# composed query is passed as an argv element, so this trades a handful of extra
-# commits for staying well clear of ARG_MAX and any server payload cap.
+# Statements per commit in the topic backfill. Bounds the composed GQ body,
+# trading a handful of extra commits for staying well clear of the server's
+# mutate body cap (about 1 MiB). The CLI transport passes it as a file since
+# witan-core 0.44.1, so argv no longer limits it.
 #
 # A SOFT threshold, checked between memories rather than between statements: a
 # chunk may overshoot by up to one memory's worth of steps. Keeping each
@@ -1267,10 +1308,11 @@ def _tag_memory_steps(
 # bounded by how many tags one memory can carry.
 _MIGRATE_BATCH_SIZE = 100
 
-# Slugs per read for a query that takes a `$slugs` list. On the local transport
-# the params travel as ONE `--params` argument, and Linux refuses a single
-# argument of 128 KiB or more with E2BIG before the CLI even starts. 200 slugs
-# of about 60 characters is roughly 14 KB.
+# Slugs per read for a query that takes a `$slugs` list. Before witan-core
+# 0.44.1 the local transport passed params as ONE `--params` argument, which
+# Linux refuses at 128 KiB (E2BIG); they now go as `--params-file`. The cap
+# still bounds each read's request body: 200 slugs of about 60 characters is
+# roughly 14 KB.
 _SLUG_LIST_READ_BATCH_SIZE = 200
 
 
@@ -2339,6 +2381,11 @@ def _parse_export(
     return _classify_rows(_lines(), str(path))
 
 
+def _source_wins(src_dt: datetime | None, dst_dt: datetime | None) -> bool:
+    """Newest-record-wins: whether the source row replaces the target's."""
+    return src_dt is not None and (dst_dt is None or src_dt > dst_dt)
+
+
 def _reconcile_nodes(
     source_nodes: dict[tuple[str, str], dict],
     target_nodes: dict[tuple[str, str], dict],
@@ -2375,7 +2422,7 @@ def _reconcile_nodes(
         dst_ts = _reconcile_timestamp(row_type, existing["data"])
         src_dt = _parse_ts(src_ts)
         dst_dt = _parse_ts(dst_ts)
-        won = src_dt is not None and (dst_dt is None or src_dt > dst_dt)
+        won = _source_wins(src_dt, dst_dt)
         decision = {
             "type": row_type,
             "slug": slug,
@@ -2551,6 +2598,212 @@ def _merge_accounting(
         "passthrough": len(passthrough),
         "duplicate_slugs": duplicates,
     }
+
+
+#: The fields a claim, a release or a close writes. A merge never overwrites a
+#: task whose copy in the target changed any of them after the export the merge
+#: reconciled against.
+_CLAIM_FIELDS = ("status", "assignee", "claimed_at")
+
+#: ``merge_task``'s parameters, every field of a Task.
+_MERGE_TASK_FIELDS = (
+    "slug",
+    "title",
+    "description",
+    "type",
+    "status",
+    "priority",
+    "repo",
+    "project_slug",
+    "parent_slug",
+    "blocked_by",
+    "assignee",
+    "external_uri",
+    "resolution",
+    "author",
+    "symbol_refs",
+    "tags",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "claimed_at",
+    "first_claimed_at",
+)
+_TASK_DATETIME_FIELDS = (
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "claimed_at",
+    "first_claimed_at",
+)
+
+
+def _split_task_collisions(
+    winners: list[dict], target_nodes: dict[tuple[str, str], dict]
+) -> tuple[list[dict], list[dict]]:
+    """``(task collisions, the other winners)``.
+
+    A collision is a winning Task row the target already holds. It is the only
+    kind of winner that can overwrite a claim, because a task the target does
+    not have yet has nobody holding it there. Collisions are written by
+    :func:`_write_task_batch`; every other winner is loaded as before.
+    """
+    collisions: list[dict] = []
+    rest: list[dict] = []
+    for row in winners:
+        key = (row.get("type"), (row.get("data") or {}).get("slug"))
+        if key[0] == "Task" and key in target_nodes:
+            collisions.append(row)
+        else:
+            rest.append(row)
+    return collisions, rest
+
+
+def _task_kept_by(source: dict, exported: dict, current: dict) -> str | None:
+    """Why the target's task must be kept over ``source``, or ``None`` to write it.
+
+    ``exported`` is the target row reconciliation compared ``source`` against;
+    ``current`` is the same row as the fenced read just returned it.
+    """
+    for field in _CLAIM_FIELDS:
+        before, after = exported.get(field), current.get(field)
+        if field == "claimed_at":
+            # An export and a read can spell one instant differently (a 0.9 or
+            # 0.10 export writes epoch millis), so they compare parsed.
+            before, after = _parse_ts(before), _parse_ts(after)
+        if before != after:
+            return "claim_changed"
+    src_dt = _parse_ts(_reconcile_timestamp("Task", source))
+    dst_dt = _parse_ts(_reconcile_timestamp("Task", current))
+    if not _source_wins(src_dt, dst_dt):
+        return "target_newer"
+    return None
+
+
+def _merge_task_params(data: dict) -> dict:
+    """``merge_task``'s parameters from an exported Task row.
+
+    A 0.9 or 0.10 export spells a ``DateTime`` as epoch milliseconds, which a
+    mutation parameter does not take, so each one is written back as ISO-8601
+    at the millisecond precision the store holds.
+    """
+    params = {field: data.get(field) for field in _MERGE_TASK_FIELDS}
+    for field in _TASK_DATETIME_FIELDS:
+        parsed = _parse_ts(params[field])
+        params[field] = (
+            parsed.isoformat(timespec="milliseconds") + "Z" if parsed else None
+        )
+    return params
+
+
+def _task_batches(collisions: list[dict]) -> list[list[dict]]:
+    """``collisions`` in batches of one fenced commit each, bounded by
+    :mod:`witan.merge_bounds`."""
+    return merge_bounds.split_by_task_budget(collisions)
+
+
+def _write_task_batch(
+    store: OmnigraphClient,
+    batch: list[dict],
+    target_nodes: dict[tuple[str, str], dict],
+) -> dict[str, str]:
+    """Write one batch of winning Task rows over the target's copies, fenced.
+
+    Returns ``{slug: reason}`` for each task in it left as the target has it.
+
+    ★ NOT A LOAD. A merge exports the target, reconciles, then writes, and on a
+    served target nothing stops a ``task_claim`` landing in between: its write
+    lock is a no-op there, because the other writers are on other hosts. A
+    winning source row loaded after that claim puts back the source's status,
+    assignee and ``claimed_at``, and a second claimer is then granted the task.
+    ``omnigraph load`` takes no precondition (0.13 has no ``--if-commit`` on
+    it), so collisions are written as ``merge_task`` mutations instead, fenced
+    the way ``_update_task`` fences: the batch re-reads its tasks, decides
+    again on that read, and states the read's commit as the write's
+    precondition. A refused batch re-reads and decides again, through the same
+    :func:`_retry_fenced`.
+
+    The fresh read keeps the target's row when its claim fields moved since
+    the export (``claim_changed``), whatever the timestamps say, and otherwise
+    re-runs newest-record-wins against it (``target_newer`` when the target
+    now wins).
+    """
+    return _retry_fenced(
+        functools.partial(_write_task_batch_once, store, batch, target_nodes),
+        f"the merge stopped at a batch of {len(batch)} task(s) the target already "
+        f"holds: {_TASK_WRITE_MAX_ATTEMPTS} attempts each found the graph "
+        "changed since they were read, and none of that batch was written. "
+        "Re-running the merge is safe; rows that already landed are kept, not "
+        "duplicated.",
+    )
+
+
+def _write_task_batch_once(
+    store: OmnigraphClient,
+    batch: list[dict],
+    target_nodes: dict[tuple[str, str], dict],
+) -> dict[str, str]:
+    """One fenced attempt of :func:`_write_task_batch`."""
+    slugs = [row["data"]["slug"] for row in batch]
+    rows, read_commit = store.read_with_commit(
+        "read.gq", "get_tasks_by_slugs", {"slugs": slugs}
+    )
+    read_commit = _fence_on(read_commit, f"{len(slugs)} merged task(s)")
+    current = {row["slug"]: row for row in rows}
+    kept: dict[str, str] = {}
+    steps: list[_Step] = []
+    for row in batch:
+        data = row["data"]
+        slug = data["slug"]
+        exported = target_nodes[("Task", slug)]["data"]
+        # Every slug here was in the export, and a Task is never deleted
+        # (mutations.gq has no `delete Task`), so the read has each one.
+        reason = _task_kept_by(data, exported, current[slug])
+        if reason is None:
+            steps.append(("mutations.gq", "merge_task", _merge_task_params(data)))
+        else:
+            kept[slug] = reason
+    store.change_many(steps, surface_conflict=True, if_commit=read_commit)
+    return kept
+
+
+class MergeBatchTooLarge(RuntimeError, Refusal):
+    """A ``store_merge`` batch whose collisions need more than one fenced commit.
+
+    Refused before anything is written, because one call may spend only one
+    fenced commit inside the gateway's 120s (:mod:`witan.merge_bounds`). A
+    client from before the split sends 2 MiB batches, so it reaches this
+    whenever one batch carries newer copies of more than 32 tasks the
+    deployment already holds, or more than 96 KiB of them.
+    """
+
+    # Built from a count and this module's constants.
+    log_safe_message = True
+
+    def __init__(self, collisions: int) -> None:
+        super().__init__(
+            f"store_merge refused this batch: it would overwrite {collisions} "
+            "tasks the graph already holds, and one call writes at most "
+            f"{merge_bounds.TASKS_PER_COMMIT} (and "
+            f"{merge_bounds.TASK_BYTES_PER_COMMIT // 1024} KiB of them). Nothing "
+            "was written. witan-council "
+            f"{merge_bounds.SPLITTING_CLIENT_VERSION} and later split "
+            "`witan migrate merge` batches to fit: upgrade with `uv tool "
+            "upgrade ol-agent-kit` (or `uv tool upgrade witan-council`) and "
+            "re-run the merge."
+        )
+
+
+def _keep_target(
+    decisions: list[dict], collisions: list[dict], kept: dict[str, str]
+) -> list[dict]:
+    """Mark the tasks a fenced write kept as ``kept-target`` in ``decisions``
+    (in place, naming why in ``fenced``), and return the collisions written."""
+    for decision in decisions:
+        if decision["type"] == "Task" and decision["slug"] in kept:
+            decision["decision"] = "kept-target"
+            decision["fenced"] = kept[decision["slug"]]
+    return [row for row in collisions if row["data"]["slug"] not in kept]
 
 
 def _store_client(
@@ -2779,7 +3032,8 @@ def merge_store(
     # writes to that graph for the whole reconcile, which can be minutes. That
     # is the same bargain a local target has always made, and it is the point:
     # a writer landing mid-reconcile is what makes the decisions stale. A served
-    # target still takes no lock, because its other writers are on other hosts.
+    # target still takes no lock, because its other writers are on other hosts,
+    # which is why Task collisions are written fenced (`_write_task_batch`).
     with (
         target_client.hold_write_lock(),
         tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp,
@@ -2820,8 +3074,9 @@ def merge_store(
                 **counts,
             }
 
-        to_load = winners + edge_winners + source_passthrough
-        if not to_load:
+        collisions, loadable = _split_task_collisions(winners, target_nodes)
+        to_load = loadable + edge_winners + source_passthrough
+        if not to_load and not collisions:
             return {
                 "merged": True,
                 "target": target,
@@ -2851,47 +3106,63 @@ def merge_store(
         # makes a re-sent row lose to its own already-applied copy, which
         # is the same "repeatable by construction" property this function's
         # docstring already promises.
+        #
+        # Task collisions go after the load, as fenced mutation batches
+        # (`_write_task_batch`), and count as batches of the merge.
         outputs = []
         loaded = 0
+        applied = 0
+        kept: dict[str, str] = {}
         batches = list(chunking.chunk_records(to_load))
-        for index, batch in enumerate(batches):
-            try:
+        task_batches = _task_batches(collisions)
+        try:
+            for batch in batches:
                 outputs.append(target_client.load_batch(batch, "merge"))
-            except BaseException as exc:
-                # The batches before this one ARE applied — the comment
-                # above says so — and that is precisely what a caller
-                # cannot see from an exception. Attaching how far the merge
-                # got is what lets the CLI report an incomplete merge as
-                # incomplete instead of only as failed.
-                merge_report.attach_partial(
-                    exc,
-                    {
-                        "target": target,
-                        "batches": len(batches),
-                        "batches_applied": index,
-                        # See the remote path's copy: an interrupt is the
-                        # one failure here with no message of its own.
-                        "interrupted": isinstance(exc, KeyboardInterrupt),
-                        "rows_loaded": loaded,
-                        **accounting,
-                        **counts,
-                    },
-                )
-                raise
-            loaded += len(batch)
+                loaded += len(batch)
+                applied += 1
+            for batch in task_batches:
+                batch_kept = _write_task_batch(target_client, batch, target_nodes)
+                kept |= batch_kept
+                loaded += len(batch) - len(batch_kept)
+                applied += 1
+        except BaseException as exc:
+            # The batches before this one ARE applied — the comment
+            # above says so — and that is precisely what a caller
+            # cannot see from an exception. Attaching how far the merge
+            # got is what lets the CLI report an incomplete merge as
+            # incomplete instead of only as failed.
+            _keep_target(decisions, collisions, kept)
+            merge_report.attach_partial(
+                exc,
+                {
+                    "target": target,
+                    "batches": len(batches) + len(task_batches),
+                    "batches_applied": applied,
+                    # See the remote path's copy: an interrupt is the
+                    # one failure here with no message of its own.
+                    "interrupted": isinstance(exc, KeyboardInterrupt),
+                    "rows_loaded": loaded,
+                    **accounting,
+                    **_decision_counts(decisions),
+                },
+            )
+            raise
         load_out = "\n".join(out.strip() for out in outputs if out.strip())
 
+    written = _keep_target(decisions, collisions, kept)
     return {
         "merged": True,
         "target": target,
         "decisions": decisions,
-        "rows_loaded": len(to_load),
-        "batches": len(batches),
-        "batches_applied": len(batches),
+        "rows_loaded": loaded,
+        "batches": applied,
+        "batches_applied": applied,
         "output": load_out.strip(),
-        "watermark": watermark,
+        "watermark": _next_watermark(
+            None, source_nodes, target_nodes, loadable + written
+        ),
         **accounting,
-        **counts,
+        **_decision_counts(decisions),
     }
 
 
@@ -2954,6 +3225,13 @@ def store_merge(
     holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
     are reconciled on ``(edge, from, to)`` by the same ``_reconcile_edges``.
 
+    A winning Task row this graph already holds is not loaded. It is written by
+    a mutation fenced on a fresh read of that task (``_write_task_batch``), so
+    a claim, release or close that lands after the export keeps the target's
+    row (its decision becomes ``kept-target`` with a ``fenced`` reason) rather
+    than being overwritten by the source. That write is a second commit after
+    the load; see the batching note below.
+
     Parameters
     ----------
     rows:
@@ -2990,11 +3268,22 @@ def store_merge(
         batch.
 
     **Batching is the caller's job, and the caller must send every node before
-    any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
-    independently, so a failure part-way leaves earlier ones applied — which is
-    safe to recover from by simply re-running, since reconciliation makes a
-    re-sent row lose to its own already-applied copy. It is not, however,
-    atomic, and a caller needing all-or-nothing has to arrange that itself.
+    any edge** (``witan_core.chunking.chunk_records`` does both), **with no more
+    Task rows than one fenced commit takes**
+    (``witan.merge_bounds.split_by_task_budget``). A batch whose collisions
+    would need more than one fenced commit is refused with
+    ``MergeBatchTooLarge`` before anything is written, so one call stays
+    inside the gateway's request budget. A dry run is refused the same way,
+    so it predicts the real run.
+
+    One call is up to two commits: the load, then the fenced write of the
+    tasks this graph already holds. A call that fails after its load (the
+    fenced write ran out of attempts with ``WriteContention``, say) leaves the
+    load applied and returns no result. Batches commit independently too, so
+    a failure part-way leaves earlier ones applied. Both are safe to recover
+    from by re-running, since reconciliation makes a re-sent row lose to its
+    own already-applied copy. It is not, however, atomic, and a caller needing
+    all-or-nothing has to arrange that itself.
 
     Returns this batch's per-row ``decisions`` plus ``added``/``updated``/
     ``kept_target``/``diverged`` counts, ``rows_loaded``, and the running
@@ -3062,35 +3351,49 @@ def store_merge(
     # stamped row that loses reconciliation is discarded with its new author,
     # so the rewrite count would report `authorship_claimed > 0` for a batch
     # that left every stored author exactly as it found it.
-    claimed = sum(
-        1
-        for row in winners
-        if (row.get("type"), (row.get("data") or {}).get("slug")) in stamped_keys
-    )
+    def claimed(written: list[dict]) -> int:
+        return sum(
+            1
+            for row in written
+            if (row.get("type"), (row.get("data") or {}).get("slug")) in stamped_keys
+        )
+
+    # Checked before the dry-run return, so a dry run predicts the refusal the
+    # real run would get. Reporting it as a key in the dry-run result instead
+    # would reach nobody: the only callers that can hit it are clients older
+    # than the split, and their proxy drops keys it does not know.
+    collisions, loadable = _split_task_collisions(winners, target_nodes)
+    task_batches = _task_batches(collisions)
+    if len(task_batches) > 1:
+        raise MergeBatchTooLarge(len(collisions))
 
     if dry_run:
         return {
             "dry_run": True,
             "decisions": decisions,
             "rows_loaded": 0,
-            "authorship_claimed": claimed,
+            "authorship_claimed": claimed(winners),
             "watermark": next_watermark,
             **accounting,
             **counts,
         }
 
-    to_load = winners + edge_winners + source_passthrough
-    if to_load:
-        with _data_tier_outage_reads_as_retryable():
+    to_load = loadable + edge_winners + source_passthrough
+    kept: dict[str, str] = {}
+    with _data_tier_outage_reads_as_retryable():
+        if to_load:
             client.load_batch(to_load, "merge")
+        for batch in task_batches:
+            kept |= _write_task_batch(client, batch, target_nodes)
+    written = loadable + _keep_target(decisions, collisions, kept)
     return {
         "dry_run": False,
         "decisions": decisions,
-        "rows_loaded": len(to_load),
-        "authorship_claimed": claimed,
-        "watermark": next_watermark,
+        "rows_loaded": len(to_load) + len(collisions) - len(kept),
+        "authorship_claimed": claimed(written),
+        "watermark": _next_watermark(watermark, source_nodes, target_nodes, written),
         **accounting,
-        **counts,
+        **_decision_counts(decisions),
     }
 
 
@@ -6582,25 +6885,18 @@ def _update_task(
     ``assignee`` gap-fill must not overwrite a holder that a ``task_claim``
     set after the caller decided there was none.
     """
-    for attempt in range(1, _TASK_WRITE_MAX_ATTEMPTS + 1):
-        try:
-            return _update_task_once(
-                slug,
-                changes,
-                extra_steps=extra_steps,
-                default_if_missing=default_if_missing,
-                require=require,
-            )
-        except OmnigraphConflict as exc:
-            if attempt == _TASK_WRITE_MAX_ATTEMPTS:
-                msg = (
-                    f"{slug} was not updated: {attempt} attempts each found the "
-                    "graph changed since the task was read. Nothing was written; "
-                    "retry once the other writers are done."
-                )
-                raise WriteContention(msg) from exc
-            _task_write_pause(attempt)
-    raise AssertionError("unreachable: the loop returns or raises")
+    return _retry_fenced(
+        lambda: _update_task_once(
+            slug,
+            changes,
+            extra_steps=extra_steps,
+            default_if_missing=default_if_missing,
+            require=require,
+        ),
+        f"{slug} was not updated: {_TASK_WRITE_MAX_ATTEMPTS} attempts each found "
+        "the graph changed since the task was read. Nothing was written; retry "
+        "once the other writers are done.",
+    )
 
 
 def _update_task_once(
@@ -6617,12 +6913,7 @@ def _update_task_once(
     if not rows:
         return None
     current = rows[0]
-    if read_commit is None:
-        msg = (
-            f"the read of {slug} reported no graph_commit_id, so there is no "
-            "precondition to state; refusing to write it unconditionally"
-        )
-        raise RuntimeError(msg)
+    read_commit = _fence_on(read_commit, slug)
     if require is not None:
         require(current)
     if callable(changes):

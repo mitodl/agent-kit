@@ -68,6 +68,13 @@ Instead, `task_update`, `task_close`, `task_release`, `task_link`,
 `task_unlink` and the unblock sweep each state the commit of the read they
 merged from, and a refused write re-reads and merges again.
 
+`store_merge` (`witan migrate merge`) writes the same way when a winning source
+row would replace a task the target already holds. It re-reads those tasks
+just before writing and fences the write on that read. A task whose status,
+assignee or `claimed_at` changed since the merge's export keeps the target's
+row, so a claim landing mid-merge survives it; the merge reports that task as
+`kept-target` with a `fenced` reason.
+
 Two details make the loop work:
 
 1. **Conflict-surfacing writes.** A task write raises a typed
@@ -113,9 +120,10 @@ not be refused by unrelated writes. It is unexplored.
   legitimate takeover.
 - Two sessions that claim under the same holder string. Pass `session_id`, or
   they cannot be told apart (the claim reports `"qualified": false`).
-- `store_merge` (`witan migrate merge`), which loads reconciled rows rather
-  than writing through the fenced path. A claim that lands while a merge into a
-  served store runs can be overwritten by a newer row from the source.
+- A task a merge adds. Only tasks the target already held at the merge's
+  export are written fenced; a new one is loaded. Nobody can have claimed a
+  task the target did not have, so this matters only if another merge writes
+  the same slug in that window.
 - A write whose response is lost. The server finishes an admitted write after
   its caller disconnects, so a timeout or a dropped connection can leave a claim
   that landed. witan does not re-send it. Re-read with `task_get` before

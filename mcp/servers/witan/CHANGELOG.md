@@ -8,6 +8,68 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.43.0] - 2026-10-20
+
+### Added
+
+- Against a deployed witan, `task_comment`, `task_create`, `task_update`,
+  `task_close` and `task_release` are queued locally when the deployment
+  cannot be reached and replayed on the next call that reaches it. The agent
+  gets `{"buffered": true, "journal_id", "pending", "note"}` instead of an
+  error. `task_update`, `task_close` and `task_release` are also queued after
+  a gateway 502/504, since applying them twice is harmless. Reads and
+  `task_claim` still fail outright.
+- On replay, a queued update, close or release of a task someone else now
+  holds, or that was closed since, is posted as a comment on the task instead
+  of applied. A queued `task_create` is skipped if a task with the same title
+  was created since.
+- `witan journal list|replay|drop` shows, replays, or discards queued writes,
+  and the context hook prints a line when any are queued.
+
+- The web UI puts a copy button beside project and task names (the project list, a project's header, Ready list and task table, board cards, search results, the task detail panel, and the `task_ready`, `task_list` and `workflow_project_status` widgets). It copies the slug, not the title, for pasting into the `witan` CLI. A tick shows when the copy lands and a cross when it fails, and both are announced to screen readers. Where the Clipboard API is unavailable or refused (a non-secure context, or a widget iframe without `clipboard-write`) it falls back to the `copy` command.
+
+### Changed
+
+- Requires witan-core 0.44.1.
+
+- Breaks older clients: upgrade witan-council before merging into a
+  deployment running this release. One `store_merge` call now writes at most 32 tasks
+  the deployment already holds (and 96 KiB of them), and the server refuses a
+  batch whose collisions need more with `MergeBatchTooLarge`, before writing
+  anything. A dry run is refused the same way. `witan migrate merge` from this
+  release splits its batches to at most 32 Task rows per call, so it never
+  hits the refusal. Older clients send batches of up to 2 MiB, so they are
+  refused whenever one batch would overwrite more than 32 tasks, or more than
+  96 KiB of them, with newer copies; the refusal names this version and the upgrade command
+  (`uv tool upgrade ol-agent-kit`, or `uv tool upgrade witan-council`).
+
+### Fixed
+
+- The web UI's blocker badges count only open blockers. A task whose blockers
+  have all closed, and a closed task, show no badge; the project list counts
+  only blocking projects that are still active. Blockers from outside a
+  project are looked up so the project page can count them.
+
+- Closing a task now moves its `blocked` dependents back to `open` in every
+  repo, not only the closed task's own. A dependent in another repo kept
+  `status: blocked` after its last blocker closed, so `task_list`, the CLI and
+  the web UI reported it as blocked while `task_ready` returned it as ready.
+- `task_release(status="closed")` now unblocks dependents, as `task_close`
+  does.
+
+- `store_merge` and `witan migrate merge` no longer overwrite a claim that
+  lands while they run. A winning source row for a task the target already
+  holds is now written by a mutation fenced on a fresh read of that task
+  rather than loaded, so a task whose status, assignee or `claimed_at` changed
+  since the merge's export keeps the target's row. Its decision comes back as
+  `kept-target` with a `fenced` reason (`claim_changed`, or `target_newer` when
+  re-running newest-record-wins against the fresh row keeps the target).
+  Those writes go in fenced commits of at most 32 tasks and 96 KiB, sized from
+  measurements against omnigraph 0.13.0 (`witan/merge_bounds.py`). A single
+  task past 128 KiB gets a commit of its own, which on a local or s3 target
+  needs witan-core 0.44.1 (it no longer passes params on the command line), so
+  the witan-core floor is now `>=0.44.1`.
+
 ## [0.42.0] - 2026-10-16
 
 ### Added

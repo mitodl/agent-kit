@@ -38,7 +38,7 @@ from witan_core.remote.proxy import (
     RemoteWriteIndeterminate,
 )
 
-from .. import merge_report, readiness, session_state
+from .. import merge_bounds, merge_report, readiness, session_state
 from .. import repo as repo_module
 from ..config import RemoteConfig, S3Credentials
 
@@ -632,7 +632,17 @@ class RemoteServerProxy(RemoteMCPProxy):
             # MCP_LOAD_MAX_BYTES, not the default: these rows ride as a JSON
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
             # body cap, not omnigraph's much larger buffered-body one.
-            batches = chunk_records(rows, MCP_LOAD_MAX_BYTES)
+            #
+            # Then no more Task rows in a call than the server writes in one
+            # fenced commit, which it refuses to exceed so a call stays inside
+            # the gateway's budget (`witan.merge_bounds`).
+            batches = [
+                part
+                for batch in chunk_records(rows, MCP_LOAD_MAX_BYTES)
+                for part in merge_bounds.split_by_task_budget(
+                    batch, merge_bounds.CLIENT_TASK_BYTES_PER_CALL
+                )
+            ]
             # The identity the SOURCE store wrote under, supplied by the
             # caller because only it knows which store this is: `--from <name>`
             # merges a target the ambient configuration is not pointed at, and
@@ -687,11 +697,14 @@ class RemoteServerProxy(RemoteMCPProxy):
                             )
                         ) from exc
                 except BaseException as exc:
-                    # The totals are the state as of the last COMPLETED batch:
-                    # this one contributed nothing, which is exactly the point.
-                    # Its rows are counted in `source_rows` and sit in no
-                    # bucket, so the report shows them as unaccounted for
-                    # instead of the merge merely looking failed.
+                    # The totals are the state as of the last COMPLETED batch.
+                    # This one returned nothing, but that does not mean it
+                    # wrote nothing: one call is a load and then a fenced task
+                    # write, and a failure in the second (WriteContention)
+                    # leaves the first applied. Its rows are counted in
+                    # `source_rows` and sit in no bucket, so the report shows
+                    # them as unaccounted for, which is what they are: some
+                    # may have landed, and re-running the merge settles which.
                     merge_report.attach_partial(
                         exc,
                         {

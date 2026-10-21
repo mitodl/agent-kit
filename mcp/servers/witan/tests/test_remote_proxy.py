@@ -8,6 +8,7 @@ client-side repo resolution are exercised end to end without a network.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1144,6 +1145,63 @@ def test_the_watermark_is_carried_between_batches_and_since_is_not(
     assert [s for s, _ in seen] == [{"source_ts": "mark", "target_ts": "mark"}] * 2
     assert [w for _, w in seen] == [None, {"source_ts": 1, "target_ts": 1}]
     assert result["watermark"] == {"source_ts": 2, "target_ts": 2}
+
+
+def test_merge_store_sends_no_more_task_rows_a_call_than_one_fenced_commit(
+    proxy, tmp_path, monkeypatch
+):
+    """The deployment refuses a batch whose collisions need a second fenced
+    commit, and it cannot know which rows collide until it reconciles, so the
+    client caps every Task row: at most 32 a call and
+    ``CLIENT_TASK_BYTES_PER_CALL`` of them. Order is kept, so every node still
+    goes before any edge."""
+    from witan import merge_bounds
+
+    small = [
+        {"type": "Task", "data": {"slug": f"tk-small-{i:03d}", "updated_at": 1}}
+        for i in range(70)
+    ]
+    # Ten of these fill more than one call's byte budget.
+    large = [
+        {
+            "type": "Task",
+            "data": {"slug": f"tk-large-{i:03d}", "description": "x" * 8000},
+        }
+        for i in range(10)
+    ]
+    memory = {"type": "Memory", "data": {"slug": "mem-one", "updated_at": 1}}
+    edge = {
+        "edge": "Blocks",
+        "from": "tk-small-000",
+        "to": "tk-small-001",
+        "data": {},
+    }
+    export = tmp_path / "handover.jsonl"
+    export.write_text(
+        "".join(json.dumps(r) + "\n" for r in [*small, memory, *large, edge])
+    )
+    calls: list[list[dict]] = []
+
+    def _fake_store_merge(*, rows, dry_run, claim_from_author, since, watermark):
+        calls.append(rows)
+        return {"decisions": [], "rows_loaded": len(rows), "watermark": None}
+
+    monkeypatch.setattr(proxy, "store_merge", _fake_store_merge)
+    proxy.merge_store(str(export))
+
+    for rows in calls:
+        tasks = [r for r in rows if r.get("type") == "Task"]
+        assert len(tasks) <= merge_bounds.TASKS_PER_COMMIT
+        assert (
+            sum(merge_bounds.task_cost(r) for r in tasks)
+            <= merge_bounds.CLIENT_TASK_BYTES_PER_CALL
+        )
+    sent = [r for rows in calls for r in rows]
+    assert [r.get("data", {}).get("slug") for r in sent if "type" in r] == [
+        r["data"]["slug"] for r in [*small, memory, *large]
+    ]
+    assert "edge" in sent[-1]
+    assert len(calls) == 5
 
 
 def test_a_deployment_that_reports_no_watermark_yields_none(

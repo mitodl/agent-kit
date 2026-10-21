@@ -372,6 +372,13 @@ newest-record-wins per ``(type, slug)`` against what this graph already
 holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
 are reconciled on ``(edge, from, to)`` by the same ``_reconcile_edges``.
 
+A winning Task row this graph already holds is not loaded. It is written by
+a mutation fenced on a fresh read of that task (``_write_task_batch``), so
+a claim, release or close that lands after the export keeps the target's
+row (its decision becomes ``kept-target`` with a ``fenced`` reason) rather
+than being overwritten by the source. That write is a second commit after
+the load; see the batching note below.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `rows` | list[object] | **required** | One batch of ``omnigraph export`` records — ``{"type": Node, "data":<br>{…}}`` for a node, ``{"edge": Edge, "from": …, "to": …}`` for an edge. |

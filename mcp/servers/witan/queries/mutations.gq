@@ -616,6 +616,61 @@ query update_task(
         where slug = $slug
 }
 
+// Sets EVERY field, `author` and `created_at` included: a merge writes the
+// winning source row whole, as `load --mode merge` would. It is a mutation
+// rather than a load because only a mutation takes a precondition
+// (`--if-commit`), and a merge overwriting a task must be fenced on the read
+// it checked the claim on. Not in the write scanner's FIELD_MAP, like the load
+// it replaces.
+query merge_task(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $type: String,
+    $status: String,
+    $priority: String,
+    $repo: String?,
+    $project_slug: String?,
+    $parent_slug: String?,
+    $blocked_by: [String]?,
+    $assignee: String?,
+    $external_uri: String?,
+    $resolution: String?,
+    $author: String,
+    $symbol_refs: [String]?,
+    $tags: [String]?,
+    $created_at: DateTime,
+    $updated_at: DateTime,
+    $closed_at: DateTime?,
+    $claimed_at: DateTime?,
+    $first_claimed_at: DateTime?
+) {
+    update Task
+        set {
+            title: $title,
+            description: $description,
+            type: $type,
+            status: $status,
+            priority: $priority,
+            repo: $repo,
+            project_slug: $project_slug,
+            parent_slug: $parent_slug,
+            blocked_by: $blocked_by,
+            assignee: $assignee,
+            external_uri: $external_uri,
+            resolution: $resolution,
+            author: $author,
+            symbol_refs: $symbol_refs,
+            tags: $tags,
+            created_at: $created_at,
+            updated_at: $updated_at,
+            closed_at: $closed_at,
+            claimed_at: $claimed_at,
+            first_claimed_at: $first_claimed_at
+        }
+        where slug = $slug
+}
+
 // ── Task comments ──────────────────────────────────────────────────
 // Append-only: there is no update or delete counterpart, and that is the
 // point — a comment is a matter of record, not a field of the task.
