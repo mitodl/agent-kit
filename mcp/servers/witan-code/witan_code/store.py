@@ -470,6 +470,39 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
     return StoreRef(str(store))
 
 
+def _schema_change_unsupported(binary: str, schema_file: Path, store: Path) -> bool:
+    """Whether ``omnigraph schema plan`` says ``store`` cannot take ``schema_file``.
+
+    Only a plan that answers ``supported: false`` counts. A missing binary, a
+    held lock or output this does not recognise is no evidence that the store
+    needs recreating, and a wrong yes deletes every repo's bindings, so each of
+    those is ``False`` and the next call retries the apply.
+    """
+    try:
+        res = subprocess.run(
+            [
+                binary,
+                "schema",
+                "plan",
+                "--schema",
+                str(schema_file),
+                "--json",
+                str(store),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    if res.returncode != 0:
+        return False
+    try:
+        return json.loads(res.stdout)["supported"] is False
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     """Resolve the shared bridge graph, initialising it from bridge-schema.pg.
 
@@ -487,8 +520,23 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     if store.exists():
         # Pick up additive schema changes (new nodes/fields) on existing
         # stores; the mtime stamp keeps hot reindex paths subprocess-free.
-        schema_apply_if_changed(binary, cfg.bridge_schema_file, store)
-        return StoreRef(str(store))
+        if schema_apply_if_changed(binary, cfg.bridge_schema_file, store):
+            return StoreRef(str(store))
+        if not _schema_change_unsupported(binary, cfg.bridge_schema_file, store):
+            return StoreRef(str(store))
+        # A change omnigraph cannot migrate in place (e.g. dropping
+        # InterfaceBinding.repo_file) fails the apply on every call, and the
+        # writer no longer matches the store it is writing to. The bridge is
+        # derived from the indexed checkouts, so recreate it. Unchanged files
+        # keep no bindings on an incremental index, so each repo needs a forced
+        # `witan-code reindex` to put its own back.
+        logger.warning(
+            "witan.code.store.bridge_recreated",
+            store=str(store),
+            reason="schema change omnigraph cannot apply in place",
+            recovery="run `witan-code reindex <repo root>` in each indexed repo",
+        )
+        discard_store(StoreRef(str(store)))
 
     store.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(

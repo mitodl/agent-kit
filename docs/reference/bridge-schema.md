@@ -44,7 +44,6 @@ MITOL_APP_BASE_URL|consumer|...settings.py::&lt;module&gt;
 | `role` | `enum(provider, consumer, shared) @index` |  |
 | `repo` | `String @index` | canonical HTTPS repo URI (join key to Layer 2) |
 | `file` | `String @index` | repo-relative source path of the binding |
-| `repo_file` | `String @index` | "repo|file" — single-field key for per-file delete |
 | `sub_kind` | `String?` | service anchor variant: repo | image | name |
 | `symbol_id` | `String?` | enclosing Symbol id (repo#path::Qn) when applicable |
 | `line` | `I32?` |  |
