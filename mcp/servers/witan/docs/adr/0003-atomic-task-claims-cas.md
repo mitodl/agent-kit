@@ -283,12 +283,15 @@ closed or blocked first. Two fenced writes never share a commit, because a
 request carries one precondition and the client does not know a write's read
 set.
 
-Grouping does not raise the fenced write ceiling. A fenced write that queues
-behind a commit in flight read the head that commit replaces, so it is refused
-(locally, without a round trip, when this process made that commit), and it
-lands only once it reaches an idle lane. Under group commit a fenced write is
-refused for the same reason as before, a publish between its read and its
-write. Group commit publishes no more often than one commit per write did, and
-less often whenever writes queue. Letting a fenced write lead the next group
-would need `_update_task` to hold the lane across its read, merge and write.
-That is not done.
+Grouping does not raise the fenced write ceiling. A fenced write that read
+its head before the commit in flight published is refused when its turn comes,
+locally and without a round trip when this process made that commit. Only a
+fenced write that read the head the last commit published, or that reaches an
+idle lane, lands. That is the same reason a fenced write was refused before
+grouping, a publish between its read and its write, and group commit publishes
+no more often than one commit per write did. Under saturating unfenced load
+from the same actor, fenced writes starve with or without grouping. In a local
+run (4 fenced and 8 unfenced writers) they completed 0.0/s without grouping and
+0.2/s with it. Having a fenced write hold the lane across `_update_task`'s
+read, merge and write would let it lead the next group every time. That is
+not done.

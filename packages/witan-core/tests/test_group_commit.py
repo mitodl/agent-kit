@@ -12,8 +12,8 @@ import time
 
 import pytest
 
-from witan_core.group_commit import GroupCommitter, RejectedBatch
-from witan_core.omnigraph import OmnigraphConflict
+from witan_core.group_commit import ConditionFailed, GroupCommitter, RejectedBatch
+from witan_core.omnigraph import OmnigraphConflict, WriteQueueFull
 
 KEY = ("graph", "actor")
 
@@ -85,7 +85,7 @@ def _queue_behind_first(committer, store, first, others):
 
 
 def test_a_lone_write_commits_at_once_and_alone():
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore()
     store.release.set()
 
@@ -95,14 +95,14 @@ def test_a_lone_write_commits_at_once_and_alone():
 
 
 def test_writes_queued_behind_a_commit_share_the_next_one():
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore()
     first = Caller(committer, store, [_step("a")])
     others = [Caller(committer, store, [_step(n)]) for n in "bcde"]
 
     _queue_behind_first(committer, store, first, others)
 
-    assert committer.commits == [1, 4]
+    assert list(committer.commits) == [1, 4]
     assert store.calls[1] == (["b", "c", "d", "e"], None, False)
     assert first.result == "c1"
     assert {c.result for c in others} == {"c2"}
@@ -110,7 +110,7 @@ def test_writes_queued_behind_a_commit_share_the_next_one():
 
 
 def test_one_fenced_write_per_commit_and_it_goes_first():
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore()
     first = Caller(committer, store, [_step("a")])
     plain = Caller(committer, store, [_step("plain")])
@@ -130,10 +130,10 @@ def test_a_refused_fence_fails_only_its_own_caller():
 
     def decide(steps, if_commit):
         if if_commit == "stale":
-            return OmnigraphConflict("precondition failed")
+            return ConditionFailed(OmnigraphConflict("precondition failed"))
         return None
 
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore(decide)
     first = Caller(committer, store, [_step("a")])
     fenced = Caller(committer, store, [_step("fenced")], if_commit="stale")
@@ -148,19 +148,74 @@ def test_a_refused_fence_fails_only_its_own_caller():
     assert {r.result for r in riders} == {"c2"}
 
 
-def test_a_fence_this_lane_already_moved_past_is_refused_without_a_commit():
-    committer = GroupCommitter(OmnigraphConflict)
+@pytest.mark.parametrize("surface_conflict", [True, False])
+def test_a_fence_this_lane_already_moved_past_is_refused_without_a_commit(
+    surface_conflict,
+):
+    """Refused the way the server would have refused it: a conflict for a
+    caller that surfaces them, the plain precondition error otherwise."""
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore()
     first = Caller(committer, store, [_step("a")])
     # The first commit replaces head c0, so a write fenced on c0 cannot land.
-    stale = Caller(committer, store, [_step("stale")], if_commit="c0")
+    stale = Caller(
+        committer,
+        store,
+        [_step("stale")],
+        if_commit="c0",
+        surface_conflict=surface_conflict,
+    )
     rider = Caller(committer, store, [_step("rider")])
 
     _queue_behind_first(committer, store, first, [stale, rider])
 
-    assert isinstance(stale.error, OmnigraphConflict)
+    expected = OmnigraphConflict if surface_conflict else RuntimeError
+    assert type(stale.error) is expected
+    assert "NOTHING WAS WRITTEN" in str(stale.error)
     assert store.calls[1] == (["rider"], None, False)
-    assert committer.commits == [1, 1]
+    assert list(committer.commits) == [1, 1]
+
+
+def test_a_refused_fence_that_does_not_surface_conflicts_spares_the_riders():
+    """A 412 for a caller without ``surface_conflict`` is a plain RuntimeError,
+    but it is still that caller's alone."""
+    refusal = RuntimeError("precondition no longer held. NOTHING WAS WRITTEN")
+
+    def decide(steps, if_commit):
+        return ConditionFailed(refusal) if if_commit == "stale" else None
+
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore(decide)
+    first = Caller(committer, store, [_step("a")])
+    fenced = Caller(committer, store, [_step("fenced")], if_commit="stale")
+    rider = Caller(committer, store, [_step("rider")])
+
+    _queue_behind_first(committer, store, first, [fenced, rider])
+
+    assert type(fenced.error) is RuntimeError
+    assert str(fenced.error) == str(refusal)
+    assert rider.error is None and rider.result == "c2"
+
+
+def test_a_write_whose_budget_runs_out_in_the_queue_is_never_sent():
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore()
+    first = Caller(committer, store, [_step("a")])
+    late = Caller(committer, store, [_step("late")], budget=0.05)
+    patient = Caller(committer, store, [_step("patient")])
+    first.start()
+    assert store.in_flight.wait(5)
+    late.start()
+    patient.start()
+    time.sleep(0.2)
+    store.release.set()
+    for caller in (first, late, patient):
+        caller.join(5)
+
+    assert isinstance(late.error, WriteQueueFull)
+    assert "NOTHING WAS WRITTEN" in str(late.error)
+    assert patient.error is None
+    assert [c[0] for c in store.calls] == [["a"], ["patient"]]
 
 
 def test_a_rejected_group_is_replayed_one_write_at_a_time():
@@ -169,7 +224,7 @@ def test_a_rejected_group_is_replayed_one_write_at_a_time():
             return RejectedBatch(RuntimeError("omnigraph mutate failed: 400"))
         return None
 
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore(decide)
     first = Caller(committer, store, [_step("a")])
     good = Caller(committer, store, [_step("good")])
@@ -197,7 +252,7 @@ def test_an_outcome_unknown_failure_reaches_every_member_and_is_not_replayed():
             return RuntimeError("request failed mid-flight")
         return None
 
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore(decide)
     first = Caller(committer, store, [_step("a")])
     others = [Caller(committer, store, [_step(n)]) for n in ("b", "c")]
@@ -211,7 +266,7 @@ def test_an_outcome_unknown_failure_reaches_every_member_and_is_not_replayed():
 
 
 def test_deletes_never_share_a_commit_with_inserts():
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore()
     first = Caller(committer, store, [_step("a")])
     insert1 = Caller(committer, store, [_step("i1")])
@@ -224,7 +279,7 @@ def test_deletes_never_share_a_commit_with_inserts():
 
 
 def test_the_statement_cap_splits_a_queue():
-    committer = GroupCommitter(OmnigraphConflict, max_statements=3)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull, max_statements=3)
     store = FakeStore()
     first = Caller(committer, store, [_step("a")])
     others = [
@@ -233,7 +288,7 @@ def test_the_statement_cap_splits_a_queue():
 
     _queue_behind_first(committer, store, first, others)
 
-    assert committer.commits == [1, 1, 1, 1]
+    assert list(committer.commits) == [1, 1, 1, 1]
     oversized = Caller(
         committer, store, [_step("x"), _step("y"), _step("z"), _step("w")]
     )
@@ -243,7 +298,7 @@ def test_the_statement_cap_splits_a_queue():
 
 def test_lanes_are_independent():
     """A commit in flight on one actor's lane does not hold up another's."""
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     blocked = FakeStore()
     other = FakeStore()
     other.release.set()
@@ -269,7 +324,7 @@ def test_every_caller_gets_exactly_its_own_outcome_under_load(writers):
             return RejectedBatch(RuntimeError("rejected"))
         return None
 
-    committer = GroupCommitter(OmnigraphConflict)
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
     store = FakeStore(decide)
     store.release.set()
     callers = [
@@ -284,3 +339,75 @@ def test_every_caller_gets_exactly_its_own_outcome_under_load(writers):
     for i, caller in enumerate(callers):
         assert (caller.error is None) == (i % 2 == 0), (i, caller.error)
     assert committer._lanes == {}
+
+
+# ── How the client classifies a failed group commit ──────────────────────────
+
+
+@pytest.fixture
+def remote(monkeypatch, tmp_path):
+    """A remote client whose HTTP call is a stub returning one attempt."""
+    import shutil
+
+    from witan_core import omnigraph as og
+
+    (tmp_path / "m.gq").write_text(
+        "query put($slug: String) {\n    insert T { slug: $slug }\n}\n"
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = og.OmnigraphClient("http://og.test", tmp_path, graph_id="g")
+
+    def answer(status=None, error="", raises=None):
+        def stub(*args, attempts=None, **kwargs):
+            attempts.append(og._AttemptResult("fatal", error=error, status=status))
+            raise raises or RuntimeError(f"omnigraph mutate failed:\n{error}")
+
+        monkeypatch.setattr(client, "_http_execute", stub)
+
+    return client, answer
+
+
+STEPS = [("m.gq", "put", {"slug": "a"}), ("m.gq", "put", {"slug": "b"})]
+
+
+def test_a_validation_400_is_a_rejection_safe_to_replay(remote):
+    client, answer = remote
+    answer(400, "__src 'x' not found in Task (HTTP 400, bad_request)")
+    with pytest.raises(RejectedBatch):
+        client._commit_group(STEPS, None, False, time.monotonic())
+
+
+def test_a_datafusion_400_is_not_replayed(remote):
+    """omnigraph marks a DataFusion error completion-uncertain server-side
+    while still answering 400, so a replay could apply a write twice."""
+    client, answer = remote
+    answer(400, "query: execution failed (HTTP 400, bad_request)")
+    with pytest.raises(RuntimeError) as raised:
+        client._commit_group(STEPS, None, False, time.monotonic())
+    assert type(raised.value) is RuntimeError
+
+
+def test_a_412_belongs_to_the_fenced_member(remote):
+    client, answer = remote
+    answer(412, "precondition failed on branch 'main' (HTTP 412)")
+    with pytest.raises(ConditionFailed) as raised:
+        client._commit_group(STEPS, "c0", False, time.monotonic())
+    assert type(raised.value.error) is RuntimeError
+
+
+def test_a_surfaced_conflict_belongs_to_the_conditional_member(remote):
+    client, answer = remote
+    answer(409, "stale view", raises=OmnigraphConflict("stale view"))
+    with pytest.raises(ConditionFailed) as raised:
+        client._commit_group(STEPS, None, True, time.monotonic())
+    assert isinstance(raised.value.error, OmnigraphConflict)
+
+
+def test_a_missing_parameter_is_a_rejection_before_anything_is_sent(remote):
+    client, answer = remote
+    answer(raises=AssertionError("nothing may be sent"))
+    with pytest.raises(RejectedBatch) as raised:
+        client._commit_group(
+            [STEPS[0], ("m.gq", "put", {})], None, False, time.monotonic()
+        )
+    assert isinstance(raised.value.error, KeyError)

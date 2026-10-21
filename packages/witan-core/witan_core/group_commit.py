@@ -29,19 +29,23 @@ WHAT A GROUP MAY HOLD, and why each rule preserves what a caller was promised:
   read set, which this layer does not have.
 
 PER-CALLER OUTCOMES. Success gives every member the group's commit id. A
-refused precondition (or a surfaced conflict) goes to the conditional member
-only, and the others go back to the head of the queue for the next commit. A
-:class:`RejectedBatch` (the server answered and applied nothing) is replayed
-one member at a time, so one caller's bad write fails only that caller. Any
-other failure goes to every member unchanged. Each caller then has the
-retry-safety it would have had alone, but one lost response leaves every member
-of that group to re-read before retrying.
+:class:`ConditionFailed` (a refused precondition or a surfaced conflict) goes
+to the conditional member only, and the others go back to the head of the
+queue for the next commit. A :class:`RejectedBatch` (the server answered and
+applied nothing) is replayed one member at a time, so one caller's bad write
+fails only that caller. Any other failure goes to every member unchanged. Each
+caller then has the retry-safety it would have had alone, but one lost response
+leaves every member of that group to re-read before retrying.
 
 KNOWN-STALE FENCES. Each commit's response names the head it replaced. A queued
 fenced write whose fence is one of those heads would be refused by the server,
 and would cost the writes riding with it a commit, so it is refused here
 instead. A wrong guess here can only refuse a write (the caller re-reads, as on
 a 412), never apply one.
+
+EXPIRED WRITES. A write whose own deadline passes while it queues is refused
+before its group is sent, as the write gate refuses one it cannot finish in
+time: committing it would land a write its caller has stopped waiting for.
 
 Stdlib only, like the rest of ``witan_core``'s base modules.
 """
@@ -73,6 +77,8 @@ MAX_GROUP_BYTES = 256 * 1024
 
 #: How many replaced heads a lane remembers for the known-stale check.
 _SUPERSEDED_MEMORY = 64
+#: How many recent group sizes ``GroupCommitter.commits`` keeps.
+_RECENT_COMMITS = 1024
 
 
 class RejectedBatch(Exception):
@@ -87,6 +93,18 @@ class RejectedBatch(Exception):
         self.error = error
 
 
+class ConditionFailed(Exception):
+    """Raised by a ``CommitFn`` when the group's precondition was refused.
+
+    The precondition is the conditional member's, so ``error`` is its outcome
+    alone and nothing was written for anyone.
+    """
+
+    def __init__(self, error: BaseException) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
 @dataclass(eq=False)
 class _Member:
     steps: list[Step]
@@ -94,6 +112,7 @@ class _Member:
     surface_conflict: bool
     destructive: bool
     cost: int
+    deadline: float | None
     submitted: float = field(default_factory=time.monotonic)
     lead: bool = False
     done: bool = False
@@ -116,27 +135,33 @@ class _Lane:
 class GroupCommitter:
     """Process-wide lanes of queued writes, one lane per (actor, graph).
 
-    :param conflict_type: the exception a refused precondition raises
-        (``OmnigraphConflict``), passed in so this module does not import the
-        client that imports it.
+    The two error types are passed in so this module does not import the
+    client that imports it.
+
+    :param conflict_type: what a caller that surfaces conflicts gets for a
+        refused precondition (``OmnigraphConflict``).
+    :param expired_type: what a write whose deadline passed in the queue gets
+        (``WriteQueueFull``).
     :param max_statements: statement cap for one group commit.
     :param max_bytes: estimated param-byte cap for one group commit.
     """
 
     def __init__(
         self,
-        conflict_type: type[BaseException],
+        conflict_type: Callable[[str], BaseException],
+        expired_type: Callable[[str], BaseException],
         *,
         max_statements: int = MAX_GROUP_STATEMENTS,
         max_bytes: int = MAX_GROUP_BYTES,
     ) -> None:
         self._conflict_type = conflict_type
+        self._expired_type = expired_type
         self.max_statements = max_statements
         self.max_bytes = max_bytes
         self._cv = threading.Condition()
         self._lanes: dict[Hashable, _Lane] = {}
-        #: Commits issued, by group size. For tests and benchmarks.
-        self.commits: list[int] = []
+        #: Recent commits issued, by group size. For tests and benchmarks.
+        self.commits: deque[int] = deque(maxlen=_RECENT_COMMITS)
 
     def submit(
         self,
@@ -148,6 +173,7 @@ class GroupCommitter:
         surface_conflict: bool = False,
         destructive: bool = False,
         cost: int = 0,
+        budget: float | None = None,
     ) -> str | None:
         """Commit ``steps``, alone or with whatever else is queued on ``key``.
 
@@ -163,15 +189,19 @@ class GroupCommitter:
         :param surface_conflict: raise a conflict instead of retrying it.
         :param destructive: whether any step deletes.
         :param cost: estimated bytes of params, for the group cap.
+        :param budget: seconds this call has, from now, or ``None`` for no limit.
         :returns: the commit id this write landed in, if known.
         :rtype: str | None
         """
+        now = time.monotonic()
         member = _Member(
             steps=steps,
             if_commit=if_commit,
             surface_conflict=surface_conflict,
             destructive=destructive,
             cost=cost,
+            deadline=now + budget if budget else None,
+            submitted=now,
         )
         with self._cv:
             lane = self._lanes.get(key)
@@ -184,9 +214,10 @@ class GroupCommitter:
         if not member.done:
             self._lead(key, lane, member, commit)
         if member.error is not None:
-            # A copy per caller: the same instance raised from several threads
-            # would have its traceback rewritten by each of them.
-            raise copy.copy(member.error) from member.error
+            own = _own_copy(member.error)
+            if own is member.error:
+                raise own
+            raise own from member.error
         return member.result
 
     def _lead(self, key: Hashable, lane: _Lane, me: _Member, commit: CommitFn) -> None:
@@ -214,11 +245,16 @@ class GroupCommitter:
         conditional: _Member | None = None
         destructive: bool | None = None
         statements = size = 0
+        now = time.monotonic()
         for member in list(lane.queue):
+            if member.deadline is not None and now >= member.deadline:
+                lane.queue.remove(member)
+                self._finish(member, error=self._expired(member, now))
+                continue
             if member.conditional:
                 if member.if_commit is not None and member.if_commit in lane.superseded:
                     lane.queue.remove(member)
-                    self._finish(member, error=self._stale(member.if_commit))
+                    self._finish(member, error=self._stale(member))
                     continue
                 if conditional is not None:
                     continue
@@ -243,11 +279,22 @@ class GroupCommitter:
             picked.insert(0, conditional)
         return picked
 
-    def _stale(self, fence: str) -> BaseException:
-        return self._conflict_type(
-            f"precondition failed: expected head '{fence}', which a commit "
-            "this process made has already replaced. Nothing was written; "
-            "re-read and decide."
+    def _stale(self, member: _Member) -> BaseException:
+        message = (
+            f"precondition failed: expected head '{member.if_commit}', which a "
+            "commit this process made has already replaced. NOTHING WAS "
+            "WRITTEN; re-read and decide."
+        )
+        if member.surface_conflict:
+            return self._conflict_type(message)
+        return RuntimeError(message)
+
+    def _expired(self, member: _Member, now: float) -> BaseException:
+        return self._expired_type(
+            f"write was refused before it was sent: it queued "
+            f"{now - member.submitted:.0f}s behind other writes to this graph "
+            "and its call has no time left. NOTHING WAS WRITTEN — retry once "
+            "the burst clears."
         )
 
     def _run(self, lane: _Lane, group: list[_Member], commit: CommitFn) -> None:
@@ -271,14 +318,14 @@ class GroupCommitter:
             for member in group:
                 self._run(lane, [member], commit)
             return
-        except self._conflict_type as exc:
+        except ConditionFailed as failed:
             with self._cv:
                 if conditional is not None:
-                    self._finish(conditional, error=exc)
+                    self._finish(conditional, error=failed.error)
                     lane.queue.extendleft(reversed(group[1:]))
                 else:
                     for member in group:
-                        self._finish(member, error=exc)
+                        self._finish(member, error=failed.error)
             return
         except BaseException as exc:  # noqa: BLE001 — each caller re-raises it
             for member in group:
@@ -302,3 +349,16 @@ class GroupCommitter:
             member.error = error
             member.done = True
             self._cv.notify_all()
+
+
+def _own_copy(error: BaseException) -> BaseException:
+    """A copy of ``error`` for one caller to raise.
+
+    The same instance raised from several threads would have its traceback
+    rewritten by each. An exception whose constructor cannot be replayed from
+    its ``args`` (``json.JSONDecodeError`` is one) is raised as the original.
+    """
+    try:
+        return copy.copy(error)
+    except Exception:  # noqa: BLE001 — the original is the fallback
+        return error

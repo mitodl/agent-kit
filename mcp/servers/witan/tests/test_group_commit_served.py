@@ -145,7 +145,11 @@ def burst(monkeypatch):
     commit's step names and fence.
     """
     from witan_core import omnigraph as og
+    from witan_core.group_commit import GroupCommitter
 
+    monkeypatch.setattr(
+        og, "_GROUP_COMMITTER", GroupCommitter(og.OmnigraphConflict, og.WriteQueueFull)
+    )
     real = og.OmnigraphClient._commit_group
     gate = {"expect": 0, "held": True, "hold": "before"}
     in_flight = threading.Event()
@@ -191,7 +195,7 @@ def burst(monkeypatch):
         for thread in threads:
             thread.join(60)
             assert not thread.is_alive()
-        return outcomes, og._GROUP_COMMITTER.commits[sizes_before:]
+        return outcomes, list(og._GROUP_COMMITTER.commits)[sizes_before:]
 
     run.calls = []
     return run
@@ -309,3 +313,84 @@ def test_a_rejected_write_fails_only_its_own_caller(served, burst):
     assert [isinstance(o, Exception) for o in outcomes] == [False, False, True, False]
     assert sizes == [1, 3, 1, 1, 1]
     assert {t["title"] for t in tools.task_list(repo=REPO)} >= {"first", "a", "b"}
+
+
+def test_a_missing_parameter_fails_only_its_own_caller(served, burst):
+    """Caught while composing the group, before anything is sent, and
+    replayed so that only the write missing it fails."""
+    from witan import server as srv
+
+    tools, _url = served
+
+    def create(title):
+        return lambda: tools.task_create(title=title, description="d", repo=REPO)
+
+    def incomplete():
+        srv.client.change_many(
+            [
+                ("mutations.gq", "link_blocks", {"from": "x", "to": "y"}),
+                ("mutations.gq", "link_blocks", {"from": "x"}),
+            ]
+        )
+
+    outcomes, sizes = burst(create("first"), [create("a"), incomplete, create("b")])
+
+    assert isinstance(outcomes[2], KeyError)
+    assert [isinstance(o, Exception) for o in outcomes] == [False, False, True, False]
+    assert sizes == [1, 3, 1, 1, 1]
+
+
+def test_a_server_refused_fence_spares_the_writes_riding_with_it(served, burst):
+    """A fence the lane cannot know is stale (it read before the lane's last
+    idle spell) reaches the server, which answers 412. Only that caller is
+    refused, and with the error it would have had alone."""
+    from witan import server as srv
+
+    tools, _url = served
+    task = tools.task_create(title="t", description="d", repo=REPO)
+    _, old_head = srv.client.read_with_commit(
+        "read.gq", "get_task", {"slug": task["slug"]}
+    )
+    other = tools.task_create(title="moves the head", description="d", repo=REPO)
+    row = tools.task_get(task["slug"])
+
+    def fenced_on_old_head():
+        params = {
+            k: row.get(k)
+            for k in (
+                "slug",
+                "title",
+                "description",
+                "type",
+                "status",
+                "priority",
+                "repo",
+                "project_slug",
+                "parent_slug",
+                "blocked_by",
+                "assignee",
+                "external_uri",
+                "resolution",
+                "symbol_refs",
+                "tags",
+                "closed_at",
+                "claimed_at",
+                "first_claimed_at",
+                "updated_at",
+            )
+        }
+        srv.client.change("mutations.gq", "update_task", params, if_commit=old_head)
+
+    def comment(text):
+        return lambda: tools.task_comment(other["slug"], text)
+
+    outcomes, sizes = burst(
+        comment("held"), [fenced_on_old_head, comment("r1"), comment("r2")]
+    )
+
+    assert type(outcomes[1]) is RuntimeError
+    assert "precondition" in str(outcomes[1])
+    assert [isinstance(o, Exception) for o in outcomes] == [False, True, False, False]
+    assert sizes == [1, 3, 2]
+    bodies = {c["body"] for c in tools.task_get(other["slug"])["comments"]}
+    assert bodies == {"held", "r1", "r2"}

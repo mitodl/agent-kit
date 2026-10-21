@@ -14,12 +14,17 @@
   authorizes a request once and records one actor on its commit), never mixes
   deletes with inserts or updates, and carries at most one fenced
   (`if_commit`) write. That write goes first and the commit is fenced on its
-  head. A refused fence fails only that caller, and the writes queued with it
-  go into the next commit. A queued fenced write whose head a commit from this
-  process has already replaced is refused without a round trip. A group the
-  server rejects with 400 or 413 is replayed one write at a time. Any other
-  failure, including one whose outcome is unknown, reaches every member, so
-  every member of that group re-reads before retrying.
+  head. A refused fence fails only that caller, with the error it would have
+  had alone, and the writes queued with it go into the next commit. A queued
+  fenced write whose head a commit from this process has already replaced is
+  refused without a round trip. A group the server rejects with 400 or 413
+  before any effect, or that is missing a parameter, is replayed one write at
+  a time. A 400 carrying a DataFusion error (`query: ...`) is excluded,
+  because omnigraph marks that one completion-uncertain. A write whose
+  `WITAN_REMOTE_CALL_BUDGET_SECONDS` runs out while it queues is refused
+  unsent with `WriteQueueFull`. Any other failure, including one whose outcome
+  is unknown, reaches every member, so every member of that group re-reads
+  before retrying.
 
   Only remote writes over the HTTP transport are grouped. Set
   `WITAN_GROUP_COMMIT=0` to turn grouping off.

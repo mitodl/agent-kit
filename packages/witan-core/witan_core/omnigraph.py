@@ -69,6 +69,7 @@ from typing import NamedTuple, TypeVar
 
 from witan_core import omnigraph_http as _http
 from witan_core.group_commit import (
+    ConditionFailed,
     GroupCommitter,
     RejectedBatch,
     Step,
@@ -457,7 +458,13 @@ GROUP_COMMIT_ENV_VAR = "WITAN_GROUP_COMMIT"
 # whole query before any effect, and a resource limit is checked before it too.
 # Only these let a failed group be replayed one write at a time; a failure
 # whose effects are unknown (a mid-flight timeout is FATAL too) must not be.
+# One 400 is NOT proof: omnigraph 0.13 answers a generic DataFusion error with
+# 400 and a "query: " message, and marks it completion-uncertain server-side
+# (`ApiError::from_omni`, omnigraph-server/src/lib.rs), without saying so on
+# the wire. `_DATAFUSION_ERROR_PREFIX` keeps that one out.
 _DEFINITE_REJECTION_STATUSES = frozenset({400, 413})
+_DATAFUSION_ERROR_PREFIX = "query: "
+_PRECONDITION_FAILED_STATUS = 412
 _DELETE_STATEMENT_RE = re.compile(r"^\s*delete\b", re.MULTILINE)
 
 # A deployed omnigraph-server is reached over http(s); local files and s3://
@@ -1533,11 +1540,6 @@ class OmnigraphConflict(RuntimeError):
     can re-read and decide (see ``task_claim``)."""
 
 
-#: Process-wide, like `_WRITE_GATE`: witan builds a client per request, so lanes
-#: kept on a client would group nothing.
-_GROUP_COMMITTER = GroupCommitter(OmnigraphConflict)
-
-
 class WriteIndeterminate(RuntimeError, Refusal):
     """A write whose outcome CANNOT BE DETERMINED from the response.
 
@@ -1600,6 +1602,11 @@ class WriteQueueFull(RuntimeError, Refusal):
     # (`f"{server_url}|{graph_id}"`) and this process's own counts and times.
     # No upstream string, unlike its neighbours below.
     log_safe_message = True
+
+
+#: Process-wide, like `_WRITE_GATE`: witan builds a client per request, so lanes
+#: kept on a client would group nothing.
+_GROUP_COMMITTER = GroupCommitter(OmnigraphConflict, WriteQueueFull)
 
 
 class WriteContention(RuntimeError, Refusal):
@@ -2511,6 +2518,8 @@ class OmnigraphClient:
                 for query_file, name, _ in steps
             ),
             cost=sum(len(json.dumps(params, default=str)) for _, _, params in steps),
+            budget=_env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
+            or None,
         )
 
     def _commit_group(
@@ -2536,7 +2545,12 @@ class OmnigraphClient:
                     sources[query_file] = (self.queries_dir / query_file).read_text()
                 return sources[query_file]
 
-            source, params = compose_batch(steps, read_source)
+            try:
+                source, params = compose_batch(steps, read_source)
+            except KeyError as exc:
+                # One member's missing parameter, caught before anything was
+                # sent: replaying one write at a time gives it to that member.
+                raise RejectedBatch(exc) from exc
         attempts: list[_AttemptResult] = []
         try:
             body = self._http_execute(
@@ -2550,14 +2564,20 @@ class OmnigraphClient:
                 started=started,
                 attempts=attempts,
             )
+        except OmnigraphConflict as exc:
+            raise ConditionFailed(exc) from exc
         except RuntimeError as exc:
             # Exactly RuntimeError: every subclass (unavailable, contention,
             # indeterminate, queue full, quarantined) is a condition of the
             # graph, not of one caller's statements, and replaying cannot help.
-            if (
-                type(exc) is RuntimeError
-                and attempts
-                and attempts[-1].status in _DEFINITE_REJECTION_STATUSES
+            last = attempts[-1] if attempts else None
+            if type(exc) is not RuntimeError or last is None:
+                raise
+            if last.status == _PRECONDITION_FAILED_STATUS:
+                # The fence of a caller that does not surface conflicts.
+                raise ConditionFailed(exc) from exc
+            if last.status in _DEFINITE_REJECTION_STATUSES and not (
+                last.error.lstrip().startswith(_DATAFUSION_ERROR_PREFIX)
             ):
                 raise RejectedBatch(exc) from exc
             raise
