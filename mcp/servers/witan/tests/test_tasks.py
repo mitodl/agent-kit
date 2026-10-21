@@ -5,6 +5,20 @@ import pytest
 from .conftest import requires_omnigraph
 
 
+@pytest.fixture(autouse=True)
+def outside_a_checkout(tmp_path, monkeypatch):
+    """Run outside any git checkout, so a claim carries no CodeBranch steps.
+
+    `task_claim` folds the caller's CodeBranch upsert into its own commit, and
+    under local stdio it reads the branch from the working directory. Run from
+    a developer's checkout, every claim here would be a three-step batch; run
+    from CI's detached HEAD, a single statement. The conflict-injection tests
+    below fake `client.change`, which only a single statement reaches. Branch
+    tracking is covered by test_codebranch.py and test_write_batching.py.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 @requires_omnigraph
 def test_create_defaults(server):
     res = server.task_create(title="do a thing", description="x")

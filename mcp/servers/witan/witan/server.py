@@ -4933,41 +4933,6 @@ def _code_branch_steps(
     return steps
 
 
-def _track_code_branch(
-    repo: str | None,
-    *,
-    branch: str | None = None,
-    task_slug: str | None = None,
-    project_slug: str | None = None,
-) -> None:
-    """Issue :func:`_code_branch_steps` as one standalone commit.
-
-    For callers that cannot fold the steps into their own write. ``task_claim``
-    is the case: its claim is a single-statement compare-and-swap, and the
-    branch metadata must only be recorded once the claim is known won — so it
-    cannot ride along, and retrying the claim must not re-apply it.
-
-    Still never raises, for the same reason the step builder doesn't: this is
-    metadata beside the tool's purpose. One commit now instead of up to three.
-    """
-    steps = _code_branch_steps(
-        repo, branch=branch, task_slug=task_slug, project_slug=project_slug
-    )
-    if not steps:
-        return
-    try:
-        client.change_many(steps)
-    except Exception as exc:  # coordination metadata, never fatal
-        logger.warning(
-            "witan.code_branch.tracking_failed",
-            repo=repo,
-            task=task_slug,
-            project=project_slug,
-            error=str(exc),
-            exc_info=True,
-        )
-
-
 # ── Workflow Tracking Tools ───────────────────────────────────────
 
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
@@ -6829,13 +6794,14 @@ def _with_unswept_warning(task: dict, unswept: list[str]) -> dict:
 #: A task row change, or a function computing one from the row the write is
 #: fenced on (``None`` for "nothing to change").
 _TaskChanges = dict | Callable[[dict], dict | None]
+_ExtraSteps = list[_Step] | Callable[[], list[_Step]]
 
 
 def _update_task(
     slug: str,
     changes: _TaskChanges,
     *,
-    extra_steps: list[_Step] | None = None,
+    extra_steps: _ExtraSteps | None = None,
     default_if_missing: dict[str, Callable[[], object]] | None = None,
     require: Callable[[dict], None] | None = None,
 ) -> dict | None:
@@ -6877,6 +6843,19 @@ def _update_task(
     half-applied now, which is the more important half: the edge and the
     ``parent_slug`` field are two encodings of one fact.
 
+    ``extra_steps`` may also be a function of no arguments, called at the
+    start of each attempt, BEFORE the fenced read. ``task_claim`` passes one:
+    its CodeBranch steps are built from reads (insert vs. touch, whether the
+    WorksOn edge exists). Those reads stay outside the fence window on
+    purpose. The precondition is the whole graph head, so every read between
+    the fenced read and the commit widens the interval in which any write
+    anywhere refuses the attempt. The cost is that the steps can be one
+    commit staler than the row: a rival that creates the same CodeBranch in
+    between makes our ``insert_code_branch`` land on an existing key, which
+    omnigraph 0.13 upserts (``created_at`` moves by that gap), and a WorksOn
+    re-insert upserts the same way. A refused attempt rebuilds them, so the
+    reads are repeated only when the fence refuses.
+
     A missing task still writes NOTHING, extras included — the early return
     below happens before any step is issued.
 
@@ -6903,12 +6882,14 @@ def _update_task_once(
     slug: str,
     changes: _TaskChanges,
     *,
-    extra_steps: list[_Step] | None,
+    extra_steps: _ExtraSteps | None,
     default_if_missing: dict[str, Callable[[], object]] | None,
     require: Callable[[dict], None] | None,
 ) -> dict | None:
     """One fenced attempt of :func:`_update_task`. Raises ``OmnigraphConflict``
     when the store refuses the precondition or another writer moved the head."""
+    if callable(extra_steps):
+        extra_steps = extra_steps()
     rows, read_commit = client.read_with_commit("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -7918,8 +7899,8 @@ async def task_claim(
     """
     # This first read only decides whether to refuse or offer a steal; the
     # claim loop below re-decides on the row its conditional write is fenced
-    # on (see docs/adr/0003). On success also upserts a CodeBranch for the
-    # caller's repo+branch and links it WorksOn this task (best-effort).
+    # on (see docs/adr/0003). The claim also upserts a CodeBranch for the
+    # caller's repo+branch and links it WorksOn this task, in the same commit.
     holder = _claim_holder(assignee, session_id)
     rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
     if not rows:
@@ -7999,8 +7980,27 @@ async def task_claim(
         if (refusal := _claim_refusal(slug, current, holder, force)) is not None:
             raise _TaskWriteRefused(refusal)
 
+    # The CodeBranch upsert and WorksOn edge ride in the claim's own commit.
+    # They used to be a second commit after the claim, and on omnigraph 0.13
+    # same-branch commits serialize at about 1s each, so every claim (lease
+    # renewals included) took two slots in that lane. The fence makes this
+    # safe: a refused attempt writes neither, so the metadata still lands only
+    # with a won claim. Construction stays best-effort (`_code_branch_steps`
+    # returns `[]` on a failed read); a failed commit is the claim failing.
+    branch_steps = functools.partial(
+        _code_branch_steps,
+        repo_module.detect(override=repo),
+        branch=branch,
+        task_slug=slug,
+    )
     try:
-        claimed = await _offload(_update_task, slug, claim, require=require_claimable)
+        claimed = await _offload(
+            _update_task,
+            slug,
+            claim,
+            extra_steps=branch_steps,
+            require=require_claimable,
+        )
     except _TaskWriteRefused as refused:
         return refused.result
     except WriteContention:
@@ -8023,12 +8023,6 @@ async def task_claim(
     if claimed is None:
         # Deleted between the first read and the fenced one.
         return None
-    await _offload(
-        _track_code_branch,
-        repo_module.detect(override=repo),
-        branch=branch,
-        task_slug=slug,
-    )
     result = {
         "slug": slug,
         "claimed": True,
