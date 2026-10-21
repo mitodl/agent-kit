@@ -187,22 +187,129 @@ def test_a_missing_task_writes_nothing_including_the_parent_edge(server, commits
 
 
 @requires_omnigraph
-def test_code_branch_tracking_survives_a_write_failure(server, tmp_path, monkeypatch):
-    """Best-effort is preserved where it matters: `_track_code_branch` is the
-    standalone path (task_claim's tail), and a store that refuses the write must
-    not turn a won claim into a failed tool call."""
+def test_task_claim_is_one_commit(server, tmp_path, monkeypatch, commits):
+    """It used to be two: the fenced claim, then the CodeBranch upsert and
+    WorksOn edge as a separate commit. A lease renewal paid the same two."""
     from witan import server as srv
 
     base = _git_repo(tmp_path / "r")
-    _git(base, "checkout", "-q", "-b", "feature/failing")
+    _git(base, "checkout", "-q", "-b", "feature/claim")
     monkeypatch.chdir(base)
+    task = server.task_create(title="claim me", description="d", repo=REPO)
+    commits.clear()
+
+    assert server.task_claim(task["slug"])["claimed"] is True
+    assert commits == ["update_task+insert_code_branch+link_works_on"], commits
+    branch_slug = srv._code_branch_slug(REPO, "feature/claim")
+    assert srv.client.read(
+        "read.gq",
+        "code_branch_works_on_edge",
+        {"branch_slug": branch_slug, "task_slug": task["slug"]},
+    ), "the WorksOn edge must land in the claim's commit"
+
+    commits.clear()
+    assert server.task_claim(task["slug"])["claimed"] is True
+    assert commits == ["update_task+touch_code_branch"], commits
+
+
+@requires_omnigraph
+def test_a_refused_claim_builds_no_branch_steps(server, tmp_path, monkeypatch, commits):
+    """The CodeBranch steps are built after `require` decides the claim, so a
+    claim lost on the fenced read neither writes them nor pays for the reads
+    behind them."""
+    from witan import server as srv
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/held")
+    monkeypatch.chdir(base)
+    task = server.task_create(title="held", description="d", repo=REPO)
+    built = []
+    real_steps = srv._code_branch_steps
+    monkeypatch.setattr(
+        srv,
+        "_code_branch_steps",
+        lambda *a, **kw: built.append(a) or real_steps(*a, **kw),
+    )
+    real_read = srv.client.read_with_commit
+
+    def rival_claims_first(*args, **kwargs):
+        # A rival's claim lands after task_claim's first read and before the
+        # read its write is fenced on, so `require` is what refuses.
+        monkeypatch.setattr(srv.client, "read_with_commit", real_read)
+        srv._update_task(
+            task["slug"],
+            {
+                "status": "in_progress",
+                "assignee": "agentB",
+                "claimed_at": srv.now_iso(),
+            },
+        )
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "read_with_commit", rival_claims_first)
+    commits.clear()
+
+    result = server.task_claim(task["slug"], assignee="agentA")
+    assert result["claimed"] is False and result["held_by"] == "agentB"
+    assert commits == ["update_task"], "only the rival's claim may be written"
+    assert built == []
+
+
+@requires_omnigraph
+def test_a_retried_claim_rebuilds_its_branch_steps(
+    server, tmp_path, monkeypatch, commits
+):
+    """A rival on the same branch can create the CodeBranch between our read
+    and our commit. The retry has to see that and touch it, not replay an
+    insert decided on the stale read."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/race")
+    monkeypatch.chdir(base)
+    task = server.task_create(title="race", description="d", repo=REPO)
+    rival = server.task_create(title="rival", description="d", repo=REPO)
+    monkeypatch.setattr(srv, "_task_write_pause", lambda _attempt: None)
+    real_change_many = srv.client.change_many
+    state = {"refused": False}
+
+    def rival_lands_first(steps, *args, **kwargs):
+        if not state["refused"] and kwargs.get("if_commit"):
+            # Set first, so the rival's own claim passes straight through.
+            state["refused"] = True
+            assert server.task_claim(rival["slug"], assignee="rival")["claimed"]
+            raise graph_mod.OmnigraphConflict("stale view")
+        return real_change_many(steps, *args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change_many", rival_lands_first)
+
+    assert server.task_claim(task["slug"])["claimed"] is True
+    assert state["refused"]
+    assert commits[-1] == "update_task+touch_code_branch+link_works_on", commits
+
+
+@requires_omnigraph
+def test_a_failed_branch_read_does_not_fail_the_claim(
+    server, tmp_path, monkeypatch, commits
+):
+    """Construction stays best-effort: a read behind the CodeBranch steps that
+    fails drops the metadata, and the claim still lands in its one commit."""
+    from witan import server as srv
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/unreadable")
+    monkeypatch.chdir(base)
+    task = server.task_create(title="unreadable", description="d", repo=REPO)
 
     def boom(*_args, **_kwargs):
-        raise RuntimeError("omnigraph mutate failed")
+        raise RuntimeError("unknown node type CodeBranch")
 
-    monkeypatch.setattr(srv.client, "change_many", boom)
+    monkeypatch.setattr(srv, "_upsert_code_branch_step", boom)
+    commits.clear()
 
-    srv._track_code_branch(REPO, task_slug="tk-whatever")  # must not raise
+    assert server.task_claim(task["slug"])["claimed"] is True
+    assert commits == ["update_task"], commits
 
 
 @requires_omnigraph
