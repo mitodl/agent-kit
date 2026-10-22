@@ -68,16 +68,27 @@ class Caller(threading.Thread):
             self.error = exc
 
 
+def _queued(committer) -> int:
+    return sum(len(lane.queue) for lane in committer._lanes.values())
+
+
+def _queue_in_order(committer, callers):
+    """Start ``callers`` one at a time, each queued before the next starts, so
+    tests that assert on arrival order are deterministic."""
+    for caller in callers:
+        expected = _queued(committer) + 1
+        caller.start()
+        deadline = time.monotonic() + 5
+        while _queued(committer) < expected:
+            assert time.monotonic() < deadline, "caller never queued"
+            time.sleep(0.005)
+
+
 def _queue_behind_first(committer, store, first, others):
     """Start ``first``, wait until its commit is in flight, then queue ``others``."""
     first.start()
     assert store.in_flight.wait(5)
-    for caller in others:
-        caller.start()
-    deadline = time.monotonic() + 5
-    while sum(len(lane.queue) for lane in committer._lanes.values()) < len(others):
-        assert time.monotonic() < deadline, "callers never queued"
-        time.sleep(0.005)
+    _queue_in_order(committer, others)
     store.release.set()
     for caller in [first, *others]:
         caller.join(5)
