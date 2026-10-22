@@ -37,6 +37,7 @@ from witan_core.omnigraph import (
     schema_apply_if_changed,
     schema_stamp_path,
     shared_transport,
+    store_write_lock,
 )
 from witan_core.refusal import Refusal
 
@@ -470,6 +471,39 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
     return StoreRef(str(store))
 
 
+def _schema_change_unsupported(binary: str, schema_file: Path, store: Path) -> bool:
+    """Whether ``omnigraph schema plan`` says ``store`` cannot take ``schema_file``.
+
+    Only a plan that answers ``supported: false`` counts. A missing binary, a
+    held lock or output this does not recognise is no evidence that the store
+    needs recreating, and a wrong yes deletes every repo's bindings, so each of
+    those is ``False`` and the next call retries the apply.
+    """
+    try:
+        res = subprocess.run(
+            [
+                binary,
+                "schema",
+                "plan",
+                "--schema",
+                str(schema_file),
+                "--json",
+                str(store),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    if res.returncode != 0:
+        return False
+    try:
+        return json.loads(res.stdout)["supported"] is False
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     """Resolve the shared bridge graph, initialising it from bridge-schema.pg.
 
@@ -477,6 +511,13 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     bridge graph is declared by provisioning under the fixed
     :data:`config.BRIDGE_GRAPH_ID` and this only verifies it. ``schema apply``
     builds the FTS index on ``key_norm`` that ``search_bindings`` needs.
+
+    A local store whose schema omnigraph cannot migrate in place (e.g. the drop
+    of ``InterfaceBinding.repo_file``) is deleted and recreated, because the
+    writer no longer matches it and the bridge is derived from the indexed
+    checkouts. The check cannot tell an older store from a newer one, so two
+    witan-code versions on either side of such a change, sharing one
+    ``code_dir``, recreate each other's bridge on every write.
     """
     cfg = config or cfg_module.load()
     if _via_mcp(cfg) or cfg.code_server:
@@ -484,20 +525,41 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
 
     store = cfg_module.bridge_store_path(cfg.code_dir)
     binary = _binary()
-    if store.exists():
-        # Pick up additive schema changes (new nodes/fields) on existing
-        # stores; the mtime stamp keeps hot reindex paths subprocess-free.
-        schema_apply_if_changed(binary, cfg.bridge_schema_file, store)
+    # Pick up additive schema changes (new nodes/fields) on existing stores;
+    # the mtime stamp keeps hot reindex paths subprocess-free.
+    if store.exists() and schema_apply_if_changed(
+        binary, cfg.bridge_schema_file, store
+    ):
         return StoreRef(str(store))
+    # Creating or recreating runs under the write lock every local write to
+    # the store takes, so a concurrent writer waits for a finished store
+    # rather than writing into a deleted or half-built one. Every check is
+    # repeated once the lock is held, since another process may have done
+    # the work while this one waited.
+    with store_write_lock(str(store)):
+        if store.exists():
+            if schema_apply_if_changed(binary, cfg.bridge_schema_file, store):
+                return StoreRef(str(store))
+            if not _schema_change_unsupported(binary, cfg.bridge_schema_file, store):
+                return StoreRef(str(store))
+            # Unchanged files keep no bindings on an incremental index, so each
+            # repo needs a forced reindex to put its own back.
+            logger.warning(
+                "witan.code.store.bridge_recreated",
+                store=str(store),
+                reason="schema change omnigraph cannot apply in place",
+                recovery="run `witan-code reindex <repo root>` in each indexed repo",
+            )
+            discard_store(StoreRef(str(store)))
 
-    store.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [binary, "init", "--schema", str(cfg.bridge_schema_file), str(store)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    schema_apply(binary, cfg.bridge_schema_file, store)
+        store.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [binary, "init", "--schema", str(cfg.bridge_schema_file), str(store)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        schema_apply(binary, cfg.bridge_schema_file, store)
     return StoreRef(str(store))
 
 

@@ -167,11 +167,7 @@ def write_bindings(
     client.change_many(
         [
             *(
-                (
-                    "bridge.gq",
-                    "delete_bindings_in_file",
-                    {"repo_file": f"{repo}|{rel}"},
-                )
+                ("bridge.gq", "delete_bindings_in_file", {"repo": repo, "file": rel})
                 for rel in sorted(purge_files)
             ),
             ("bridge.gq", "delete_repo_symbols", {"repo": repo}),
@@ -451,7 +447,6 @@ def _record(b: ParsedBinding, repo: str) -> dict:
             "role": b.role,
             "repo": repo,
             "file": b.file,
-            "repo_file": f"{repo}|{b.file}",
             "symbol_id": b.symbol_id or None,
             "line": b.line,
             "language": b.language,
