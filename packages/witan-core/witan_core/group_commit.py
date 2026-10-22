@@ -44,8 +44,11 @@ instead. A wrong guess here can only refuse a write (the caller re-reads, as on
 a 412), never apply one.
 
 EXPIRED WRITES. A write whose own deadline passes while it queues is refused
-before its group is sent, as the write gate refuses one it cannot finish in
-time: committing it would land a write its caller has stopped waiting for.
+before it is sent, as the write gate refuses one it cannot finish in time:
+committing it would land a write its caller has stopped waiting for. A queued
+caller wakes at its own deadline rather than when the commit ahead of it
+returns, and a rejected group's replay rechecks each member's deadline before
+sending it. A write already sent in a group waits for that group's outcome.
 
 Stdlib only, like the rest of ``witan_core``'s base modules.
 """
@@ -210,7 +213,19 @@ class GroupCommitter:
                 member.lead = True
             lane.queue.append(member)
             while not (member.lead or member.done):
-                self._cv.wait()
+                if member.deadline is None:
+                    self._cv.wait()
+                    continue
+                now = time.monotonic()
+                if now < member.deadline:
+                    self._cv.wait(member.deadline - now)
+                elif member in lane.queue:
+                    # Still queued, so nothing of it has been sent. Once a
+                    # leader takes it into a group it waits for that outcome.
+                    lane.queue.remove(member)
+                    self._finish(member, error=self._expired(member, now))
+                else:
+                    self._cv.wait()
         if not member.done:
             self._lead(key, lane, member, commit)
         if member.error is not None:
@@ -316,7 +331,13 @@ class GroupCommitter:
                 self._finish(lead, error=rejected.error)
                 return
             for member in group:
-                self._run(lane, [member], commit)
+                # The rejected commit and the replays before this one spent
+                # time this member may not have had.
+                now = time.monotonic()
+                if member.deadline is not None and now >= member.deadline:
+                    self._finish(member, error=self._expired(member, now))
+                else:
+                    self._run(lane, [member], commit)
             return
         except ConditionFailed as failed:
             with self._cv:

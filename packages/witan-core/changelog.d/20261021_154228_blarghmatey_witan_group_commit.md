@@ -21,8 +21,9 @@
   before any effect, or that is missing a parameter, is replayed one write at
   a time. A 400 carrying a DataFusion error (`query: ...`) is excluded,
   because omnigraph marks that one completion-uncertain. A write whose
-  `WITAN_REMOTE_CALL_BUDGET_SECONDS` runs out while it queues is refused
-  unsent with `WriteQueueFull`. Any other failure, including one whose outcome
+  `WITAN_REMOTE_CALL_BUDGET_SECONDS` runs out before it is sent, while it
+  queues or while a rejected group is replayed ahead of it, is refused unsent
+  with `WriteQueueFull` at its own deadline. Any other failure, including one whose outcome
   is unknown, reaches every member, so every member of that group re-reads
   before retrying.
 

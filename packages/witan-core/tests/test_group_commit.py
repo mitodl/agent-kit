@@ -218,6 +218,61 @@ def test_a_write_whose_budget_runs_out_in_the_queue_is_never_sent():
     assert [c[0] for c in store.calls] == [["a"], ["patient"]]
 
 
+def test_a_queued_caller_is_refused_at_its_own_deadline_not_the_leaders():
+    """The commit ahead stays in flight past the follower's budget, and the
+    follower still gets its refusal on time."""
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore()
+    first = Caller(committer, store, [_step("a")])
+    late = Caller(committer, store, [_step("late")], budget=0.05)
+    first.start()
+    assert store.in_flight.wait(5)
+    late.start()
+
+    late.join(2)
+    assert not late.is_alive(), "the follower waited for the leader's commit"
+    assert first.is_alive(), "the leader's commit is still in flight"
+    assert isinstance(late.error, WriteQueueFull)
+    assert "NOTHING WAS WRITTEN" in str(late.error)
+
+    store.release.set()
+    first.join(5)
+    assert [c[0] for c in store.calls] == [["a"]]
+    assert committer._lanes == {}
+
+
+def test_a_replay_does_not_send_a_member_whose_budget_ran_out_meanwhile():
+    """The rejected group and the replays ahead of a member can use up its
+    budget; it is then refused, not sent."""
+
+    def decide(steps, if_commit):
+        names = [s[1] for s in steps]
+        if "bad" in names:
+            return RejectedBatch(RuntimeError("omnigraph mutate failed: 400"))
+        if names == ["slow"]:
+            time.sleep(0.6)
+        return None
+
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore(decide)
+    first = Caller(committer, store, [_step("a")])
+    slow = Caller(committer, store, [_step("slow")])
+    bad = Caller(committer, store, [_step("bad")])
+    short = Caller(committer, store, [_step("short")], budget=0.5)
+
+    _queue_behind_first(committer, store, first, [slow, bad, short])
+
+    assert slow.error is None
+    assert type(bad.error) is RuntimeError
+    assert isinstance(short.error, WriteQueueFull)
+    assert "NOTHING WAS WRITTEN" in str(short.error)
+    assert [c[0] for c in store.calls[1:]] == [
+        ["slow", "bad", "short"],
+        ["slow"],
+        ["bad"],
+    ]
+
+
 def test_a_rejected_group_is_replayed_one_write_at_a_time():
     def decide(steps, if_commit):
         if any(s[1] == "bad" for s in steps):
