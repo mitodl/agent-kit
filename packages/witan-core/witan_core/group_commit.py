@@ -33,22 +33,29 @@ PER-CALLER OUTCOMES. Success gives every member the group's commit id. A
 to the conditional member only, and the others go back to the head of the
 queue for the next commit. A :class:`RejectedBatch` (the server answered and
 applied nothing) is replayed one member at a time, so one caller's bad write
-fails only that caller. Any other failure goes to every member unchanged. Each
-caller then has the retry-safety it would have had alone, but one lost response
-leaves every member of that group to re-read before retrying.
+fails only that caller. The first member is replayed at once and the rest go
+back to the head of the queue, each marked to commit alone on whichever thread
+leads next, so the leader's caller is not held for every other member's
+commit. Any other failure goes to every member unchanged. Each caller then has
+the retry-safety it would have had alone, but one lost response leaves every
+member of that group to re-read before retrying.
 
-KNOWN-STALE FENCES. Each commit's response names the head it replaced. A queued
-fenced write whose fence is one of those heads would be refused by the server,
+KNOWN-STALE FENCES. Each commit's response names the head it replaced, and the
+lane remembers those heads while it lives. A queued fenced write whose fence is
+one of them would be refused by the server,
 and would cost the writes riding with it a commit, so it is refused here
 instead. A wrong guess here can only refuse a write (the caller re-reads, as on
 a 412), never apply one.
 
-EXPIRED WRITES. A write whose own deadline passes while it queues is refused
-before it is sent, as the write gate refuses one it cannot finish in time:
-committing it would land a write its caller has stopped waiting for. A queued
-caller wakes at its own deadline rather than when the commit ahead of it
-returns, and a rejected group's replay rechecks each member's deadline before
-sending it. A write already sent in a group waits for that group's outcome.
+REFUSED BEFORE SENDING. Only a lane's leader passes through the write gate, so
+a write that queues behind a commit gets the gate's checks here instead, and
+is refused unsent when its deadline passes, when it has queued longer than the
+gate's queue limit, or when the graph's measured commit time no longer fits in
+what its call has left: committing it would land a write its caller has
+stopped waiting for. A queued caller wakes when the first of those comes due
+rather than when the commit ahead of it returns. A write that arrives on an
+idle lane is held to its deadline only, as the gate never refuses a write on an
+idle graph. A write already sent in a group waits for that group's outcome.
 
 Stdlib only, like the rest of ``witan_core``'s base modules.
 """
@@ -82,6 +89,11 @@ MAX_GROUP_BYTES = 256 * 1024
 _SUPERSEDED_MEMORY = 64
 #: How many recent group sizes ``GroupCommitter.commits`` keeps.
 _RECENT_COMMITS = 1024
+#: Shortest wait in a queued caller's loop, so a wake time that has only just
+#: come due does not spin.
+_MIN_WAIT_SECONDS = 0.01
+
+_NOTHING_WRITTEN = "NOTHING WAS WRITTEN — retry once the burst clears."
 
 
 class RejectedBatch(Exception):
@@ -117,6 +129,12 @@ class _Member:
     cost: int
     deadline: float | None
     submitted: float = field(default_factory=time.monotonic)
+    #: Whether it arrived behind a commit, rather than on an idle lane.
+    queued: bool = False
+    queue_deadline: float | None = None
+    estimate: Callable[[], float | None] | None = None
+    #: Commits in a group of its own (a rejected group's members).
+    alone: bool = False
     lead: bool = False
     done: bool = False
     result: str | None = None
@@ -143,7 +161,7 @@ class GroupCommitter:
 
     :param conflict_type: what a caller that surfaces conflicts gets for a
         refused precondition (``OmnigraphConflict``).
-    :param expired_type: what a write whose deadline passed in the queue gets
+    :param expired_type: what a write refused before it was sent gets
         (``WriteQueueFull``).
     :param max_statements: statement cap for one group commit.
     :param max_bytes: estimated param-byte cap for one group commit.
@@ -177,6 +195,8 @@ class GroupCommitter:
         destructive: bool = False,
         cost: int = 0,
         budget: float | None = None,
+        queue_wait: float | None = None,
+        estimate: Callable[[], float | None] | None = None,
     ) -> str | None:
         """Commit ``steps``, alone or with whatever else is queued on ``key``.
 
@@ -193,6 +213,10 @@ class GroupCommitter:
         :param destructive: whether any step deletes.
         :param cost: estimated bytes of params, for the group cap.
         :param budget: seconds this call has, from now, or ``None`` for no limit.
+        :param queue_wait: longest this write may queue behind a commit, or
+            ``None`` for no limit.
+        :param estimate: the graph's measured commit time in seconds, or
+            ``None`` before the first.
         :returns: the commit id this write landed in, if known.
         :rtype: str | None
         """
@@ -205,27 +229,34 @@ class GroupCommitter:
             cost=cost,
             deadline=now + budget if budget else None,
             submitted=now,
+            estimate=estimate,
         )
         with self._cv:
             lane = self._lanes.get(key)
             if lane is None:
                 lane = self._lanes[key] = _Lane()
                 member.lead = True
+            else:
+                member.queued = True
+                if queue_wait is not None:
+                    member.queue_deadline = now + queue_wait
             lane.queue.append(member)
             while not (member.lead or member.done):
-                if member.deadline is None:
+                if member not in lane.queue:
+                    # Taken into a group, so it waits for that group's outcome.
                     self._cv.wait()
                     continue
                 now = time.monotonic()
-                if now < member.deadline:
-                    self._cv.wait(member.deadline - now)
-                elif member in lane.queue:
-                    # Still queued, so nothing of it has been sent. Once a
-                    # leader takes it into a group it waits for that outcome.
+                refusal = self._refusal(member, now)
+                if refusal is not None:
+                    # Still queued, so nothing of it has been sent.
                     lane.queue.remove(member)
-                    self._finish(member, error=self._expired(member, now))
-                else:
-                    self._cv.wait()
+                    self._finish(member, error=refusal)
+                    break
+                wake = self._wake_at(member)
+                self._cv.wait(
+                    None if wake is None else max(wake - now, _MIN_WAIT_SECONDS)
+                )
         if not member.done:
             self._lead(key, lane, member, commit)
         if member.error is not None:
@@ -247,6 +278,12 @@ class GroupCommitter:
                     self._cv.notify_all()
                     return
                 group = self._take(lane)
+                if me.done and group:
+                    # `_take` refused this caller and took others. Their
+                    # commit must not hold up a caller that already has its
+                    # answer, so they go back for the next leader.
+                    lane.queue.extendleft(reversed(group))
+                    group = []
                 self._cv.notify_all()
             if group:
                 self._run(lane, group, commit)
@@ -262,17 +299,22 @@ class GroupCommitter:
         statements = size = 0
         now = time.monotonic()
         for member in list(lane.queue):
-            if member.deadline is not None and now >= member.deadline:
+            refusal = self._refusal(member, now)
+            if refusal is not None:
                 lane.queue.remove(member)
-                self._finish(member, error=self._expired(member, now))
+                self._finish(member, error=refusal)
                 continue
-            if member.conditional:
-                if member.if_commit is not None and member.if_commit in lane.superseded:
-                    lane.queue.remove(member)
-                    self._finish(member, error=self._stale(member))
-                    continue
-                if conditional is not None:
-                    continue
+            if member.if_commit is not None and member.if_commit in lane.superseded:
+                lane.queue.remove(member)
+                self._finish(member, error=self._stale(member))
+                continue
+            if member.alone:
+                if not picked:
+                    picked.append(member)
+                    break
+                continue
+            if member.conditional and conditional is not None:
+                continue
             if destructive is None:
                 destructive = member.destructive
             elif member.destructive != destructive:
@@ -297,20 +339,56 @@ class GroupCommitter:
     def _stale(self, member: _Member) -> BaseException:
         message = (
             f"precondition failed: expected head '{member.if_commit}', which a "
-            "commit this process made has already replaced. NOTHING WAS "
+            "commit by this actor's lane has already replaced. NOTHING WAS "
             "WRITTEN; re-read and decide."
         )
         if member.surface_conflict:
             return self._conflict_type(message)
         return RuntimeError(message)
 
-    def _expired(self, member: _Member, now: float) -> BaseException:
+    def _refusal(self, member: _Member, now: float) -> BaseException | None:
+        """Why ``member`` may not be sent now, or ``None``. Caller holds the lock.
+
+        A write that arrived on an idle lane is held to its deadline only, as
+        the write gate never refuses a write on an idle graph: a graph slower
+        than the budget would otherwise refuse every write and never measure a
+        faster one.
+        """
+        waited = now - member.submitted
+        if member.deadline is not None and now >= member.deadline:
+            return self._expired_type(
+                f"write was refused before it was sent: it queued {waited:.0f}s "
+                "behind other writes to this graph and its call has no time "
+                f"left. {_NOTHING_WRITTEN}"
+            )
+        if not member.queued:
+            return None
+        if member.queue_deadline is not None and now >= member.queue_deadline:
+            return self._expired_type(
+                f"write was refused before it was sent: it queued {waited:.0f}s "
+                "behind other writes to this graph, longer than the write queue "
+                f"allows. {_NOTHING_WRITTEN}"
+            )
+        estimate = member.estimate() if member.estimate else None
+        if estimate is None or member.deadline is None:
+            return None
+        remaining = member.deadline - now
+        if estimate <= remaining:
+            return None
         return self._expired_type(
-            f"write was refused before it was sent: it queued "
-            f"{now - member.submitted:.0f}s behind other writes to this graph "
-            "and its call has no time left. NOTHING WAS WRITTEN — retry once "
-            "the burst clears."
+            f"write was refused before it was sent: writes to this graph are "
+            f"taking about {estimate:.0f}s and this call has {remaining:.0f}s "
+            f"left, so it cannot complete in time. {_NOTHING_WRITTEN}"
         )
+
+    def _wake_at(self, member: _Member) -> float | None:
+        """When a queued ``member`` next needs checking, or ``None`` for only
+        when the lane moves. Caller holds the lock."""
+        times = [t for t in (member.deadline, member.queue_deadline) if t is not None]
+        estimate = member.estimate() if member.estimate else None
+        if estimate is not None and member.deadline is not None:
+            times.append(member.deadline - estimate)
+        return min(times, default=None)
 
     def _run(self, lane: _Lane, group: list[_Member], commit: CommitFn) -> None:
         """Commit ``group`` and deliver every member's outcome. Never raises."""
@@ -330,14 +408,20 @@ class GroupCommitter:
             if len(group) == 1:
                 self._finish(lead, error=rejected.error)
                 return
-            for member in group:
-                # The rejected commit and the replays before this one spent
-                # time this member may not have had.
-                now = time.monotonic()
-                if member.deadline is not None and now >= member.deadline:
-                    self._finish(member, error=self._expired(member, now))
-                else:
-                    self._run(lane, [member], commit)
+            # The server does not say whose write it refused, so each member
+            # commits alone. Only the first does so on this thread; the rest
+            # wait at the head of the queue for whoever leads next.
+            with self._cv:
+                for member in group[1:]:
+                    member.alone = True
+                lane.queue.extendleft(reversed(group[1:]))
+                # The rejected commit spent time this member may not have had.
+                refusal = self._refusal(lead, time.monotonic())
+                self._cv.notify_all()
+            if refusal is not None:
+                self._finish(lead, error=refusal)
+            else:
+                self._run(lane, [lead], commit)
             return
         except ConditionFailed as failed:
             with self._cv:

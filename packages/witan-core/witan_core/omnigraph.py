@@ -964,6 +964,12 @@ class _WriteGate:
                     del self._in_flight[key]
                 self._cv.notify_all()
 
+    def estimate(self, key: str) -> float | None:
+        """The measured execution time of a write to ``key``, or ``None``
+        before the first. Group commit checks a queued write against it."""
+        with self._cv:
+            return self._service.get(key)
+
     def _latest_viable_wait(
         self, key: str, call_deadline: float | None
     ) -> float | None:
@@ -2507,6 +2513,7 @@ class OmnigraphClient:
             str(self.queries_dir),
             self.connect_retry,
         )
+        gate_key = self._write_gate_key()
         return _GROUP_COMMITTER.submit(
             key,
             steps,
@@ -2520,7 +2527,17 @@ class OmnigraphClient:
             cost=sum(len(json.dumps(params, default=str)) for _, _, params in steps),
             budget=_env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
             or None,
+            # Only a lane's leader enters the write gate, so a queued write is
+            # held to the gate's queue limit and service estimate here.
+            queue_wait=_env_override(
+                REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, _REMOTE_WRITE_QUEUE_WAIT, float
+            ),
+            estimate=lambda: _WRITE_GATE.estimate(gate_key),
         )
+
+    def _write_gate_key(self) -> str:
+        """This graph's key in :data:`_WRITE_GATE`."""
+        return f"{self.server_url}|{self.graph_id}"
 
     def _commit_group(
         self,
@@ -2576,11 +2593,18 @@ class OmnigraphClient:
             if last.status == _PRECONDITION_FAILED_STATUS:
                 # The fence of a caller that does not surface conflicts.
                 raise ConditionFailed(exc) from exc
-            if last.status in _DEFINITE_REJECTION_STATUSES and not (
-                last.error.lstrip().startswith(_DATAFUSION_ERROR_PREFIX)
-            ):
-                raise RejectedBatch(exc) from exc
-            raise
+            if last.status not in _DEFINITE_REJECTION_STATUSES:
+                raise
+            if last.error.lstrip().startswith(_DATAFUSION_ERROR_PREFIX):
+                # omnigraph marks this one completion-uncertain and closes
+                # write admission on it, so the write may have landed.
+                raise WriteIndeterminate(
+                    "omnigraph mutate failed with a query error the server "
+                    "treats as completion-uncertain. ITS OUTCOME IS "
+                    "INDETERMINATE: the write may or may not have been "
+                    f"applied. Re-read before retrying:\n{last.error.strip()}"
+                ) from exc
+            raise RejectedBatch(exc) from exc
         return _commit_ids_from_mutate_body(body)
 
     def export_to(self, path: Path | str, *, label: str = "export") -> None:
@@ -2800,9 +2824,7 @@ class OmnigraphClient:
         origin = time.monotonic() if started is None else started
         deadline = origin + budget if budget else None
         gate = (
-            _WRITE_GATE.admit(
-                f"{self.server_url}|{self.graph_id}", label, call_deadline=deadline
-            )
+            _WRITE_GATE.admit(self._write_gate_key(), label, call_deadline=deadline)
             if gate_write
             else nullcontext()
         )

@@ -16,16 +16,20 @@
   (`if_commit`) write. That write goes first and the commit is fenced on its
   head. A refused fence fails only that caller, with the error it would have
   had alone, and the writes queued with it go into the next commit. A queued
-  fenced write whose head a commit from this process has already replaced is
-  refused without a round trip. A group the server rejects with 400 or 413
+  fenced write whose head a commit by this actor's lane has already replaced
+  is refused without a round trip. A group the server rejects with 400 or 413
   before any effect, or that is missing a parameter, is replayed one write at
-  a time. A 400 carrying a DataFusion error (`query: ...`) is excluded,
-  because omnigraph marks that one completion-uncertain. A write whose
-  `WITAN_REMOTE_CALL_BUDGET_SECONDS` runs out before it is sent, while it
-  queues or while a rejected group is replayed ahead of it, is refused unsent
-  with `WriteQueueFull` at its own deadline. Any other failure, including one whose outcome
-  is unknown, reaches every member, so every member of that group re-reads
-  before retrying.
+  a time, each on its own caller's thread. A 400 carrying a DataFusion error
+  (`query: ...`) is excluded, because omnigraph marks that one
+  completion-uncertain, and every member gets `WriteIndeterminate`.
+
+  Only the oldest queued write passes through the write gate, so a write
+  queued behind a commit gets the gate's checks instead. It is refused unsent
+  with `WriteQueueFull` when its `WITAN_REMOTE_CALL_BUDGET_SECONDS` runs out,
+  when it has queued longer than `WITAN_REMOTE_WRITE_QUEUE_SECONDS`, or when
+  the graph's measured commit time no longer fits in what its call has left.
+  Any other failure, including one whose outcome is unknown, reaches every
+  member, so every member of that group re-reads before retrying.
 
   Only remote writes over the HTTP transport are grouped. Set
   `WITAN_GROUP_COMMIT=0` to turn grouping off.

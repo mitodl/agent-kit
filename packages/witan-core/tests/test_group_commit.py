@@ -32,6 +32,8 @@ class FakeStore:
 
     def __init__(self, decide=None) -> None:
         self.calls: list[tuple[list[str], str | None, bool]] = []
+        #: The thread each commit ran on, in commit order.
+        self.threads: list[threading.Thread] = []
         self.release = threading.Event()
         self.in_flight = threading.Event()
         self.decide = decide or (lambda steps, if_commit: None)
@@ -42,6 +44,7 @@ class FakeStore:
         with self._lock:
             first = not self.calls
             self.calls.append(([s[1] for s in steps], if_commit, surface_conflict))
+            self.threads.append(threading.current_thread())
         if first:
             self.in_flight.set()
             assert self.release.wait(5)
@@ -310,6 +313,113 @@ def test_a_rejected_group_is_replayed_one_write_at_a_time():
     ]
 
 
+def test_the_leaders_caller_does_not_wait_for_the_other_members_replays():
+    """Each replay is a full commit, so a group of 64 behind one bad write
+    would otherwise hold the leader's caller for 64 commits."""
+    held = threading.Event()
+
+    def decide(steps, if_commit):
+        names = [s[1] for s in steps]
+        if "bad" in names:
+            return RejectedBatch(RuntimeError("omnigraph mutate failed: 400"))
+        if names == ["after"]:
+            assert held.wait(5)
+        return None
+
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore(decide)
+    first = Caller(committer, store, [_step("a")])
+    leader = Caller(committer, store, [_step("leader")])
+    after = Caller(committer, store, [_step("after")])
+    bad = Caller(committer, store, [_step("bad")])
+    first.start()
+    assert store.in_flight.wait(5)
+    _queue_in_order(committer, [leader, after, bad])
+    store.release.set()
+
+    leader.join(5)
+    assert not leader.is_alive(), "the leader waited for another member's replay"
+    assert leader.error is None
+    assert after.is_alive(), "the next member's own commit is still in flight"
+    held.set()
+    for caller in (first, after, bad):
+        caller.join(5)
+    assert after.error is None and type(bad.error) is RuntimeError
+    assert [c[0] for c in store.calls[1:]] == [
+        ["leader", "after", "bad"],
+        ["leader"],
+        ["after"],
+        ["bad"],
+    ]
+    # Each replay ran on its own caller's thread.
+    assert store.threads[2:] == [leader, after, bad]
+
+
+def test_a_leader_refused_by_its_own_take_does_not_run_the_others_commit():
+    """Its caller has its answer, so the commit it took goes to the next
+    leader instead of arriving a full commit late."""
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore()
+    first = Caller(committer, store, [_step("a")])
+    # The first commit replaces head c0, so the lane hands the lead to a write
+    # its own take refuses.
+    stale = Caller(committer, store, [_step("stale")], if_commit="c0")
+    rider = Caller(committer, store, [_step("rider")])
+
+    _queue_behind_first(committer, store, first, [stale, rider])
+
+    assert "NOTHING WAS WRITTEN" in str(stale.error)
+    assert rider.error is None
+    assert [c[0] for c in store.calls] == [["a"], ["rider"]]
+    assert store.threads[1] is rider
+
+
+def test_a_queued_write_the_graph_cannot_serve_in_time_is_refused_unsent():
+    """Only the leader passes the write gate, so its service estimate is
+    applied to queued writes here."""
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore()
+    first = Caller(committer, store, [_step("a")], budget=0.5, estimate=lambda: 1.0)
+    short = Caller(committer, store, [_step("short")], budget=0.5, estimate=lambda: 1.0)
+    roomy = Caller(committer, store, [_step("roomy")], budget=5, estimate=lambda: 1.0)
+    first.start()
+    assert store.in_flight.wait(5)
+    short.start()
+
+    short.join(2)
+    assert not short.is_alive(), "refused while the commit ahead is in flight"
+    assert isinstance(short.error, WriteQueueFull)
+    _queue_in_order(committer, [roomy])
+    assert "cannot complete in time" in str(short.error)
+    store.release.set()
+    for caller in (first, roomy):
+        caller.join(5)
+    # A write on an idle lane is never refused by the estimate, as the gate
+    # never refuses one on an idle graph.
+    assert first.error is None and roomy.error is None
+    assert [c[0] for c in store.calls] == [["a"], ["roomy"]]
+
+
+def test_a_queued_write_is_held_to_the_write_queue_limit():
+    """With no call budget, the queue limit is the only bound on the wait."""
+    committer = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+    store = FakeStore()
+    first = Caller(committer, store, [_step("a")], queue_wait=0.05)
+    queued = Caller(committer, store, [_step("queued")], queue_wait=0.05)
+    first.start()
+    assert store.in_flight.wait(5)
+    queued.start()
+
+    queued.join(2)
+    assert not queued.is_alive()
+    assert isinstance(queued.error, WriteQueueFull)
+    assert "longer than the write queue allows" in str(queued.error)
+    store.release.set()
+    first.join(5)
+    assert first.error is None
+    assert [c[0] for c in store.calls] == [["a"]]
+
+
 def test_an_outcome_unknown_failure_reaches_every_member_and_is_not_replayed():
     """A lost response may have committed, so replaying would write it twice."""
 
@@ -443,14 +553,16 @@ def test_a_validation_400_is_a_rejection_safe_to_replay(remote):
         client._commit_group(STEPS, None, False, time.monotonic())
 
 
-def test_a_datafusion_400_is_not_replayed(remote):
+def test_a_datafusion_400_is_indeterminate_and_not_replayed(remote):
     """omnigraph marks a DataFusion error completion-uncertain server-side
-    while still answering 400, so a replay could apply a write twice."""
+    while still answering 400, so a replay could apply a write twice, and
+    every member must re-read before retrying."""
+    from witan_core.omnigraph import WriteIndeterminate
+
     client, answer = remote
     answer(400, "query: execution failed (HTTP 400, bad_request)")
-    with pytest.raises(RuntimeError) as raised:
+    with pytest.raises(WriteIndeterminate, match="INDETERMINATE"):
         client._commit_group(STEPS, None, False, time.monotonic())
-    assert type(raised.value) is RuntimeError
 
 
 def test_a_412_belongs_to_the_fenced_member(remote):
@@ -477,3 +589,36 @@ def test_a_missing_parameter_is_a_rejection_before_anything_is_sent(remote):
             [STEPS[0], ("m.gq", "put", {})], None, False, time.monotonic()
         )
     assert isinstance(raised.value.error, KeyError)
+
+
+def test_each_token_gets_its_own_lane_and_the_gates_bounds(monkeypatch, tmp_path):
+    """omnigraph records one actor per commit, from the bearer token, so two
+    tokens must never share a commit. A queued write gets the gate's queue
+    limit and estimate for its graph."""
+    import shutil
+
+    from witan_core import omnigraph as og
+
+    (tmp_path / "m.gq").write_text(
+        "query put($slug: String) {\n    insert T { slug: $slug }\n}\n"
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    submitted = []
+    monkeypatch.setattr(
+        og._GROUP_COMMITTER,
+        "submit",
+        lambda key, steps, commit, **kwargs: submitted.append((key, kwargs)),
+    )
+    monkeypatch.setattr(og._WRITE_GATE, "_service", {"http://og.test|g": 2.5})
+    for token in ("token-a", "token-b", "token-a"):
+        client = og.OmnigraphClient(
+            "http://og.test", tmp_path, token=token, graph_id="g"
+        )
+        client._submit_to_group(STEPS, surface_conflict=False, if_commit=None)
+
+    keys = [key for key, _ in submitted]
+    assert keys[0] != keys[1] and keys[0] == keys[2]
+    assert not any("token-a" in str(part) for part in keys[0]), "no secret kept"
+    kwargs = submitted[0][1]
+    assert kwargs["queue_wait"] == og._REMOTE_WRITE_QUEUE_WAIT
+    assert kwargs["estimate"]() == 2.5
