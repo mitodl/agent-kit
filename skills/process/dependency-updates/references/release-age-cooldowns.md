@@ -169,16 +169,31 @@ transferring.
 | Yarn Berry 4.10+ | `npmMinimalAgeGate` — type `DURATION`, unit minutes | `npmPreapprovedPackages` — descriptors or globs | **No** |
 | pnpm 10.16+ | `minimumReleaseAge` — minutes, default `1440` from v11 | `minimumReleaseAgeExclude` | via config only |
 
+**The three managers do not share a unit.** npm counts **days** (`hint: '<days>'`; its
+flatten computes `Date.now() - 86400000 * age`), while Yarn and pnpm count **minutes**. A
+value copied between them is wrong by three orders of magnitude in whichever direction
+hurts — `min-release-age=7` is a week of soak, `minimumReleaseAge: 7` is seven minutes.
+Read the unit out of the manager you are configuring before reusing a number.
+
 ### npm
 
 The exclusion is an ordinary npm config, so it works as a flag and the uv pattern carries
 over directly:
 
 ```bash
-npm install --min-release-age-exclude=<pkg>
+npm install <pkg>@<fixed> --min-release-age-exclude=<pkg>
 ```
 
+**Name the version.** The flag only makes the fresh release *eligible*; it does not request
+an upgrade. An argument-free `npm install` reifies the existing `package-lock.json` and
+keeps any locked version that still satisfies the manifest — so the command succeeds with
+the vulnerable version still installed. For a transitive dependency, declare the
+`overrides` floor first (see [Pin the floor](#pin-the-floor-not-just-the-lockfile)) and
+then install with the flag attached.
+
 `min-release-age-exclude` exempts a package from **both** `min-release-age` and `before`.
+npm's own config definition for `before` says so explicitly: "Packages whose names match
+`min-release-age-exclude` are exempt from this filter."
 
 ### Yarn — no safe CLI-only form
 
@@ -197,8 +212,18 @@ the only scoped one:
 
 ```yaml
 npmPreapprovedPackages:
-  - "somepkg"
+  # CVE-2026-XXXXX: 2.1.4 is the fix and is inside the gate window.
+  # Remove this entry after 2026-11-05.
+  - "somepkg@2.1.4"
 ```
+
+**Use a versioned descriptor, not a bare name.** Yarn parses each entry with
+`tryParseDescriptor` and, when the range comes back `unknown` — which is what a bare
+`somepkg` yields — the entry matches *every* version of that package, forever. A range
+(`somepkg@2.1.4`, `somepkg@^2.1.4`) is tested against the candidate version, so the
+exemption expires on its own once the tree moves past it. Verified by reading
+`.yarn/releases/yarn-4.12.0.cjs`; the bare-name case is the `range === "unknown"` early
+`return true`.
 
 ### Read the Yarn default from the binary, not the docs
 
@@ -332,11 +357,20 @@ An override that the next maintenance run undoes is worse than no fix, because n
 reports the regression. Prove it:
 
 ```bash
-uv lock --upgrade --dry-run 2>&1 | grep -iE '^Updated? <pkg> '
+uv lock --upgrade --dry-run >relock.log 2>&1; rc=$?
+cat relock.log
+[ "$rc" -eq 0 ] || echo 'RESOLUTION FAILED — not a pass; read the log above'
+grep -iE '^Updated? <pkg> ' relock.log    # only meaningful when rc was 0
 ```
 
-This must print **nothing**. `--dry-run` writes no lockfile. Match both tenses: `--dry-run`
-prints `Update pkg vA -> vB`, while a real run prints `Updated`.
+**Check uv's exit status before you read the grep.** Piping straight into `grep` conflates
+two opposite outcomes: with the floor in place but no effective exemption, uv *errors* and
+prints no `Update` line, so a naive `uv lock ... | grep` produces the same empty output and
+the same non-zero pipeline status as a clean unchanged resolution. The bump only survived if
+uv exited `0` **and** the grep printed nothing.
+
+`--dry-run` writes no lockfile. Match both tenses: `--dry-run` prints `Update pkg vA -> vB`,
+while a real run prints `Updated`.
 
 Then confirm the version that is actually installed, not just locked:
 
@@ -345,6 +379,10 @@ Then confirm the version that is actually installed, not just locked:
 uv run python -c "import importlib.metadata as m; print(m.version('<pkg>'))"
 uv lock --check
 ```
+
+`uv lock --check` is not a substitute for the re-resolution above — it only asserts that the
+lockfile on disk is consistent with `pyproject.toml`, which an exemption-bearing lockfile
+satisfies happily.
 
 ---
 
@@ -371,8 +409,19 @@ Whenever you touch a repo's dependencies, check for overrides that have outlived
 reason:
 
 ```bash
-grep -A2 'exclude-newer-package' pyproject.toml
+# uv — print the whole table, through to the next TOML section
+awk '/^\[tool\.uv\.exclude-newer-package\]/{f=1} f&&/^\[/&&!/exclude-newer-package/{f=0} f' pyproject.toml
+
+# Yarn — every preapproved descriptor, with its dated comment
+awk '/^npmPreapprovedPackages:/{f=1;print;next} f&&/^[^[:space:]#-]/{f=0} f' .yarnrc.yml
+
+# npm / pnpm
+grep -n 'min-release-age-exclude\|minimumReleaseAgeExclude' .npmrc package.json pnpm-workspace.yaml 2>/dev/null
 ```
+
+A fixed-count `grep -A2` is not enough: the entries above carry a two-line dated comment,
+so the package line itself falls outside the window and any second entry is invisible. Read
+the whole table.
 
 **Deleting the line is not enough.** uv also records the override in `uv.lock` under
 `[options.exclude-newer-package]`, and a plain `uv lock` will not clear it — the resolution
@@ -387,7 +436,20 @@ grep '<pkg> = {' uv.lock          # must print nothing
 Then confirm the package holds its version on its own, and that the lockfile's `[[package]]`
 section is otherwise unchanged. Use the same uv version the lockfile was written with — an
 older uv silently rewrites `revision` in the lock header and turns a one-line cleanup into a
-large spurious diff. Leave permanent first-party exemptions alone — entries covering an
+large spurious diff.
+
+The same applies on the JS side, and the removal is not uv-specific: a stale
+`npmPreapprovedPackages` or `minimumReleaseAgeExclude` entry keeps the soak gate off for
+that package indefinitely. Delete the entry **and** regenerate the lockfile, or the
+fast-tracked version simply stays resolved:
+
+```bash
+yarn install --mode=update-lockfile    # Yarn Berry
+npm install --package-lock-only        # npm
+pnpm install --lockfile-only           # pnpm
+```
+
+Leave permanent first-party exemptions alone — entries covering an
 organization's own packages (`mitol-django-*`, `ol-openedx-*`) are deliberate and carry no
 removal date, because a cooldown on a package you just published serves no purpose.
 

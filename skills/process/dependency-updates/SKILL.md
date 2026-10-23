@@ -353,8 +353,13 @@ For uv, a flag-only override lives in the lockfile and is silently reverted by t
 next maintenance run. Prove it either way:
 
 ```bash
-uv lock --upgrade --dry-run 2>&1 | grep -iE '^Updated? <pkg> '   # must print nothing
+uv lock --upgrade --dry-run >relock.log 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { cat relock.log; echo 'RESOLUTION FAILED — not a pass'; }
+grep -iE '^Updated? <pkg> ' relock.log    # must print nothing, and only counts when rc is 0
 ```
+
+Check uv's exit status first: piping straight into `grep` makes a failed re-resolution look
+identical to a clean one — both print no `Update` line.
 
 **Pin the floor, not just the lockfile.** A lockfile bump is reversible; a declared minimum is
 not. Alongside the bump, require the fixed version so the vulnerable one can never be resolved
@@ -444,7 +449,10 @@ npm update
 # Update a specific package to a specific version
 npm install <pkg>@<version>
 # Blocked by a cooldown? npm exempts per package; Yarn needs a .yarnrc.yml edit
-npm install --min-release-age-exclude=<pkg>
+# The flag only makes the release *eligible* — it does not request an upgrade. Name the
+# version, or an argument-free `npm install` reifies the lock and leaves the vulnerable
+# one in place. For a transitive dep, add the `overrides` floor first, then install.
+npm install <pkg>@<fixed> --min-release-age-exclude=<pkg>
 
 # Rust
 cargo update                       # update all deps within semver constraints

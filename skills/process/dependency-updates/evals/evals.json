@@ -63,7 +63,22 @@
 				"Addresses Docker base image discovery — explains how to check whether the base image is outdated when there is no automated tool (e.g., checking digest, pulling latest tag, checking upstream release page)",
 				"Explains how to classify the discovered updates into risk tiers (patch vs. minor vs. major) to determine processing order",
 				"Identifies what can be updated safely in parallel (e.g., patch bumps across both Python and npm ecosystems simultaneously) versus what must be sequenced (e.g., runtime version before dependent libraries)",
-				"Recommends checking for known security vulnerabilities in the discovered outdated packages (e.g., pip-audit, npm audit) before starting updates"
+				"Recommends checking for known security vulnerabilities in the discovered outdated packages (e.g., pip-audit, npm audit) before starting updates",
+				"Warns that a configured release-age cooldown makes the resolver's 'latest' lag the registry's, so a package can read as current while a newer release exists — and says to check for a cooldown window (uv exclude-newer, npm min-release-age, Yarn npmMinimalAgeGate, pnpm minimumReleaseAge) before concluding the inventory is complete"
+			]
+		},
+		{
+			"id": 6,
+			"prompt": "pip-audit flagged GHSA-xxxx-yyyy-zzzz against `certifi` in our uv-managed Python service. The fix is in 2026.10.19, published two days ago. `uv lock --upgrade-package certifi` reports no change, and our pyproject.toml has `[tool.uv] exclude-newer = \"7d\"`. certifi is transitive — nothing in our manifest depends on it directly. How do I ship the fix?",
+			"expected_output": "Confirms the cooldown is the blocker, justifies the override against the advisory, applies a scoped and dated exemption rather than a global one, declares a permanent version floor via constraint-dependencies, verifies the bump survives a full re-resolution (checking uv's exit status, not just grep output), audits the fast-tracked release, and schedules removal of the dated entry while keeping the floor.",
+			"files": [],
+			"expectations": [
+				"Identifies the 7-day exclude-newer window as the reason uv reports no update — rather than treating the missing bump as 'no version available' — and does not relieve the cooldown globally (no bare --exclude-newer or lowering the project-wide exclude-newer value)",
+				"Gates the override on the cited advisory affecting the version currently in the lockfile, naming the GHSA/CVE in the PR body as the justification, rather than overriding because the release is merely newer",
+				"Applies the exemption scoped to certifi with an explicit removal date — a dated [tool.uv.exclude-newer-package] entry, or the --exclude-newer-package CLI flag with the revert-risk tradeoff stated (the flag-only form lives in the lockfile and the next uv lock --upgrade drops it)",
+				"Declares a permanent version floor for the transitive dependency via [tool.uv] constraint-dependencies = [\"certifi>=2026.10.19\"] — not overrides/override-dependencies — and states that the floor outlives the dated cooldown entry and must be kept when that entry is removed",
+				"Verifies the bump survives a full re-resolution (uv lock --upgrade --dry-run) and checks uv's exit status rather than only grepping for an Update line, since a failed resolution and an unchanged one both print no Update line",
+				"Audits the fast-tracked release in place of the skipped soak period — upstream tag matches the published artifact, the diff matches the advisory, attestations/provenance present, maintainer set unchanged"
 			]
 		}
 	]
