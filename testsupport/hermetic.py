@@ -111,6 +111,10 @@ _CLEARED = (
     # output into something no assertion here expects.
     "WITAN_OUTPUT_FORMAT",
     "WITAN_OMNIGRAPH_HTTP",
+    # `WITAN_GROUP_COMMIT=0` is the documented opt-out; inherited, the
+    # served group-commit tests fail and every other remote write test runs
+    # the path that does not ship by default.
+    "WITAN_GROUP_COMMIT",
     "OMNIGRAPH_BEARER_TOKEN",
     # The write-path scanner. `WITAN_SCAN_ENABLED=false` is a documented
     # opt-out, and inheriting it would run the whole suite with the scanner

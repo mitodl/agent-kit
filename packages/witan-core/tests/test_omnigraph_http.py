@@ -1830,3 +1830,23 @@ def test_a_named_call_still_sends_its_params_even_when_empty(_fake_http, verb):
 
     body = json.loads(FakeConnection.created[-1].requests[-1]["body"])
     assert body == {"query": "query q() { }", "params": {}}
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            '{"commit": {"graph_commit_id": "c2", "parent_commit_id": "c1"}}',
+            ("c2", "c1"),
+        ),
+        ('{"commit": {"graph_commit_id": "c2"}}', ("c2", None)),
+        ('{"commit": null}', (None, None)),
+        ("", (None, None)),
+        ("not json", (None, None)),
+    ],
+)
+def test_a_mutate_body_names_the_head_its_commit_replaced(body, expected):
+    """Group commit refuses a queued write fenced on a replaced head without a
+    round trip. If this stopped finding the parent, that refusal would quietly
+    turn off (the server's 412 would still guard the write)."""
+    assert og._commit_ids_from_mutate_body(body) == expected

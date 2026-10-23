@@ -49,6 +49,7 @@ NOT re-exported from ``witan_core``'s package root — import it as
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -67,6 +68,12 @@ from pathlib import Path
 from typing import NamedTuple, TypeVar
 
 from witan_core import omnigraph_http as _http
+from witan_core.group_commit import (
+    ConditionFailed,
+    GroupCommitter,
+    RejectedBatch,
+    Step,
+)
 from witan_core.refusal import Refusal
 
 _log = logging.getLogger(__name__)
@@ -442,6 +449,24 @@ BEARER_TOKEN_ENV_VAR = "OMNIGRAPH_BEARER_TOKEN"
 HTTP_TRANSPORT_ENV_VAR = "WITAN_OMNIGRAPH_HTTP"
 _FALSEY = {"0", "false", "no", "off"}
 
+# Concurrent remote writes from one actor to one graph share a commit (see
+# `witan_core.group_commit`). On by default; this is the revert, read per call
+# for the same reason as HTTP_TRANSPORT_ENV_VAR.
+GROUP_COMMIT_ENV_VAR = "WITAN_GROUP_COMMIT"
+
+# A server answer that proves nothing was applied: the engine validates the
+# whole query before any effect, and a resource limit is checked before it too.
+# Only these let a failed group be replayed one write at a time; a failure
+# whose effects are unknown (a mid-flight timeout is FATAL too) must not be.
+# One 400 is NOT proof: omnigraph 0.13 answers a generic DataFusion error with
+# 400 and a "query: " message, and marks it completion-uncertain server-side
+# (`ApiError::from_omni`, omnigraph-server/src/lib.rs), without saying so on
+# the wire. `_DATAFUSION_ERROR_PREFIX` keeps that one out.
+_DEFINITE_REJECTION_STATUSES = frozenset({400, 413})
+_DATAFUSION_ERROR_PREFIX = "query: "
+_PRECONDITION_FAILED_STATUS = 412
+_DELETE_STATEMENT_RE = re.compile(r"^\s*delete\b", re.MULTILINE)
+
 # A deployed omnigraph-server is reached over http(s); local files and s3://
 # roots are opened directly. Only http(s) needs the `--server`/`--graph`
 # addressing split — s3:// keeps `--store` (omnigraph opens it directly).
@@ -689,6 +714,8 @@ class _AttemptResult(NamedTuple):
     #: transport only — the CLI never sees response headers — so `None` here
     #: means "no hint", not "retry now".
     retry_after: float | None = None
+    #: The HTTP status, when the server answered. HTTP transport only.
+    status: int | None = None
 
 
 class _CliFailure(NamedTuple):
@@ -937,6 +964,12 @@ class _WriteGate:
                     del self._in_flight[key]
                 self._cv.notify_all()
 
+    def estimate(self, key: str) -> float | None:
+        """The measured execution time of a write to ``key``, or ``None``
+        before the first. Group commit checks a queued write against it."""
+        with self._cv:
+            return self._service.get(key)
+
     def _latest_viable_wait(
         self, key: str, call_deadline: float | None
     ) -> float | None:
@@ -1048,6 +1081,21 @@ def _cached_declared_params(path: Path, query_name: str) -> set[str]:
         declared = _declared_params(raw_decls)
         _QUERY_DECLS_CACHE[key] = declared
     return declared
+
+
+_QUERY_DESTRUCTIVE_CACHE: dict[tuple[str, str, float], bool] = {}
+
+
+def _cached_is_destructive(path: Path, query_name: str) -> bool:
+    """Whether the named query deletes. omnigraph refuses one query that both
+    deletes and inserts or updates, so a group commit must not mix the two."""
+    key = (str(path), query_name, path.stat().st_mtime)
+    destructive = _QUERY_DESTRUCTIVE_CACHE.get(key)
+    if destructive is None:
+        _, body = parse_query(path.read_text(), query_name)
+        destructive = bool(_DELETE_STATEMENT_RE.search(body))
+        _QUERY_DESTRUCTIVE_CACHE[key] = destructive
+    return destructive
 
 
 def _split_decls(raw: str) -> list[str]:
@@ -1562,6 +1610,11 @@ class WriteQueueFull(RuntimeError, Refusal):
     log_safe_message = True
 
 
+#: Process-wide, like `_WRITE_GATE`: witan builds a client per request, so lanes
+#: kept on a client would group nothing.
+_GROUP_COMMITTER = GroupCommitter(OmnigraphConflict, WriteQueueFull)
+
+
 class WriteContention(RuntimeError, Refusal):
     """A write lost every optimistic-concurrency retry. Nothing was written.
 
@@ -1659,7 +1712,13 @@ def _friendly_storage_error(raw: str, hint: str) -> str:
 
 
 def _commit_id_from_mutate_body(body: str) -> str | None:
-    """Pull ``commit.graph_commit_id`` out of a raw mutate response body.
+    return _commit_ids_from_mutate_body(body)[0]
+
+
+def _commit_ids_from_mutate_body(body: str) -> tuple[str | None, str | None]:
+    """``(commit.graph_commit_id, commit.parent_commit_id)`` from a raw mutate
+    response body. The parent is the head the write replaced, which is how a
+    group commit knows a queued write's fence is stale.
 
     Deliberately lenient rather than raising: an empty body, non-JSON body, or
     a ``"commit": null`` (a write that matched nothing) are all just "no
@@ -1669,18 +1728,22 @@ def _commit_id_from_mutate_body(body: str) -> str | None:
     information could not be parsed out of an otherwise-successful response.
     """
     if not body.strip():
-        return None
+        return None, None
     try:
         parsed = json.loads(body)
     except json.JSONDecodeError:
-        return None
+        return None, None
     if not isinstance(parsed, dict):
-        return None
+        return None, None
     commit = parsed.get("commit")
     if not isinstance(commit, dict):
-        return None
+        return None, None
     graph_commit_id = commit.get("graph_commit_id")
-    return graph_commit_id if isinstance(graph_commit_id, str) else None
+    parent_commit_id = commit.get("parent_commit_id")
+    return (
+        graph_commit_id if isinstance(graph_commit_id, str) else None,
+        parent_commit_id if isinstance(parent_commit_id, str) else None,
+    )
 
 
 @contextmanager
@@ -1911,7 +1974,9 @@ class OmnigraphClient:
         re-read and retry more often than the contention alone would suggest.
 
         Returns the NEW ``graph_commit_id`` this write produced (the mutate
-        response's ``commit.graph_commit_id``), or ``None`` when there is none:
+        response's ``commit.graph_commit_id``; under group commit, the commit
+        that carried it with other callers' writes), or ``None`` when there is
+        none:
         the CLI path, or a write that matched nothing (0.13 answers those with
         ``"commit": null``). Distinct from ``if_commit``, which is the commit
         you fenced ON before the call. From 0.12 it is the exact commit this
@@ -1926,6 +1991,12 @@ class OmnigraphClient:
         """
         if self.guard is not None:
             params = self.guard(query_name, params)
+        if self._groups_writes():
+            return self._submit_to_group(
+                [(query_file, query_name, params)],
+                surface_conflict=surface_conflict,
+                if_commit=if_commit,
+            )
         transport = self._http_transport()
         if transport is not None:
             body = self._http_execute(
@@ -2013,6 +2084,11 @@ class OmnigraphClient:
         A single step is passed straight through to ``change`` rather than
         wrapped: the composed form would be equivalent, but the direct path
         keeps the named query in the error message and skips the splice.
+
+        Against a deployed server both this and :meth:`change` go through the
+        process-wide group committer, so the commit may also carry other
+        callers' writes (see :mod:`witan_core.group_commit`). The outcome
+        reported is still this call's own.
         """
         if not steps:
             return
@@ -2072,6 +2148,11 @@ class OmnigraphClient:
             return
         if self.guard is not None:
             steps = [(f, n, self.guard(n, p)) for f, n, p in steps]
+        if self._groups_writes():
+            self._submit_to_group(
+                steps, surface_conflict=surface_conflict, if_commit=if_commit
+            )
+            return
         # Read each .gq once, not once per step: the steps of a batch nearly
         # always come from the same file (a memory and all its tags are
         # mutations.gq), and re-reading it per step would put avoidable I/O on
@@ -2335,8 +2416,15 @@ class OmnigraphClient:
         *,
         surface_conflict: bool = False,
         if_graph_commit: str | None = None,
+        started: float | None = None,
+        attempts: list[_AttemptResult] | None = None,
     ) -> str:
         """Run one query/mutate over HTTP under the shared retry policy.
+
+        ``started`` moves the start of the call budget earlier, for a group
+        commit whose members queued before it was sent. ``attempts`` collects
+        each attempt's result, so a group commit can tell a definite rejection
+        from a failure whose effects are unknown.
 
         A write additionally holds a slot in the process-wide :data:`_WRITE_GATE`
         for the whole call, retries included — a write being retried is still
@@ -2364,12 +2452,16 @@ class OmnigraphClient:
                 outcome = transport.mutate(
                     self.graph_id, source, params, token, if_graph_commit
                 )
-            return _AttemptResult(
+            result = _AttemptResult(
                 outcome.kind,
                 body=outcome.body,
                 error=outcome.error,
                 retry_after=outcome.retry_after,
+                status=outcome.status,
             )
+            if attempts is not None:
+                attempts.append(result)
+            return result
 
         return self._with_retry_policy(
             attempt,
@@ -2379,7 +2471,141 @@ class OmnigraphClient:
             env=self._subprocess_env(),
             is_write=is_write,
             surface_conflict=surface_conflict,
+            started=started,
         )
+
+    # ── Group commit (remote writes over HTTP) ──
+
+    def _groups_writes(self) -> bool:
+        """Whether this client's writes go through the group committer.
+
+        Only remote writes over the HTTP transport. A local or s3 store
+        serializes on a lock that :meth:`hold_write_lock` re-enters on the
+        caller's own thread, so a commit led from another thread would wait on
+        it forever. And the CLI reports a failed write as text, which cannot
+        tell a definite rejection (safe to replay one write at a time) from a
+        lost response (not safe).
+        """
+        if os.environ.get(GROUP_COMMIT_ENV_VAR, "").strip().lower() in _FALSEY:
+            return False
+        return self._http_transport() is not None
+
+    def _submit_to_group(
+        self,
+        steps: list[Step],
+        *,
+        surface_conflict: bool,
+        if_commit: str | None,
+    ) -> str | None:
+        """Queue ``steps`` on this actor's lane for this graph and wait for them.
+
+        The lane key is everything that changes what the request does or who
+        it is from. The token is in it because omnigraph authorizes a request
+        once and records one actor on its commit, so a commit must never carry
+        two actors' writes. It is hashed so the lane table holds no secret.
+        """
+        token = self._resolve_token()
+        key = (
+            type(self),
+            self.server_url,
+            self.graph_id,
+            hashlib.sha256(token.encode()).hexdigest() if token else None,
+            str(self.queries_dir),
+            self.connect_retry,
+        )
+        gate_key = self._write_gate_key()
+        return _GROUP_COMMITTER.submit(
+            key,
+            steps,
+            self._commit_group,
+            if_commit=if_commit,
+            surface_conflict=surface_conflict,
+            destructive=any(
+                _cached_is_destructive(self.queries_dir / query_file, name)
+                for query_file, name, _ in steps
+            ),
+            cost=sum(len(json.dumps(params, default=str)) for _, _, params in steps),
+            budget=_env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
+            or None,
+            # Only a lane's leader enters the write gate, so a queued write is
+            # held to the gate's queue limit and service estimate here.
+            queue_wait=_env_override(
+                REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, _REMOTE_WRITE_QUEUE_WAIT, float
+            ),
+            estimate=lambda: _WRITE_GATE.estimate(gate_key),
+        )
+
+    def _write_gate_key(self) -> str:
+        """This graph's key in :data:`_WRITE_GATE`."""
+        return f"{self.server_url}|{self.graph_id}"
+
+    def _commit_group(
+        self,
+        steps: list[Step],
+        if_commit: str | None,
+        surface_conflict: bool,
+        started: float,
+    ) -> tuple[str | None, str | None]:
+        """Commit one group as one mutate. A lone step is sent as its own named
+        query, so an unloaded graph sees exactly the request it saw before."""
+        transport = self._http_transport()
+        if transport is None:
+            raise RuntimeError("group commit needs the HTTP transport")
+        if len(steps) == 1:
+            query_file, query_name, params = steps[0]
+            source = self._query_source(query_file, query_name)
+        else:
+            sources: dict[str, str] = {}
+
+            def read_source(query_file: str) -> str:
+                if query_file not in sources:
+                    sources[query_file] = (self.queries_dir / query_file).read_text()
+                return sources[query_file]
+
+            try:
+                source, params = compose_batch(steps, read_source)
+            except KeyError as exc:
+                # One member's missing parameter, caught before anything was
+                # sent: replaying one write at a time gives it to that member.
+                raise RejectedBatch(exc) from exc
+        attempts: list[_AttemptResult] = []
+        try:
+            body = self._http_execute(
+                transport,
+                "mutate",
+                source,
+                params,
+                "mutate",
+                surface_conflict=surface_conflict,
+                if_graph_commit=if_commit,
+                started=started,
+                attempts=attempts,
+            )
+        except OmnigraphConflict as exc:
+            raise ConditionFailed(exc) from exc
+        except RuntimeError as exc:
+            # Exactly RuntimeError: every subclass (unavailable, contention,
+            # indeterminate, queue full, quarantined) is a condition of the
+            # graph, not of one caller's statements, and replaying cannot help.
+            last = attempts[-1] if attempts else None
+            if type(exc) is not RuntimeError or last is None:
+                raise
+            if last.status == _PRECONDITION_FAILED_STATUS:
+                # The fence of a caller that does not surface conflicts.
+                raise ConditionFailed(exc) from exc
+            if last.status not in _DEFINITE_REJECTION_STATUSES:
+                raise
+            if last.error.lstrip().startswith(_DATAFUSION_ERROR_PREFIX):
+                # omnigraph marks this one completion-uncertain and closes
+                # write admission on it, so the write may have landed.
+                raise WriteIndeterminate(
+                    "omnigraph mutate failed with a query error the server "
+                    "treats as completion-uncertain. ITS OUTCOME IS "
+                    "INDETERMINATE: the write may or may not have been "
+                    f"applied. Re-read before retrying:\n{last.error.strip()}"
+                ) from exc
+            raise RejectedBatch(exc) from exc
+        return _commit_ids_from_mutate_body(body)
 
     def export_to(self, path: Path | str, *, label: str = "export") -> None:
         """Stream ``omnigraph export`` of this store into ``path``.
@@ -2556,6 +2782,7 @@ class OmnigraphClient:
         env: dict,
         is_write: bool,
         surface_conflict: bool = False,
+        started: float | None = None,
     ) -> str:
         """The retry/backoff policy, shared by both transports.
 
@@ -2594,11 +2821,10 @@ class OmnigraphClient:
             if self.is_remote
             else 0.0
         )
-        deadline = time.monotonic() + budget if budget else None
+        origin = time.monotonic() if started is None else started
+        deadline = origin + budget if budget else None
         gate = (
-            _WRITE_GATE.admit(
-                f"{self.server_url}|{self.graph_id}", label, call_deadline=deadline
-            )
+            _WRITE_GATE.admit(self._write_gate_key(), label, call_deadline=deadline)
             if gate_write
             else nullcontext()
         )
