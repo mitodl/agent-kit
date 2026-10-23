@@ -566,7 +566,10 @@ def index_path(
 
     # A vanished single file: the one id that file had, and its bindings, which
     # `write_bindings` clears for every touched file the batch has none for.
-    if gone and indexable(target):
+    # Only under a git root, for `_may_purge`'s reason: without one `base` is
+    # just the nearest directory, and under a WITAN_REPO override the path
+    # relative to it can name a different file that is still in the repo.
+    if gone and repo_root is not None and indexable(target):
         rel = _relative_path(target, base)
         if f"{slug}#{rel}" in existing:
             delete_steps += _delete_file_steps(f"{slug}#{rel}")

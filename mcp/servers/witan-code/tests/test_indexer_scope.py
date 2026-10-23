@@ -532,3 +532,58 @@ def test_index_path_passes_the_view_it_wrote_to_the_purge_gate(tmp_path, monkeyp
 
     assert seen["branch"] == "act-alice/feature_x"
     assert seen["actor"] == "act-alice"
+
+
+# ── A single file that is gone from disk ─────────────────────────────────────
+
+
+@requires_stack
+def test_indexing_a_deleted_file_clears_its_bridge_bindings(tmp_path, monkeypatch):
+    """The per-edit hook indexes a file an agent deleted. Its cross-repo
+    bindings must go with its rows, or the bridge keeps reporting a consumer
+    that no longer exists."""
+    from witan_code import config as cfg_mod
+    from witan_code.graph import OmnigraphClient
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "settings.py").write_text(
+        'import os\nVALUE = os.getenv("WITAN_CODE_GONE_VAR")\n'
+    )
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    bridge = OmnigraphClient(
+        str(cfg_mod.bridge_store_path(cfg.code_dir)), cfg.queries_dir
+    )
+
+    def _binding_files() -> set[str]:
+        rows = bridge.read("bridge.gq", "all_bindings", {})
+        return {r["file"] for r in rows if r["key_norm"] == "WITAN_CODE_GONE_VAR"}
+
+    assert _binding_files() == {"settings.py"}
+
+    (src / "settings.py").unlink()
+    stats = indexer.index_path(src / "settings.py", config=cfg)
+
+    assert stats.purged == 1
+    assert _binding_files() == set()
+
+
+@requires_stack
+def test_a_deleted_file_outside_a_git_root_purges_nothing(tmp_path, monkeypatch):
+    """`_may_purge`'s guard, for the single-file case: with no git root the
+    path is relative to whatever directory is nearest, so under a WITAN_REPO
+    override it can name a different file that is still in the repo."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    elsewhere = tmp_path / "scratch"  # not a git checkout
+    elsewhere.mkdir()
+
+    stats = indexer.index_path(elsewhere / "a.py", config=cfg)
+
+    assert stats.purged == 0
+    assert _files(store, cfg) == {"a.py"}
