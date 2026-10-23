@@ -14,5 +14,11 @@
   knows what it wrote before. `validate` reads the old file too but never
   deletes it.
 - `default_state_path()` and `default_applied_state_path()` take the write
-  `scope` as a second argument. `state_dir()` is new and returns the directory
-  both live in.
+  `scope` as a second argument. `agent_config_kit.prune.state_dir()` is new
+  and returns the directory both live in.
+
+### Fixed
+
+- A relative `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` or `XDG_STATE_HOME` is now
+  ignored, as the XDG Base Directory spec requires, instead of resolving
+  against the directory `agent-kit` ran from.

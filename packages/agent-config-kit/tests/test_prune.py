@@ -465,6 +465,17 @@ def test_state_dir_falls_back_to_home_local_state(tmp_path, monkeypatch):
     assert path.parent == tmp_path / ".local" / "state" / "agent-config-kit"
 
 
+def test_state_dir_ignores_a_relative_xdg_state_home(tmp_path, monkeypatch):
+    """The XDG spec says to ignore a relative value; honoring it would put
+    the state under the CWD, usually a repo."""
+    monkeypatch.setenv("XDG_STATE_HOME", "rel-state")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    path = state_dir(tmp_path / "agent-config.toml", Scope.GLOBAL)
+
+    assert path.parent == tmp_path / ".local" / "state" / "agent-config-kit"
+
+
 def test_state_dir_is_keyed_by_cwd_for_project_scope_only(tmp_path, monkeypatch):
     """Project targets are relative to the CWD, so one manifest applied into
     two repos needs two states; a global apply writes the same files from

@@ -69,13 +69,26 @@ class GlobalConfig(BaseModel):
     overlay: dict[str, Any] = Field(default_factory=dict)
 
 
+def xdg_base_dir(env_var: str, default: Path) -> Path:
+    """``$env_var`` when it is set to an absolute path, else ``default``
+    (relative to ``Path.home()``). The XDG Base Directory spec says to ignore
+    a relative value, and honoring one would put per-machine files under
+    whatever directory the command ran from, typically a repo. Reads the
+    environment and ``Path.home()`` at call time (not cached) so it stays
+    testable via ``monkeypatch``."""
+    value = os.environ.get(env_var)
+    if value and Path(value).is_absolute():
+        return Path(value)
+    return Path.home() / default
+
+
 def default_config_path() -> Path:
-    """``${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml``. Reads
-    the environment and ``Path.home()`` at call time (not cached) so it stays
-    testable via ``monkeypatch``, matching ``paths.py``'s convention."""
-    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
-    return base / "agent-config-kit" / "config.toml"
+    """``${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml``."""
+    return (
+        xdg_base_dir("XDG_CONFIG_HOME", Path(".config"))
+        / "agent-config-kit"
+        / "config.toml"
+    )
 
 
 def resolve_config_path(explicit: Path | None) -> Path:

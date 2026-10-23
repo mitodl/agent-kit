@@ -137,6 +137,34 @@ def test_validate_reports_stale_skill_and_exits_1(tmp_path, monkeypatch, capsys)
     assert "skills:commit" in capsys.readouterr().out
 
 
+def test_validate_reads_pre_xdg_applied_state_without_moving_it(
+    tmp_path, monkeypatch, capsys
+):
+    """validate falls back to the old ``<manifest>.applied.json`` like apply
+    does, but it never writes, so the old file stays where it is."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_md = _write_skill(tmp_path, "skills/commit/SKILL.md", "# commit v1")
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [skills]
+        commit = "skills/commit/SKILL.md"
+        """,
+    )
+    _run_ok(["apply", str(manifest), "--platform", "claude"])
+    legacy = tmp_path / "agent-config.toml.applied.json"
+    default_applied_state_path(manifest, Scope.GLOBAL).replace(legacy)
+    skill_md.write_text("# commit v2, changed upstream")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["validate", str(manifest), "--platform", "claude"])
+
+    assert exc_info.value.code == 1
+    assert "skills:commit" in capsys.readouterr().out
+    assert legacy.is_file()
+    assert not default_applied_state_path(manifest, Scope.GLOBAL).exists()
+
+
 def test_validate_no_staleness_when_source_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     _write_skill(tmp_path, "skills/commit/SKILL.md", "# commit v1")

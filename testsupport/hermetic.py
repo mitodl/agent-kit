@@ -319,6 +319,7 @@ def _strict() -> bool:
 _WATCHED_TREES = (
     (REAL_HOME / ".local" / "share" / "witan", 3),
     (REAL_HOME / ".config" / "witan", 2),
+    (REAL_HOME / ".local" / "state" / "agent-config-kit", 2),
 )
 
 # Watched as FILES, by size and mtime, because the agent-kit#282 leak was an

@@ -14,11 +14,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
+from .config import xdg_base_dir
 from .configio import load_config_object, write_config
 from .installers import (
     _prune_empty_dirs,
@@ -130,8 +130,7 @@ def state_dir(manifest_path: Path, scope: Scope) -> Path:
     §9 O-STATE), and a ``global``-scope apply keeps one state whichever
     directory it ran from, since its targets are the same files either way.
     """
-    xdg_state_home = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg_state_home) if xdg_state_home else Path.home() / ".local" / "state"
+    base = xdg_base_dir("XDG_STATE_HOME", Path(".local") / "state")
     identity = str(manifest_path.resolve())
     if scope == Scope.PROJECT:
         identity += "\0" + str(Path.cwd().resolve())
