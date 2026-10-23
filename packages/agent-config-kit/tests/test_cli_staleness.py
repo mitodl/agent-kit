@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from agent_config_kit.cli import app
+from agent_config_kit.models import Scope
 from agent_config_kit.prune import default_applied_state_path
 
 
@@ -50,7 +51,7 @@ def test_apply_first_run_writes_applied_state_and_prints_no_warning(
 
     out = capsys.readouterr().out
     assert "changed upstream" not in out
-    state_path = default_applied_state_path(manifest)
+    state_path = default_applied_state_path(manifest, Scope.GLOBAL)
     assert state_path.is_file()
     recorded = json.loads(state_path.read_text())
     assert "commit" in recorded["platforms"]["claude"]["skills"]
@@ -113,7 +114,7 @@ def test_apply_dry_run_does_not_write_applied_state(tmp_path, monkeypatch):
 
     _run_ok(["apply", str(manifest), "--platform", "claude", "--dry-run"])
 
-    assert not default_applied_state_path(manifest).exists()
+    assert not default_applied_state_path(manifest, Scope.GLOBAL).exists()
 
 
 def test_validate_reports_stale_skill_and_exits_1(tmp_path, monkeypatch, capsys):

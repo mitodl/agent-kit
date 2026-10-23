@@ -305,16 +305,21 @@ def test_prune_state_is_not_shared_across_repos_applying_the_same_org_manifest(
     _init_git_repo(repo_b)
     _add_remote(repo_b, "origin", "https://github.com/mitodl/repo-b.git")
 
+    from agent_config_kit.models import Scope
+    from agent_config_kit.prune import default_state_path
+
     monkeypatch.chdir(repo_a)
     _run_ok(app, ["apply", "--platform", "claude", "--prune"])
+    state_a = default_state_path(org_manifest, Scope.PROJECT)
     monkeypatch.chdir(repo_b)
     _run_ok(app, ["apply", "--platform", "claude", "--prune"])
+    state_b = default_state_path(org_manifest, Scope.PROJECT)
 
-    state_a = repo_a / ".agent-config-kit-state.json"
-    state_b = repo_b / ".agent-config-kit-state.json"
+    assert state_a != state_b
     assert state_a.is_file()
     assert state_b.is_file()
     assert not (tmp_path / "org" / "agent-config.toml.lock.json").is_file()
+    assert not (repo_a / ".agent-config-kit-state.json").is_file()
 
     # Both repos still have their own independently-written entry.
     assert json.loads((repo_a / ".mcp.json").read_text())["mcpServers"]["witan"]

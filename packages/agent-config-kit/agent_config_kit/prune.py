@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -116,8 +117,30 @@ def manifest_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def default_state_path(manifest_path: Path) -> Path:
-    return manifest_path.with_name(manifest_path.name + ".lock.json")
+def state_dir(manifest_path: Path, scope: Scope) -> Path:
+    """``${XDG_STATE_HOME:-~/.local/state}/agent-config-kit/<key>``: where
+    one manifest's apply state lives on this machine.
+
+    The state records what this machine's last apply wrote, so it is never
+    something to commit, and a manifest usually sits in a repo that is
+    committed. The key is the resolved manifest path, plus the CWD for a
+    ``project``-scope apply because project targets (``.mcp.json``,
+    ``.claude/settings.json``) are relative to it. One shared manifest
+    applied into several repos therefore keeps separate state per repo (spec
+    §9 O-STATE), and a ``global``-scope apply keeps one state whichever
+    directory it ran from, since its targets are the same files either way.
+    """
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    base = Path(xdg_state_home) if xdg_state_home else Path.home() / ".local" / "state"
+    identity = str(manifest_path.resolve())
+    if scope == Scope.PROJECT:
+        identity += "\0" + str(Path.cwd().resolve())
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    return base / "agent-config-kit" / f"{manifest_path.name}-{digest}"
+
+
+def default_state_path(manifest_path: Path, scope: Scope) -> Path:
+    return state_dir(manifest_path, scope) / "lock.json"
 
 
 def load_state(path: Path) -> dict[str, PlatformState]:
@@ -172,8 +195,8 @@ def write_state(
 @dataclass
 class AppliedState:
     """Per-skill/plugin-hook content hashes recorded at apply time —
-    ``<manifest>.applied.json`` (staleness-detection spec S1/S4), a
-    sibling to ``PlatformState``'s own ``<manifest>.lock.json`` but
+    ``applied.json`` (staleness-detection spec S1/S4), a sibling to
+    ``PlatformState``'s own ``lock.json`` in ``state_dir`` but
     deliberately narrower: no ``mcp_servers`` entry, since this file only
     tracks content the manifest merely *points at* (a skill's files, a
     plugin hook's script), not content the manifest inlines directly
@@ -210,8 +233,8 @@ def stale_names(current: dict[str, str], previous: dict[str, str]) -> list[str]:
     return sorted(k for k, h in current.items() if k in previous and previous[k] != h)
 
 
-def default_applied_state_path(manifest_path: Path) -> Path:
-    return manifest_path.with_name(manifest_path.name + ".applied.json")
+def default_applied_state_path(manifest_path: Path, scope: Scope) -> Path:
+    return state_dir(manifest_path, scope) / "applied.json"
 
 
 def load_applied_state(path: Path) -> dict[str, AppliedState]:
