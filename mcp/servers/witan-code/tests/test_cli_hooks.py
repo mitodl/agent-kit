@@ -5,6 +5,10 @@ exception escape (the hooks are documented as "always exits 0"), and must
 not print an extra trailing newline beyond what the backend already returns.
 """
 
+import io
+import json
+import sys
+
 import pytest
 
 from witan_code import cli
@@ -64,8 +68,62 @@ def test_inject_context_cmd_defaults_to_the_claude_client(monkeypatch, capsys):
     assert seen == ["claude"]
 
 
-@pytest.mark.parametrize("client", ["pi", "pi-builtin"])
-def test_inject_context_cmd_passes_an_explicit_pi_client_through(monkeypatch, client):
+def _stdin(monkeypatch, payload: dict) -> None:
+    """Hand the command a hook payload on a closed, non-tty stdin."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+
+
+def _run_bare(monkeypatch) -> list[str]:
+    import witan_code.context as context_module
+
+    seen = []
+    monkeypatch.setattr(
+        context_module, "inject_context", lambda client: seen.append(client) or ""
+    )
+    command, bound, _ = cli.app.parse_args(["inject-context"])
+    command(*bound.args, **bound.kwargs)
+    return seen
+
+
+def test_the_bare_command_renders_for_codex_from_a_codex_payload(monkeypatch):
+    """One hook command is registered for Claude Code and Codex alike, so the
+    payload is what picks the block."""
+    from .conftest import CODEX_PROMPT_PAYLOAD
+
+    _stdin(monkeypatch, CODEX_PROMPT_PAYLOAD)
+
+    assert _run_bare(monkeypatch) == ["codex"]
+
+
+def test_the_bare_command_stays_claude_for_a_claude_payload(monkeypatch):
+    from .conftest import CLAUDE_PROMPT_PAYLOAD
+
+    _stdin(monkeypatch, CLAUDE_PROMPT_PAYLOAD)
+
+    assert _run_bare(monkeypatch) == ["claude"]
+
+
+def test_an_explicit_client_does_not_read_stdin(monkeypatch):
+    """The Pi extension passes `--client`; its stdin is not a hook payload."""
+    import witan_code.context as context_module
+
+    from .conftest import CODEX_PROMPT_PAYLOAD
+
+    _stdin(monkeypatch, CODEX_PROMPT_PAYLOAD)
+    seen = []
+    monkeypatch.setattr(
+        context_module, "inject_context", lambda client: seen.append(client) or ""
+    )
+
+    command, bound, _ = cli.app.parse_args(["inject-context", "--client", "pi"])
+    command(*bound.args, **bound.kwargs)
+
+    assert seen == ["pi"]
+    assert sys.stdin.read() != ""  # left unread
+
+
+@pytest.mark.parametrize("client", ["codex", "pi", "pi-builtin"])
+def test_inject_context_cmd_passes_an_explicit_client_through(monkeypatch, client):
     import witan_code.context as context_module
 
     seen = []

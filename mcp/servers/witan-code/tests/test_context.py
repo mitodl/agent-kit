@@ -5,6 +5,7 @@ tests exercise context.py's own orchestration (repo detection, lock-file
 check, store-exists branching), not the underlying query.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +16,8 @@ from pathlib import Path
 import pytest
 
 from witan_code import context
+
+from .conftest import CLAUDE_PROMPT_PAYLOAD, CODEX_PROMPT_PAYLOAD
 
 
 def _lock(tmp_path, monkeypatch, project_dir):
@@ -463,3 +466,35 @@ def test_inject_context_for_pi_names_the_mcp_proxy_not_toolsearch(
     assert "https://github.com/test/cg" in text
     assert "3 files" in text
     assert "No other repo is indexed" in text
+
+
+# ── Codex ─────────────────────────────────────────────────────────────────────
+
+
+def test_a_codex_payload_selects_the_codex_client():
+    assert context.client_from_payload(json.dumps(CODEX_PROMPT_PAYLOAD)) == "codex"
+
+
+@pytest.mark.parametrize(
+    "payload", [json.dumps(CLAUDE_PROMPT_PAYLOAD), "", "not json", "[1]"]
+)
+def test_anything_but_a_codex_payload_selects_claude(payload):
+    assert context.client_from_payload(payload) == "claude"
+
+
+def test_inject_context_for_codex_names_tools_codex_has(tmp_path, monkeypatch):
+    """Codex has no `ToolSearch` and no `/witan-code` command. It defers MCP
+    tools behind `tool_search` when the model supports one, and lists them
+    directly otherwise, so the search is the fallback for unlisted tools."""
+    _indexed(tmp_path, monkeypatch)
+
+    text = context.inject_context(client="codex")
+
+    assert "ToolSearch" not in text
+    assert "/witan-code" not in text
+    assert 'tool_search(query="code_find_definition callers impact")' in text
+    assert "`witan-code` skill" in text
+    # The status lines above the discovery line are client-neutral.
+    assert "https://github.com/test/cg" in text
+    assert "3 files" in text
+    assert len(text) < 600  # same budget as the Claude block

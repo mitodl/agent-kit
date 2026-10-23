@@ -592,7 +592,7 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
 
 @app.command(name="inject-context")
 def inject_context_cmd(
-    *, client: Literal["claude", "pi", "pi-builtin"] = "claude"
+    *, client: Literal["claude", "codex", "pi", "pi-builtin"] | None = None
 ) -> None:
     """Print a short code-graph status block for the UserPromptSubmit hook.
 
@@ -604,23 +604,44 @@ def inject_context_cmd(
     ----------
     client
         Which agent the block's tool-discovery instructions are written for:
-        ``claude`` (``ToolSearch``, the default), ``pi-builtin`` (a
-        ``codemode`` script, for Pi's built-in MCP), or ``pi``
-        (pi-mcp-adapter's ``mcp`` proxy). The Pi extension passes
+        ``claude`` (``ToolSearch``), ``codex`` (``tool_search``),
+        ``pi-builtin`` (a ``codemode`` script, for Pi's built-in MCP), or
+        ``pi`` (pi-mcp-adapter's ``mcp`` proxy). The Pi extension passes
         ``--client pi`` when the adapter's ``mcp`` tool is registered and
-        ``--client pi-builtin`` otherwise; nothing is inferred from the
-        environment.
+        ``--client pi-builtin`` otherwise. Omitted, as in the hook Claude
+        Code and Codex share, it is read off the hook's stdin payload:
+        ``codex`` for a Codex payload, ``claude`` for anything else. Nothing
+        is inferred from the environment.
     """
     import sys
 
     from . import context as context_module
 
     try:
+        if client is None:
+            client = context_module.client_from_payload(_hook_stdin())
         text = context_module.inject_context(client=client)
     except Exception:  # noqa: BLE001 — must never fail the hook
         return
     if text:
         sys.stdout.write(text)  # inject_context() already ends with "\n"
+
+
+def _hook_stdin() -> str:
+    """The hook's stdin payload, or "" when there isn't one to read.
+
+    Empty for a terminal (the command run by hand) and for a stdin that
+    cannot be read, so the block falls back to Claude's rather than going
+    blank. Claude Code and Codex write the payload and close the pipe, so the
+    read can't block.
+    """
+    stdin = sys.stdin
+    if stdin is None:
+        return ""
+    try:
+        return "" if stdin.isatty() else stdin.read()
+    except (OSError, ValueError):
+        return ""
 
 
 @app.command
