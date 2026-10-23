@@ -202,6 +202,14 @@ def serve(
 
     witan_mcp = _serve_target(transport)
 
+    # Only stdio is certainly this user's own machine. The deployment serves
+    # these same tool functions over HTTP, where a `gh` call would act as
+    # whoever runs the pod. A remote target's forwarder annotates by itself.
+    if transport == "stdio":
+        from .. import live_pr
+
+        live_pr.annotate_tool_results()
+
     try:
         from witan_code.server import mcp as code_mcp
 

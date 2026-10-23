@@ -27,6 +27,10 @@ import re
 import tempfile
 from pathlib import Path
 
+from witan_core.observability import get_logger
+
+logger = get_logger("witan.session_state")
+
 STATE_FILE_PREFIX = "workflow-session-"
 
 # The agent-session id variables, in precedence order. Claude Code exports
@@ -78,6 +82,38 @@ _SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_.-]+")
 
 def session_state_dir() -> Path:
     return Path(tempfile.gettempdir())
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically and privately; never raises.
+
+    The context hook runs as concurrent fresh processes (a ``/``-command burst
+    fires it repeatedly), so a plain ``write_text`` could let one process read
+    a half-written file. Writing a process-unique temp file and ``os.replace``-ing it in
+    means a reader always sees either the old or the new *complete* file. The
+    temp file is created ``0600`` (umask-independent) because what lands here
+    (project/task titles, PR state) lives in a shared temp dir.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, text.encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except OSError:
+        # Debug: everything written here is an advisory cache the caller
+        # recomputes. Anything louder would fire on every prompt for a
+        # read-only temp dir.
+        logger.debug("witan.session_state.write_failed", path=str(path), exc_info=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            # Nothing left to try, and the temp file is in a temp dir. Silence
+            # is right here: reporting a failed cleanup of a failed write would
+            # be two lines about the same non-event.
+            pass
 
 
 def is_safe_session_id(session_id: str) -> bool:

@@ -56,6 +56,13 @@ working it). An ``in_progress`` task also carries ``lease_expired`` (see
 ``DiscoveredFrom`` is not included: it has no read query, and nothing has
 needed it.
 
+When ``external_uri`` is a GitHub PR or issue and witan runs on your
+machine, the node also carries ``live_pr``: that PR's or issue's state
+fetched from GitHub just now (``state``, ``draft``, ``review_decision``,
+``checks``, ``fetched_at``), or ``{"error": ...}`` when it could not be
+fetched. The description and comments are snapshots from when they were
+written; where ``live_pr`` disagrees with them, ``live_pr`` is current.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to retrieve. |

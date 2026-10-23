@@ -16,11 +16,12 @@ import os
 import threading
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from witan_core.observability import get_logger
 
-from . import envelope, readiness, session_state
+from . import envelope, live_pr, readiness, session_state
 from . import repo as repo_module
 from .graph import OmnigraphClient
 
@@ -76,37 +77,6 @@ def _context_deadline() -> float:
     return _env_seconds("WITAN_CONTEXT_DEADLINE", _CONTEXT_DEADLINE)
 
 
-def _atomic_write_private(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically and privately; never raises.
-
-    The hook runs as concurrent fresh processes (a ``/``-command burst fires it
-    repeatedly), so a plain ``write_text`` could let one process read a half-
-    written file. Writing a process-unique temp file and ``os.replace``-ing it in
-    means a reader always sees either the old or the new *complete* file. The
-    temp file is created ``0600`` (umask-independent) because the cached block
-    contains project/task titles and lives in a shared temp dir.
-    """
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, text.encode())
-        finally:
-            os.close(fd)
-        os.replace(tmp, path)
-    except OSError:
-        # Debug: the cache is advisory, and the caller recomputes. Anything
-        # louder would fire on every prompt for a read-only temp dir.
-        logger.debug("witan.context.cache_write_failed", path=str(path), exc_info=True)
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            # Nothing left to try, and the temp file is in a temp dir. Silence
-            # is right here: reporting a failed cleanup of a failed write would
-            # be two lines about the same non-event.
-            pass
-
-
 def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> Path:
     key = f"{graph_uri}|{repo}|{branch}"
     digest = hashlib.sha1(key.encode()).hexdigest()[:16]
@@ -160,7 +130,7 @@ def _read_seen(cache_key: str) -> dict[str, list[str]]:
 
 
 def _write_seen(cache_key: str, seen: dict[str, list[str]]) -> None:
-    _atomic_write_private(_seen_file(cache_key), json.dumps(seen))
+    session_state.write_private(_seen_file(cache_key), json.dumps(seen))
 
 
 def _read_output_cache(
@@ -186,7 +156,7 @@ def _write_output_cache(
 ) -> None:
     if _output_cache_ttl() <= 0:
         return
-    _atomic_write_private(
+    session_state.write_private(
         _output_cache_file(graph_uri, repo, branch),
         json.dumps({"stamp": time.time(), "output": output}),
     )
@@ -393,7 +363,74 @@ _READ_BLOCKS = {
     "held": "held-task comments",
     "sessions": "project sessions",
     "comments": "held-task comments",
+    "live": "linked PR state",
 }
+
+# Lookups per render. Each is a `gh` call of ~2s (measured 2026-10-23), run
+# concurrently, so the cap bounds GitHub API use more than latency.
+_LIVE_LOOKUP_LIMIT = 5
+
+
+def _live_urls(
+    held: list[dict], open_branch_tasks: list[dict], projects: list[dict]
+) -> list[str]:
+    """The linked GitHub URLs this render shows live state for, in render order.
+
+    Only the records the block actually shows: the held tasks it can name, the
+    branch's tasks, and the first three projects. A URL that is not GitHub's is
+    skipped before the cap so it cannot take a slot.
+    """
+    if not live_pr.enabled():
+        return []
+    urls = [t.get("external_uri") for t in held[:_HELD_TASK_LIMIT]]
+    urls += [t.get("external_uri") for t in open_branch_tasks]
+    urls += [p.get("github_pr") for p in projects[:3]]
+    linked = (u for u in urls if isinstance(u, str) and live_pr.parse(u))
+    return list(dict.fromkeys(linked))[:_LIVE_LOOKUP_LIMIT]
+
+
+def _live_calls(urls: list[str]) -> dict[str, Callable[[], Awaitable[object]]]:
+    """One ``live:<url>`` wave entry per URL.
+
+    ``live_state`` is a blocking subprocess, so it runs on a worker thread. A
+    cancelled entry stops waiting but cannot stop its ``gh``; that is bounded
+    by ``gh``'s own 5s timeout, which the interpreter waits out at exit.
+    """
+    return {
+        f"live:{url}": (lambda url=url: asyncio.to_thread(live_pr.live_state, url))
+        for url in urls
+    }
+
+
+def _live_lines(fetched: dict[str, object], urls: list[str]) -> dict[str, str]:
+    """``url -> rendered line`` for each lookup that answered.
+
+    A lookup that failed or missed the deadline renders nothing. Showing an
+    older answer in its place would present stale state as live, which is the
+    problem these lines exist to fix.
+    """
+    out: dict[str, str] = {}
+    for url in urls:
+        value = fetched.get(f"live:{url}")
+        if isinstance(value, dict) and (line := live_pr.describe(value)):
+            out[url] = line
+    return out
+
+
+def _stamp(value: str | None) -> str:
+    """`` (2026-10-15 20:09 UTC)`` for a stored timestamp, ``""`` without one.
+
+    Stored timestamps are UTC, written without an offset.
+    """
+    if not value:
+        return ""
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return f" ({when.astimezone(UTC):%Y-%m-%d %H:%M} UTC)"
 
 
 def inject_context(
@@ -419,7 +456,12 @@ def inject_context(
     must never crash a prompt), but each one first reports *why* to stderr — a
     broken graph, missing git, or empty result is otherwise indistinguishable
     from "nothing to show".
+
+    The graph reads here are local and not bounded, but the linked-PR lookups
+    go to GitHub, so they run concurrently under the same shared deadline the
+    remote path uses (:func:`_context_deadline`).
     """
+    deadline = time.monotonic() + _context_deadline()
     try:
         # Kept inside the try so the hook still degrades to "" on the off chance
         # any of this raises — the module contract is that it never does.
@@ -522,9 +564,11 @@ def inject_context(
     def comments_for(slug: str) -> list[dict]:
         return client.read("read.gq", "list_task_comments", {"task_slug": slug})
 
-    commented = _held_task_comments(
-        _held_by(all_rows, author), comments_for, graph_uri, debug=debug
-    )
+    held = _held_by(all_rows, author)
+    commented = _held_task_comments(held, comments_for, graph_uri, debug=debug)
+
+    live_urls = _live_urls(held, open_branch_tasks, projects)
+    live = _live_lines(_gather(_live_calls(live_urls), deadline), live_urls)
 
     # Shared with ``task_ready`` so the injected list and the tool agree —
     # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
@@ -546,7 +590,9 @@ def inject_context(
         sessions_by_project=sessions_by_project,
         ready=ready,
         open_branch_tasks=open_branch_tasks,
+        held=held,
         commented=commented,
+        live=live,
         stale_repo_case=stale_repo_case,
         debug=debug,
     )
@@ -671,9 +717,17 @@ def _render_context_block(
     commented: list[tuple[dict, list[dict]]],
     stale_repo_case: bool,
     debug: bool,
+    held: list[dict],
+    live: dict[str, str],
     partial: str | None = None,
 ) -> str:
     """Render the markdown block both the local and remote data paths share.
+
+    ``live`` maps a linked GitHub URL to its live-state line
+    (:func:`_live_lines`). Each line goes under the record that links it: a
+    project's ``github_pr``, or a held or in-flight-branch task's
+    ``external_uri``. A held task that no other block names gets a line in
+    ``## Work You Hold``.
 
     ``cache_key`` stands in for ``graph_uri`` in the output-cache key — for the
     remote path (:func:`inject_context_remote`) that is the deployment's own
@@ -690,6 +744,9 @@ def _render_context_block(
     lines: list[str] = []
     # What this render actually delivers, which is what gets recorded below.
     rendered: list[tuple[dict, list[dict]]] = []
+
+    def live_line(url: object) -> list[str]:
+        return [f"  {live[url]}"] if isinstance(url, str) and url in live else []
 
     # First, ahead of the projects and ready-work blocks. A comment on work you
     # are already holding is the only thing here addressed to you specifically,
@@ -711,11 +768,15 @@ def _render_context_block(
             lines.append(
                 f"- **{task.get('title', task['slug'])}** (slug: `{task['slug']}`)"
             )
+            lines.extend(live_line(task.get("external_uri")))
             for comment in shown:
                 body = " ".join((comment.get("body") or "").split())
                 if len(body) > _COMMENT_PREVIEW_CHARS:
                     body = body[:_COMMENT_PREVIEW_CHARS].rstrip() + "…"
-                lines.append(f"  - {comment.get('author', 'unknown')}: {body}")
+                # Dated, because a comment is a snapshot: "blocked on sign-off"
+                # from last week reads as current without one.
+                when = _stamp(comment.get("created_at"))
+                lines.append(f"  - {comment.get('author', 'unknown')}{when}: {body}")
             if (held_back := len(unread) - len(shown)) > 0:
                 lines.append(
                     f"  - …and {held_back} more unread — still undelivered, "
@@ -729,6 +790,28 @@ def _render_context_block(
             ),
             "",
         ]
+
+    named = {t["slug"] for t, _ in commented} | {t["slug"] for t in open_branch_tasks}
+    held_live = [
+        t
+        for t in held[:_HELD_TASK_LIMIT]
+        if t["slug"] not in named and live_line(t.get("external_uri"))
+    ]
+    if held_live:
+        lines += [
+            "## Work You Hold",
+            "",
+            (
+                "Live state of what your claimed tasks link to. Task and comment "
+                "text is a snapshot from when it was written; where it disagrees "
+                "with this, this is current:"
+            ),
+            "",
+        ]
+        for t in held_live:
+            lines.append(f"- **{t.get('title', t['slug'])}** (slug: `{t['slug']}`)")
+            lines.extend(live_line(t.get("external_uri")))
+        lines.append("")
 
     if projects:
         proj_header = f"This repository has {len(projects)} active tracked project(s)"
@@ -745,6 +828,7 @@ def _render_context_block(
             lines.append(f"  Phase: {p['phase']}")
             if p.get("github_issue"):
                 lines.append(f"  Issue: {p['github_issue']}")
+            lines.extend(live_line(p.get("github_pr")))
             lines.extend(envelope.context_lines(p))
             lines.extend(
                 _project_session_lines(sessions_by_project.get(p["slug"], []), p)
@@ -767,6 +851,7 @@ def _render_context_block(
         for t in open_branch_tasks:
             held_by = f" (claimed by {t['assignee']})" if t.get("assignee") else ""
             lines.append(f"- **{t['title']}** (slug: `{t['slug']}`){held_by}")
+            lines.extend(live_line(t.get("external_uri")))
         lines += [
             "",
             "This is likely the work this session should continue, not a new task.",
@@ -1034,6 +1119,10 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
             for t in held[:_HELD_TASK_LIMIT]
         }
     )
+    # The linked-PR lookups depend on the same first-wave rows and go to
+    # GitHub rather than the deployment, so they join this wave as well.
+    live_urls = _live_urls(held, open_branch_tasks, projects)
+    second.update(_live_calls(live_urls))
     fetched = _gather(second, deadline)
 
     timed_out = sorted(
@@ -1084,7 +1173,9 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         sessions_by_project=sessions_by_project,
         ready=ready,
         open_branch_tasks=open_branch_tasks,
+        held=held,
         commented=commented,
+        live=_live_lines(fetched, live_urls),
         stale_repo_case=False,
         partial=partial,
         debug=debug,
@@ -1161,7 +1252,7 @@ def _cached_repo_and_branch() -> tuple[str | None, str | None]:
 
     repo = _detect_repo()
     branch = _current_branch() if repo else None
-    _atomic_write_private(
+    session_state.write_private(
         cache_file, json.dumps({"stamp": time.time(), "repo": repo, "branch": branch})
     )
     return repo, branch
@@ -1230,8 +1321,6 @@ def journal_line(remote_url: str, debug: bool = False) -> str:
     on any call. Called after the render so a replay that the render's own
     reads triggered is already reflected.
     """
-    from datetime import datetime
-
     from witan_core.remote.journal import WriteJournal, journal_path
 
     journal = WriteJournal(journal_path(remote_url))

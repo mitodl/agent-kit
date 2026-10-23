@@ -117,8 +117,8 @@ export interface TaskDetail extends TaskRow {
  * What both project projections carry.
  *
  * Split for the same reason as `TaskCore`: `workflow_project_list` returns a
- * narrower row than `workflow_project_get`, with `github_issue` rather than
- * `github_pr`, so one interface over both would declare a field half the
+ * narrower row than `workflow_project_get`, and the rollup's `project` has no
+ * `github_issue`, so one interface over all three would declare fields some
  * results do not have.
  */
 export interface WorkflowProjectCore {
@@ -144,20 +144,22 @@ export interface WorkflowProjectCore {
 export interface WorkflowProjectSummary extends WorkflowProjectCore {
 	blocked_by: string[] | null;
 	github_issue: string | null;
+	github_pr: string | null;
 	tags: string[] | null;
 	updated_at: string;
 }
 
 /**
- * The rollup's `project`, which is an eleven-field projection.
+ * The rollup's `project`, which is a twelve-field projection.
  *
- * NOT what `workflow_project_get` returns: that one carries eight more fields
+ * NOT what `workflow_project_get` returns: that one carries seven more fields
  * (see `WorkflowProjectDetail`). Sharing one interface between them made the
  * detail view unable to reach `description`, `blocked_by` or `blocks`, and
  * widening it instead would have promised the rollup fields it does not send.
  */
 export interface WorkflowProject extends WorkflowProjectCore {
 	github_pr: string | null;
+	updated_at: string;
 }
 
 /** What `workflow_project_get` returns: the whole node. */
@@ -169,7 +171,6 @@ export interface WorkflowProjectDetail extends WorkflowProject {
 	github_issue: string | null;
 	tags: string[] | null;
 	created_at: string;
-	updated_at: string;
 	completed_at: string | null;
 }
 
@@ -533,6 +534,7 @@ const WORKFLOW_PROJECT_CORE: Record<string, Check> = {
 const WORKFLOW_PROJECT: Record<string, Check> = {
 	...WORKFLOW_PROJECT_CORE,
 	github_pr: nullable(str),
+	updated_at: str,
 };
 
 export function isTaskCore(value: unknown): value is TaskCore {
@@ -617,7 +619,7 @@ export function isWorkflowProjectCore(
 	return matches(value, WORKFLOW_PROJECT_CORE);
 }
 
-/** The rollup's `project`: eleven fields, NOT what `workflow_project_get` sends. */
+/** The rollup's `project`: twelve fields, NOT what `workflow_project_get` sends. */
 export function isWorkflowProject(value: unknown): value is WorkflowProject {
 	return matches(value, WORKFLOW_PROJECT);
 }
@@ -629,6 +631,7 @@ export function isWorkflowProjectSummary(
 		...WORKFLOW_PROJECT_CORE,
 		blocked_by: strList,
 		github_issue: nullable(str),
+		github_pr: nullable(str),
 		tags: strList,
 		updated_at: str,
 	});
@@ -645,7 +648,6 @@ export function isWorkflowProjectDetail(
 		github_issue: nullable(str),
 		tags: strList,
 		created_at: str,
-		updated_at: str,
 		completed_at: nullable(str),
 	});
 }

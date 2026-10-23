@@ -319,7 +319,7 @@ export function workflowProjectStatus(
 	return read("workflow_project_status", { slug });
 }
 
-/** Summary rows: `github_issue` and no `github_pr`, unlike the single reads. */
+/** Summary rows: narrower than `workflow_project_get`, with no `description`. */
 export function workflowProjectList(args: {
 	repo: string;
 	/** Omitted, the tool lists `active` projects only; `null` lists every status. */

@@ -36,12 +36,14 @@ cluster; only the process that reads source files stays on this machine.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.tools import FunctionTool
 
+from .. import live_pr
 from ..config import RemoteConfig
 from .oidc import default_token_provider, default_token_refresher
 from .proxy import RemoteServerProxy
@@ -68,11 +70,19 @@ def _forwarder(proxy: RemoteServerProxy, name: str) -> Callable[..., Any]:
     already validated against it.
     """
 
+    linked_field = live_pr.LINKED_FIELDS.get(name)
+
     async def call(**kwargs: Any) -> Any:
         # `dispatch`, not `getattr(proxy, name)`: the synchronous form wraps
         # this in `asyncio.run`, which cannot nest inside the event loop
         # FastMCP is already running us on.
-        return await proxy.dispatch(name, **kwargs)
+        result = await proxy.dispatch(name, **kwargs)
+        if linked_field is None:
+            return result
+        # Added here, not by the deployment: it has no GitHub credential for
+        # the caller, and this process runs as the caller (`witan.live_pr`).
+        # A thread, because `gh` blocks for seconds and this is the loop.
+        return await asyncio.to_thread(live_pr.annotate, result, linked_field)
 
     call.__name__ = name
     return call

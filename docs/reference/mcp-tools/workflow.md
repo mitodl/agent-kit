@@ -58,6 +58,13 @@ in-session instructions, or a repo's AGENTS.md.
 before this one is ready. ``blocks`` lists projects this project is
 currently blocking (derived by scanning all active projects).
 
+When ``github_pr`` is set and witan runs on your machine, the project also
+carries ``live_pr``: that PR's state fetched from GitHub just now
+(``state``, ``draft``, ``review_decision``, ``checks``, ``fetched_at``), or
+``{"error": ...}`` when it could not be fetched. The description is a
+snapshot from when it was written; where ``live_pr`` disagrees with it,
+``live_pr`` is current.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``wp-`` slug to retrieve. |
