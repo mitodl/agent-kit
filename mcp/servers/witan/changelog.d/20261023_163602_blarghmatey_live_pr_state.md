@@ -6,7 +6,7 @@
   your own `gh`, plus `fetched_at`. It is added on your machine, by the stdio
   server or by `witan serve`'s forwarder to a deployment; the deployment's own
   response is unchanged. A failed lookup reports `{"error": ...}`.
-- The context hook shows the same state as a `(live, HH:MM)` line under each
+- The context hook shows the same state as a `(live, HH:MM UTC)` line under each
   shown project with a `github_pr`, each in-flight-branch task, and each held
   task with a linked PR (in a new `## Work You Hold` block when no other block
   names the task). At most 5 lookups per render, run concurrently under the

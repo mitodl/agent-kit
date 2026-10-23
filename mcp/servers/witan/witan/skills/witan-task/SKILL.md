@@ -88,7 +88,7 @@ says what was true when someone wrote it. When the task's `external_uri` (or a
 project's `github_pr`) is a GitHub PR or issue, `task_get` and
 `workflow_project_get` add `live_pr`: its state fetched from GitHub just now
 (open, draft, merged, review decision, check counts, `fetched_at`), and the
-context hook shows the same as a `(live, HH:MM)` line. Where `live_pr`
+context hook shows the same as a `(live, HH:MM UTC)` line. Where `live_pr`
 disagrees with the stored text, `live_pr` wins. Don't repeat a status from a
 description or comment ("blocked on review", "PR still in draft") without
 checking it against `live_pr`, or `gh pr view` when there is none.

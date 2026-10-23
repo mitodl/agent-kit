@@ -397,7 +397,7 @@ desc = "Time budget, in seconds, for all of the session-context hook's reads aga
 
 [section.vars.WITAN_LIVE_PR]
 default = "1"
-desc = "`0` turns off the live linked-PR lookups: the `live_pr` field `task_get` and `workflow_project_get` add on your machine, the `(live, HH:MM)` lines in the session-context hook, and the same line in `witan task show` and `witan project status`. Each lookup is a `gh pr view` or `gh issue view` run as you (about 2s each), cached per URL for 120s."
+desc = "`0` turns off the live linked-PR lookups: the `live_pr` field `task_get` and `workflow_project_get` add on your machine, the `(live, HH:MM UTC)` lines in the session-context hook, and the same line in `witan task show` and `witan project status`. Each lookup is a `gh pr view` or `gh issue view` run as you (about 2s each), cached per URL for 120s."
 
 [section.vars.WITAN_LOG_LEVEL]
 default = "INFO"

@@ -5281,6 +5281,8 @@ def workflow_project_status(slug: str) -> dict | None:
                 "reserved_decisions",
                 "preauthorized_set_by",
                 "reserved_decisions_set_by",
+                # How old the project's text is, for a reader resuming from it.
+                "updated_at",
             )
         },
         "ready_tasks": [_project_ready_row(t) for t in ready[:_PROJECT_READY_CAP]],

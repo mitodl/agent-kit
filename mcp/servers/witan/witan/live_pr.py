@@ -178,7 +178,8 @@ def describe(state: dict[str, Any]) -> str | None:
     """One line for a successful :func:`live_state`, or None for an error.
 
     e.g. ``PR mitodl/agent-kit#512: open (draft), review: CHANGES_REQUESTED,
-    checks: 7 pass / 1 fail (live, 14:02)``.
+    checks: 7 pass / 1 fail (live, 14:02 UTC)``. UTC, like the comment dates
+    the context hook shows next to it, so the two can be compared.
     """
     if "error" in state:
         return None
@@ -192,8 +193,8 @@ def describe(state: dict[str, Any]) -> str | None:
     counts = [f"{checks[k]} {k}" for k in ("pass", "fail", "pending") if checks.get(k)]
     if counts:
         parts.append(f"checks: {' / '.join(counts)}")
-    fetched = datetime.fromisoformat(state["fetched_at"]).astimezone()
-    return f"{', '.join(parts)} (live, {fetched:%H:%M})"
+    fetched = datetime.fromisoformat(state["fetched_at"]).astimezone(UTC)
+    return f"{', '.join(parts)} (live, {fetched:%H:%M} UTC)"
 
 
 def _gh(*args: str) -> dict[str, Any]:
@@ -256,15 +257,41 @@ def _cache_file(url: str) -> Path:
 
 
 def _read_cache(url: str) -> dict[str, Any] | None:
+    """A cached answer for ``url`` this user wrote inside the TTL, else None.
+
+    The file sits at a predictable name in a shared temp dir, so anything
+    about it is checked rather than trusted: another local user could plant
+    one, and a malformed state would crash :func:`describe` in the hook.
+    A file this user does not own, a stamp in the future, or a state that is
+    not one :func:`live_state` could have produced all count as a miss.
+    """
+    path = _cache_file(url)
     try:
-        data = json.loads(_cache_file(url).read_text())
-        if time.time() - data["stamp"] < _CACHE_TTL_SECONDS:
-            return data["state"]
+        if hasattr(os, "getuid") and path.stat().st_uid != os.getuid():
+            logger.debug("witan.live_pr.cache_foreign_owner", path=str(path))
+            return None
+        data = json.loads(path.read_text())
+        age = time.time() - float(data["stamp"])
+        state = data["state"]
+        if 0 <= age < _CACHE_TTL_SECONDS and _well_formed(state, url):
+            return state
     except FileNotFoundError:  # the first lookup of this URL
         return None
     except Exception:  # corrupt cache → ask GitHub
         logger.debug("witan.live_pr.cache_unreadable", url=url, exc_info=True)
     return None
+
+
+def _well_formed(state: object, url: str) -> bool:
+    if not isinstance(state, dict) or state.get("url") != url:
+        return False
+    if state.get("kind") not in ("pr", "issue"):
+        return False
+    if not all(isinstance(state.get(k), str) for k in ("ref", "state", "fetched_at")):
+        return False
+    datetime.fromisoformat(state["fetched_at"])  # raises on garbage
+    checks = state.get("checks", {})
+    return isinstance(checks, dict) and all(isinstance(v, int) for v in checks.values())
 
 
 def _write_cache(url: str, state: dict[str, Any]) -> None:

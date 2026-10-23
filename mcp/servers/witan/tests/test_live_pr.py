@@ -105,6 +105,8 @@ def test_a_pr_reports_its_state_review_and_checks(gh):
         "PR o/r#512: open (draft), review: CHANGES_REQUESTED, "
         "checks: 2 pass / 1 fail / 2 pending (live, "
     )
+    # UTC, like the comment dates the hook shows beside it.
+    assert line.endswith(" UTC)")
 
 
 def test_a_merged_pr_is_merged_not_closed(gh):
@@ -157,10 +159,51 @@ def test_a_second_lookup_inside_the_ttl_is_served_from_cache(gh, monkeypatch):
     second = live_pr.live_state(f"{PR_URL}/files")
     assert len(gh.calls()) == 1
     # The cached answer keeps the time it was fetched, not the time it was
-    # read back, so the rendered "(live, HH:MM)" stays honest.
+    # read back, so the rendered "(live, HH:MM UTC)" stays honest.
     assert second == first
 
     monkeypatch.setattr(live_pr, "_CACHE_TTL_SECONDS", 0)
+    live_pr.live_state(PR_URL)
+    assert len(gh.calls()) == 2
+
+
+def _plant(url: str, stamp: float, state: object) -> None:
+    live_pr._cache_file(url).write_text(json.dumps({"stamp": stamp, "state": state}))
+
+
+@pytest.mark.parametrize(
+    "stamp_offset, state",
+    [
+        # A stamp in the future would otherwise be served forever.
+        (1e9, None),
+        # Shapes `describe` would crash on, or that name another URL.
+        (0, {}),
+        (0, "merged"),
+        (0, {"kind": "pr", "ref": "o/r#512", "state": "merged"}),
+        (0, {"kind": "pr", "ref": "o/r#512", "state": "merged", "url": "x"}),
+    ],
+)
+def test_a_planted_or_malformed_cache_entry_is_a_miss(gh, stamp_offset, state):
+    """The cache lives at a predictable name in a shared temp dir."""
+    import time
+
+    forged = {
+        "kind": "pr",
+        "url": PR_URL,
+        "ref": "o/r#512",
+        "state": "merged",
+        "checks": {"pass": 9},
+        "fetched_at": "2026-10-23T10:00:00+00:00",
+    }
+    _plant(PR_URL, time.time() + stamp_offset, forged if state is None else state)
+
+    assert live_pr.live_state(PR_URL)["state"] == "open"
+    assert len(gh.calls()) == 1
+
+
+def test_a_cache_entry_another_user_owns_is_a_miss(gh, monkeypatch):
+    live_pr.live_state(PR_URL)
+    monkeypatch.setattr(os, "getuid", lambda: os.geteuid() + 1)
     live_pr.live_state(PR_URL)
     assert len(gh.calls()) == 2
 
@@ -365,6 +408,17 @@ def test_the_local_hook_shows_live_state_for_the_in_flight_branch_task(
     block = text.split("## In-Flight Branch")[1]
     assert "linked work" in block
     assert "PR o/r#512: open (draft)" in block
+
+
+@requires_omnigraph
+def test_project_status_carries_how_old_the_project_text_is(tmp_path, monkeypatch):
+    """`witan project status` prints it, so the rollup has to send it."""
+    from witan import server as srv
+
+    _setup(tmp_path, monkeypatch, "https://github.com/test/age")
+    project = _unwrap(srv.workflow_project_create)(title="P", description="d")
+    status = _unwrap(srv.workflow_project_status)(slug=project["slug"])
+    assert status["project"]["updated_at"]
 
 
 def test_the_cli_prints_the_live_line_and_a_failed_lookup(gh, monkeypatch):
