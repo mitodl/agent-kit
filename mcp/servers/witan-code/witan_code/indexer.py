@@ -300,8 +300,8 @@ class IndexStats:
     purged: int = 0
     """Files dropped from the store because they are no longer part of the
     repo — deleted, or newly excluded (a nested checkout, a skipped
-    directory). Full-repo runs only; reported so a mass cleanup is visible
-    rather than silent."""
+    directory). Full-repo runs, plus a single-file run on a file that is gone;
+    reported so a mass cleanup is visible rather than silent."""
 
     store: str = ""
     """Where the run wrote — a local directory, or the shared graph's address.
@@ -398,7 +398,7 @@ def resolve_repo_key(target: Path, repo_override: str | None = None) -> str:
     to index. So the key is resolved once, up front, by whoever is about to act
     on it.
     """
-    repo_root = repo_module.root(target if target.is_dir() else target.parent)
+    repo_root = repo_module.root(anchor_dir(target))
     slug = repo_module.detect(
         override=repo_override, start=repo_root or target, dirname_fallback=False
     )
@@ -423,13 +423,20 @@ def index_path(
 
     Incremental by default: unchanged files (matching content_hash) are skipped.
     ``force`` re-indexes regardless of hash.
+
+    A ``target`` that no longer exists is a file deleted or moved away since
+    it was named, and indexing it as it is now means dropping its rows. That
+    is how the PostToolUse hook clears a file a Codex ``apply_patch`` deleted
+    or renamed, which otherwise kept answering ``code_*`` queries until the
+    next full-repo run purged it.
     """
     cfg = config or cfg_module.load()
     target = target.resolve()
+    gone = not target.exists()
 
-    repo_root = repo_module.root(target if target.is_dir() else target.parent)
+    repo_root = repo_module.root(anchor_dir(target))
     slug = resolve_repo_key(target, repo_override)
-    base = repo_root or (target if target.is_dir() else target.parent)
+    base = repo_root or anchor_dir(target)
 
     # Non-default git branches index onto their own omnigraph branch, forked
     # from main on first write (docs/BRANCH_INDEXING.md), so in-flight work
@@ -482,7 +489,7 @@ def index_path(
     # that is invisible from the result alone — and the purge below reads
     # "missing from the collected set" as "no longer part of the repo".
     walk_errors: list[OSError] = []
-    collected = _collect_files(target, on_error=walk_errors.append)
+    collected = [] if gone else _collect_files(target, on_error=walk_errors.append)
     for exc in walk_errors:
         stats.errors += 1
         # Warning: an unreadable directory silently shrinks `collected`, and
@@ -556,6 +563,15 @@ def index_path(
             if rel is not None and rel not in indexed_rel:
                 delete_steps += _delete_file_steps(file_id)
                 stats.purged += 1
+
+    # A vanished single file: the one id that file had, and its bindings, which
+    # `write_bindings` clears for every touched file the batch has none for.
+    if gone and indexable(target):
+        rel = _relative_path(target, base)
+        if f"{slug}#{rel}" in existing:
+            delete_steps += _delete_file_steps(f"{slug}#{rel}")
+            stats.purged += 1
+        touched_files.append(rel)
 
     with _write_phase(
         "delete of stale rows",
@@ -726,6 +742,21 @@ def _may_purge(
         and not walk_errors
         and owns_view(is_remote=client.is_remote, branch=branch, cfg=cfg, actor=actor)
     )
+
+
+def indexable(path: Path) -> bool:
+    """Whether ``path`` is a file type the indexer parses, so can have rows."""
+    return path.suffix in _EXT_TO_SPEC
+
+
+def anchor_dir(target: Path) -> Path:
+    """The directory to ask git about ``target``: itself, or its nearest
+    existing parent. A file's own directory is not enough, because deleting or
+    moving away the last file in a directory can take the directory with it.
+    """
+    if target.is_dir():
+        return target
+    return next(p for p in target.parents if p.is_dir())
 
 
 def _relative_path(path: Path, base: Path) -> str:

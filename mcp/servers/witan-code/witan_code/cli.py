@@ -993,8 +993,9 @@ def reindex_hook_cmd() -> None:
 
     Reads the hook payload from stdin, extracts ``tool_input.file_path`` (or
     ``path``/``filename``) from Claude Code's, or every file a Codex
-    ``apply_patch`` adds, updates or moves to, and queues each for reindexing
-    if it exists. One detached drainer per checkout applies the
+    ``apply_patch`` names, and queues each: one still on disk is reindexed,
+    and one the patch deleted or moved away has its rows purged. One detached
+    drainer per checkout applies the
     queue, so parallel agents editing one worktree do not race each other's
     writes to its branch view. Logs from the last drainer are kept in
     ``$TMPDIR/witan-code-<uid>/``. Best-effort: a missing or
