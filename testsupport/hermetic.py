@@ -111,6 +111,10 @@ _CLEARED = (
     # output into something no assertion here expects.
     "WITAN_OUTPUT_FORMAT",
     "WITAN_OMNIGRAPH_HTTP",
+    # `WITAN_GROUP_COMMIT=0` is the documented opt-out; inherited, the
+    # served group-commit tests fail and every other remote write test runs
+    # the path that does not ship by default.
+    "WITAN_GROUP_COMMIT",
     "OMNIGRAPH_BEARER_TOKEN",
     # The write-path scanner. `WITAN_SCAN_ENABLED=false` is a documented
     # opt-out, and inheriting it would run the whole suite with the scanner
@@ -125,9 +129,11 @@ _CLEARED = (
     # Identity of the calling agent session, which several code paths record
     # as provenance. Pi's is a fallback for Claude's (see
     # witan.session_state.current_session_id), so a suite run from inside a Pi
-    # bash command would otherwise pick up the live Pi session.
+    # bash command would otherwise pick up the live Pi session. Codex's is the
+    # last fallback, and is set in every command a Codex shell tool runs.
     "CLAUDE_SESSION_ID",
     "PI_SESSION_ID",
+    "CODEX_SESSION_ID",
     # agent-config-kit resolves Codex's config dir from this, ahead of HOME.
     "CODEX_HOME",
     # Observability: an exporter endpoint set on a developer's box would have

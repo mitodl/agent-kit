@@ -43,3 +43,6 @@ mcp-server.log
 
 # Zensical build output for the witan-context docs site.
 site/
+
+# You get this with every apply run.
+agent-config.toml.applied.json

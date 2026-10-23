@@ -8,6 +8,105 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.45.0] - 2026-10-23
+
+### Performance
+
+- Concurrent remote writes from one actor to one graph now share a commit
+  (`witan_core.group_commit`). A write on an idle graph commits at once and
+  alone, as before. Writes that arrive while a commit is in flight wait for it,
+  and the oldest of them then commits everything queued as one composed
+  mutation (at most 64 statements and about 256 KiB of params). On omnigraph
+  0.13 commits to one branch serialize, so this is what lets a graph take more
+  than about one write a second. Against a local omnigraph-server 0.13.0, 240
+  single-row writes from 16 threads went from 240 commits at 27 writes/s to 30
+  commits at 244 writes/s. A single thread is unchanged. Against QA's deployed
+  witan (`task_comment` from one actor), 8 serial writes took 8 commits at 1.1
+  writes/s, 48 writes from 16 threads took 8 commits at 8.4 writes/s, and 96
+  from 32 threads took 9 commits at 13.8 writes/s.
+
+  Each caller still gets its own outcome. A group holds one actor (omnigraph
+  authorizes a request once and records one actor on its commit), never mixes
+  deletes with inserts or updates, and carries at most one fenced
+  (`if_commit`) write. That write goes first and the commit is fenced on its
+  head. A refused fence fails only that caller, with the error it would have
+  had alone, and the writes queued with it go into the next commit. A queued
+  fenced write whose head a commit by this actor's lane has already replaced
+  is refused without a round trip. A group the server rejects with 400 or 413
+  before any effect, or that is missing a parameter, is replayed one write at
+  a time, each on its own caller's thread. A 400 carrying a DataFusion error
+  (`query: ...`) is excluded, because omnigraph marks that one
+  completion-uncertain, and every member gets `WriteIndeterminate`.
+
+  Only the oldest queued write passes through the write gate, so a write
+  queued behind a commit gets the gate's checks instead. It is refused unsent
+  with `WriteQueueFull` when its `WITAN_REMOTE_CALL_BUDGET_SECONDS` runs out,
+  when it has queued longer than `WITAN_REMOTE_WRITE_QUEUE_SECONDS`, or when
+  the graph's measured commit time no longer fits in what its call has left.
+  Any other failure, including one whose outcome is unknown, reaches every
+  member, so every member of that group re-reads before retrying.
+
+  Only remote writes over the HTTP transport are grouped. Set
+  `WITAN_GROUP_COMMIT=0` to turn grouping off.
+
+## [0.44.1] - 2026-10-20
+
+### Fixed
+
+- The CLI transport no longer passes a query's or mutation's params, or a
+  composed batch's source, on the command line, so neither is limited by
+  ARG_MAX. Linux caps a single argv element at 128 KiB, and a write past it
+  (a task with a 200 KiB description, or a batch of 128 `merge_task`
+  statements) failed with `Argument list too long` before omnigraph ran.
+  `read`, `change` and `change_many` now write them to files in a private
+  temporary directory (under `TMPDIR`, removed when the call returns) and pass
+  `--params-file` and `--query <path>`. The HTTP transport is unchanged.
+  Every local call therefore needs a little space in `TMPDIR`. When the
+  payload cannot be written there, the call raises `RuntimeError` naming the
+  directory, the same error a CLI that could not run raises.
+
+## [0.44.0] - 2026-10-20
+
+### Added
+
+- `RemoteMCPProxy` can queue a write it could not send in a per-deployment
+  journal (`witan_core.remote.journal`, under `$XDG_DATA_HOME/witan/journal/`)
+  and returns a `{"buffered": true, ...}` result instead of raising. The
+  journal replays oldest first at the start of the next call whose connection
+  opens, under an `fcntl` lock so two processes never send the same entry.
+  A write that is unsafe to apply twice replays at most once: it leaves the
+  journal before it is sent. Which tools queue is a binding's choice
+  (`_buffers`); the base proxy queues nothing, and `buffer_writes=False`
+  turns queueing off for one proxy. `replay_journal()` replays on demand.
+  The journal file is created `0600`.
+- `RemoteNotSent`, a `RemoteUnreachable` raised only when the connection never
+  opened, so the call provably did not reach the deployment.
+
+## [0.43.1] - 2026-10-19
+
+### Changed
+
+- `report_install` now prints the paths in `InstallResult.removed`, so
+  `witan setup` and `witan-code setup` show the duplicate Pi skill copies they
+  remove ("would remove" under `--dry-run`).
+
+## [0.43.0] - 2026-10-16
+
+### Added
+
+- `report_install` prints an install result's `notices`, one `⚠ action` line each (`ACTION:` without a rich console). For Codex that is the line saying a newly written hook won't run until it is trusted with `/hooks` in the Codex TUI, which `witan setup` and `witan code setup` never showed before.
+- `codex` is an `AgentName`, labelled "Codex CLI", so both servers' `setup --agent codex` installs into Codex alone.
+
+### Changed
+
+- The `cli` extra requires `agent-config-kit>=0.13`, the first release with `InstallResult.notices` and the `codex` platform. `report_install` reads `prerequisites` directly instead of through `getattr`, since every release the floor admits has it.
+
+## [0.42.0] - 2026-10-16
+
+### Added
+
+- `OmnigraphClient.change_many` takes `if_commit`, fencing the whole batch the way it fences `change`: the commit applies only while that branch head is current, over HTTP (`/mutate/if-graph-commit`) and the CLI (`--if-commit`), and a refusal means no step was applied. It cannot be combined with `chunk_size`, since chunks are separate commits.
+
 ## [0.41.0] - 2026-10-15
 
 ### Added

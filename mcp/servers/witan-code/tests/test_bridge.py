@@ -737,3 +737,86 @@ def test_incremental_index_preserves_unchanged_file_bindings(tmp_path, monkeypat
     (base / "b.ts").unlink()
     indexer.index_path(base, config=cfg)
     assert binding_files() == {"a.ts"}
+
+
+@requires_stack
+def test_bridge_purge_and_symbol_reset_are_one_commit(tmp_path, monkeypatch):
+    """The bindings purge and the repo's symbol-table reset used to be two
+    bridge commits on every index. Bridge main is one serialized commit lane
+    shared by every repo, so they now land as one; the load is the other."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/commits")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+    base = tmp_path / "repo"
+    base.mkdir()
+    (base / "a.ts").write_text('const a = fetch("/api/v0/aaa/");\n')
+    indexer.index_path(base, config=cfg)
+
+    commits: list[str] = []
+    inside = {"batch": 0}
+    real_change = OmnigraphClient.change
+    real_change_many = OmnigraphClient.change_many
+
+    # Depth-guarded like witan's `commits` fixture: a one-step `change_many`
+    # delegates to `change`, which must not count twice.
+    def change(self, query_file, query_name, *args, **kwargs):
+        if query_file == "bridge.gq" and not inside["batch"]:
+            commits.append(query_name)
+        return real_change(self, query_file, query_name, *args, **kwargs)
+
+    def change_many(self, steps, *args, **kwargs):
+        if steps and steps[0][0] == "bridge.gq" and not inside["batch"]:
+            commits.append("+".join(sorted({name for _f, name, _p in steps})))
+        inside["batch"] += 1
+        try:
+            return real_change_many(self, steps, *args, **kwargs)
+        finally:
+            inside["batch"] -= 1
+
+    monkeypatch.setattr(OmnigraphClient, "change", change)
+    monkeypatch.setattr(OmnigraphClient, "change_many", change_many)
+
+    (base / "a.ts").write_text('const a = fetch("/api/v0/aaa2/");\n')
+    indexer.index_path(base, config=cfg)
+
+    assert commits == ["delete_bindings_in_file+delete_repo_symbols"], commits
+
+
+@requires_stack
+def test_the_per_file_purge_is_scoped_to_its_repo(tmp_path, monkeypatch):
+    """The purge deletes on repo AND file. Two repos share a path here, so a
+    delete on the file alone would take the other repo's binding with it."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+    repo_a = "https://github.com/test/repo-a"
+    repos = {repo_a: tmp_path / "a", "https://github.com/test/repo-b": tmp_path / "b"}
+    for uri, base in repos.items():
+        base.mkdir()
+        (base / "client.ts").write_text('const a = fetch("/api/v0/shared/");\n')
+        (base / "other.ts").write_text('const b = fetch("/api/v0/other/");\n')
+        indexer.index_path(base, repo_override=uri, config=cfg)
+
+    def client_ts_repos():
+        client = OmnigraphClient(
+            str(cfg_mod.bridge_store_path(cfg.code_dir)), cfg.queries_dir
+        )
+        return {
+            r["repo"]
+            for r in client.read("bridge.gq", "all_bindings", {})
+            if r["file"] == "client.ts"
+        }
+
+    assert client_ts_repos() == set(repos)
+
+    (repos[repo_a] / "client.ts").unlink()
+    indexer.index_path(repos[repo_a], repo_override=repo_a, config=cfg)
+
+    assert client_ts_repos() == {"https://github.com/test/repo-b"}

@@ -53,6 +53,23 @@ def _clear_symlink(dest: Path, *, force: bool) -> None:
     dest.unlink()
 
 
+def _prune_empty_dirs(start: Path, *, stop_above: Path) -> None:
+    """Remove ``start`` and any now-empty ancestor directories, stopping
+    before (never removing) ``stop_above`` itself — e.g. a platform's shared
+    ``skills/`` dir must survive even after every skill under it is gone.
+
+    Stops at a symlink: ``is_dir`` follows it, but ``rmdir`` can't remove it."""
+    current = start
+    while (
+        current != stop_above
+        and not current.is_symlink()
+        and current.is_dir()
+        and not any(current.iterdir())
+    ):
+        current.rmdir()
+        current = current.parent
+
+
 def skill_files(skill: SkillSource) -> list[Path]:
     """Every file belonging to a skill, relative to the skill's own
     directory — the full Agent Skills payload (``SKILL.md`` plus whatever

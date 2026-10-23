@@ -9,7 +9,11 @@ description: >
   Covers any ecosystem (Python, JavaScript/TypeScript, Go, Ruby, Rust, Java,
   etc.) and any layer of the stack (libraries, frameworks, Helm/Kubernetes
   charts, Docker base images, Apt/system packages, databases, operators,
-  Terraform/Pulumi providers).
+  Terraform/Pulumi providers). Also covers emergency bumps blocked by a
+  release-age cooldown — a zero-day or CVE fix refused by uv's exclude-newer,
+  Yarn's npmMinimalAgeGate, npm's min-release-age, or Renovate's
+  minimumReleaseAge — when an override is justified, and how to scope it so it
+  survives the next lockfile maintenance run.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -44,6 +48,12 @@ metadata:
 ## Phase 0 — Discover what is outdated
 
 When you don't have an automated tool handing you a list, generate it yourself. Run the appropriate command for each ecosystem present in the project.
+
+These commands report the **registry's** latest version, which is not necessarily what your
+resolver will accept. If the project sets a release-age cooldown, fresh releases are treated
+as if they do not exist — security fixes included. See
+[Blocked by a release-age cooldown](#blocked-by-a-release-age-cooldown) before concluding a
+package is already current.
 
 ### Python
 
@@ -182,12 +192,12 @@ Build a list of every file that references the package.
 ### Language libraries
 
 ```bash
-# Adapt the pattern and --type flag to the language
-rg "<package-name>" --type py           # Python
-rg "\"<package-name>\"" go.mod          # Go module declaration
-rg "<package-name>" --type ts --type tsx # TypeScript
-rg "'<gem-name>'" Gemfile               # Ruby
-rg '"<crate>"' Cargo.toml               # Rust
+# Adapt the pattern and --include globs to the language
+grep -rn --include='*.py' "<package-name>" .                          # Python
+grep -n '"<package-name>"' go.mod                                     # Go module declaration
+grep -rn --include='*.ts' --include='*.tsx' "<package-name>" .        # TypeScript
+grep -n "'<gem-name>'" Gemfile                                        # Ruby
+grep -n '"<crate>"' Cargo.toml                                        # Rust
 ```
 
 Also search config files that reference the package by name: plugin configs, lint configs, CI workflow steps.
@@ -195,8 +205,8 @@ Also search config files that reference the package by name: plugin configs, lin
 ### Docker / container base images
 
 ```bash
-rg "FROM <image-name>" --glob 'Dockerfile*' --glob '*.dockerfile'
-rg "apt-get install" --glob 'Dockerfile*'   # apt lines may reference packages affected by base change
+grep -rn --include='Dockerfile*' --include='*.dockerfile' "FROM <image-name>" .
+grep -rn --include='Dockerfile*' "apt-get install" .   # apt lines may reference packages affected by base change
 ```
 
 Multi-stage builds: check whether intermediate `AS build` stages also use the image.
@@ -204,7 +214,7 @@ Multi-stage builds: check whether intermediate `AS build` stages also use the im
 ### Helm / Kubernetes charts
 
 ```bash
-rg "<chart-name>" charts/ -l
+grep -rl "<chart-name>" charts/
 # Render the current state as a baseline before upgrading
 helm template <release-name> <chart> -f values.yaml > baseline.yaml
 ```
@@ -236,7 +246,7 @@ Cross-reference each usage site against the changelog flags from Phase 2.
   - **Python 3.13** (PEP 594): `cgi`, `cgitb`, `imghdr`, `aifc`, `chunk`, `crypt`, `mailcap`, `msilib`, `nis`, `nntplib`, `ossaudiodev`, `pipes`, `sndhdr`, `spwd`, `sunau`, `telnetlib`, `uu`, `xdrlib` — all removed. If the target base image bundles Python 3.13, search for any of these:
 
   ```bash
-  rg "import (cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes|telnetlib)" --type py
+  grep -rnE --include='*.py' 'import (cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes|telnetlib)\b' .
   pip show setuptools   # must be present if any dep still calls distutils at install time
   ```
 
@@ -308,6 +318,67 @@ terraform plan
 
 ---
 
+## Blocked by a release-age cooldown
+
+A **release-age cooldown** — uv `exclude-newer`, Yarn `npmMinimalAgeGate`, npm
+`min-release-age`, pnpm `minimumReleaseAge`, Renovate `minimumReleaseAge` — refuses versions
+published inside a recent window. It is a supply-chain control, and it blocks security fixes
+along with everything else, because the fix for a zero-day is always a brand-new release.
+
+Whether it announces itself depends on whether anything *forces* the new version. With
+nothing forcing it, a blocked bump is a silent no-op — the resolver reports the version as
+missing, not withheld, and the symptom is just "no update available". Make resolution fail
+instead (see the floor below) and uv names `exclude-newer` in a hint and points at
+`exclude-newer-package`. Check for a window before debugging anything else.
+
+**Override only when one of these holds, and name it in the PR body:**
+
+1. A GHSA/CVE/OSV ID affects the version **currently in the lockfile**, and the fix is in the
+   new release.
+2. A documented compromise of the existing version's trust chain — CA key leak, maintainer
+   account takeover, a yanked release shipping malware.
+
+"It is newer", "CI is red", and "Renovate wants it" are not grounds. Wait out the window. If
+the trigger came from the `renovate-security-triage` skill, its tier 0 (`critical`) is exactly
+the case that hits a cooldown on the way in.
+
+Then override in the narrowest form available. **uv and npm** have a scoped flag needing no
+file change; **Yarn does not** — its exclusion list is an array, unreachable by environment
+variable, so a `.yarnrc.yml` edit is its only scoped route. Never relieve a cooldown globally
+to fix one package.
+
+For uv, a flag-only override lives in the lockfile and is silently reverted by the next
+`uv lock --upgrade` — which is what Renovate's `lockFileMaintenance` runs. Prefer a dated
+`[tool.uv.exclude-newer-package]` entry unless the release ages out of the window before the
+next maintenance run. Prove it either way:
+
+```bash
+uv lock --upgrade --dry-run >relock.log 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { cat relock.log; echo 'RESOLUTION FAILED — not a pass'; }
+grep -iE '^Updated? <pkg> ' relock.log    # must print nothing, and only counts when rc is 0
+```
+
+Check uv's exit status first: piping straight into `grep` makes a failed re-resolution look
+identical to a clean one — both print no `Update` line.
+
+**Pin the floor, not just the lockfile.** A lockfile bump is reversible; a declared minimum is
+not. Alongside the bump, require the fixed version so the vulnerable one can never be resolved
+again — raise the range for a direct dependency, and for a transitive one declare
+`[tool.uv] constraint-dependencies = ["<pkg>>=<fixed>"]`, npm `overrides`, Yarn `resolutions`,
+or pnpm `overrides`. The floor outlives the cooldown override: keep it when you remove the
+dated entry. It also turns a future silent downgrade into a hard failure — with a floor in
+place, `uv lock --upgrade` errors out instead of quietly restoring the vulnerable version.
+
+Bypassing the window also skips the soak that would have caught a malicious release, so audit
+what you let through: upstream tag matches the published artifact, the diff matches the
+advisory, attestations present, maintainer set unchanged.
+
+See [references/release-age-cooldowns.md](references/release-age-cooldowns.md) for per-tool
+settings, the Renovate and Dependabot interaction, how to read Yarn's default out of its
+bundled binary, and sweeping expired overrides.
+
+---
+
 ## Batch strategy — working through a backlog
 
 Whether you discovered the backlog via `uv pip list --outdated`, `npm outdated`, `go list -m -u all`, or a pile of Renovate PRs, the same sequencing logic applies.
@@ -320,7 +391,7 @@ Run Phase 0 for every ecosystem in the project. Produce a flat list: package nam
 
 | Tier | Criteria | Approach |
 |------|----------|----------|
-| 1 — Security | Known CVE or security advisory | Apply immediately, ahead of everything else |
+| 1 — Security | Known CVE or security advisory | Apply immediately, ahead of everything else; if a release-age cooldown blocks the fix, see [Blocked by a release-age cooldown](#blocked-by-a-release-age-cooldown) |
 | 2 — Patch | x.y.**z** bumps | Batch-apply per ecosystem; one test run per batch |
 | 3 — Minor (clean) | No breaking flags in changelog | Review + test, one ecosystem group at a time |
 | 4 — Minor (with deprecations) | Deprecations in use | Review + adapt + test; open follow-up tasks |
@@ -366,6 +437,8 @@ Run the full test suite after each wave. If a wave introduces failures, diagnose
 # Python — apply all patch-level updates
 uv lock --upgrade-package <pkg>    # upgrade a single package in the lockfile
 uv lock --upgrade && uv sync       # upgrade all to latest allowed by constraints
+# Blocked by `exclude-newer`? Scoped, emergency-only — see "Blocked by a release-age cooldown"
+uv lock --upgrade-package <pkg> --exclude-newer-package <pkg>=0d
 
 # Go — apply patch updates only
 go get -u=patch ./...
@@ -375,6 +448,11 @@ go mod tidy
 npm update
 # Update a specific package to a specific version
 npm install <pkg>@<version>
+# Blocked by a cooldown? npm exempts per package; Yarn needs a .yarnrc.yml edit
+# The flag only makes the release *eligible* — it does not request an upgrade. Name the
+# version, or an argument-free `npm install` reifies the lock and leaves the vulnerable
+# one in place. For a transitive dep, add the `overrides` floor first, then install.
+npm install <pkg>@<fixed> --min-release-age-exclude=<pkg>
 
 # Rust
 cargo update                       # update all deps within semver constraints
@@ -413,6 +491,9 @@ Keep a simple checklist in a tracking issue or branch description:
 | Base image major bump | Build locally, smoke test, then apply |
 | DB / operator major bump | Validate in staging; coordinate with deploy |
 | Security advisory (any bump size) | Prioritize; apply ahead of the queue |
+| Security fix blocked by a release-age cooldown | Confirm the advisory, override scoped to that one package, date it, verify it survives a full re-lock |
+| Security fix for a transitive dependency | Bump the lock **and** declare a version floor, so the vulnerable version cannot be resolved again |
+| Cooldown override past its stated removal date | Remove it, re-lock, confirm the version holds on its own |
 | Tests fail, root cause unclear | Do not apply; open investigation task |
 | Runtime version requirement raised | Upgrade runtime first as its own wave |
 | Two updates touch overlapping files | Sequence them; do not combine |

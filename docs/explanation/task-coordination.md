@@ -41,72 +41,102 @@ reason the task exists at all.
 Here is the honest version, because a confident wrong answer here causes real
 double-work.
 
-**A claim is an advisory lease with a best-effort compare-and-swap. It is not a
-mutex.**
+**A claim is a compare-and-swap with a lease. Once granted, it changes only by
+a write meant to change it.**
 
-### Why it cannot be more
+### How it works
 
 On a local `.omni` store, `OmnigraphClient` serialises writes with a per-store
-advisory `flock`, and claiming is effectively safe.
+advisory `flock`. A shared deployment cannot: a `flock` is a local-filesystem
+lock and cannot coordinate across pods. What makes a claim safe there is the
+store itself.
 
-A shared deployment removes that. A `flock` is a local-filesystem lock; it
-cannot coordinate across pods. And omnigraph — this is the crux — offers **no
-conditional-write primitive**. There is no `--if-version`, no
-`--expected-commit`, and the query engine cannot express a
-`... WHERE status = 'open'` guard inside the mutation. You cannot ask the store
-to "set this claim only if it is still unclaimed" and have the store reject the
-loser.
+omnigraph accepts a precondition on a write: `/mutate/if-graph-commit` over
+HTTP, `--if-commit` on the CLI. The write applies only while the branch head is
+still the `graph_commit_id` the caller read, and otherwise is refused with a
+412, having written nothing. `task_claim` reads the task, decides on that row
+whether it may take it (not closed, not blocked, not held by someone else's
+live lease), and writes its claim fenced on the commit of that same read. A
+claim that succeeds therefore proves nobody claimed, closed or blocked the task
+in between. A rival whose claim lands later either read yours and is refused,
+or fenced on an older head and is refused by the store.
 
-So a naive read-check-write lets two agents both read a task as `open`, both
-write their own claim, and the last write silently clobbers the first.
+Every other task write is fenced the same way. A task write replaces the whole
+row, so an unfenced edit that read the task before your claim would put back
+the old status and assignee and leave the task open for a second claimer.
+Instead, `task_update`, `task_close`, `task_release`, `task_link`,
+`task_unlink` and the unblock sweep each state the commit of the read they
+merged from, and a refused write re-reads and merges again.
 
-### What witan does instead
+`store_merge` (`witan migrate merge`) writes the same way when a winning source
+row would replace a task the target already holds. It re-reads those tasks
+just before writing and fences the write on that read. A task whose status,
+assignee or `claimed_at` changed since the merge's export keeps the target's
+row, so a claim landing mid-merge survives it; the merge reports that task as
+`kept-target` with a `fenced` reason.
 
-Three mechanisms, reconstructing as much of a CAS as the storage layer permits:
+Two details make the loop work:
 
-1. **Conflict-surfacing writes.** `task_claim` opts into raising a typed
-   `OmnigraphConflict` on a Lance optimistic-concurrency conflict, rather than
-   retrying. Every other write keeps transparent retry, which idempotent upserts
-   rely on — but for a claim, a blind retry re-reads the updated state and
-   re-applies the claim *over* whoever won, turning a should-fail claim into a
-   clobbering success.
+1. **Conflict-surfacing writes.** A task write raises a typed
+   `OmnigraphConflict` on a refused precondition or a write conflict, rather
+   than retrying the same merge. A blind retry would re-apply a row built from
+   a read that is already stale.
 
-2. **Conflict-aware retry.** On conflict, `task_claim` re-reads rather than
-   re-applying. If someone else now holds a live claim, it returns
-   `{"claimed": false, "reason": "lost_race", "held_by": …}`. If the conflicting
-   write was unrelated, or the rival's lease has lapsed, it retries — in a
-   bounded loop that keeps surfacing conflicts, so a consecutive conflict never
-   falls back to the clobbering path.
+2. **Bounded retry.** The precondition covers the whole branch head, not this
+   task, so any concurrent write to the graph refuses it. A refused write backs
+   off, re-reads and tries again, up to five times. For a claim, the next
+   attempt's read decides whether a rival won (`{"claimed": false, "reason":
+   "lost_race", "held_by": …}`) or the conflict was unrelated, and a budget that
+   runs out reports `"reason": "contention"` once a last read shows the task is
+   still claimable. Any other task write that runs out raises
+   `WriteContention`, and that write did not land. A tool that makes more than
+   one write can still have landed an earlier one: `task_close` commits the
+   close and then reopens each dependent with its own fenced write, so a
+   dependent that runs out comes back as a `warning` on the closed task rather
+   than as an error. `task_unlink` deletes the edge before it clears
+   `parent_slug`, and re-running it clears a `parent_slug` left behind.
 
-3. **Post-write verification.** Because the last writer still wins, `task_claim`
-   re-reads after writing and confirms it is still the assignee. A claim that
-   was overwritten by a rival landing later is reported as `lost_race`, not as a
-   false success.
+### The cost: refusals under unrelated load
 
-Together these collapse the common double-claim race to at most one
-`claimed: true`, and never a silent clobber.
+The fence is the whole branch head, so every task write (not only a claim) can
+be refused by a write anywhere on the graph, and a call can run out of
+attempts with nothing wrong with its task. That is the trade for no longer
+silently reverting a claim. Over the 7 days to 2026-10-16 the production graph
+peaked at about 9 write-tool calls a minute (5-minute rate) and averaged 0.15,
+with p95 tool durations near 5s for `task_update` and `task_comment` and 10s or
+more for `task_close` and `task_claim`. At that peak a single attempt has
+roughly an even chance of being refused and five in a row a few percent;
+off-peak it is negligible. A refused write wrote nothing, so retrying the call
+is safe, and a retried `task_close` keeps its original `closed_at`.
 
-### The residual window
+A row-scoped guard (a mutation that matches on `slug` and `updated_at`) would
+not be refused by unrelated writes. It is unexplored.
 
-A small window remains: if both callers run their verification read after both
-writes commit and before either observes the other, both can see the last writer
-and one of them is wrong.
+### What it does not cover
 
-This is not merely theoretical — it has been observed under concurrent write
-load. Treat `claimed: true` as **"you almost certainly hold this"**, not as a
-hard mutex, and design work so that a brief overlap between two agents is
-wasteful rather than destructive.
+- Writes meant to change the holder. `force` steals on purpose, `task_update`
+  can set `assignee` or `status` directly, `task_release --force` clears
+  someone else's claim, and a claim taken after the lease lapses is a
+  legitimate takeover.
+- Two sessions that claim under the same holder string. Pass `session_id`, or
+  they cannot be told apart (the claim reports `"qualified": false`).
+- A task a merge adds. Only tasks the target already held at the merge's
+  export are written fenced; a new one is loaded. Nobody can have claimed a
+  task the target did not have, so this matters only if another merge writes
+  the same slug in that window.
+- A write whose response is lost. The server finishes an admitted write after
+  its caller disconnects, so a timeout or a dropped connection can leave a claim
+  that landed. witan does not re-send it. Re-read with `task_get` before
+  retrying.
 
-A true single-round-trip guarantee needs omnigraph to accept a manifest-version
-or commit-id precondition on `mutate`. Until that exists upstream, this is the
-ceiling. [ADR 0003](decisions/0003-atomic-task-claims-cas.md) has the full
-analysis.
+[ADR 0003](decisions/0003-atomic-task-claims-cas.md) has the history, including
+the best-effort design this replaced.
 
 ### Leases
 
 Claims carry `claimed_at` and expire. A task held by a session that crashed does
 not stay held forever, and the lease is also the backstop that recovers any task
-that ends up mis-owned through the window above. `task_release` hands one back
+that ends up mis-owned through the cases above. `task_release` hands one back
 deliberately.
 
 ## Saying something about a task

@@ -87,21 +87,21 @@ witan task close tk-retry-logic-... --resolution "Re-raise the final exception; 
 
 ### What a claim actually guarantees
 
-This is worth being precise about, because the answer is "less than you might
-assume".
+This is worth being precise about.
 
-A claim is an **advisory lease with a best-effort compare-and-swap**, not a
-lock. On a local store, writes are serialised by a file lock and a claim is
-effectively safe. Against a **shared, deployed** store there is no such lock,
-and omnigraph offers no conditional-write primitive — you cannot ask the store
-to "set this claim only if it is still unclaimed" and have it reject the loser.
+A claim is a **compare-and-swap with a lease**. witan writes it only while the
+graph is unchanged since the read that found the task claimable, so when two
+agents claim the same task at once, one gets `claimed: true` and the other gets
+`lost_race`. That holds on a local store and on a shared, deployed one.
 
-witan reconstructs as much of that as it can: it detects the lost-race conflict
-and surfaces it rather than retrying over the winner. But under genuine
-concurrent write load, mutual exclusion has been observed to fail. Treat a claim
-as *coordination* — a strong signal that someone is on this — rather than as a
-correctness guarantee. Design work so that two agents briefly overlapping is
-wasteful, not destructive.
+Other task writes are fenced the same way, so an edit that read the task
+before your claim is merged over it rather than reverting it. What still
+changes the holder is a write meant to: `--force` steals, `task_update` can
+set the assignee or status directly, and `task release --force` clears
+someone else's claim. Two sessions that claim under the same name (no
+`session_id`) look like one holder. A claim whose response was lost (a
+timeout, a dropped connection) may still have landed, so check with
+`witan task show` before claiming again.
 
 [ADR 0003](../explanation/decisions/0003-atomic-task-claims-cas.md) records the
 full reasoning and the exact limits.

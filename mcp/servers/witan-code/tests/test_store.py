@@ -7,8 +7,10 @@ store, an unreadable one, a dangling symlink) worth pinning explicitly.
 
 import json
 import os
+import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import ClassVar
 
@@ -243,6 +245,97 @@ def test_discard_store_takes_the_schema_stamp_with_it(tmp_path):
     assert not schema_stamp_path(store).exists()
     assert not store_module.repo_sidecar(store).exists()
     assert freed >= len("payload")
+
+
+def _plan(cfg, store) -> dict:
+    res = subprocess.run(
+        [
+            store_module._binary(),
+            "schema",
+            "plan",
+            "--schema",
+            str(cfg.bridge_schema_file),
+            "--json",
+            str(store),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(res.stdout)
+
+
+@requires_stack
+@pytest.mark.parametrize("callers", [1, 4])
+def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
+    tmp_path, monkeypatch, callers
+):
+    """omnigraph 0.13 refuses to drop InterfaceBinding.repo_file in place, so
+    a local bridge created before the drop fails every apply. Recreating it is
+    the recovery, since the bridge is derived from the indexed checkouts.
+
+    Several callers at once is the state right after an upgrade, when every
+    reindex hook finds the old store. Without the write lock one of them
+    deletes the store another is initialising, or inits over one that exists.
+    """
+    from witan_code import config as cfg_mod
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+    current = cfg.bridge_schema_file.read_text()
+    field = "    file: String @index"
+    assert field in current
+    old_schema = tmp_path / "bridge-with-repo-file.pg"
+    old_schema.write_text(
+        current.replace(field, f"{field}\n    repo_file: String @index", 1)
+    )
+    store = cfg_mod.bridge_store_path(cfg.code_dir)
+    store.parent.mkdir(parents=True)
+    subprocess.run(
+        [store_module._binary(), "init", "--schema", str(old_schema), str(store)],
+        check=True,
+        capture_output=True,
+    )
+    assert _plan(cfg, store)["supported"] is False
+
+    with ThreadPoolExecutor(callers) as pool:
+        for future in [
+            pool.submit(store_module.ensure_bridge_store, cfg) for _ in range(callers)
+        ]:
+            future.result()
+
+    assert _plan(cfg, store) == {
+        "uri": str(store),
+        "supported": True,
+        "step_count": 0,
+        "steps": [],
+    }
+
+
+@requires_stack
+def test_a_bridge_whose_apply_fails_for_another_reason_is_kept(tmp_path, monkeypatch):
+    """Only a plan that says the change is unsupported deletes the bridge. It
+    holds every repo's bindings, so a failure a retry can fix must not."""
+    from witan_code import config as cfg_mod
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+    store = cfg_mod.bridge_store_path(cfg.code_dir)
+    store_module.ensure_bridge_store(cfg)
+    marker = store / "kept"
+    marker.write_text("")
+    monkeypatch.setattr(store_module, "schema_apply_if_changed", lambda *_: False)
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("binary", ["/nonexistent/omnigraph", "false"])
+def test_an_unanswered_plan_is_not_a_reason_to_recreate(tmp_path, binary):
+    assert not store_module._schema_change_unsupported(
+        binary, tmp_path / "bridge-schema.pg", tmp_path / "_bridge.omni"
+    )
 
 
 def test_discard_store_refuses_a_cluster_graph():

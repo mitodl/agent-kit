@@ -4,8 +4,8 @@ Phase-exit criterion 2 of wp-witan-multi-user-service-deployment-dcf6ee asks for
 concurrency to be *observed*, not argued from the design. The design argument is
 weak on purpose: ``acquire_store_flock`` is skipped for http(s) stores
 (``_UNLOCKABLE_SCHEMES``), so the advisory lock that serialises local writers
-does nothing here, and ``task_claim`` is documented best-effort CAS pending an
-upstream omnigraph conditional-write.
+does nothing here, and ``task_claim``'s exclusion rests on omnigraph's
+conditional write (``/mutate/if-graph-commit``) instead.
 
 Three probes, each run by N genuinely independent OS processes -- separate
 interpreters, separate MCP clients, separate connections -- released against the
@@ -290,7 +290,9 @@ def _srv(target: str, token: str | None = None):
             "something against a deployment (see [targets.*] in witan config)"
         )
     provider = (lambda: token) if token else default_token_provider(remote)
-    return RemoteServerProxy(remote, provider)
+    # The probe measures how writes fail; a queued write would hide that, and
+    # replay would later send its scratch rows into the shared graph.
+    return RemoteServerProxy(remote, provider, buffer_writes=False)
 
 
 def _pinned_token(target: str, needed_s: float) -> tuple[str, float]:

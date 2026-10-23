@@ -13,11 +13,14 @@ changes, re-read its raise sites and update both the class and this table.
 import pytest
 
 from witan.scan.enforce import WriteBlocked
-from witan.server import MissingReference
+from witan.server import MergeBatchTooLarge, MissingReference
 
 EXPECTED_LOG_SAFE = {
     # A tool name, a node type and the slug the caller asked for.
     MissingReference: True,
+    # A collision count and `witan.merge_bounds` constants (the per-commit caps
+    # and the version that splits).
+    MergeBatchTooLarge: True,
     # A field name, a detector id and `Finding.preview` -- masked by the
     # detectors, which build every preview with `masked_preview`.
     WriteBlocked: True,

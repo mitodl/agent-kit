@@ -122,12 +122,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group test
 
-      - name: Cache omnigraph binary
+      - name: Cache omnigraph binaries
         id: cache-omnigraph
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.local/bin/omnigraph
-          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
+          path: |
+            ~/.local/bin/omnigraph
+            ~/.local/bin/omnigraph-server
+          key: omnigraph-and-server-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
 
       - name: Install omnigraph binary
         # witan/server.py bootstraps a local graph at import time, so the
@@ -139,8 +141,29 @@ jobs:
         if: steps.cache-omnigraph.outputs.cache-hit != 'true'
         run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
+      - name: Install omnigraph-server binary
+        # For tests/test_group_commit_served.py, which runs group commit, the
+        # default remote write path, against a real server. Same pinned
+        # tarball and checksum as the CLI.
+        if: steps.cache-omnigraph.outputs.cache-hit != 'true'
+        run: uv run python ../../../bin/install_omnigraph_server.py
+
       - name: Run tests
-        run: uv run pytest -v
+        # WITAN_REQUIRE_OMNIGRAPH turns the served group-commit tests' "no
+        # omnigraph-server, skip" into a failure, so losing the step above
+        # fails loudly instead of quietly retiring them.
+        env:
+          WITAN_REQUIRE_OMNIGRAPH: "1"
+        # Parallel across the runner's cores (4 on ubuntu-latest). Nearly all of
+        # this suite's time is spent waiting on `omnigraph` subprocesses against
+        # a per-test store, so the tests are independent and run serially they
+        # took 5-8 minutes. Each xdist worker imports testsupport/hermetic.py
+        # itself and gets its own fake HOME. The controller's leak check still
+        # watches the real home for writes from every worker. worksteal rather
+        # than the default `load` because per-test cost ranges from
+        # milliseconds to ~15s, and stealing keeps one slow chunk from setting
+        # the wall time.
+        run: uv run pytest -v -n auto --dist worksteal
 
   witan-policy:
     name: witan (Cedar policy bundle)

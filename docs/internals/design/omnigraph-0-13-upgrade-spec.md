@@ -286,11 +286,23 @@ stop window:
 3. Scale `omnigraph-server` to 0 and wait until no live pod matches its
    selector (D3's rule), then unlock the `serve` lock.
 4. For each graph: `optimize`, then force-unlock the `graph_operation` lock it
-   left. On the cleanup day, also run `cleanup` with the existing retention
+   left. On a cleanup day, also run `cleanup` with the configured retention
    and unlock after it. The job unlocks only lock ids it created (the CLI
    prints `lock_id=` on stderr), and only after the child command has exited.
 5. Restore the recorded replica count only if no migration was armed in the
    meantime (see the failure modes below), then release the Lease.
+
+Cleanup days are `OMNIGRAPH_CLEANUP_ISO_WEEKDAY`, a comma-separated list of
+ISO weekdays. The window first ran `cleanup` once a week (Sunday) at 30d
+retention. In Production on 2026-10-18 the busiest graphs' cleanup outlasted
+the 600s command timeout: 0.13's cleanup plans every present table version,
+retained and removed, before it deletes any, and a run stopped while planning
+deletes nothing. A weekly run plans a week of writes on top of the retained
+ones, about 37 days at 30d and 9 at 2d. The plan is to run cleanup every
+night with 2d retention, which plans about 3 days each night. That is
+ol-infrastructure config (`omnigraph:cleanup_iso_weekdays`,
+`DEFAULT_CLEANUP_OLDER_THAN`), and it deploys after an image with this list
+parsing. Upstream: ModernRelay/omnigraph#1095.
 
 Shutdown has to restore service too. The container runs `/bin/sh -c` as PID
 1, which ignores SIGTERM unless it traps it, and a trapping shell still waits

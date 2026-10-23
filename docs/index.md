@@ -27,8 +27,8 @@ is working on, the others can see.
 -   **Work coordination**
 
     Tasks, dependency edges, and multi-session projects. Claiming is a
-    best-effort compare-and-swap with a lease — enough for parallel agents to
-    divide work without double-doing it.
+    compare-and-swap with a lease, so parallel agents can divide work without
+    double-doing it.
 
     [Task tools →](reference/mcp-tools/tasks.md)
 

@@ -23,6 +23,7 @@ from . import (
     auth,  # noqa: F401
     graph,  # noqa: F401
     hooks,  # noqa: F401
+    journal,  # noqa: F401
     maintenance,  # noqa: F401
     memory,  # noqa: F401
     projects,  # noqa: F401

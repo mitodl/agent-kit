@@ -8,6 +8,235 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.44.0] - 2026-10-21
+
+### Changed
+
+- The cleanup that rides a background optimize now keeps 2 days of versions
+  instead of 30, matching the deployed nightly cleanup. Nothing reads older
+  history, and on omnigraph 0.13 a cleanup's cost grows with every version
+  still present ([ModernRelay/omnigraph#1095](https://github.com/ModernRelay/omnigraph/issues/1095)).
+- `witan cleanup --yes` with neither `--keep` nor `--older-than` now keeps 2 days
+  as well, since it shares the default. Pass `--older-than 30d` to keep the
+  old window.
+- `task_claim` writes its CodeBranch upsert and `WorksOn` edge in the claim's
+  own fenced commit instead of a second one, so a claim or lease renewal costs
+  one graph commit instead of two. On omnigraph 0.13 same-branch commits
+  serialize at about 1s each, which caps a graph at about 0.9 writes/s. A
+  claim refused or lost to a rival still writes neither, and a retry rebuilds
+  the branch steps from its own read. This shipped in 0.44.0 but was left out
+  of it at release.
+- The two cleanup changes already shipped in 0.43.0, whose entry left them out.
+
+## [0.43.0] - 2026-10-20
+
+### Added
+
+- Against a deployed witan, `task_comment`, `task_create`, `task_update`,
+  `task_close` and `task_release` are queued locally when the deployment
+  cannot be reached and replayed on the next call that reaches it. The agent
+  gets `{"buffered": true, "journal_id", "pending", "note"}` instead of an
+  error. `task_update`, `task_close` and `task_release` are also queued after
+  a gateway 502/504, since applying them twice is harmless. Reads and
+  `task_claim` still fail outright.
+- On replay, a queued update, close or release of a task someone else now
+  holds, or that was closed since, is posted as a comment on the task instead
+  of applied. A queued `task_create` is skipped if a task with the same title
+  was created since.
+- `witan journal list|replay|drop` shows, replays, or discards queued writes,
+  and the context hook prints a line when any are queued.
+
+- The web UI puts a copy button beside project and task names (the project list, a project's header, Ready list and task table, board cards, search results, the task detail panel, and the `task_ready`, `task_list` and `workflow_project_status` widgets). It copies the slug, not the title, for pasting into the `witan` CLI. A tick shows when the copy lands and a cross when it fails, and both are announced to screen readers. Where the Clipboard API is unavailable or refused (a non-secure context, or a widget iframe without `clipboard-write`) it falls back to the `copy` command.
+
+### Changed
+
+- Requires witan-core 0.44.1.
+
+- Breaks older clients: upgrade witan-council before merging into a
+  deployment running this release. One `store_merge` call now writes at most 32 tasks
+  the deployment already holds (and 96 KiB of them), and the server refuses a
+  batch whose collisions need more with `MergeBatchTooLarge`, before writing
+  anything. A dry run is refused the same way. `witan migrate merge` from this
+  release splits its batches to at most 32 Task rows per call, so it never
+  hits the refusal. Older clients send batches of up to 2 MiB, so they are
+  refused whenever one batch would overwrite more than 32 tasks, or more than
+  96 KiB of them, with newer copies; the refusal names this version and the upgrade command
+  (`uv tool upgrade ol-agent-kit`, or `uv tool upgrade witan-council`).
+
+### Fixed
+
+- The web UI's blocker badges count only open blockers. A task whose blockers
+  have all closed, and a closed task, show no badge; the project list counts
+  only blocking projects that are still active. Blockers from outside a
+  project are looked up so the project page can count them.
+
+- Closing a task now moves its `blocked` dependents back to `open` in every
+  repo, not only the closed task's own. A dependent in another repo kept
+  `status: blocked` after its last blocker closed, so `task_list`, the CLI and
+  the web UI reported it as blocked while `task_ready` returned it as ready.
+- `task_release(status="closed")` now unblocks dependents, as `task_close`
+  does.
+
+- `store_merge` and `witan migrate merge` no longer overwrite a claim that
+  lands while they run. A winning source row for a task the target already
+  holds is now written by a mutation fenced on a fresh read of that task
+  rather than loaded, so a task whose status, assignee or `claimed_at` changed
+  since the merge's export keeps the target's row. Its decision comes back as
+  `kept-target` with a `fenced` reason (`claim_changed`, or `target_newer` when
+  re-running newest-record-wins against the fresh row keeps the target).
+  Those writes go in fenced commits of at most 32 tasks and 96 KiB, sized from
+  measurements against omnigraph 0.13.0 (`witan/merge_bounds.py`). A single
+  task past 128 KiB gets a commit of its own, which on a local or s3 target
+  needs witan-core 0.44.1 (it no longer passes params on the command line), so
+  the witan-core floor is now `>=0.44.1`.
+
+## [0.42.0] - 2026-10-16
+
+### Added
+
+- The witan-task skill has a checkpoint convention for long runs. After each durable step (branch, change, validated, pushed, pr-opened, review-requested, blocked) the holder leaves one `task_comment` line, `checkpoint <step>: <ref or exact command> | next: <action>`. A session that claims a task with checkpoints checks the last one against git and GitHub and resumes from the first step live state does not confirm, so a run cut off by a spend limit, network error or OOM kill can be picked up where it stopped.
+
+- `task_search` takes `project_slug` and `assignee` (`"@me"` included), the
+  filters `witan tasks QUERY --project/--assignee` already offered. Without
+  them, an agent that passed either one got a schema rejection. A project
+  search spans every repo. With either filter the
+  20-hit cap applies after filtering, so a match ranked below the unfiltered
+  query's top 20 is still found.
+- The witan-task skill has a "Find a task" section: `task_ready`/`task_list`
+  for the next task in a project, `task_search` for keywords, and
+  `witan tasks "<query>"` as the CLI fallback (`witan task search` does not
+  exist).
+
+- Workflow projects carry an autonomy envelope: `preauthorized` (actions an
+  agent may take on the project without asking) and `reserved_decisions`
+  (decisions kept for a human). `workflow_project_create` and
+  `workflow_project_update` take both, with replace-list semantics and `[]` to
+  clear; `workflow_project_get`, `workflow_project_status`,
+  `workflow_project_list` and `workflow_project_search` return them. The CLI
+  takes `--allow` / `--reserve` (repeatable) on `project create` and
+  `project update`, and shows both in `project status` and `project <slug>`.
+- `workflow_project_update` writes an envelope list only when it is passed,
+  through its own mutation, so an unrelated edit can't restore a grant or drop
+  a reservation another session changed after it read the row.
+- The secret/PII scanner checks each envelope item on create and update, with
+  the configured block/redact/warn action applied per item.
+  `workflow_project_update`'s title and description edits are now scanned too;
+  they went through a mutation the scanner had no entry for.
+- Each envelope list records who last set it (`preauthorized_set_by`,
+  `reserved_decisions_set_by`), resolved server-side the way `author` is and
+  never taken from the caller. Writing a list makes the caller its setter for
+  every item in it.
+- The context hook renders a project's envelope under its bullet, naming the
+  setter, capped at 5 items of 160 characters each. A `preauthorized` list set
+  by the project's author reads as `Pre-authorized by the project author`;
+  one set by anyone else reads as a suggestion to confirm with the user.
+  `witan project run`, `project status` and `project <slug>` show the full
+  lists the same way.
+- The witan-project-tracker skill has an "Autonomy Envelope" section: treat
+  pre-authorized items as standing approval only when the author or the
+  current user set them, batch reserved ones into one list, and read
+  historical notes as past state rather than standing rules.
+
+- `$CODEX_SESSION_ID`, which Codex sets in every command its shell tool runs, is the last fallback for the agent session id, after `$CLAUDE_SESSION_ID` and `$PI_SESSION_ID`. It is the id Codex hands its hooks, so `witan session start` run from Codex parks the handle where the Stop hook looks. The witan-workflow and witan-project-tracker skills tell a Codex agent to pass it to `workflow_session_start`.
+
+### Changed
+
+- The web UI renders agent-written prose (task descriptions, resolutions and
+  comments, project descriptions, session summaries, memory content) as a safe
+  subset of markdown: lists, tables, code, emphasis, links and bare URLs.
+  markdown-it's tokens are walked into lit-html templates and no HTML string is
+  ever built. Images render as links, never `<img>`; raw HTML, footnotes and
+  entities render as text. `/ui/` responses also send
+  `Referrer-Policy: no-referrer` and `X-DNS-Prefetch-Control: off`.
+
+- The context hook's "New Comments on Work You Hold" block skips `checkpoint ` comments written by the task's holder, matched by person across sessions. Without this, every checkpoint an agent left came back on its own next prompt as a new comment to act on. A teammate's checkpoint on a task you hold still shows.
+
+- `witan tasks QUERY` passes `--project` and `--assignee` to `task_search`
+  instead of filtering its 20 hits client-side. Against a deployment older
+  than this release, a search with either flag fails until the deployment is
+  upgraded.
+
+- The `witan-task` skill description now triggers on "what's next", "the next
+  task in X" and finding the task for an issue or PR, and the
+  `witan-project-tracker` description on "continue the X project", "advance
+  the X project" and "pick up where we left off". Re-run `witan setup` after
+  upgrading to install the new descriptions.
+
+- Blocker checks in `task_create`, `task_ready`, `task_unlink` and the
+  unblock pass after `task_close` read the status of every blocker they need
+  in one query instead of one `get_task` per blocker.
+  `workflow_project_get_blockers`, `recall`'s contradiction pass and
+  `witan migrate topics` do the same for their per-slug reads.
+
+- `memory_list`'s language-filtered and slim listings and
+  `memory_contradictions` drop superseded memories in the query with
+  `not { $_ supersedes $m }`, instead of reading the superseded set
+  separately and filtering in Python. That is one read instead of two, and
+  the language-filtered and slim listings now prune before their 10,000-row
+  cap rather than after it.
+- The ranking edge index reads the superseded and contradicted sets with
+  `exists { }` blocks: one row per memory rather than per edge, and one
+  read instead of two for the contradicted set.
+
+- The memory, task and project searches and listings in `read.gq` take their
+  optional filters (`repo`, `kind`, `status`) as nullable parameters, so each
+  read is one query instead of one per filter combination (36 queries become
+  12). Against omnigraph 0.13.0 the collapsed queries returned the same rows
+  in the same order, with the same limits and bm25 scores, for every filter
+  combination, and timed within noise of the ones they replace. A caller
+  running `read.gq` queries by name passes the filter key as `null` to leave
+  it off: `search_all` is now `search_memories` with `repo` and `kind` null.
+
+- Requires witan-core 0.42 for `change_many(if_commit=...)`, which fences a task row and its edge in one commit.
+
+### Removed
+
+- The web UI no longer keeps oidc-spa's `crypto.subtle` polyfill alive under
+  vite 8, so login over plain http on a non-loopback host no longer works.
+  https and loopback (`localhost`, `127.0.0.1`) are unaffected: browsers give
+  them `crypto.subtle` natively, and the polyfill is never loaded there.
+
+- `task_claim`'s post-write verification read, the loop that retried it until its `graph_commit_id` caught up with the claim's own, and the `witan.task_claim.verify` / `witan.task_update.conditional` log lines. A successful conditional write already proves nobody claimed, closed or blocked the task first, so the read-back could only observe a later write meant to change the holder (a `force` steal, an explicit reassignment). `witan.commit_ids`, which only that loop used, is gone too.
+- The unconditional fallback for a conditional task write whose read reported no `graph_commit_id`. omnigraph 0.13 reports one on both transports, so such a read now raises instead of sending the claim without a precondition.
+
+### Fixed
+
+- `witan inject-context` against a deployed target now gives all of its reads
+  one shared deadline, 30s from when the hook starts (`WITAN_CONTEXT_DEADLINE`
+  overrides it). A read still unanswered at the deadline is cancelled, and the
+  blocks that did answer render with a line naming what timed out. Before, a
+  deployment that accepted a request and never answered held the hook for the
+  MCP client's 300s read timeout, so the client killed it at its 45s hook
+  timeout and nothing was injected. A partial block is never cached, so the
+  next prompt retries the full read.
+
+- `task_unlink` and `workflow_project_unblock` delete exactly the one edge
+  named, with a single delete on both endpoints. They used to delete every
+  edge on one endpoint and re-insert the others, so a concurrent reader could
+  see those edges missing and a failure between the two steps lost them.
+
+- `task_claim` decides whether a task is claimable on the same read its conditional write is fenced on. It used to decide on an earlier read, so a rival that claimed in between was overwritten by a write whose precondition still held, and both callers could be told `claimed: true`. A rival found on the fenced read is now reported as `lost_race` and nothing is written.
+
+- Every task write is fenced on the read it merged from. `update_task` replaces the whole row, and `task_update`, `task_close`, `task_release`, `task_link`, `task_unlink`, the unblock sweep and `migrate_repo_keys` wrote it unconditionally, so an edit that read a task before a claim landed put back `status=open` and no assignee, and a second caller was then granted the same task. Each write now states its read's `graph_commit_id` and, when the store refuses it, re-reads and merges again (up to five attempts with jittered backoff, then `WriteContention` with nothing written). Changes that depend on the row (`blocked_by` appends, the release holder check, the unblock sweep) are recomputed on each attempt's read.
+- `task_release` checks the holder on the row its write is fenced on, so a claim someone else took after the caller's read is refused rather than released.
+- `task_close` (and `task_update` to `closed`) no longer fails after its close committed. Reopening each dependent is its own fenced write; one that runs out of attempts is skipped, the rest are swept, and the closed task comes back with a `warning` naming the dependents still marked blocked (they are still ready). A retried close keeps its original `closed_at`.
+- `task_unlink(kind="parent")` clears `parent_slug` whenever the row still names that parent, so re-running it repairs a sync that ran out of attempts after the edge was deleted.
+- `task_claim` on a stale-blocked task whose reopen runs out of attempts reports `contention` instead of raising.
+- `migrate_repo_keys` that runs out of attempts on a task says it is safe to re-run and reports the counts done so far, and no longer counts a task another writer had already folded.
+- A `task_claim` that runs out of attempts reads the task once more and reports `lost_race` or `closed`/`blocked` when that is why, instead of `contention` with a remedy that asserted what it had not checked.
+
+- `witan session-checkpoint` closes the session under Codex. Codex runs its Stop hook with no session variable in the environment, so the checkpoint would find no handle and leave the session open. It now takes the id from the hook's stdin payload when the payload is Codex's (it carries `turn_id`); a Claude Code payload is not read, so the Claude path is unchanged.
+- `witan session-checkpoint` sends a half-configured remote's error to stderr. It went to stdout, which Codex reads as a malformed Stop decision and reports as a failed hook.
+- The Pi extension's shutdown checkpoint drops an inherited `$CODEX_SESSION_ID` from its child, as it already did `$CLAUDE_SESSION_ID`. A Pi started from Codex's shell with no session id of its own would otherwise close the Codex session's witan session.
+
+### Notes
+
+- `schema.pg` adds four nullable properties to `WorkflowProject` (two
+  `[String]?` lists and their `String?` setters).
+  It is an additive migration (`omnigraph schema plan` reports it supported),
+  and a local store picks it up on its own. A deployed graph needs the schema
+  applied before the witan image that writes the fields rolls out.
+
 ## [0.41.0] - 2026-10-15
 
 ### Added

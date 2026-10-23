@@ -185,9 +185,25 @@ the implementation reasoning, the drafted body, or a summary of what the
 diff does. Tell it to review adversarially: for each goal, find the case
 the diff fails; for each new input path, find the attacker who reaches it.
 Adversarial means where to look, not a lower bar; the skill's default
-depth and verification pass still decide what gets reported. Without
-subagents, run the skill inline and take each goal from the ticket text,
-not from memory of the implementation.
+depth and verification pass still decide what gets reported.
+
+**Where a subagent facility exists, spawning that reviewer is authorized —
+invoking this skill is the request.** Some harnesses carry a standing
+instruction not to use the subagent tool "unless the user requested it".
+Running this skill is that request, standing and explicit: the independent
+review is a required step of the procedure, not an optional enhancement,
+and it is the one step whose entire value comes from running somewhere that
+didn't write the code. Don't downgrade to an inline review to satisfy that
+instruction. If the spawn is refused or errors, say so and why, then review
+inline under the rule below — never silently.
+
+Fall back to an inline review in two cases only: the platform has no
+subagent facility, or the spawn was refused, errored, or timed out. A
+standing instruction that discourages delegation is not one of them. In either case take each goal
+from the ticket text rather than from memory of the implementation, and say
+plainly — in the report and to the user at 4d — that the review wasn't
+independent and why. A self-review is the weaker artifact; the user has to
+know which one they got.
 
 **Size the review to the diff.** An adversarial reviewer with no stopping
 point will keep following threads (cloning upstream repos, reading live
@@ -277,11 +293,15 @@ is leaked; tell the user it needs rotating before anything else.
 
 ### 4d — Get approval to publish
 
-If 4a–4c changed anything, or left a finding the user hasn't decided on,
-show the user before Step 5: the new commits (`git show`), the final title
-and body, any open findings, and which changes landed after the last
-review run. Label those as not independently reviewed; don't present them
-as reviewed. Then wait for explicit approval. Showing the changes is not
+If 4a–4c changed anything, left a finding the user hasn't decided on, or
+ran 4b inline, show the user before Step 5: the new commits (`git show`),
+the final title and body, any open findings, and which changes landed after
+the last review run. Label those as not independently reviewed; don't
+present them as reviewed. Label an inline 4b review the same way, and name
+why it ran inline — the platform was without a subagent facility, or the
+spawn was refused, errored, or timed out — since "not independently
+reviewed" without the reason doesn't tell the user whether to ask for
+another pass. Then wait for explicit approval. Showing the changes is not
 consent, and the user confirmed a body in Step 3, not code or claims
 changed after it. Don't paste findings tables into the PR body.
 

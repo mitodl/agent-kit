@@ -27,9 +27,11 @@ test-ol-agent-kit *args:
 test-witan-core *args:
     uv run --isolated --package witan-core --group test pytest packages/witan-core {{ args }}
 
-# Run witan-council's (mcp/servers/witan) tests in an isolated venv.
+# Run witan-council's (mcp/servers/witan) tests in an isolated venv, in
+# parallel (pytest-xdist; see the `Run tests` step in witan-tests.yml). Pass
+# `-n 0` to run serially, e.g. for `--pdb`, which xdist does not support.
 test-witan-council *args:
-    uv run --isolated --package witan-council --group test pytest mcp/servers/witan {{ args }}
+    uv run --isolated --package witan-council --group test pytest mcp/servers/witan -n auto --dist worksteal {{ args }}
 
 # Run witan-code's (mcp/servers/witan-code) tests in an isolated venv.
 test-witan-code *args:
@@ -403,9 +405,9 @@ docs-check:
 # one CI checks and Read the Docs publishes — which is the exact drift the CI
 # pin exists to prevent. Renovate bumps all three together.
 docs-build:
-    uvx zensical@0.0.67 build
+    uvx zensical@0.0.68 build
     ./bin/gen_llms.py
 
 # Serve the docs locally with incremental rebuilds.
 docs-serve:
-    uvx zensical@0.0.67 serve
+    uvx zensical@0.0.68 serve

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
+import sys
 from pathlib import Path
 
 from witan_core.observability import get_logger
@@ -60,6 +63,8 @@ def inject_context(*, debug: bool = False) -> None:
         text = ctx_module.inject_context_remote(
             remote_proxy(remote), remote.url, debug=debug
         )
+        queued = ctx_module.journal_line(remote.url, debug=debug)
+        text = "\n\n".join(part for part in (queued, text) if part)
         if text:
             print(text)
         return
@@ -111,26 +116,33 @@ def session_checkpoint() -> None:
     holds the session: the in-process module locally, or the deployment over MCP.
     Writing straight to a local store here is what used to leave deployed
     sessions open forever.
+
+    Under Codex, whose hooks get no session variable, the session id comes
+    from the hook's stdin payload instead.
     """
     from .. import maintenance, session_state
     from ._common import _fn, _srv
 
     # $CLAUDE_SESSION_ID under Claude Code's Stop hook; $PI_SESSION_ID under
-    # Pi, whose workflow extension sets it on this process at session_shutdown.
-    session_id = session_state.current_session_id()
+    # Pi, whose workflow extension sets it on this process at session_shutdown;
+    # the payload's `session_id` under Codex.
+    session_id = session_state.current_session_id(_codex_session_id(_hook_payload()))
     handle = session_state.read_handle(session_id)
     session_slug = (handle or {}).get("session_slug")
     if session_slug:
         try:
-            _fn(_srv().workflow_session_end)(
-                session_slug=session_slug,
-                summary=(
-                    "Session ended (auto-closed by Stop hook — "
-                    "call workflow_session_end explicitly for a better summary)"
-                ),
-                tools_used=None,
-                files_changed=_changed_files() or None,
-            )
+            # Codex fails a Stop hook whose stdout isn't a JSON decision, and
+            # `_srv()` prints its half-configured-remote error to stdout.
+            with contextlib.redirect_stdout(sys.stderr):
+                _fn(_srv().workflow_session_end)(
+                    session_slug=session_slug,
+                    summary=(
+                        "Session ended (auto-closed by Stop hook — "
+                        "call workflow_session_end explicitly for a better summary)"
+                    ),
+                    tools_used=None,
+                    files_changed=_changed_files() or None,
+                )
         # SystemExit is not an Exception: _srv() raises it for a half-configured
         # remote, and letting it escape would break the "never blocks" contract.
         except (Exception, SystemExit):  # noqa: BLE001, S110 — never fail the agent
@@ -156,6 +168,41 @@ def session_checkpoint() -> None:
         maintenance.spawn_background_optimize(cfg_module.load().graph_uri)
     except Exception:  # noqa: BLE001, S110 — maintenance must never fail the Stop hook
         pass
+
+
+def _hook_payload() -> dict:
+    """The hook's stdin JSON object, or ``{}`` when there isn't one.
+
+    Empty for a terminal (``witan session-checkpoint`` run by hand), for Pi's
+    extension, which spawns the command with stdin ignored, and for anything
+    that isn't a JSON object. Claude Code and Codex write the payload and
+    close the pipe, so the read can't block.
+    """
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _codex_session_id(payload: dict) -> str | None:
+    """The session id from a Codex hook payload, or ``None`` for any other.
+
+    Codex runs a hook with its own environment and no session variable, so
+    stdin is the only place the id is. It is the same id Codex exports to its
+    shell tool as ``$CODEX_SESSION_ID``, which is what the agent passes to
+    ``workflow_session_start`` and so what the parked handle is keyed by.
+
+    Told apart by ``turn_id``, which Codex's input schema marks as a Codex
+    extension to the Claude-style payload (``codex-rs/hooks/src/schema.rs``).
+    A payload without it is not used, so the Claude path still resolves
+    ``$CLAUDE_SESSION_ID`` exactly as before.
+    """
+    if "turn_id" not in payload:
+        return None
+    return payload["session_id"]
 
 
 def _changed_files() -> list[str]:

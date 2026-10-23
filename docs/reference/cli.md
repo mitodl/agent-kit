@@ -19,6 +19,10 @@ witan — agent memory, planning, and collaboration graph.
 - [`graph`](#witan-graph)
 - [`inject-context`](#witan-inject-context)
 - [`session-checkpoint`](#witan-session-checkpoint)
+- [`journal`](#witan-journal)
+    - [`list`](#witan-journal-list)
+    - [`replay`](#witan-journal-replay)
+    - [`drop`](#witan-journal-drop)
 - [`optimize`](#witan-optimize)
 - [`cleanup`](#witan-cleanup)
 - [`memory`](#witan-memory)
@@ -102,6 +106,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`code`](#witan-code): witan-code — tree-sitter code graph + cross-repo bridge.
 * [`graph`](#witan-graph): Visualize the workflow project and task dependency graph.
 * [`inject-context`](#witan-inject-context): Print workflow context for the UserPromptSubmit hook.
+* [`journal`](#witan-journal): Inspect and replay task writes queued while the deployment was unreachable.
 * [`login`](#witan-login): Authenticate to the deployed witan service via the OIDC device grant.
 * [`logout`](#witan-logout): Forget the cached token for the configured deployment.
 * [`memory`](#witan-memory): Search memory (BM25), or with no query list memories (filtered by --kind).
@@ -279,6 +284,9 @@ holds the session: the in-process module locally, or the deployment over MCP.
 Writing straight to a local store here is what used to leave deployed
 sessions open forever.
 
+Under Codex, whose hooks get no session variable, the session id comes
+from the hook's stdin payload instead.
+
 **Parameters**:
 
 * `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
@@ -288,6 +296,48 @@ sessions open forever.
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+
+## witan journal
+
+Inspect and replay task writes queued while the deployment was unreachable.
+
+**Parameters**:
+
+* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+    tasks`, `witan memory` and `witan code index` included, none of which
+    could be pointed at one before. Overrides auto-detection by checkout
+    path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+
+### witan journal list
+
+```console
+witan journal list
+```
+
+List queued writes for the selected deployment, oldest first.
+
+### witan journal replay
+
+```console
+witan journal replay
+```
+
+Replay queued writes now, instead of waiting for the next call.
+
+### witan journal drop
+
+```console
+witan journal drop ENTRY-ID
+```
+
+Remove one queued write without sending it.
+
+**Parameters**:
+
+* `ENTRY-ID, --entry-id`: **[required]**
 
 ## witan optimize
 
@@ -334,7 +384,7 @@ bound keeps it. From omnigraph 0.11 it is also the only thing that
 reclaims the storage of deleted branches. Irreversible, so it requires
 ``--yes``.
 
-With neither bound given it keeps the last 30 days, the same policy the
+With neither bound given it keeps the last 2 days, the same policy the
 Stop hook and the deployed maintenance job use.
 
 **Parameters**:
@@ -680,8 +730,8 @@ Link a session to a workflow project.
 
 * `PROJECT-SLUG, --project-slug`: **[required]**
 * `--phase CHOICE`: **[required]** *[choices: discovery, spec, implementation, delivery]*
-* `--session-id STR`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else a
-    generated uuid. The Stop hook keys its state file on this.
+* `--session-id STR`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
+    ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
 * `--repo STR`:
 * `--tags STR..., --empty-tags`:
 
@@ -780,7 +830,7 @@ Re-run after every upgrade to refresh installed files.
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
+* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
 * `--force, --no-force`: *[default: False]*
@@ -1693,7 +1743,7 @@ bound keeps it. From omnigraph 0.11 it is also the only thing that
 reclaims the storage of deleted branches (``branches --prune``,
 ``reap-views --apply``). Irreversible, so it requires ``--yes``.
 
-With neither bound given it keeps the last 30 days, the same policy the
+With neither bound given it keeps the last 2 days, the same policy the
 Stop hook and the deployed maintenance job use.
 
 **Parameters**:
@@ -1779,9 +1829,10 @@ witan code reindex-hook
 
 Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
 
-Reads the Claude Code hook payload from stdin, extracts
-``tool_input.file_path`` (or ``path``/``filename``), and queues it for
-reindexing if it exists. One detached drainer per checkout applies the
+Reads the hook payload from stdin, extracts ``tool_input.file_path`` (or
+``path``/``filename``) from Claude Code's, or every file a Codex
+``apply_patch`` adds, updates or moves to, and queues each for reindexing
+if it exists. One detached drainer per checkout applies the
 queue, so parallel agents editing one worktree do not race each other's
 writes to its branch view. Logs from the last drainer are kept in
 ``$TMPDIR/witan-code-<uid>/``. Best-effort: a missing or
@@ -1814,7 +1865,7 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
+* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
 * `--force, --no-force`: *[default: False]*

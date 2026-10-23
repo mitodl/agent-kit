@@ -1,6 +1,7 @@
 """Tests for write-path enforcement: WriteGuard block/redact/warn + graph wiring."""
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -289,13 +290,14 @@ def test_change_applies_guard_before_persist(monkeypatch, tmp_path):
     captured = {}
 
     def fake_run(subcommand, *args, **kwargs):
-        captured["args"] = args
+        # Read now: the params file is removed once the call returns.
+        captured["params"] = Path(args[args.index("--params-file") + 1]).read_text()
         return ""
 
     monkeypatch.setattr(client, "_run", fake_run)
     client.change("mutations.gq", "insert_memory", {"title": "t", "content": "a@b.com"})
 
-    params_json = captured["args"][captured["args"].index("--params") + 1]
+    params_json = captured["params"]
     assert "a@b.com" not in params_json
     assert "redacted:email" in params_json  # guillemets are JSON-escaped to «
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,20 @@ from .context import _busy_path, _lock_path, _project_dir, _state_path
 logger = get_logger("witan.code.hooks")
 
 _LOG_MAX_BYTES = 1024 * 1024
+
+# Codex edits files with its `apply_patch` tool, whose hook payload carries the
+# patch text (`tool_input.command`) rather than a path; its `Edit|Write`
+# matcher selects that tool by alias. These are the patch grammar's
+# file-header lines that name a file left on disk (codex-rs/apply-patch
+# parser.rs: ADD_FILE_MARKER, UPDATE_FILE_MARKER, MOVE_TO_MARKER). Codex
+# accepts an indented Add/Update header (streaming_parser.rs trims the line
+# outside an update hunk) but only a column-0 Move to. Added content starts
+# with `+`, so it can't name a file; an update hunk's context line that quotes
+# a header can, and at worst reindexes an unchanged file.
+_APPLY_PATCH_TARGET = re.compile(
+    r"^(?:[ \t]*\*\*\* (?:Add File|Update File)|\*\*\* Move to): (.+)$",
+    re.MULTILINE,
+)
 
 
 def session_init() -> None:
@@ -64,6 +79,9 @@ def reindex_hook(payload: str) -> None:
     before the hook returns. Outside one there is no branch view to contend
     over and the file is indexed in the foreground, as before.
 
+    Claude Code's payload names one file; Codex's ``apply_patch`` payload
+    names every file in the patch, and each is reindexed.
+
     Best-effort: a missing/malformed payload, an untracked tool, or a parse
     failure all degrade to a silent no-op rather than interrupting the agent.
     """
@@ -74,14 +92,25 @@ def reindex_hook(payload: str) -> None:
     tool_input = data.get("tool_input") if isinstance(data, dict) else None
     if not isinstance(tool_input, dict):
         return
-    raw = (
-        tool_input.get("file_path")
-        or tool_input.get("path")
-        or tool_input.get("filename")
-    )
-    if not isinstance(raw, str) or not raw:
-        return
+    if data.get("tool_name") == "apply_patch":
+        patch = tool_input.get("command")
+        targets = (
+            [m.strip() for m in _APPLY_PATCH_TARGET.findall(patch)]
+            if isinstance(patch, str)
+            else []
+        )
+    else:
+        raw = (
+            tool_input.get("file_path")
+            or tool_input.get("path")
+            or tool_input.get("filename")
+        )
+        targets = [raw] if isinstance(raw, str) and raw else []
+    for raw in targets:
+        _reindex_one(raw)
 
+
+def _reindex_one(raw: str) -> None:
     path = Path(raw)
     if not path.is_absolute():
         path = Path.cwd() / path

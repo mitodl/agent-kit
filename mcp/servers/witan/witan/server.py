@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
@@ -41,6 +41,7 @@ from witan_core.export_rows import (
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
+    WriteContention,
     acquire_store_flock,
     release_store_flock,
     schema_apply,
@@ -52,6 +53,7 @@ from witan_core.refusal import Refusal
 from . import config as cfg_module
 from . import (
     elicit,
+    merge_bounds,
     merge_report,
     readiness,
     scan,
@@ -60,7 +62,6 @@ from . import (
     ui_widgets,
 )
 from . import repo as repo_module
-from .commit_ids import commit_reached
 from .graph import (
     OmnigraphClient,
     OmnigraphConflict,
@@ -545,7 +546,7 @@ async def _offload(fn, /, *args, **kwargs):
         # ★ IN A `finally` BECAUSE THE GUARD RECORDS BEFORE THE WRITE IS ISSUED.
         # `scan.enforce` notes the redaction and then hands the rewritten params
         # to the mutation, so a call that redacts and *then* raises — an
-        # `OmnigraphConflict` from `_update_task(surface_conflict=True)`, say —
+        # `WriteContention` from `_update_task`'s fenced retry, say —
         # has already produced a notice. Adopting only on success would discard
         # it, which is the silent-rewrite failure this module exists to prevent,
         # just narrowed to the error path.
@@ -902,8 +903,9 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
 
     The environment is still consulted as the local-stdio fallback, via
     ``session_state.current_session_id`` (``$CLAUDE_SESSION_ID``, else
-    ``$PI_SESSION_ID``; Pi does not export the latter to MCP servers it
-    launches, so under Pi the explicit argument is the path that works). The id is
+    ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``; Pi and Codex export theirs
+    only to the commands their shell tools run, not to the MCP servers they
+    launch, so under either the explicit argument is the path that works). The id is
     condensed to 8 hex chars by ``readiness.session_suffix`` — short because
     the holder string is read by humans in refusal messages and task listings,
     and a digest rather than a prefix because the id's shape varies by caller
@@ -1002,11 +1004,78 @@ def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
     )
 
 
-# Bounded re-tries for the best-effort CAS claim loop: on each surfaced
-# optimistic-concurrency conflict we re-read and either bail (a rival won) or
-# re-attempt the claim. Was 3 with no backoff between attempts — three
-# back-to-back immediate re-attempts have no chance against the contention
-# windows tk-the-write-gate-is-sized-against-a-3-45s-solo-wri-73fc2b measured
+class _TaskWriteRefused(Exception):
+    """The row a task write was about to be fenced on fails the caller's check.
+
+    Raised from a ``require`` callback inside ``_update_task``, so the refusal
+    is decided on the same snapshot the write would have stated as its
+    precondition, and nothing is written. ``result`` is the tool's answer.
+    """
+
+    def __init__(self, result: dict) -> None:
+        super().__init__(result.get("reason", "refused"))
+        self.result = result
+
+
+def _claim_contention(slug: str, holder: str, what: str) -> dict:
+    """``task_claim``'s answer when its fenced writes ran out of attempts.
+
+    ``what`` says which writes, after the attempt count. A retryable answer
+    rather than the raw conflict text
+    (tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414).
+    """
+    logger.warning(
+        "witan.task_claim.contention_exhausted",
+        task_slug=slug,
+        holder=holder,
+        attempts=_TASK_WRITE_MAX_ATTEMPTS,
+    )
+    return {
+        "slug": slug,
+        "claimed": False,
+        "reason": "contention",
+        "remedy": f"{_TASK_WRITE_MAX_ATTEMPTS} {what}. Retry task_claim.",
+    }
+
+
+def _claim_refusal(slug: str, row: dict, holder: str, force: bool) -> dict | None:
+    """``task_claim``'s refusal for ``row``, or ``None`` if ``holder`` may take it.
+
+    A rival is reported as ``lost_race`` rather than ``held``: ``task_claim``
+    already refused (or offered a steal of) a live claim it saw on its first
+    read, so one found here was taken after that read.
+    """
+    status = row.get("status")
+    if status in ("closed", "blocked"):
+        return {"slug": slug, "claimed": False, "reason": status}
+    rival = row.get("assignee")
+    lease_started_at = row.get("claimed_at") or row.get("updated_at")
+    if (
+        status == "in_progress"
+        and rival != holder
+        and not _lease_expired(lease_started_at)
+        and not force
+    ):
+        held_by = rival or _UNKNOWN_HOLDER
+        return {
+            "slug": slug,
+            "claimed": False,
+            "reason": "lost_race",
+            "held_by": held_by,
+            "claimed_at": row.get("claimed_at"),
+            "remedy": _claim_remedy(slug, held_by, lease_started_at),
+        }
+    return None
+
+
+# Bounded re-tries for a fenced task write (`_update_task`): on each refused
+# precondition (a 412) or write conflict (a 409 from a writer that moved the
+# branch head during prepare) it backs off, re-reads and merges again. The
+# precondition is the whole branch head, so ANY concurrent write to the graph
+# refuses it, not only one to this task. Was 3 with no backoff between
+# attempts (for the claim, which had this loop first) — three back-to-back
+# immediate re-attempts have no chance against the contention windows
+# tk-the-write-gate-is-sized-against-a-3-45s-solo-wri-73fc2b measured
 # (loaded writes taking 17-44s), so an unrelated conflict on a hot table (e.g.
 # node:Task, written by every claim/update/close across every session) would
 # exhaust this budget and escape as a raw OmnigraphConflict — see
@@ -1014,48 +1083,66 @@ def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
 # paired with a short jittered backoff below; still deliberately short next to
 # the 30s call deadline, since a real fix for multi-second contention is the
 # write-gate/batching work, not a longer spin here.
-_CLAIM_MAX_ATTEMPTS = 5
-_CLAIM_BACKOFF_BASE = 0.25
-_CLAIM_BACKOFF_CAP = 3.0
+_TASK_WRITE_MAX_ATTEMPTS = 5
+_TASK_WRITE_BACKOFF_BASE = 0.25
+_TASK_WRITE_BACKOFF_CAP = 3.0
 
 
-def _claim_backoff(attempt: int) -> float:
-    """Jittered exponential backoff between CAS retry attempts.
+def _task_write_backoff(attempt: int) -> float:
+    """Jittered exponential backoff between fenced task-write attempts.
 
     Jitter matters here specifically because the trigger case is a burst of
     concurrent claimers on the same task/table — lockstep exponential backoff
     would just have them collide again on the next attempt.
     """
-    delay = _CLAIM_BACKOFF_BASE * (2 ** (attempt - 1))
+    delay = _TASK_WRITE_BACKOFF_BASE * (2 ** (attempt - 1))
     jitter = random.uniform(0, 0.1 * delay)
-    return min(delay + jitter, _CLAIM_BACKOFF_CAP)
+    return min(delay + jitter, _TASK_WRITE_BACKOFF_CAP)
 
 
-# Bounds for task_claim's post-write verification catch-up loop (see the
-# comment at the call site) — sized above the largest staleness gap actually
-# measured (~2s, tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd),
-# so a genuinely-stale read path gets a real chance to catch up before the
-# loop gives up and falls back to trusting whatever it last saw.
-_VERIFY_CAUGHT_UP_MAX_ATTEMPTS = 6
-_VERIFY_CAUGHT_UP_BACKOFF_SECONDS = 0.5
+def _task_write_pause(attempt: int) -> None:
+    """Sleep before re-attempt ``attempt + 1``. Its own name so tests can
+    observe the backoff without patching ``time.sleep`` for the whole process."""
+    time.sleep(_task_write_backoff(attempt))
 
 
-def _verify_caught_up(verify_commit: str | None, write_commit: str) -> bool:
-    """Whether a verification read is at least as new as the claim's write.
+_T = TypeVar("_T")
 
-    An id ``commit_reached`` cannot place counts as not caught up, and is
-    logged. By the time this runs the claim is already written, so raising
-    would report a failure for a claim the caller in fact holds, and would do
-    so on every claim until the parser learned the new shape. Not caught up
-    costs the bounded retry loop instead.
+
+def _fence_on(read_commit: str | None, what: str) -> str:
+    """The precondition a fenced write states: its read's ``graph_commit_id``.
+
+    Both transports report one on omnigraph 0.13. ``if_commit=None`` would send
+    the write unconditionally, so a read without one raises instead.
     """
-    if verify_commit is None:
-        return False
-    try:
-        return commit_reached(verify_commit, write_commit)
-    except ValueError as exc:
-        logger.warning("witan.task_claim.verify.unorderable_commit", error=str(exc))
-        return False
+    if read_commit is None:
+        msg = (
+            f"the read of {what} reported no graph_commit_id, so there is no "
+            "precondition to state; refusing to write it unconditionally"
+        )
+        raise RuntimeError(msg)
+    return read_commit
+
+
+def _retry_fenced(attempt_once: Callable[[], _T], exhausted: str) -> _T:
+    """Run one fenced read-decide-write until the store accepts it.
+
+    ``attempt_once`` reads with :meth:`~witan.graph.OmnigraphClient.read_with_commit`,
+    decides on that read, and writes with ``if_commit`` set to its commit and
+    ``surface_conflict=True``, so a head that moved in between arrives here as
+    an ``OmnigraphConflict`` with nothing written. Each refusal backs off and
+    runs the whole attempt again, so the decision is remade on a fresh read.
+    After ``_TASK_WRITE_MAX_ATTEMPTS`` refusals it raises
+    :class:`~witan_core.omnigraph.WriteContention` carrying ``exhausted``.
+    """
+    for attempt in range(1, _TASK_WRITE_MAX_ATTEMPTS + 1):
+        try:
+            return attempt_once()
+        except OmnigraphConflict as exc:
+            if attempt == _TASK_WRITE_MAX_ATTEMPTS:
+                raise WriteContention(exhausted) from exc
+            _task_write_pause(attempt)
+    raise AssertionError("unreachable: the loop returns or raises")
 
 
 def _project_repos(row: dict) -> list[str]:
@@ -1210,9 +1297,10 @@ def _tag_memory_steps(
     ]
 
 
-# Statements per commit in the topic backfill. Bounds the inline GQ body — the
-# composed query is passed as an argv element, so this trades a handful of extra
-# commits for staying well clear of ARG_MAX and any server payload cap.
+# Statements per commit in the topic backfill. Bounds the composed GQ body,
+# trading a handful of extra commits for staying well clear of the server's
+# mutate body cap (about 1 MiB). The CLI transport passes it as a file since
+# witan-core 0.44.1, so argv no longer limits it.
 #
 # A SOFT threshold, checked between memories rather than between statements: a
 # chunk may overshoot by up to one memory's worth of steps. Keeping each
@@ -1220,10 +1308,11 @@ def _tag_memory_steps(
 # bounded by how many tags one memory can carry.
 _MIGRATE_BATCH_SIZE = 100
 
-# Slugs per read for a query that takes a `$slugs` list. On the local transport
-# the params travel as ONE `--params` argument, and Linux refuses a single
-# argument of 128 KiB or more with E2BIG before the CLI even starts. 200 slugs
-# of about 60 characters is roughly 14 KB.
+# Slugs per read for a query that takes a `$slugs` list. Before witan-core
+# 0.44.1 the local transport passed params as ONE `--params` argument, which
+# Linux refuses at 128 KiB (E2BIG); they now go as `--params-file`. The cap
+# still bounds each read's request body: 200 slugs of about 60 characters is
+# roughly 14 KB.
 _SLUG_LIST_READ_BATCH_SIZE = 200
 
 
@@ -1543,6 +1632,24 @@ def migrate_repo_keys() -> dict:
         if old and old != new:
             repos_changed[old] = new
 
+    # What the last attempt's read had left to fold: `None` when another
+    # writer (or an earlier run) already folded it, so it is not counted.
+    folding: dict[str, tuple[str | None, str | None] | None] = {"last": None}
+
+    def fold_task_keys(current: dict) -> dict | None:
+        # Through `_update_task`, not a write of the listed row: the listing is
+        # older than any claim or edit landing while this runs, and writing it
+        # back whole would revert them.
+        repo = current.get("repo")
+        refs = current.get("symbol_refs")
+        new_repo = normalise(repo) if repo else repo
+        new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
+        if new_repo == repo and new_refs == refs:
+            folding["last"] = None
+            return None
+        folding["last"] = (repo, new_repo)
+        return {"repo": new_repo, "symbol_refs": new_refs}
+
     for row in client.read("read.gq", "list_all_tasks_full", {}):
         repo = row.get("repo")
         refs = row.get("symbol_refs")
@@ -1550,13 +1657,20 @@ def migrate_repo_keys() -> dict:
         new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
         if new_repo == repo and new_refs == refs:
             continue
-        _note(repo, new_repo)
-        client.change(
-            "mutations.gq",
-            "update_task",
-            {**row, "repo": new_repo, "symbol_refs": new_refs, "updated_at": now},
-        )
-        counts["tasks_updated"] += 1
+        folding["last"] = None
+        try:
+            _update_task(row["slug"], fold_task_keys)
+        except WriteContention as exc:
+            msg = (
+                f"migrate_repo_keys stopped at task {row['slug']}: concurrent "
+                f"writes refused it {_TASK_WRITE_MAX_ATTEMPTS} times. It is "
+                "idempotent and safe to re-run; rows already folded are skipped. "
+                f"Done so far: {counts}."
+            )
+            raise WriteContention(msg) from exc
+        if folding["last"] is not None:
+            _note(*folding["last"])
+            counts["tasks_updated"] += 1
 
     for row in client.read("read.gq", "list_all_memories_full", {}):
         repo = row.get("repo")
@@ -2267,6 +2381,11 @@ def _parse_export(
     return _classify_rows(_lines(), str(path))
 
 
+def _source_wins(src_dt: datetime | None, dst_dt: datetime | None) -> bool:
+    """Newest-record-wins: whether the source row replaces the target's."""
+    return src_dt is not None and (dst_dt is None or src_dt > dst_dt)
+
+
 def _reconcile_nodes(
     source_nodes: dict[tuple[str, str], dict],
     target_nodes: dict[tuple[str, str], dict],
@@ -2303,7 +2422,7 @@ def _reconcile_nodes(
         dst_ts = _reconcile_timestamp(row_type, existing["data"])
         src_dt = _parse_ts(src_ts)
         dst_dt = _parse_ts(dst_ts)
-        won = src_dt is not None and (dst_dt is None or src_dt > dst_dt)
+        won = _source_wins(src_dt, dst_dt)
         decision = {
             "type": row_type,
             "slug": slug,
@@ -2479,6 +2598,212 @@ def _merge_accounting(
         "passthrough": len(passthrough),
         "duplicate_slugs": duplicates,
     }
+
+
+#: The fields a claim, a release or a close writes. A merge never overwrites a
+#: task whose copy in the target changed any of them after the export the merge
+#: reconciled against.
+_CLAIM_FIELDS = ("status", "assignee", "claimed_at")
+
+#: ``merge_task``'s parameters, every field of a Task.
+_MERGE_TASK_FIELDS = (
+    "slug",
+    "title",
+    "description",
+    "type",
+    "status",
+    "priority",
+    "repo",
+    "project_slug",
+    "parent_slug",
+    "blocked_by",
+    "assignee",
+    "external_uri",
+    "resolution",
+    "author",
+    "symbol_refs",
+    "tags",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "claimed_at",
+    "first_claimed_at",
+)
+_TASK_DATETIME_FIELDS = (
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "claimed_at",
+    "first_claimed_at",
+)
+
+
+def _split_task_collisions(
+    winners: list[dict], target_nodes: dict[tuple[str, str], dict]
+) -> tuple[list[dict], list[dict]]:
+    """``(task collisions, the other winners)``.
+
+    A collision is a winning Task row the target already holds. It is the only
+    kind of winner that can overwrite a claim, because a task the target does
+    not have yet has nobody holding it there. Collisions are written by
+    :func:`_write_task_batch`; every other winner is loaded as before.
+    """
+    collisions: list[dict] = []
+    rest: list[dict] = []
+    for row in winners:
+        key = (row.get("type"), (row.get("data") or {}).get("slug"))
+        if key[0] == "Task" and key in target_nodes:
+            collisions.append(row)
+        else:
+            rest.append(row)
+    return collisions, rest
+
+
+def _task_kept_by(source: dict, exported: dict, current: dict) -> str | None:
+    """Why the target's task must be kept over ``source``, or ``None`` to write it.
+
+    ``exported`` is the target row reconciliation compared ``source`` against;
+    ``current`` is the same row as the fenced read just returned it.
+    """
+    for field in _CLAIM_FIELDS:
+        before, after = exported.get(field), current.get(field)
+        if field == "claimed_at":
+            # An export and a read can spell one instant differently (a 0.9 or
+            # 0.10 export writes epoch millis), so they compare parsed.
+            before, after = _parse_ts(before), _parse_ts(after)
+        if before != after:
+            return "claim_changed"
+    src_dt = _parse_ts(_reconcile_timestamp("Task", source))
+    dst_dt = _parse_ts(_reconcile_timestamp("Task", current))
+    if not _source_wins(src_dt, dst_dt):
+        return "target_newer"
+    return None
+
+
+def _merge_task_params(data: dict) -> dict:
+    """``merge_task``'s parameters from an exported Task row.
+
+    A 0.9 or 0.10 export spells a ``DateTime`` as epoch milliseconds, which a
+    mutation parameter does not take, so each one is written back as ISO-8601
+    at the millisecond precision the store holds.
+    """
+    params = {field: data.get(field) for field in _MERGE_TASK_FIELDS}
+    for field in _TASK_DATETIME_FIELDS:
+        parsed = _parse_ts(params[field])
+        params[field] = (
+            parsed.isoformat(timespec="milliseconds") + "Z" if parsed else None
+        )
+    return params
+
+
+def _task_batches(collisions: list[dict]) -> list[list[dict]]:
+    """``collisions`` in batches of one fenced commit each, bounded by
+    :mod:`witan.merge_bounds`."""
+    return merge_bounds.split_by_task_budget(collisions)
+
+
+def _write_task_batch(
+    store: OmnigraphClient,
+    batch: list[dict],
+    target_nodes: dict[tuple[str, str], dict],
+) -> dict[str, str]:
+    """Write one batch of winning Task rows over the target's copies, fenced.
+
+    Returns ``{slug: reason}`` for each task in it left as the target has it.
+
+    ★ NOT A LOAD. A merge exports the target, reconciles, then writes, and on a
+    served target nothing stops a ``task_claim`` landing in between: its write
+    lock is a no-op there, because the other writers are on other hosts. A
+    winning source row loaded after that claim puts back the source's status,
+    assignee and ``claimed_at``, and a second claimer is then granted the task.
+    ``omnigraph load`` takes no precondition (0.13 has no ``--if-commit`` on
+    it), so collisions are written as ``merge_task`` mutations instead, fenced
+    the way ``_update_task`` fences: the batch re-reads its tasks, decides
+    again on that read, and states the read's commit as the write's
+    precondition. A refused batch re-reads and decides again, through the same
+    :func:`_retry_fenced`.
+
+    The fresh read keeps the target's row when its claim fields moved since
+    the export (``claim_changed``), whatever the timestamps say, and otherwise
+    re-runs newest-record-wins against it (``target_newer`` when the target
+    now wins).
+    """
+    return _retry_fenced(
+        functools.partial(_write_task_batch_once, store, batch, target_nodes),
+        f"the merge stopped at a batch of {len(batch)} task(s) the target already "
+        f"holds: {_TASK_WRITE_MAX_ATTEMPTS} attempts each found the graph "
+        "changed since they were read, and none of that batch was written. "
+        "Re-running the merge is safe; rows that already landed are kept, not "
+        "duplicated.",
+    )
+
+
+def _write_task_batch_once(
+    store: OmnigraphClient,
+    batch: list[dict],
+    target_nodes: dict[tuple[str, str], dict],
+) -> dict[str, str]:
+    """One fenced attempt of :func:`_write_task_batch`."""
+    slugs = [row["data"]["slug"] for row in batch]
+    rows, read_commit = store.read_with_commit(
+        "read.gq", "get_tasks_by_slugs", {"slugs": slugs}
+    )
+    read_commit = _fence_on(read_commit, f"{len(slugs)} merged task(s)")
+    current = {row["slug"]: row for row in rows}
+    kept: dict[str, str] = {}
+    steps: list[_Step] = []
+    for row in batch:
+        data = row["data"]
+        slug = data["slug"]
+        exported = target_nodes[("Task", slug)]["data"]
+        # Every slug here was in the export, and a Task is never deleted
+        # (mutations.gq has no `delete Task`), so the read has each one.
+        reason = _task_kept_by(data, exported, current[slug])
+        if reason is None:
+            steps.append(("mutations.gq", "merge_task", _merge_task_params(data)))
+        else:
+            kept[slug] = reason
+    store.change_many(steps, surface_conflict=True, if_commit=read_commit)
+    return kept
+
+
+class MergeBatchTooLarge(RuntimeError, Refusal):
+    """A ``store_merge`` batch whose collisions need more than one fenced commit.
+
+    Refused before anything is written, because one call may spend only one
+    fenced commit inside the gateway's 120s (:mod:`witan.merge_bounds`). A
+    client from before the split sends 2 MiB batches, so it reaches this
+    whenever one batch carries newer copies of more than 32 tasks the
+    deployment already holds, or more than 96 KiB of them.
+    """
+
+    # Built from a count and this module's constants.
+    log_safe_message = True
+
+    def __init__(self, collisions: int) -> None:
+        super().__init__(
+            f"store_merge refused this batch: it would overwrite {collisions} "
+            "tasks the graph already holds, and one call writes at most "
+            f"{merge_bounds.TASKS_PER_COMMIT} (and "
+            f"{merge_bounds.TASK_BYTES_PER_COMMIT // 1024} KiB of them). Nothing "
+            "was written. witan-council "
+            f"{merge_bounds.SPLITTING_CLIENT_VERSION} and later split "
+            "`witan migrate merge` batches to fit: upgrade with `uv tool "
+            "upgrade ol-agent-kit` (or `uv tool upgrade witan-council`) and "
+            "re-run the merge."
+        )
+
+
+def _keep_target(
+    decisions: list[dict], collisions: list[dict], kept: dict[str, str]
+) -> list[dict]:
+    """Mark the tasks a fenced write kept as ``kept-target`` in ``decisions``
+    (in place, naming why in ``fenced``), and return the collisions written."""
+    for decision in decisions:
+        if decision["type"] == "Task" and decision["slug"] in kept:
+            decision["decision"] = "kept-target"
+            decision["fenced"] = kept[decision["slug"]]
+    return [row for row in collisions if row["data"]["slug"] not in kept]
 
 
 def _store_client(
@@ -2707,7 +3032,8 @@ def merge_store(
     # writes to that graph for the whole reconcile, which can be minutes. That
     # is the same bargain a local target has always made, and it is the point:
     # a writer landing mid-reconcile is what makes the decisions stale. A served
-    # target still takes no lock, because its other writers are on other hosts.
+    # target still takes no lock, because its other writers are on other hosts,
+    # which is why Task collisions are written fenced (`_write_task_batch`).
     with (
         target_client.hold_write_lock(),
         tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp,
@@ -2748,8 +3074,9 @@ def merge_store(
                 **counts,
             }
 
-        to_load = winners + edge_winners + source_passthrough
-        if not to_load:
+        collisions, loadable = _split_task_collisions(winners, target_nodes)
+        to_load = loadable + edge_winners + source_passthrough
+        if not to_load and not collisions:
             return {
                 "merged": True,
                 "target": target,
@@ -2779,47 +3106,63 @@ def merge_store(
         # makes a re-sent row lose to its own already-applied copy, which
         # is the same "repeatable by construction" property this function's
         # docstring already promises.
+        #
+        # Task collisions go after the load, as fenced mutation batches
+        # (`_write_task_batch`), and count as batches of the merge.
         outputs = []
         loaded = 0
+        applied = 0
+        kept: dict[str, str] = {}
         batches = list(chunking.chunk_records(to_load))
-        for index, batch in enumerate(batches):
-            try:
+        task_batches = _task_batches(collisions)
+        try:
+            for batch in batches:
                 outputs.append(target_client.load_batch(batch, "merge"))
-            except BaseException as exc:
-                # The batches before this one ARE applied — the comment
-                # above says so — and that is precisely what a caller
-                # cannot see from an exception. Attaching how far the merge
-                # got is what lets the CLI report an incomplete merge as
-                # incomplete instead of only as failed.
-                merge_report.attach_partial(
-                    exc,
-                    {
-                        "target": target,
-                        "batches": len(batches),
-                        "batches_applied": index,
-                        # See the remote path's copy: an interrupt is the
-                        # one failure here with no message of its own.
-                        "interrupted": isinstance(exc, KeyboardInterrupt),
-                        "rows_loaded": loaded,
-                        **accounting,
-                        **counts,
-                    },
-                )
-                raise
-            loaded += len(batch)
+                loaded += len(batch)
+                applied += 1
+            for batch in task_batches:
+                batch_kept = _write_task_batch(target_client, batch, target_nodes)
+                kept |= batch_kept
+                loaded += len(batch) - len(batch_kept)
+                applied += 1
+        except BaseException as exc:
+            # The batches before this one ARE applied — the comment
+            # above says so — and that is precisely what a caller
+            # cannot see from an exception. Attaching how far the merge
+            # got is what lets the CLI report an incomplete merge as
+            # incomplete instead of only as failed.
+            _keep_target(decisions, collisions, kept)
+            merge_report.attach_partial(
+                exc,
+                {
+                    "target": target,
+                    "batches": len(batches) + len(task_batches),
+                    "batches_applied": applied,
+                    # See the remote path's copy: an interrupt is the
+                    # one failure here with no message of its own.
+                    "interrupted": isinstance(exc, KeyboardInterrupt),
+                    "rows_loaded": loaded,
+                    **accounting,
+                    **_decision_counts(decisions),
+                },
+            )
+            raise
         load_out = "\n".join(out.strip() for out in outputs if out.strip())
 
+    written = _keep_target(decisions, collisions, kept)
     return {
         "merged": True,
         "target": target,
         "decisions": decisions,
-        "rows_loaded": len(to_load),
-        "batches": len(batches),
-        "batches_applied": len(batches),
+        "rows_loaded": loaded,
+        "batches": applied,
+        "batches_applied": applied,
         "output": load_out.strip(),
-        "watermark": watermark,
+        "watermark": _next_watermark(
+            None, source_nodes, target_nodes, loadable + written
+        ),
         **accounting,
-        **counts,
+        **_decision_counts(decisions),
     }
 
 
@@ -2882,6 +3225,13 @@ def store_merge(
     holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
     are reconciled on ``(edge, from, to)`` by the same ``_reconcile_edges``.
 
+    A winning Task row this graph already holds is not loaded. It is written by
+    a mutation fenced on a fresh read of that task (``_write_task_batch``), so
+    a claim, release or close that lands after the export keeps the target's
+    row (its decision becomes ``kept-target`` with a ``fenced`` reason) rather
+    than being overwritten by the source. That write is a second commit after
+    the load; see the batching note below.
+
     Parameters
     ----------
     rows:
@@ -2918,11 +3268,22 @@ def store_merge(
         batch.
 
     **Batching is the caller's job, and the caller must send every node before
-    any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
-    independently, so a failure part-way leaves earlier ones applied — which is
-    safe to recover from by simply re-running, since reconciliation makes a
-    re-sent row lose to its own already-applied copy. It is not, however,
-    atomic, and a caller needing all-or-nothing has to arrange that itself.
+    any edge** (``witan_core.chunking.chunk_records`` does both), **with no more
+    Task rows than one fenced commit takes**
+    (``witan.merge_bounds.split_by_task_budget``). A batch whose collisions
+    would need more than one fenced commit is refused with
+    ``MergeBatchTooLarge`` before anything is written, so one call stays
+    inside the gateway's request budget. A dry run is refused the same way,
+    so it predicts the real run.
+
+    One call is up to two commits: the load, then the fenced write of the
+    tasks this graph already holds. A call that fails after its load (the
+    fenced write ran out of attempts with ``WriteContention``, say) leaves the
+    load applied and returns no result. Batches commit independently too, so
+    a failure part-way leaves earlier ones applied. Both are safe to recover
+    from by re-running, since reconciliation makes a re-sent row lose to its
+    own already-applied copy. It is not, however, atomic, and a caller needing
+    all-or-nothing has to arrange that itself.
 
     Returns this batch's per-row ``decisions`` plus ``added``/``updated``/
     ``kept_target``/``diverged`` counts, ``rows_loaded``, and the running
@@ -2990,35 +3351,49 @@ def store_merge(
     # stamped row that loses reconciliation is discarded with its new author,
     # so the rewrite count would report `authorship_claimed > 0` for a batch
     # that left every stored author exactly as it found it.
-    claimed = sum(
-        1
-        for row in winners
-        if (row.get("type"), (row.get("data") or {}).get("slug")) in stamped_keys
-    )
+    def claimed(written: list[dict]) -> int:
+        return sum(
+            1
+            for row in written
+            if (row.get("type"), (row.get("data") or {}).get("slug")) in stamped_keys
+        )
+
+    # Checked before the dry-run return, so a dry run predicts the refusal the
+    # real run would get. Reporting it as a key in the dry-run result instead
+    # would reach nobody: the only callers that can hit it are clients older
+    # than the split, and their proxy drops keys it does not know.
+    collisions, loadable = _split_task_collisions(winners, target_nodes)
+    task_batches = _task_batches(collisions)
+    if len(task_batches) > 1:
+        raise MergeBatchTooLarge(len(collisions))
 
     if dry_run:
         return {
             "dry_run": True,
             "decisions": decisions,
             "rows_loaded": 0,
-            "authorship_claimed": claimed,
+            "authorship_claimed": claimed(winners),
             "watermark": next_watermark,
             **accounting,
             **counts,
         }
 
-    to_load = winners + edge_winners + source_passthrough
-    if to_load:
-        with _data_tier_outage_reads_as_retryable():
+    to_load = loadable + edge_winners + source_passthrough
+    kept: dict[str, str] = {}
+    with _data_tier_outage_reads_as_retryable():
+        if to_load:
             client.load_batch(to_load, "merge")
+        for batch in task_batches:
+            kept |= _write_task_batch(client, batch, target_nodes)
+    written = loadable + _keep_target(decisions, collisions, kept)
     return {
         "dry_run": False,
         "decisions": decisions,
-        "rows_loaded": len(to_load),
-        "authorship_claimed": claimed,
-        "watermark": next_watermark,
+        "rows_loaded": len(to_load) + len(collisions) - len(kept),
+        "authorship_claimed": claimed(written),
+        "watermark": _next_watermark(watermark, source_nodes, target_nodes, written),
         **accounting,
-        **counts,
+        **_decision_counts(decisions),
     }
 
 
@@ -4558,41 +4933,6 @@ def _code_branch_steps(
     return steps
 
 
-def _track_code_branch(
-    repo: str | None,
-    *,
-    branch: str | None = None,
-    task_slug: str | None = None,
-    project_slug: str | None = None,
-) -> None:
-    """Issue :func:`_code_branch_steps` as one standalone commit.
-
-    For callers that cannot fold the steps into their own write. ``task_claim``
-    is the case: its claim is a compare-and-swap with a post-write verification
-    read, and the branch metadata must only be recorded once the claim is known
-    won — so it cannot ride along, and retrying the claim must not re-apply it.
-
-    Still never raises, for the same reason the step builder doesn't: this is
-    metadata beside the tool's purpose. One commit now instead of up to three.
-    """
-    steps = _code_branch_steps(
-        repo, branch=branch, task_slug=task_slug, project_slug=project_slug
-    )
-    if not steps:
-        return
-    try:
-        client.change_many(steps)
-    except Exception as exc:  # coordination metadata, never fatal
-        logger.warning(
-            "witan.code_branch.tracking_failed",
-            repo=repo,
-            task=task_slug,
-            project=project_slug,
-            error=str(exc),
-            exc_info=True,
-        )
-
-
 # ── Workflow Tracking Tools ───────────────────────────────────────
 
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
@@ -4652,7 +4992,7 @@ def _active_session_slug() -> str | None:
 
     Reads the handle stored locally under the agent session id
     (``session_state.current_session_id``: ``$CLAUDE_SESSION_ID``, else
-    ``$PI_SESSION_ID``). Fails soft on
+    ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``). Fails soft on
     any missing-env/read/parse error — provenance is best-effort and must never
     block a memory write.
 
@@ -5995,8 +6335,9 @@ def workflow_session_start(
     extension (Pi) provides the ``project_slug``; ``session_id`` should be the
     session id — ``$CLAUDE_SESSION_ID`` on Claude Code, ``$PI_SESSION_ID`` on
     Pi (read it with ``echo $PI_SESSION_ID`` in the bash tool; it is what the Pi
-    workflow extension's shutdown auto-close looks the handle up by), or any
-    stable unique string for the session otherwise.
+    workflow extension's shutdown auto-close looks the handle up by),
+    ``$CODEX_SESSION_ID`` on Codex (read it the same way; Codex hands the Stop
+    hook that id), or any stable unique string for the session otherwise.
 
     Returns an explicit session handle (``session_slug``, ``project_slug``,
     ``phase``, ``session_id``, ``started_at``). Hold on to it and pass
@@ -6383,19 +6724,22 @@ def _task_statuses(slugs: Iterable[str]) -> dict[str, str | None]:
     return {r["slug"]: r.get("status") for r in rows}
 
 
-def _unblock_dependents(repo: str | None) -> None:
+def _unblock_dependents() -> list[str]:
     """Flip ``blocked`` tasks back to ``open`` once all their blockers are closed.
 
-    Called after a task closes so ``task_list`` status stays truthful. Scoped to the
-    closed task's repo (blockers and dependents share a repo in practice).
+    Called after a task closes, so ``task_list`` status stays truthful, and
+    before ``task_claim`` refuses a ``blocked`` task. Sweeps every repo, because
+    a dependent often lives in a different repo from its blocker.
+
+    Returns the slugs it could not sweep because their fenced write exhausted
+    its retries. One dependent's contention must not abort the rest, and must
+    not reach ``task_close``'s caller as an error: the close itself has already
+    committed by the time this runs. A dependent left ``blocked`` with every
+    blocker closed is still ready (``readiness.status_pickable``), and the next
+    sweep (any close, or a claim of that task) retries it.
     """
-    rows = (
-        client.read("read.gq", "list_tasks_by_repo", {"repo": repo, "status": None})
-        if repo
-        else client.read("read.gq", "list_tasks_uncapped", {"status": None})
-    )
-    status_by_slug = {r["slug"]: r.get("status") for r in rows}
-    blocked = [r for r in rows if r.get("status") == "blocked"]
+    blocked = client.read("read.gq", "list_blocked_tasks", {})
+    status_by_slug = {r["slug"]: r.get("status") for r in blocked}
     status_by_slug.update(
         _task_statuses(
             b
@@ -6405,58 +6749,91 @@ def _unblock_dependents(repo: str | None) -> None:
         )
     )
 
+    def reopen_if_unblocked(current: dict) -> dict | None:
+        # Decided again on the row the write is fenced on: by now the task may
+        # have been closed, claimed or re-blocked by someone else.
+        if current.get("status") != "blocked":
+            return None
+        blockers = current.get("blocked_by") or []
+        statuses = _task_statuses(blockers) if blockers else {}
+        if all(statuses.get(b, "closed") == "closed" for b in blockers):
+            return {"status": "open"}
+        return None
+
     # A blocker that no longer exists does not hold anything back.
+    unswept: list[str] = []
     for r in blocked:
         blockers = r.get("blocked_by") or []
         if all(status_by_slug.get(b, "closed") == "closed" for b in blockers):
-            _update_task(r["slug"], {"status": "open"})
+            try:
+                _update_task(r["slug"], reopen_if_unblocked)
+            except WriteContention:
+                logger.warning(
+                    "witan.unblock_dependents.contention", task_slug=r["slug"]
+                )
+                unswept.append(r["slug"])
+    return unswept
+
+
+def _with_unswept_warning(task: dict, unswept: list[str]) -> dict:
+    """``task`` plus a warning naming the dependents a sweep could not reopen."""
+    if not unswept:
+        return task
+    return {
+        **task,
+        "warning": (
+            f"{task['slug']} is closed, but {len(unswept)} dependent(s) are still "
+            f"marked blocked because concurrent writes refused the update: "
+            f"{', '.join(unswept)}. Every blocker of each is closed, so task_ready "
+            "already lists them; the next close, or a claim of one "
+            "of them, reopens it."
+        ),
+    }
+
+
+#: A task row change, or a function computing one from the row the write is
+#: fenced on (``None`` for "nothing to change").
+_TaskChanges = dict | Callable[[dict], dict | None]
+_ExtraSteps = list[_Step] | Callable[[], list[_Step]]
 
 
 def _update_task(
     slug: str,
-    changes: dict,
+    changes: _TaskChanges,
     *,
-    surface_conflict: bool = False,
-    conditional: bool = False,
-    extra_steps: list[_Step] | None = None,
+    extra_steps: _ExtraSteps | None = None,
     default_if_missing: dict[str, Callable[[], object]] | None = None,
-) -> tuple[dict | None, str | None]:
+    require: Callable[[dict], None] | None = None,
+) -> dict | None:
     """Read a task, merge ``changes`` over its mutable fields, write it back.
 
     Mirrors the read-merge-write pattern documented for ``update_memory`` so we
-    avoid per-field update queries. Returns ``(updated_node, new_commit)`` —
-    the node is ``None`` when the task did not exist (nothing was written).
-    ``new_commit`` is the ``graph_commit_id`` THIS write produced. Non-``None``
-    for any single-step write over HTTP whenever the server supplies one —
-    regardless of ``conditional`` — since ``change()`` reads it straight out
-    of the mutate response; ``None`` only for the CLI transport (never
-    supplies one), a server predating omnigraph #470, or ``extra_steps``
-    (routed through ``change_many``, which does not return a commit). See
-    :meth:`change`. ``task_claim`` uses this as the floor its post-write
-    verification's own re-read must catch up to before being trusted — see
-    the call site. Every caller before ``task_claim`` ignored the row too, so
-    this widened almost nobody's call site — see the tuple-unpack at each of
-    the two callers that actually use the row.
+    avoid per-field update queries. Returns the updated node, or ``None`` when
+    the task did not exist (nothing was written).
 
-    ``surface_conflict`` propagates to the write so a compare-and-swap caller
-    (``task_claim``) sees an :class:`~witan.graph.OmnigraphConflict` on a lost
-    optimistic-concurrency race instead of the write being silently retried.
+    ★ EVERY WRITE IS FENCED ON THE READ IT MERGED FROM. ``update_task`` sets
+    the whole row, so a write merged from a stale read puts the stale values
+    of every field back, not only the ones the caller changed: a description
+    edit that read the row before a claim landed would reopen the task and
+    clear the holder. The write therefore states the read's
+    ``graph_commit_id`` as its precondition (omnigraph's
+    ``/mutate/if-graph-commit``, the CLI's ``--if-commit``) and is refused,
+    having changed nothing, if anything committed since. A refusal re-reads and
+    merges again, up to ``_TASK_WRITE_MAX_ATTEMPTS`` times, then raises
+    :class:`~witan_core.omnigraph.WriteContention`. Both transports report the
+    read's commit on omnigraph 0.13, so a read without one raises rather than
+    sending the write unconditionally.
 
-    ``conditional`` makes the write a real compare-and-swap: it is applied only
-    while the branch head this function READ is still current, and otherwise
-    refused terminally, having changed nothing (omnigraph #470). Combined with
-    ``surface_conflict`` the refusal arrives as ``OmnigraphConflict``, which is
-    what turns "I lost" from an inference into a fact.
+    ``changes`` may be a function of the row. A caller whose change depends on
+    the row's current values (``task_link`` appending to ``blocked_by``)
+    passes one, so the decision is made again on each attempt's read rather
+    than once on a read the fence does not cover. Returning ``None`` changes
+    nothing; ``extra_steps`` are still written, fenced the same way.
 
-    ★ IT DEGRADES TO THE OLD BEHAVIOUR RATHER THAN FAILING, and that is a
-    deliberate choice worth knowing about. A server without #470 — or the CLI
-    path, which prints rows and discards the envelope — supplies no
-    ``graph_commit_id``, so there is no precondition to state and the write goes
-    out unconditional. That is exactly today's best-effort claim, and
-    ``task_claim``'s post-write verification still catches a clobber, so the
-    fallback is safe rather than silently broken. It is NOT equivalent, though:
-    losing becomes an inference again. Anything depending on the stronger
-    guarantee must check that it is actually getting it.
+    ``require`` is called with the row each attempt read, before anything is
+    written, and raises to refuse the write. It decides on the same snapshot
+    the precondition names, so a write that then succeeds proves the row still
+    looked that way when it landed. ``task_claim`` checks claimability here.
 
     ``extra_steps`` ride in the SAME commit as the update — for a caller whose
     change is one logical edit spanning a row and an edge. ``task_update`` with
@@ -6466,37 +6843,68 @@ def _update_task(
     half-applied now, which is the more important half: the edge and the
     ``parent_slug`` field are two encodings of one fact.
 
+    ``extra_steps`` may also be a function of no arguments, called at the
+    start of each attempt, BEFORE the fenced read. ``task_claim`` passes one:
+    its CodeBranch steps are built from reads (insert vs. touch, whether the
+    WorksOn edge exists). Those reads stay outside the fence window on
+    purpose. The precondition is the whole graph head, so every read between
+    the fenced read and the commit widens the interval in which any write
+    anywhere refuses the attempt. The cost is that the steps can be one
+    commit staler than the row: a rival that creates the same CodeBranch in
+    between makes our ``insert_code_branch`` land on an existing key, which
+    omnigraph 0.13 upserts (``created_at`` moves by that gap), and a WorksOn
+    re-insert upserts the same way. A refused attempt rebuilds them, so the
+    reads are repeated only when the fence refuses.
+
     A missing task still writes NOTHING, extras included — the early return
     below happens before any step is issued.
 
-    ``default_if_missing`` fills a field ONLY from the read this call itself
-    just took, never from a value a caller precomputed earlier. That
-    distinction is the whole point: ``task_update``'s own gap-fill for
-    ``assignee`` used to read the row, decide off THAT snapshot, then hand
-    the decided value back here as an ordinary ``changes`` entry — a second,
-    avoidable read-then-decide sitting in front of the read-then-decide this
-    function already does, doubling the window in which something else
-    (``task_claim``, most obviously) could set the field for real between
-    the two reads. `merged` below is built from `current`, read moments
-    before the write goes out, so resolving here — not before calling this
-    function — closes that avoidable half of the gap. It does NOT make the
-    write itself compare-and-swap: an unconditional ``task_update`` call can
-    still race its own write the same way every other field here already
-    can (see the CAS paragraph above); this only removes the extra, earlier
-    window this helper does not need to have.
+    ``default_if_missing`` fills a field ONLY from the read this attempt just
+    took, never from a value a caller precomputed earlier: ``task_update``'s
+    ``assignee`` gap-fill must not overwrite a holder that a ``task_claim``
+    set after the caller decided there was none.
     """
-    if conditional and extra_steps:
-        # Refused rather than silently downgraded. `change_many` composes the
-        # batch into one mutate, and pairing a whole-branch precondition with a
-        # multi-step commit needs its own thought about what a partial refusal
-        # means — nobody needs it yet, so the combination is an error instead of
-        # a quietly unconditional write.
-        msg = "conditional=True does not support extra_steps"
-        raise ValueError(msg)
+    return _retry_fenced(
+        lambda: _update_task_once(
+            slug,
+            changes,
+            extra_steps=extra_steps,
+            default_if_missing=default_if_missing,
+            require=require,
+        ),
+        f"{slug} was not updated: {_TASK_WRITE_MAX_ATTEMPTS} attempts each found "
+        "the graph changed since the task was read. Nothing was written; retry "
+        "once the other writers are done.",
+    )
+
+
+def _update_task_once(
+    slug: str,
+    changes: _TaskChanges,
+    *,
+    extra_steps: _ExtraSteps | None,
+    default_if_missing: dict[str, Callable[[], object]] | None,
+    require: Callable[[dict], None] | None,
+) -> dict | None:
+    """One fenced attempt of :func:`_update_task`. Raises ``OmnigraphConflict``
+    when the store refuses the precondition or another writer moved the head."""
+    if callable(extra_steps):
+        extra_steps = extra_steps()
     rows, read_commit = client.read_with_commit("read.gq", "get_task", {"slug": slug})
     if not rows:
-        return None, None
+        return None
     current = rows[0]
+    read_commit = _fence_on(read_commit, slug)
+    if require is not None:
+        require(current)
+    if callable(changes):
+        changes = changes(current)
+    if changes is None:
+        if extra_steps:
+            client.change_many(
+                extra_steps, surface_conflict=True, if_commit=read_commit
+            )
+        return current
     if default_if_missing:
         for field, factory in default_if_missing.items():
             if field not in changes and not current.get(field):
@@ -6518,12 +6926,14 @@ def _update_task(
 
     if merged_status != "closed":
         merged_closed_at = None
+    elif current.get("status") == "closed" and current.get("closed_at"):
+        # ALREADY closed, so neither an unrelated edit nor a retried
+        # `task_close` (whose first attempt landed but whose caller saw an
+        # error) may re-stamp it.
+        merged_closed_at = current.get("closed_at")
     elif changes.get("closed_at"):
         # `task_close` naming its own timestamp.
         merged_closed_at = changes["closed_at"]
-    elif current.get("status") == "closed":
-        # ALREADY closed, so an unrelated edit must not re-stamp it.
-        merged_closed_at = current.get("closed_at")
     else:
         # ARRIVING at closed. The current value is not carried over even when
         # there is one: a row that was not closed but carries a `closed_at` is
@@ -6578,45 +6988,17 @@ def _update_task(
         "updated_at": now_iso(),
     }
     update: _Step = ("mutations.gq", "update_task", merged)
-    new_commit: str | None = None
-    if extra_steps:
-        client.change_many([update, *extra_steps], surface_conflict=surface_conflict)
-    else:
-        # Single-statement `change` on the bare path: the compare-and-swap
-        # caller goes through here, and keeping its write exactly as it was
-        # keeps `surface_conflict`'s behaviour untouched.
-        #
-        # ★ THE PRECONDITION IS THE COMMIT FROM *THIS* FUNCTION'S OWN READ, a
-        # few lines up — not one the caller supplies. That is the invariant
-        # that makes the compare-and-swap mean anything: `merged` is built from
-        # THAT snapshot, so demanding the head has not moved since is exactly
-        # "nothing changed under the values I am about to write back". A token
-        # from any earlier read would fence the wrong interval.
-        if conditional:
-            # ★ THE OTHER HALF OF THE CLAIM TRACE. Pairing this with
-            # `witan.task_claim.verify` is what makes the double-claim
-            # investigation possible at all: for each racer you get the commit
-            # it FENCED against and the commit its verification READ was served
-            # at. A racer that wrote against a stale head, or verified at one,
-            # is then visible rather than hypothesised.
-            #
-            # `read_commit is None` is itself a finding worth seeing — it means
-            # the tier supplied no graph_commit_id and the write went out
-            # UNCONDITIONAL, which is the documented degraded path and would
-            # explain a lost mutual exclusion without any staleness at all.
-            logger.info(
-                "witan.task_update.conditional",
-                task_slug=slug,
-                assignee=changes.get("assignee"),
-                if_graph_commit_id=read_commit,
-                unconditional_fallback=read_commit is None,
-            )
-        new_commit = client.change(
-            *update,
-            surface_conflict=surface_conflict,
-            if_commit=read_commit if conditional else None,
-        )
-    return client.read("read.gq", "get_task", {"slug": slug})[0], new_commit
+    # ★ THE PRECONDITION IS THE COMMIT FROM THIS ATTEMPT'S OWN READ, not one the
+    # caller supplies. `merged` is built from THAT snapshot, so demanding the
+    # head has not moved since is exactly "nothing changed under the values I
+    # am about to write back". A token from any earlier read would fence the
+    # wrong interval. `surface_conflict` turns a refusal into the
+    # `OmnigraphConflict` `_update_task` re-reads on, instead of a blind retry
+    # of a merge that is already stale.
+    client.change_many(
+        [update, *(extra_steps or [])], surface_conflict=True, if_commit=read_commit
+    )
+    return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
 @_tool
@@ -7218,6 +7600,22 @@ def task_update(
     lease and refuses if someone else holds it); to close a task prefer
     ``task_close``; to add dependencies use ``task_link``.
 
+    The write is fenced on the read it merged from: it applies only while the
+    graph is unchanged since this call read the task, and a refusal re-reads
+    and merges again, up to five attempts. That is what stops an edit from
+    reverting a claim that landed after its read. The cost is availability.
+    The fence is the whole branch head, so writes anywhere on the graph refuse
+    it. Over the 7 days to 2026-10-16 the production graph peaked at about 9
+    write-tool calls a minute (5-minute rate) and averaged 0.15, with p95 tool
+    durations near 5s for ``task_update`` and 10s or more for ``task_close`` and
+    ``task_claim``. At that peak one attempt has roughly an even chance of
+    being refused and all five a few percent; off-peak it is negligible.
+    Running out raises ``WriteContention`` with nothing written, and retrying
+    is safe. (A row-scoped guard, a mutation matching on ``slug`` and
+    ``updated_at``, would avoid refusals from unrelated writes; it is
+    unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
+    ``task_close``.
+
     Parameters
     ----------
     slug:
@@ -7362,7 +7760,7 @@ def task_update(
             ("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
         )
 
-    updated, _new_commit = _update_task(
+    updated = _update_task(
         slug,
         changes,
         extra_steps=extra_steps,
@@ -7371,7 +7769,7 @@ def task_update(
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
-        _unblock_dependents(updated.get("repo"))
+        updated = _with_unswept_warning(updated, _unblock_dependents())
 
     return updated
 
@@ -7384,6 +7782,17 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
     Closing a blocker is what unblocks its dependents — they become visible to
     ``task_ready`` once every blocker is closed.
 
+    The close is fenced like ``task_update`` and has the same trade: under
+    write load elsewhere on the graph it can run out of attempts and raise
+    ``WriteContention`` with nothing written (see ``task_update`` for the
+    production rates as of 2026-10-16). Retrying is safe, and a retry of a
+    close that did land keeps its original ``closed_at``. Reopening each
+    dependent is a separate fenced write after the close has committed, so one
+    that runs out of attempts does not fail the call: the closed task comes
+    back with a ``warning`` naming the dependents still marked ``blocked``.
+    ``task_ready`` lists them anyway, since every blocker is closed, and the
+    next close anywhere or a claim of one of them reopens it.
+
     Parameters
     ----------
     slug:
@@ -7393,12 +7802,12 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
         later reader sees when asking why the task ended, and closing without
         one leaves that unanswerable.
     """
-    closed, _new_commit = _update_task(
+    closed = _update_task(
         slug,
         {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
     )
     if closed:
-        _unblock_dependents(closed.get("repo"))
+        closed = _with_unswept_warning(closed, _unblock_dependents())
     return closed
 
 
@@ -7437,14 +7846,20 @@ async def task_claim(
     no way to supply the id itself, so refusing would break every caller that
     cannot send one.
 
-    BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
-    the claim write cannot be made atomic at the store. Instead we surface the
-    Lance optimistic-concurrency conflict (rather than masking it with a retry)
-    and re-read + post-write-verify ownership, so a lost race reports
-    ``{"claimed": false, "reason": "lost_race", "held_by": …}`` instead of
-    silently clobbering the winner. The lease is the backstop for the residual
-    simultaneous-post-read case. True atomic CAS awaits an upstream omnigraph
-    conditional-write feature — see docs/adr/0003.
+    The claim is a compare-and-swap. It is written only while the branch head
+    is still the one the task was read at, and that read is where
+    claimability is decided, so a granted claim means nobody else claimed,
+    closed or blocked the task first. A lost race reports ``{"claimed": false,
+    "reason": "lost_race", "held_by": …}``. Every other task write is fenced
+    the same way and merged from the row it read, so an edit that read the
+    task before the claim is refused and re-merged rather than reverting it.
+    The holder can still change afterwards by a write meant to change it:
+    ``force``, a ``task_update`` that sets ``assignee`` or ``status``, a
+    ``task_release --force``, or a claim taken once the lease lapses. An error
+    whose outcome is unknown (a lost response, a client timeout) may still have
+    claimed the task, because the server finishes an admitted write after its
+    caller disconnects, so re-read with ``task_get`` before retrying. See
+    docs/adr/0003.
 
     Parameters
     ----------
@@ -7464,9 +7879,11 @@ async def task_claim(
         state), and without it every one of your concurrent sessions claims
         under the same name. The CLI's remote proxy fills it in automatically;
         under local stdio the server falls back to its own
-        ``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``), inherited from the
-        agent. Pi does not export ``$PI_SESSION_ID`` to the MCP servers it
-        launches, so under Pi pass the value from ``echo $PI_SESSION_ID``.
+        ``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``, else
+        ``$CODEX_SESSION_ID``), inherited from the agent. Pi and Codex do not
+        export their ids to the MCP servers they launch, so under Pi pass the
+        value from ``echo $PI_SESSION_ID``, and under Codex from
+        ``echo $CODEX_SESSION_ID``.
     force:
         Steal the task even if another holder's lease is still valid.
     repo:
@@ -7480,11 +7897,10 @@ async def task_claim(
         automatically; under local stdio they default to the server's own
         working directory, which is the agent's.
     """
-    # Best-effort CAS, not a hard lock: omnigraph has no conditional-write, so we
-    # surface OCC conflicts and post-write-verify ownership rather than trusting
-    # last-write-wins (see docs/adr/0003 and the claim loop below). On success
-    # also upserts a CodeBranch for the caller's repo+branch and links it
-    # WorksOn this task (best-effort).
+    # This first read only decides whether to refuse or offer a steal; the
+    # claim loop below re-decides on the row its conditional write is fenced
+    # on (see docs/adr/0003). The claim also upserts a CodeBranch for the
+    # caller's repo+branch and links it WorksOn this task, in the same commit.
     holder = _claim_holder(assignee, session_id)
     rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
     if not rows:
@@ -7496,8 +7912,18 @@ async def task_claim(
     if status == "blocked":
         # A task can be stale-blocked (blocked_by is empty or all closed). Run the
         # unblock sweep before rejecting so stale status doesn't permanently prevent
-        # claiming.
-        await _offload(_unblock_dependents, task.get("repo"))
+        # claiming. Contention on another dependent is that dependent's problem;
+        # contention on this one means it is still blocked only because the
+        # reopen was refused, which is load, not a reason to refuse the claim.
+        unswept = await _offload(_unblock_dependents)
+        if slug in unswept:
+            return _claim_contention(
+                slug,
+                holder,
+                "attempts to reopen this stale-blocked task (every blocker is "
+                "closed) were each refused because the graph changed after it "
+                "was read",
+            )
         rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
         if not rows or rows[0].get("status") == "blocked":
             return {"slug": slug, "claimed": False, "reason": "blocked"}
@@ -7537,194 +7963,66 @@ async def task_claim(
 
     now = now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}
-    # The claim is a compare-and-swap: `conditional=True` states the branch head
-    # the merged row was read at, so the write applies only while nothing else
-    # has committed. On each surfaced conflict we re-read and either bail (a
-    # rival won) or re-attempt. surface_conflict stays on for every attempt — a
-    # consecutive conflict must never fall back to the blind-retry path, which
-    # would re-apply the claim over whoever committed in the meantime.
-    #
-    # ★ WHAT CHANGED, AND WHAT DID NOT. Before omnigraph #470 there was no
-    # conditional-write primitive at all, so this loop was read → write →
-    # re-read → hope, with the post-write verification below as the only real
-    # backstop. The precondition now makes a refusal AUTHORITATIVE: a 412 is the
-    # store saying the write did not apply, rather than us inferring it from a
-    # conflict that might have been someone else's.
-    #
-    # ★ THE VERIFICATION BELOW STAYS ANYWAY, and deliberately. It is what covers
-    # the degraded path (a tier that supplies no graph_commit_id writes
-    # unconditionally — see `_update_task`), and it is cheap next to a claim.
-    # Removing it would make correctness depend on a server capability this code
-    # cannot see from here.
-    #
-    # ★ EXPECT MORE CONFLICTS THAN CONTENTION. The precondition is the whole
-    # branch head, not this row, so ANY concurrent write to the graph invalidates
-    # it — a rival claim and an unrelated `memory_store` are indistinguishable.
-    # That is why _CLAIM_MAX_ATTEMPTS exists and why a re-read that finds the
-    # task still claimable retries rather than reporting a lost race.
-    write_commit: str | None = None
-    for attempt in range(_CLAIM_MAX_ATTEMPTS):
-        try:
-            _, write_commit = await _offload(
-                _update_task, slug, claim, surface_conflict=True, conditional=True
-            )
-            break
-        except OmnigraphConflict:
-            # A concurrent writer committed between our read and our write.
-            rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
-            fresh = rows[0] if rows else {}
-            fresh_status = fresh.get("status")
-            # ★ REVALIDATE CLAIMABILITY BEFORE EVER RETRYING, not just before
-            # giving up. `_update_task`'s merge sets `status` from `claim`
-            # unconditionally (see its docstring) — it does not care what the
-            # fresh row it reads says — so a retry that goes ahead while the
-            # task is now closed/blocked would silently resurrect it to
-            # in_progress rather than conflict again. That window used to be
-            # a bare network round-trip; the backoff below (and the wider
-            # attempt budget) makes it wide enough to matter. Bail with the
-            # real reason instead of looping back into a write that would
-            # stomp it.
-            if fresh_status == "closed":
-                return {"slug": slug, "claimed": False, "reason": "closed"}
-            if fresh_status == "blocked":
-                return {"slug": slug, "claimed": False, "reason": "blocked"}
-            rival = fresh.get("assignee")
-            fresh_lease_started_at = fresh.get("claimed_at") or fresh.get("updated_at")
-            if (
-                fresh_status == "in_progress"
-                and rival != holder
-                and not _lease_expired(fresh_lease_started_at)
-                and not force
-            ):
-                return {
-                    "slug": slug,
-                    "claimed": False,
-                    "reason": "lost_race",
-                    "held_by": rival or _UNKNOWN_HOLDER,
-                    "claimed_at": fresh.get("claimed_at"),
-                    "remedy": _claim_remedy(
-                        slug, rival or _UNKNOWN_HOLDER, fresh_lease_started_at
-                    ),
-                }
-            # The task itself still looks claimable, so the conflict came
-            # from something else on the branch (an unrelated write, a rival
-            # claim already released, a same-holder update, or — with
-            # `force=True` — a still-live rival we intend to steal anyway).
-            # The branch-head precondition does not tell us which; back off
-            # and retry now that the manifest has advanced.
-            if attempt + 1 == _CLAIM_MAX_ATTEMPTS:
-                # Exhausted the budget without ever seeing a rival hold the
-                # task or the task become closed/blocked. Report it as a
-                # retryable condition rather than leaking the raw omnigraph
-                # "write authority ... changed during preparation" text to
-                # the caller (tk-task-claim-exhausts-its-3-attempt-no-backoff-
-                # cas-674414).
-                logger.warning(
-                    "witan.task_claim.contention_exhausted",
-                    task_slug=slug,
-                    holder=holder,
-                    attempts=_CLAIM_MAX_ATTEMPTS,
-                )
-                return {
-                    "slug": slug,
-                    "claimed": False,
-                    "reason": "contention",
-                    "remedy": (
-                        f"{_CLAIM_MAX_ATTEMPTS} claim attempts each hit a "
-                        "write conflict on the graph without the task itself "
-                        "becoming closed, blocked, or held by a rival — most "
-                        "likely heavy write load elsewhere on the graph, "
-                        "though the branch-head precondition cannot fully "
-                        "rule out a same-task race. Retry task_claim."
-                    ),
-                }
-            await anyio.sleep(_claim_backoff(attempt + 1))
 
-    # Post-write verification: with no store-level CAS, a rival's claim could
-    # still have landed last. Re-read and confirm we actually hold it before
-    # reporting success, so at most one caller ever sees claimed=True.
+    # The claim is a compare-and-swap. `_update_task` fences the write on the
+    # branch head it read the task at, and `require` decides claimability on
+    # that same row, so a write that succeeds proves nobody claimed, closed or
+    # blocked the task between that read and our commit. A rival whose claim
+    # lands later must have read ours (and is refused here) or fenced on an
+    # older head (and gets a 412). Every other `_update_task` write is fenced
+    # the same way, so a stale `task_update` cannot put a pre-claim row back
+    # either. That is why there is no read-back after the write.
     #
-    # ★ UNCONSTRAINED, NOT PINNED TO OUR OWN WRITE. An earlier version of this
-    # fix pinned the read to `write_commit` (our own write's `graph_commit_id`)
-    # and shipped in agent-kit#248 before review caught the flaw: a read fixed
-    # to our own commit can only ever show what WE wrote — it is structurally
-    # blind to a legitimate LATER write (a rival's `force` claim, a concurrent
-    # `task_update`), which is exactly the clobber this verification exists to
-    # catch (see `test_claim_post_write_verification_catches_last_writer`).
-    # Pinning made that test pass for the wrong reason: it runs over the CLI
-    # locally, where `write_commit` is always `None`, so the pinned branch
-    # never actually ran.
-    #
-    # ★ BUT AN UNCONSTRAINED READ HAS NO FRESHNESS GUARANTEE EITHER, which is
-    # the bug tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd
-    # actually proved: on 2026-08-18, one racer's verification read returned a
-    # snapshot 2 SECONDS OLDER than a rival's write that had already
-    # committed — by its OWN reported `graph_commit_id`, so the read was not
-    # lying about what it served, it genuinely served stale data.
-    #
-    # So: read unconstrained (to stay able to see a later clobber), but do not
-    # TRUST it until its own reported commit has caught up to (or passed)
-    # `write_commit`. `commit_reached` decides that from the two ids, because
-    # a read's envelope carries nothing else to order on, and it parses them
-    # rather than comparing strings: from omnigraph 0.12 an id is
-    # `hb1.<block>.<slot>.<nonce>` with a decimal slot, so slot 10 sorts before
-    # slot 9 as text. A read that is still behind ours is retried rather than
-    # trusted;
-    # `write_commit is None` (the degraded path: a tier that supplied no
-    # `graph_commit_id`, or the CLI transport, which never does) skips the
-    # catch-up check entirely, since there is nothing to catch up to.
-    rows, verify_commit = await _offload(
-        client.read_with_commit, "read.gq", "get_task", {"slug": slug}
-    )
-    verify_attempts = 1
-    if write_commit is not None:
-        while (
-            verify_attempts < _VERIFY_CAUGHT_UP_MAX_ATTEMPTS
-            and not _verify_caught_up(verify_commit, write_commit)
-        ):
-            await anyio.sleep(_VERIFY_CAUGHT_UP_BACKOFF_SECONDS)
-            rows, verify_commit = await _offload(
-                client.read_with_commit, "read.gq", "get_task", {"slug": slug}
-            )
-            verify_attempts += 1
-    winner = rows[0].get("assignee") if rows else None
-    caught_up = write_commit is None or _verify_caught_up(verify_commit, write_commit)
-    # ★ `write_graph_commit_id` IS WHAT MAKES THE OTHER TWO FIELDS READABLE.
-    # `caught_up` is `True` both when the catch-up check ran and passed AND
-    # when `write_commit is None` short-circuited it, and `verify_attempts`
-    # stays 1 in that second case for the same reason — so on their own the
-    # healthy reading and the degraded one are indistinguishable in the log.
-    # Without this field, deciding which you are looking at means inferring it
-    # from `witan.task_update.conditional.unconditional_fallback` on a
-    # neighbouring line, which is a different call's read commit, not this
-    # write's. `null` here means the catch-up check never ran.
-    logger.info(
-        "witan.task_claim.verify",
-        task_slug=slug,
-        holder=holder,
-        winner_seen=winner,
-        write_graph_commit_id=write_commit,
-        verify_graph_commit_id=verify_commit,
-        verify_attempts=verify_attempts,
-        caught_up=caught_up,
-        claim_granted=winner == holder or force,
-    )
-    if winner != holder and not force:
-        winner_claimed_at = rows[0].get("claimed_at") if rows else None
-        return {
-            "slug": slug,
-            "claimed": False,
-            "reason": "lost_race",
-            "held_by": winner or _UNKNOWN_HOLDER,
-            "claimed_at": winner_claimed_at,
-            "remedy": _claim_remedy(slug, winner or _UNKNOWN_HOLDER, winner_claimed_at),
-        }
-    await _offload(
-        _track_code_branch,
+    # A conflict (any concurrent write to the graph, since the precondition is
+    # the whole branch head) is retried inside `_update_task`, and each attempt
+    # re-runs `require` on its own read.
+    def require_claimable(current: dict) -> None:
+        if (refusal := _claim_refusal(slug, current, holder, force)) is not None:
+            raise _TaskWriteRefused(refusal)
+
+    # The CodeBranch upsert and WorksOn edge ride in the claim's own commit.
+    # They used to be a second commit after the claim, and on omnigraph 0.13
+    # same-branch commits serialize at about 1s each, so every claim (lease
+    # renewals included) took two slots in that lane. The fence makes this
+    # safe: a refused attempt writes neither, so the metadata still lands only
+    # with a won claim. Construction stays best-effort (`_code_branch_steps`
+    # returns `[]` on a failed read); a failed commit is the claim failing.
+    branch_steps = functools.partial(
+        _code_branch_steps,
         repo_module.detect(override=repo),
         branch=branch,
         task_slug=slug,
     )
+    try:
+        claimed = await _offload(
+            _update_task,
+            slug,
+            claim,
+            extra_steps=branch_steps,
+            require=require_claimable,
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
+    except WriteContention:
+        # Every attempt was refused by some write. One more read says whether
+        # that write was a rival taking the task, and reports it as such
+        # rather than as load (tk-task-claim-exhausts-its-3-attempt-no-backoff-
+        # cas-674414 is why exhaustion is an answer and not a raw error).
+        rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
+        if not rows:
+            return None
+        if (refusal := _claim_refusal(slug, rows[0], holder, force)) is not None:
+            return refusal
+        return _claim_contention(
+            slug,
+            holder,
+            "claim attempts were each refused because the graph changed after "
+            "the task was read, and it is still claimable, so the writes were "
+            "elsewhere on the graph",
+        )
+    if claimed is None:
+        # Deleted between the first read and the fenced one.
+        return None
     result = {
         "slug": slug,
         "claimed": True,
@@ -7794,26 +8092,42 @@ def task_release(
     — the point of that field is to survive exactly this.
     """
     holder = _claim_holder(assignee, session_id)
-    rows = client.read("read.gq", "get_task", {"slug": slug})
-    if not rows:
-        return None
-    current_holder = rows[0].get("assignee")
-    # Identity-level match, so you can release a claim your *other* session took
-    # (same person, different `#<session>` qualifier) without reaching for force.
-    # Another person's claim still needs it.
-    if current_holder and not _same_person(current_holder, holder) and not force:
-        return {
-            "slug": slug,
-            "released": False,
-            "held_by": current_holder,
-            "remedy": (
-                f"{slug} is held by {current_holder}, not {holder}. Release it "
-                f"anyway with `witan task release {slug} --force`."
-            ),
-        }
 
-    _update_task(slug, {"status": status, "assignee": None, "claimed_at": None})
-    return {"slug": slug, "released": True, "status": status}
+    def require_held_by_caller(current: dict) -> None:
+        # Checked on the row the release is fenced on, so a claim someone else
+        # took after an earlier read is refused rather than released.
+        # Identity-level match, so you can release a claim your *other* session
+        # took (same person, different `#<session>` qualifier) without reaching
+        # for force. Another person's claim still needs it.
+        current_holder = current.get("assignee")
+        if current_holder and not _same_person(current_holder, holder) and not force:
+            raise _TaskWriteRefused(
+                {
+                    "slug": slug,
+                    "released": False,
+                    "held_by": current_holder,
+                    "remedy": (
+                        f"{slug} is held by {current_holder}, not {holder}. "
+                        f"Release it anyway with `witan task release {slug} "
+                        "--force`."
+                    ),
+                }
+            )
+
+    try:
+        released = _update_task(
+            slug,
+            {"status": status, "assignee": None, "claimed_at": None},
+            require=require_held_by_caller,
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
+    if released is None:
+        return None
+    result = {"slug": slug, "released": True, "status": status}
+    if status == "closed":
+        result = _with_unswept_warning(result, _unblock_dependents())
+    return result
 
 
 @_tool(app=ui_widgets.app_for("task_ready"))
@@ -7976,28 +8290,29 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     if kind == "blocks":
         # The edge always lands; the denormalized `blocked_by`/`status` sync
-        # only when there's something new to sync. Reading `to_slug` FIRST
-        # (rather than after, as this used to) is what lets the two land in
-        # ONE commit via `extra_steps` when both apply — order doesn't change
-        # what's read, since the edge write doesn't touch `to_slug`'s row.
+        # only when there's something new to sync. Both land in ONE commit via
+        # `extra_steps`, and the sync is computed from the row that commit is
+        # fenced on, so a concurrent `blocked_by` append or status change is
+        # merged with rather than overwritten.
         link_step: _Step = (
             "mutations.gq",
             "link_blocks",
             {"from": from_slug, "to": to_slug},
         )
-        blocked = client.read("read.gq", "get_task", {"slug": to_slug})
-        changes = None
-        if blocked:
-            existing = blocked[0].get("blocked_by") or []
-            if from_slug not in existing:
-                changes = {"blocked_by": [*existing, from_slug]}
-                if blocked[0].get("status") == "open":
-                    blocker = client.read("read.gq", "get_task", {"slug": from_slug})
-                    if blocker and blocker[0].get("status") != "closed":
-                        changes["status"] = "blocked"
-        if changes is not None:
-            _update_task(to_slug, changes, extra_steps=[link_step])
-        else:
+
+        def block_on_from(current: dict) -> dict | None:
+            existing = current.get("blocked_by") or []
+            if from_slug in existing:
+                return None
+            changes: dict = {"blocked_by": [*existing, from_slug]}
+            if current.get("status") == "open":
+                blocker = client.read("read.gq", "get_task", {"slug": from_slug})
+                if blocker and blocker[0].get("status") != "closed":
+                    changes["status"] = "blocked"
+            return changes
+
+        if _update_task(to_slug, block_on_from, extra_steps=[link_step]) is None:
+            # No such task: let the engine refuse the edge, as it always has.
             client.change(*link_step)
     elif kind == "parent":
         # Edge + `parent_slug` sync are one logical edit, always both — the
@@ -8005,7 +8320,7 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         # writes already use for their CodeBranch edges.
         # `_update_task` reads the child first and writes nothing when it is
         # absent, so the engine never sees the edge and cannot refuse it.
-        updated, _ = _update_task(
+        updated = _update_task(
             to_slug,
             {"parent_slug": from_slug},
             extra_steps=[
@@ -8091,25 +8406,38 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     removed = _unlink_edge(kind, from_slug, to_slug)
 
+    # Both syncs are computed from the row their write is fenced on, so a
+    # concurrent edit to the same task is merged with rather than overwritten.
     if kind == "blocks":
-        blocked = client.read("read.gq", "get_task", {"slug": to_slug})
-        if blocked:
-            existing = blocked[0].get("blocked_by") or []
-            if from_slug in existing:
-                remaining = [s for s in existing if s != from_slug]
-                changes: dict = {"blocked_by": remaining or None}
-                # Only clear `blocked` once nothing open is still holding it.
-                if blocked[0].get("status") == "blocked":
-                    still_held = any(
-                        s != "closed" for s in _task_statuses(remaining).values()
-                    )
-                    if not still_held:
-                        changes["status"] = "open"
-                _update_task(to_slug, changes)
-    elif kind == "parent" and removed:
-        child = client.read("read.gq", "get_task", {"slug": to_slug})
-        if child and child[0].get("parent_slug") == from_slug:
-            _update_task(to_slug, {"parent_slug": None})
+
+        def unblock_from(current: dict) -> dict | None:
+            existing = current.get("blocked_by") or []
+            if from_slug not in existing:
+                return None
+            remaining = [s for s in existing if s != from_slug]
+            changes: dict = {"blocked_by": remaining or None}
+            # Only clear `blocked` once nothing open is still holding it.
+            if current.get("status") == "blocked":
+                still_held = any(
+                    s != "closed" for s in _task_statuses(remaining).values()
+                )
+                if not still_held:
+                    changes["status"] = "open"
+            return changes
+
+        _update_task(to_slug, unblock_from)
+    elif kind == "parent":
+        # Not gated on `removed`: the edge delete is its own commit, so a call
+        # whose sync then ran out of attempts leaves the edge gone and
+        # `parent_slug` set, and a retry finds no edge to remove. The row is
+        # what says whether there is still something to clear.
+
+        def orphan(current: dict) -> dict | None:
+            if current.get("parent_slug") != from_slug:
+                return None
+            return {"parent_slug": None}
+
+        _update_task(to_slug, orphan)
 
     return {"from": from_slug, "to": to_slug, "kind": kind, "removed": removed}
 

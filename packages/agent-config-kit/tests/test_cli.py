@@ -1508,6 +1508,24 @@ def test_apply_prune_removes_pi_skill_copies_once_codex_is_targeted(
     assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
 
 
+def test_apply_removes_pi_skill_copies_once_codex_is_targeted_without_prune(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_skill_manifest(tmp_path)
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi"])
+    pi_copy = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    assert pi_copy.is_dir()
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "pi", "--platform", "codex"])
+
+    assert not pi_copy.exists()
+    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").is_file()
+    assert "my-skill" in capsys.readouterr().out  # reported as removed
+
+
 _SKILL_HOOK_MANIFEST = """
 [skills]
 my-skill = "skills/my-skill/SKILL.md"

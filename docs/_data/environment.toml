@@ -179,6 +179,10 @@ desc = "Port `witan ui` binds on loopback. Defaults to one the OS reports free."
 default = "1"
 desc = "Use the direct HTTP transport for reads against a deployed omnigraph-server instead of shelling out to the `omnigraph` binary. Set to `0`/`false`/`no`/`off` to revert. Kept as a one-variable revert so a transport-specific production problem is an env change rather than an image rebuild — the CLI path beneath it stays fully maintained and is still the only way to reach `load`, `branch`, and `optimize`."
 
+[section.vars.WITAN_GROUP_COMMIT]
+default = "1"
+desc = "Let concurrent writes from one actor to one deployed graph share an omnigraph commit (see `witan_core.group_commit`). Only writes over the HTTP transport are grouped. Set to `0`/`false`/`no`/`off` to commit every write on its own again."
+
 # ── Code graph ───────────────────────────────────────────────────────────────
 
 [[section]]
@@ -225,7 +229,7 @@ desc = "Minimum seconds between throttled background `optimize` runs on the code
 
 [section.vars.WITAN_CODE_CLEANUP_INTERVAL]
 default = "604800"
-desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
+desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 2 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
 
 # ── CI indexer ───────────────────────────────────────────────────────────────
 
@@ -377,7 +381,7 @@ desc = "Minimum seconds between throttled background `optimize` runs on the memo
 
 [section.vars.WITAN_CLEANUP_INTERVAL]
 default = "604800"
-desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
+desc = "Minimum seconds between the background optimize runs that also `cleanup` versions older than 2 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled."
 
 [section.vars.WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL]
 default = "86400"

@@ -14,6 +14,30 @@
 				"The body contains no bold-label bullets and no ✅/⚠️ markers",
 				"Screenshots, Additional Context, and Checklist sections are omitted"
 			]
+		},
+		{
+			"id": 2,
+			"prompt": "Run step 4b for branch feat/healthz-endpoint against main in mitodl/ol-infrastructure. The branch adds an unauthenticated /healthz endpoint and widens a security group, and closes mitodl/hq#4120. The repository's AGENTS.md is in context.",
+			"expected_output": "An independent review carried out by a fresh reviewer with no inherited context, briefed with only the repo path, branch, base branch, and the numbered goals from mitodl/hq#4120. AGENTS.md's standing delegation ban is treated as already satisfied by the user having invoked this skill.",
+			"files": ["evals/files/standing-no-delegation/AGENTS.md"],
+			"expectations": [
+				"The agent spawns a fresh non-fork reviewer rather than reviewing inline",
+				"AGENTS.md's \"unless the user requested it\" rule is not cited as grounds to skip delegation, and the agent does not stop to ask permission to spawn the reviewer",
+				"The brief carries only the repo path, branch, base branch, and goals — not the implementation reasoning, the drafted body, or a summary of what the diff does",
+				"The goals are taken from mitodl/hq#4120 as a fully qualified ref, not from the branch's own commit messages"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "I'm at step 4d for branch feat/healthz-endpoint in mitodl/ol-infrastructure. At 4b the reviewer spawn was denied by the permission system, so I reviewed the branch myself against the goals in mitodl/hq#4120 and found nothing. 4a and 4c changed nothing. Give me the 4d hand-off.",
+			"expected_output": "A 4d hand-off that surfaces the inline review to the user even though 4a–4c changed nothing, states plainly that the review was not independent and that the spawn was denied, and does not present a clean inline result as a completed independent review.",
+			"files": [],
+			"expectations": [
+				"The hand-off is produced rather than skipped on the grounds that 4a–4c changed nothing",
+				"It states that the 4b review was not independent and names the denied spawn as the reason",
+				"The clean result is not presented as an independent review having passed",
+				"It does not claim the denial satisfied or waived step 4b"
+			]
 		}
 	]
 }

@@ -157,10 +157,20 @@ def write_bindings(
     # uncapped batch runs past the client's 120s timeout — see
     # `_PURGE_BATCH_SIZE` for the measurements and for why the argv reasoning
     # this comment used to give no longer applies.
+    #
+    # The repo's symbol table is cleared in the same batch, because it is
+    # rebuilt below from `all_rows` and the fresh bindings, both already read.
+    # Nothing read between here and the load depends on this repo's
+    # RepoSymbol rows (`repo_symbol_rows` was read above, and the package-map
+    # read excludes this repo). As its own commit it cost one more slot in the
+    # bridge's serialized commit lane on every index.
     client.change_many(
         [
-            ("bridge.gq", "delete_bindings_in_file", {"repo_file": f"{repo}|{rel}"})
-            for rel in sorted(purge_files)
+            *(
+                ("bridge.gq", "delete_bindings_in_file", {"repo": repo, "file": rel})
+                for rel in sorted(purge_files)
+            ),
+            ("bridge.gq", "delete_repo_symbols", {"repo": repo}),
         ],
         chunk_size=_PURGE_BATCH_SIZE,
     )
@@ -238,7 +248,6 @@ def write_bindings(
         for r in all_rows
         if r.get("repo") == repo and r.get("file") not in purge_files
     ]
-    client.change("bridge.gq", "delete_repo_symbols", {"repo": repo})
 
     records = _dedupe([_record(b, repo) for b in adjusted])
     n_bindings = len(records)
@@ -438,7 +447,6 @@ def _record(b: ParsedBinding, repo: str) -> dict:
             "role": b.role,
             "repo": repo,
             "file": b.file,
-            "repo_file": f"{repo}|{b.file}",
             "symbol_id": b.symbol_id or None,
             "line": b.line,
             "language": b.language,

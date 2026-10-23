@@ -13,7 +13,8 @@ import type {
 	WorkflowProjectSummary,
 	WorkflowSession,
 } from "../types.js";
-import { slugLinks, uriFact } from "./parts.js";
+import { openBlockers } from "./board.js";
+import { copyButton, slugLinks, uriFact } from "./parts.js";
 
 /**
  * The Projects view: the list, and the rollup for one project (spec §6.2).
@@ -23,12 +24,17 @@ import { slugLinks, uriFact } from "./parts.js";
  * fixtures with no server and no transport.
  */
 
-/** Everything the rollup draws, read as four calls (spec §6.2). */
+/**
+ * Everything the rollup draws, read as four calls (spec §6.2) plus one
+ * `task_get` per outside blocker.
+ */
 export interface Rollup {
 	detail: WorkflowProjectDetail | null;
 	status: ProjectStatus | null;
 	tasks: TaskRow[];
 	sessions: WorkflowSession[];
+	/** Open blockers of `tasks` from outside the project, one `task_get` each. */
+	outside: TaskRow[];
 }
 
 /**
@@ -55,12 +61,18 @@ export function projectsWithAssignee(
 	return projects.filter((project) => held.has(project.slug));
 }
 
+/**
+ * `active` is every project the list read, before any repo filter: a blocker
+ * outside the selected repo still holds its dependent back.
+ */
 export function projectList(
 	allProjects: WorkflowProjectSummary[],
 	route: Route,
 	tasks: readonly TaskRow[] = [],
+	active: readonly WorkflowProjectSummary[] = allProjects,
 ): TemplateResult {
 	const projects = projectsWithAssignee(allProjects, tasks, route.assignees);
+	const live = new Set(active.map((project) => project.slug));
 	if (projects.length === 0 && allProjects.length > 0) {
 		return emptyBox("No projects have a task held by the selected assignees.");
 	}
@@ -89,14 +101,8 @@ export function projectList(
               <td>
                 <a href=${routeHref(route, { project: project.slug })}
                   >${project.title}</a
-                >
-                ${
-									project.blocked_by?.length
-										? html`<span class="badge blocked"
-                        >blocked by ${project.blocked_by.length}</span
-                      >`
-										: nothing
-								}
+                >${copyButton(project.slug)}
+                ${blockedByBadge(project, live)}
               </td>
               <td>${project.phase}</td>
               <td>${project.status}</td>
@@ -110,6 +116,23 @@ export function projectList(
       </tbody>
     </table>
   `;
+}
+
+/**
+ * A badge counting `project`'s blockers that are still active, or nothing.
+ *
+ * The list reads only `active` projects, so a blocker missing from `live` is
+ * completed, abandoned or deleted. An abandoned one is left out too, though
+ * `_project_is_ready` still waits on it.
+ */
+function blockedByBadge(
+	project: WorkflowProjectSummary,
+	live: ReadonlySet<string>,
+): TemplateResult | typeof nothing {
+	const open = (project.blocked_by ?? []).filter((slug) => live.has(slug));
+	return open.length
+		? html`<span class="badge blocked">blocked by ${open.length}</span>`
+		: nothing;
 }
 
 /**
@@ -143,13 +166,15 @@ export function projectRollup(
 			(route.closed || task.status !== "closed") &&
 			matchesAssignee(task, route.assignees),
 	);
+	// Unfiltered: a blocker hidden by the assignee filter still holds back.
+	const live = liveTasks([...rollup.tasks, ...rollup.outside]);
 
 	return html`
     <article class="rollup">
       <header>
         <p class="crumbs">
           <a href=${routeHref(route, { project: null })}>Projects</a> /
-          <code>${detail.slug}</code>
+          <code>${detail.slug}</code>${copyButton(detail.slug)}
         </p>
         <h2>${detail.title}</h2>
         <dl class="facts">
@@ -235,7 +260,7 @@ export function projectRollup(
 							: nothing
 					}
         </h3>
-        ${taskTable(tasks, route, now)}
+        ${taskTable(tasks, route, now, live)}
       </section>
 
       <section>
@@ -321,7 +346,7 @@ function readyTasks(
                     <span class="badge priority">${task.priority}</span>
                     <a href=${routeHref(route, { slug: task.slug })}
                       >${task.title}</a
-                    >
+                    >${copyButton(task.slug)}
                     ${
 											task.assignee
 												? html`<span class="assignee">${task.assignee}</span>`
@@ -375,7 +400,9 @@ export function statusRollup(
 	return html`
     <article class="rollup">
       <header>
-        <p class="crumbs"><code>${project.slug}</code></p>
+        <p class="crumbs">
+          <code>${project.slug}</code>${copyButton(project.slug)}
+        </p>
         <h2>${project.title}</h2>
         <dl class="facts">
           <dt>Phase</dt>
@@ -460,21 +487,36 @@ export function taskGroups(
 	if (tasks.length === 0) {
 		return emptyBox("No tasks matched.");
 	}
+	const live = liveTasks(tasks);
 	return html`${STATUS_ORDER.map((status) => {
 		const group = tasks.filter((task) => task.status === status);
 		return group.length === 0
 			? nothing
 			: html`<section>
             <h3>${STATUS_HEADINGS[status]} <span class="count">${group.length}</span></h3>
-            ${taskTable(group, route, now)}
+            ${taskTable(group, route, now, live)}
           </section>`;
 	})}`;
 }
 
+/** The tasks in `rows` that are not closed, by slug, for `openBlockers`. */
+function liveTasks(rows: readonly TaskRow[]): Map<string, TaskRow> {
+	return new Map(
+		rows
+			.filter((task) => task.status !== "closed")
+			.map((task) => [task.slug, task]),
+	);
+}
+
+/**
+ * `live` is what each row's blockers resolve in. A blocker missing from it is
+ * left out of the count, closed or not, since there is no way to tell here.
+ */
 export function taskTable(
 	tasks: TaskRow[],
 	route: Route,
-	now = Date.now(),
+	now: number,
+	live: Map<string, TaskRow>,
 ): TemplateResult {
 	if (tasks.length === 0) {
 		return emptyBox(
@@ -500,16 +542,9 @@ export function taskTable(
 					(task) => html`
             <tr class=${task.status === "closed" ? "closed" : ""}>
               <td>
-                <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a>
-                ${
-									task.blocked_by?.length
-										? html`<span class="badge blocked"
-                        >${task.blocked_by.length} blocker${
-													task.blocked_by.length === 1 ? "" : "s"
-												}</span
-                      >`
-										: nothing
-								}
+                <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a
+                >${copyButton(task.slug)}
+                ${blockerBadge(task, live)}
               </td>
               <td>${task.type}</td>
               <td>
@@ -576,4 +611,16 @@ function sessionList(
 			)}
     </ul>
   `;
+}
+
+function blockerBadge(
+	task: TaskRow,
+	live: Map<string, TaskRow>,
+): TemplateResult | typeof nothing {
+	const open = task.status === "closed" ? [] : openBlockers(task, live);
+	return open.length
+		? html`<span class="badge blocked"
+        >${open.length} blocker${open.length === 1 ? "" : "s"}</span
+      >`
+		: nothing;
 }

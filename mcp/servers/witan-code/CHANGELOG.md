@@ -8,6 +8,45 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.27.0] - 2026-10-21
+
+### Changed
+
+- The cleanup that rides a background optimize now keeps 2 days of versions
+  instead of 30, matching the deployed nightly cleanup. Nothing reads older
+  history, and on omnigraph 0.13 a cleanup's cost grows with every version
+  still present ([ModernRelay/omnigraph#1095](https://github.com/ModernRelay/omnigraph/issues/1095)).
+- `witan-code cleanup --yes` with neither `--keep` nor `--older-than` now keeps 2 days
+  as well, since it shares the default. Pass `--older-than 30d` to keep the
+  old window.
+- A local `_bridge.omni` whose schema omnigraph reports it cannot migrate in
+  place (`schema plan` answers `supported: false`) is now deleted and recreated
+  instead of failing every apply. It comes back empty. Run
+  `witan-code reindex <repo root>` in each indexed repo to restore its
+  cross-repo bindings. A local bridge created by 0.26.x hits this on the
+  first index after upgrading, because of the schema change under Removed.
+  (Shipped in 0.27.0, left out at release.)
+- A bridge write clears the repo's symbol table in the same commit as its
+  per-file bindings purge, instead of a separate one. Every index that writes
+  bindings now costs the bridge one commit fewer, on a graph whose main branch
+  every repo shares and whose commits serialize. (Shipped in 0.27.0, left out
+  at release.)
+
+### Removed
+
+- `InterfaceBinding.repo_file` is gone from the bridge schema. The per-file
+  purge deletes on `repo` and `file` directly, which GQ 2.1 allows. omnigraph
+  0.13 cannot drop the column in place, so a deployed `code-bridge` graph has
+  to be recreated and every repo reindexed. Until then, this release's bridge
+  writes to that graph fail, because its schema still requires `repo_file`.
+  (Shipped in 0.27.0, left out at release.)
+
+## [0.26.0] - 2026-10-16
+
+### Fixed
+
+- `reindex-hook` reindexes files Codex edits. Codex's `Edit|Write` matcher selects its `apply_patch` tool, whose payload carries the patch text instead of a file path, so the hook would find nothing to index. It now reads the `*** Add File:`, `*** Update File:` and `*** Move to:` headers and reindexes each file the patch leaves on disk.
+
 ## [0.25.0] - 2026-10-15
 
 ### Changed

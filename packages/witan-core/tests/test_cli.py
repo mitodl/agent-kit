@@ -21,10 +21,16 @@ from witan_core.cli import (
 )
 
 
-def _result(planned, skipped):
-    # report_install only reads .planned and .skipped, so a stub stands in for
-    # agent_config_kit.InstallResult (keeps the base test deps light).
-    return SimpleNamespace(planned=planned, skipped=skipped)
+def _result(planned, skipped, prerequisites=(), notices=(), removed=()):
+    # A stub stands in for agent_config_kit.InstallResult, carrying only the
+    # fields report_install reads (keeps the base test deps light).
+    return SimpleNamespace(
+        planned=planned,
+        skipped=skipped,
+        removed=list(removed),
+        prerequisites=list(prerequisites),
+        notices=list(notices),
+    )
 
 
 def test_agent_names_cover_the_literal():
@@ -70,6 +76,16 @@ def test_report_install_plain(capsys):
     assert "[green]" not in out  # plain branch: no rich markup
 
 
+def test_report_install_prints_removed_paths(capsys):
+    result = _result(planned=[], skipped=[], removed=["old/SKILL.md"])
+
+    report_install("pi", result, dry_run=False)
+    assert "removed old/SKILL.md" in capsys.readouterr().out
+
+    report_install("pi", result, dry_run=True)
+    assert "would remove old/SKILL.md" in capsys.readouterr().out
+
+
 def test_report_install_dry_run_tag(capsys):
     report_install("pi", _result(planned=["x"], skipped=[]), dry_run=True)
     assert "(dry-run)" in capsys.readouterr().out
@@ -110,7 +126,7 @@ def _prereq(*, satisfied):
 
 
 def test_report_install_plain_prints_prerequisite_warning_and_note(capsys):
-    result = SimpleNamespace(
+    result = _result(
         planned=["mcp.json"],
         skipped=[],
         prerequisites=[_prereq(satisfied=False), _prereq(satisfied=True)],
@@ -126,9 +142,7 @@ def test_report_install_plain_prints_prerequisite_warning_and_note(capsys):
 def test_report_install_rich_prints_prerequisite_warning():
     calls: list[str] = []
     console = SimpleNamespace(print=lambda s, **kw: calls.append(s))
-    result = SimpleNamespace(
-        planned=[], skipped=[], prerequisites=[_prereq(satisfied=False)]
-    )
+    result = _result(planned=[], skipped=[], prerequisites=[_prereq(satisfied=False)])
 
     report_install("pi", result, dry_run=False, console=console)
 
@@ -137,7 +151,47 @@ def test_report_install_rich_prints_prerequisite_warning():
     assert "needs pi-mcp-adapter (dry_run=False)" in joined
 
 
-def test_report_install_tolerates_results_without_prerequisites(capsys):
-    # An older agent-config-kit's InstallResult has no `prerequisites` field.
-    report_install("pi", _result(planned=["x"], skipped=[]), dry_run=False)
-    assert "-> x" in capsys.readouterr().out
+_TRUST_NOTICE = (
+    "Stop hook 'witan session-checkpoint' was written to /h/.codex/hooks.json; "
+    "Codex won't run it until you trust it with /hooks in the Codex TUI"
+)
+
+
+def test_report_install_plain_prints_notices(capsys):
+    """Codex runs a new hook only once the user trusts it, so the line saying
+    so has to reach the user, or the hook sits there inert and unexplained."""
+    report_install(
+        "codex", _result(planned=[], skipped=[], notices=[_TRUST_NOTICE]), dry_run=False
+    )
+    out = capsys.readouterr().out
+    assert "Codex CLI" in out
+    assert f"ACTION: {_TRUST_NOTICE}" in out
+
+
+def test_report_install_rich_prints_notices():
+    calls: list[str] = []
+    console = SimpleNamespace(print=lambda s, **kw: calls.append(s))
+
+    report_install(
+        "codex",
+        _result(planned=[], skipped=[], notices=[_TRUST_NOTICE]),
+        dry_run=False,
+        console=console,
+    )
+
+    joined = "\n".join(calls)
+    assert "⚠ action" in joined
+    assert _TRUST_NOTICE in joined
+
+
+def test_report_install_reads_a_real_install_result(capsys):
+    from agent_config_kit import InstallResult
+
+    report_install(
+        "codex",
+        InstallResult(
+            platform="codex", planned=["hooks.json"], notices=[_TRUST_NOTICE]
+        ),
+        dry_run=False,
+    )
+    assert f"ACTION: {_TRUST_NOTICE}" in capsys.readouterr().out

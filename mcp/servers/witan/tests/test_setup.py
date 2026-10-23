@@ -14,6 +14,7 @@ from pathlib import Path
 
 from agent_config_kit import apply
 from witan import setup
+from witan.session_state import SESSION_ID_ENV_VARS
 
 
 def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch):
@@ -228,6 +229,19 @@ def test_claude_inject_context_hook_uses_the_shared_constant(tmp_path):
         h for h in bundle.hooks if getattr(h, "command", None) == "witan inject-context"
     ]
     assert hook.timeout_seconds == setup.INJECT_CONTEXT_TIMEOUT_SECONDS
+
+
+def test_pi_checkpoint_env_drops_every_inherited_session_id():
+    # A Pi launched from another agent's shell inherits that agent's id; the
+    # checkpoint child must not, or a Pi with no id of its own would close the
+    # enclosing session's handle.
+    source = _PKG_EXT.read_text()
+    body = re.search(
+        r"^function checkpointEnv\(.*?^}$", source, re.DOTALL | re.MULTILINE
+    )
+    assert body, "checkpointEnv is not declared as a top-level function"
+    for var in SESSION_ID_ENV_VARS:
+        assert f"delete env.{var};" in body.group(0), var
 
 
 def test_configs_pi_mirror_matches_the_package_extension():

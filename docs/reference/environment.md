@@ -80,6 +80,7 @@ with a partial identity configuration rather than serving unauthenticated.
 | --- | --- | --- |
 | `WITAN_ACTOR` | — | Overrides the OIDC-derived identity. Intended for service accounts and the CI indexer, which authenticate as themselves rather than as a person. |
 | `WITAN_ACTOR_TOKENS_FILE` | — | Path to a mounted `{actor_id: token}` map. The server-side half of identity: it maps an authenticated caller to the actor recorded on the nodes they write. |
+| `WITAN_GROUP_COMMIT` | `1` | Let concurrent writes from one actor to one deployed graph share an omnigraph commit (see `witan_core.group_commit`). Only writes over the HTTP transport are grouped. Set to `0`/`false`/`no`/`off` to commit every write on its own again. |
 | `WITAN_MCP_HOST` | `127.0.0.1` | Interface to bind for HTTP transports. Use `0.0.0.0` inside a container. |
 | `WITAN_MCP_PATH` | `/mcp` | URL path the MCP endpoint is served on. HTTP transports only. |
 | `WITAN_MCP_PORT` | `8000` | Port to bind for HTTP transports. |
@@ -98,7 +99,7 @@ from the memory/task graph.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` | Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled. |
+| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` | Minimum seconds between the background optimize runs that also `cleanup` versions older than 2 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled. |
 | `WITAN_CODE_DIR` | — | Directory holding the per-repo code-graph stores. |
 | `WITAN_CODE_GRAPH` | — | Graph id to address on `WITAN_CODE_SERVER`. |
 | `WITAN_CODE_INDEX_ROLE` | — | Declares what the indexing process is entitled to write **on a shared graph**. There, only `ci` may write a repo's default (`main`) view and run the stale-file purge that goes with it, so no developer's reindex can clobber the view all readers fall back to. A local store has a single user, who is its writer — this setting does not restrict it, and a local default-branch reindex works with no role declared. |
@@ -176,7 +177,7 @@ weight to `0` to reproduce the raw BM25 order.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `WITAN_CLEANUP_INTERVAL` | `604800` | Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled. |
+| `WITAN_CLEANUP_INTERVAL` | `604800` | Minimum seconds between the background optimize runs that also `cleanup` versions older than 2 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled. |
 | `WITAN_CONTEXT_DEADLINE` | `30.0` | Time budget, in seconds, for all of the session-context hook's reads against a deployed target, measured from when the hook starts. A read still unanswered at the deadline is cancelled and its block left out, with one line naming what is missing; that partial block is not cached. Keep it under the hook's own 45s timeout, past which the client kills the hook and discards its output. Unlike `WITAN_CONTEXT_TTL`, `0` does not disable it: every read is skipped as already timed out. |
 | `WITAN_CONTEXT_TTL` | `30.0` | How long the rendered session-context block is cached on disk, in seconds. Only the first prompt in the window pays to build it; the rest read one small file. `0` disables the cache. The content is advisory, so a few seconds of staleness is fine. |
 | `WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL` | `86400` | Minimum seconds between repeats of the warning that a target's memory graph is deployed while its code graphs are still local. `0` disables it. Per target, so switching to a misrouted one warns straight away. Only a terminal ever sees it: hooks, CI and pipes are skipped so they cannot spend the window on nobody. |
