@@ -393,7 +393,11 @@ desc = "How long the rendered session-context block is cached on disk, in second
 
 [section.vars.WITAN_CONTEXT_DEADLINE]
 default = "30.0"
-desc = "Time budget, in seconds, for all of the session-context hook's reads against a deployed target, measured from when the hook starts. A read still unanswered at the deadline is cancelled and its block left out, with one line naming what is missing; that partial block is not cached. Keep it under the hook's own 45s timeout, past which the client kills the hook and discards its output. Unlike `WITAN_CONTEXT_TTL`, `0` does not disable it: every read is skipped as already timed out."
+desc = "Time budget, in seconds, for all of the session-context hook's reads against a deployed target, and for its linked-PR lookups on any target, measured from when the hook starts. A read still unanswered at the deadline is cancelled and its block left out, with one line naming what is missing; that partial block is not cached. Keep it under the hook's own 45s timeout, past which the client kills the hook and discards its output. Unlike `WITAN_CONTEXT_TTL`, `0` does not disable it: every read is skipped as already timed out."
+
+[section.vars.WITAN_LIVE_PR]
+default = "1"
+desc = "`0` turns off the live linked-PR lookups: the `live_pr` field `task_get` and `workflow_project_get` add on your machine, the `(live, HH:MM)` lines in the session-context hook, and the same line in `witan task show` and `witan project status`. Each lookup is a `gh pr view` or `gh issue view` run as you (about 2s each), cached per URL for 120s."
 
 [section.vars.WITAN_LOG_LEVEL]
 default = "INFO"

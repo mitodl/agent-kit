@@ -4,6 +4,7 @@
       "author": "fixtures",
       "blocked_by": null,
       "github_issue": null,
+      "github_pr": null,
       "phase": "discovery",
       "preauthorized": [
         "Rebuild the UI bundle"

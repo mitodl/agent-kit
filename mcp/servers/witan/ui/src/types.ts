@@ -117,8 +117,8 @@ export interface TaskDetail extends TaskRow {
  * What both project projections carry.
  *
  * Split for the same reason as `TaskCore`: `workflow_project_list` returns a
- * narrower row than `workflow_project_get`, with `github_issue` rather than
- * `github_pr`, so one interface over both would declare a field half the
+ * narrower row than `workflow_project_get`, and the rollup's `project` has no
+ * `github_issue`, so one interface over all three would declare fields some
  * results do not have.
  */
 export interface WorkflowProjectCore {
@@ -144,6 +144,7 @@ export interface WorkflowProjectCore {
 export interface WorkflowProjectSummary extends WorkflowProjectCore {
 	blocked_by: string[] | null;
 	github_issue: string | null;
+	github_pr: string | null;
 	tags: string[] | null;
 	updated_at: string;
 }
@@ -629,6 +630,7 @@ export function isWorkflowProjectSummary(
 		...WORKFLOW_PROJECT_CORE,
 		blocked_by: strList,
 		github_issue: nullable(str),
+		github_pr: nullable(str),
 		tags: strList,
 		updated_at: str,
 	});

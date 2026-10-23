@@ -53,6 +53,7 @@ from witan_core.refusal import Refusal
 from . import config as cfg_module
 from . import (
     elicit,
+    live_pr,
     merge_bounds,
     merge_report,
     readiness,
@@ -5129,6 +5130,13 @@ def workflow_project_get(slug: str) -> dict | None:
     before this one is ready. ``blocks`` lists projects this project is
     currently blocking (derived by scanning all active projects).
 
+    When ``github_pr`` is set and witan runs on your machine, the project also
+    carries ``live_pr``: that PR's state fetched from GitHub just now
+    (``state``, ``draft``, ``review_decision``, ``checks``, ``fetched_at``), or
+    ``{"error": ...}`` when it could not be fetched. The description is a
+    snapshot from when it was written; where ``live_pr`` disagrees with it,
+    ``live_pr`` is current.
+
     Parameters
     ----------
     slug:
@@ -5143,7 +5151,7 @@ def workflow_project_get(slug: str) -> dict | None:
     all_rows = client.read("read.gq", "list_projects_by_status", {"status": "active"})
     blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
     project["blocks"] = blocks
-    return project
+    return live_pr.tool_result("workflow_project_get", project)
 
 
 def _live_sessions(rows: list[dict]) -> list[dict]:
@@ -7155,6 +7163,13 @@ def task_get(slug: str) -> dict | None:
     ``DiscoveredFrom`` is not included: it has no read query, and nothing has
     needed it.
 
+    When ``external_uri`` is a GitHub PR or issue and witan runs on your
+    machine, the node also carries ``live_pr``: that PR's or issue's state
+    fetched from GitHub just now (``state``, ``draft``, ``review_decision``,
+    ``checks``, ``fetched_at``), or ``{"error": ...}`` when it could not be
+    fetched. The description and comments are snapshots from when they were
+    written; where ``live_pr`` disagrees with them, ``live_pr`` is current.
+
     Parameters
     ----------
     slug:
@@ -7175,15 +7190,18 @@ def task_get(slug: str) -> dict | None:
     # `_task_comments` exists to avoid, reintroduced to add one field.
     children = client.read("read.gq", "list_tasks_by_parent", {"parent_slug": slug})
     blocks = client.read("read.gq", "blocks_to_slugs", {"from": slug})
-    return {
-        **_with_lease_flag(rows[0]),
-        "comments": _task_comments(slug),
-        "blocks": [r["slug"] for r in blocks],
-        "children": [
-            {k: c.get(k) for k in ("slug", "title", "status")} for c in children
-        ],
-        "branches": _task_branches(slug),
-    }
+    return live_pr.tool_result(
+        "task_get",
+        {
+            **_with_lease_flag(rows[0]),
+            "comments": _task_comments(slug),
+            "blocks": [r["slug"] for r in blocks],
+            "children": [
+                {k: c.get(k) for k in ("slug", "title", "status")} for c in children
+            ],
+            "branches": _task_branches(slug),
+        },
+    )
 
 
 def _task_branches(slug: str) -> list[dict]:

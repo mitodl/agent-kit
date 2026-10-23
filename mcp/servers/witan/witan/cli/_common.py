@@ -14,6 +14,7 @@ from rich.table import Table
 from witan_core.cli import make_app
 from witan_core.elicit import with_console_ctx
 
+from .. import live_pr
 from .. import repo as repo_module
 from .output import dump_structured, get_output_format
 from .selected_target import selected_target
@@ -195,6 +196,22 @@ def print_error(message: object, *, stderr: bool = False) -> None:
     omnigraph error quotes the query it choked on. Both are markup to Rich.
     """
     (stderr_console if stderr else console).print(f"[red]{esc(message)}[/red]")
+
+
+def print_live_pr(record: dict) -> None:
+    """The ``live_pr`` line :func:`witan.live_pr.annotate` added, if any.
+
+    An error is printed too, dimmed: a reader who sees no line cannot tell a
+    record with no linked PR from a lookup that failed.
+    """
+    state = record.get("live_pr")
+    if not state:
+        return
+    line = live_pr.describe(state)
+    if line is None:
+        console.print(f"  [dim]live state unavailable: {esc(state['error'])}[/dim]")
+    else:
+        console.print(f"  [green]{esc(line)}[/green]")
 
 
 def notice_console() -> Console:
