@@ -7,8 +7,9 @@ composed group is a mutation omnigraph accepts, that a fenced claim's
 guarantee survives sharing a commit, and how many commits a burst costs.
 
 Needs ``omnigraph-server`` (it ships in the omnigraph release tarball but
-``witan setup`` installs only the CLI). Set ``OMNIGRAPH_SERVER_BIN``, or put it
-on PATH; otherwise the module skips.
+``witan setup`` installs only the CLI; ``bin/install_omnigraph_server.py``
+fetches it). Set ``OMNIGRAPH_SERVER_BIN``, or put it on PATH; otherwise the
+module skips, unless ``WITAN_REQUIRE_OMNIGRAPH`` is set, as it is in CI.
 """
 
 from __future__ import annotations
@@ -28,8 +29,10 @@ import pytest
 from .conftest import SCHEMA, _Tools
 
 SERVER_BIN = os.environ.get("OMNIGRAPH_SERVER_BIN") or shutil.which("omnigraph-server")
+_REQUIRED = os.environ.get("WITAN_REQUIRE_OMNIGRAPH", "") not in ("", "0", "false")
 pytestmark = pytest.mark.skipif(
-    SERVER_BIN is None, reason="omnigraph-server not found (set OMNIGRAPH_SERVER_BIN)"
+    SERVER_BIN is None and not _REQUIRED,
+    reason="omnigraph-server not found (set OMNIGRAPH_SERVER_BIN)",
 )
 GRAPH = "council"
 REPO = "https://github.com/test/repo"
