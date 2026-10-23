@@ -192,12 +192,12 @@ Build a list of every file that references the package.
 ### Language libraries
 
 ```bash
-# Adapt the pattern and --type flag to the language
-rg "<package-name>" --type py           # Python
-rg "\"<package-name>\"" go.mod          # Go module declaration
-rg "<package-name>" --type ts --type tsx # TypeScript
-rg "'<gem-name>'" Gemfile               # Ruby
-rg '"<crate>"' Cargo.toml               # Rust
+# Adapt the pattern and --include globs to the language
+grep -rn --include='*.py' "<package-name>" .                          # Python
+grep -n '"<package-name>"' go.mod                                     # Go module declaration
+grep -rn --include='*.ts' --include='*.tsx' "<package-name>" .        # TypeScript
+grep -n "'<gem-name>'" Gemfile                                        # Ruby
+grep -n '"<crate>"' Cargo.toml                                        # Rust
 ```
 
 Also search config files that reference the package by name: plugin configs, lint configs, CI workflow steps.
@@ -205,8 +205,8 @@ Also search config files that reference the package by name: plugin configs, lin
 ### Docker / container base images
 
 ```bash
-rg "FROM <image-name>" --glob 'Dockerfile*' --glob '*.dockerfile'
-rg "apt-get install" --glob 'Dockerfile*'   # apt lines may reference packages affected by base change
+grep -rn --include='Dockerfile*' --include='*.dockerfile' "FROM <image-name>" .
+grep -rn --include='Dockerfile*' "apt-get install" .   # apt lines may reference packages affected by base change
 ```
 
 Multi-stage builds: check whether intermediate `AS build` stages also use the image.
@@ -214,7 +214,7 @@ Multi-stage builds: check whether intermediate `AS build` stages also use the im
 ### Helm / Kubernetes charts
 
 ```bash
-rg "<chart-name>" charts/ -l
+grep -rl "<chart-name>" charts/
 # Render the current state as a baseline before upgrading
 helm template <release-name> <chart> -f values.yaml > baseline.yaml
 ```
@@ -246,7 +246,7 @@ Cross-reference each usage site against the changelog flags from Phase 2.
   - **Python 3.13** (PEP 594): `cgi`, `cgitb`, `imghdr`, `aifc`, `chunk`, `crypt`, `mailcap`, `msilib`, `nis`, `nntplib`, `ossaudiodev`, `pipes`, `sndhdr`, `spwd`, `sunau`, `telnetlib`, `uu`, `xdrlib` — all removed. If the target base image bundles Python 3.13, search for any of these:
 
   ```bash
-  rg "import (cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes|telnetlib)" --type py
+  grep -rnE --include='*.py' 'import (cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes|telnetlib)\b' .
   pip show setuptools   # must be present if any dep still calls distutils at install time
   ```
 
@@ -353,7 +353,7 @@ For uv, a flag-only override lives in the lockfile and is silently reverted by t
 next maintenance run. Prove it either way:
 
 ```bash
-uv lock --upgrade --dry-run 2>&1 | rg -i '^updated? <pkg> '   # must print nothing
+uv lock --upgrade --dry-run 2>&1 | grep -iE '^Updated? <pkg> '   # must print nothing
 ```
 
 **Pin the floor, not just the lockfile.** A lockfile bump is reversible; a declared minimum is

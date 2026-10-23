@@ -34,7 +34,7 @@
 			"files": [],
 			"expectations": [
 				"Recommends reading the gRPC-Go changelog for every version from v1.57.0 to v1.68.0, not just the final release notes",
-				"Provides rg commands covering both client-side grpc.Dial/DialContext/NewClient calls AND server-side grpc.NewServer calls as separate search patterns to find all grpc API usage",
+				"Provides grep commands covering both client-side grpc.Dial/DialContext/NewClient calls AND server-side grpc.NewServer calls as separate search patterns to find all grpc API usage",
 				"Identifies at least one hard breaking change (a removed API, not just a deprecation) in the v1.57→v1.68 range — such as resolver.AddressType, WithServiceConfig, or NewServiceConfig removal — as distinct from the grpc.Dial deprecation",
 				"Classifies grpc.Dial deprecation as a follow-up task rather than a merge blocker (the deprecated functions are still present in v1.68), not as something that must be fixed before merging",
 				"Recommends running go test ./... as the verification step before approving the PR"

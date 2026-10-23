@@ -46,15 +46,15 @@ When you see any of those, check for a window **before** debugging anything else
 
 ```bash
 # Python
-rg 'exclude-newer' pyproject.toml uv.lock
+grep -n 'exclude-newer' pyproject.toml uv.lock
 
 # JavaScript — config first, then the bundled binary's own default,
 # because Yarn's gate can be active with no config present at all
-rg 'npmMinimalAgeGate|npmPreapprovedPackages|min-release-age' .yarnrc.yml .npmrc 2>/dev/null
-rg -o 'npmMinimalAgeGate:\{[^}]*' .yarn/releases/yarn-*.cjs
+grep -nE 'npmMinimalAgeGate|npmPreapprovedPackages|min-release-age' .yarnrc.yml .npmrc 2>/dev/null
+grep -o 'npmMinimalAgeGate:{[^}]*' .yarn/releases/yarn-*.cjs
 
 # PR-level (Renovate) — check the preset it extends, not just the local file
-rg 'minimumReleaseAge|lockFileMaintenance' renovate.json*
+grep -nE 'minimumReleaseAge|lockFileMaintenance' renovate.json*
 ```
 
 ---
@@ -206,7 +206,7 @@ The gate can be active with no configuration present, because its default varies
 version — and the published docs have been wrong about it. Check the bundled release:
 
 ```bash
-rg -o 'npmMinimalAgeGate:\{[^}]*' .yarn/releases/yarn-*.cjs
+grep -o 'npmMinimalAgeGate:{[^}]*' .yarn/releases/yarn-*.cjs
 ```
 
 Observed defaults: `0m` in 4.12.0 and 4.13.0 (off), `1d` in 4.17.0 (on), and the setting
@@ -332,7 +332,7 @@ An override that the next maintenance run undoes is worse than no fix, because n
 reports the regression. Prove it:
 
 ```bash
-uv lock --upgrade --dry-run 2>&1 | rg -i '^updated? <pkg> '
+uv lock --upgrade --dry-run 2>&1 | grep -iE '^Updated? <pkg> '
 ```
 
 This must print **nothing**. `--dry-run` writes no lockfile. Match both tenses: `--dry-run`
@@ -371,7 +371,7 @@ Whenever you touch a repo's dependencies, check for overrides that have outlived
 reason:
 
 ```bash
-rg -A2 'exclude-newer-package' pyproject.toml
+grep -A2 'exclude-newer-package' pyproject.toml
 ```
 
 **Deleting the line is not enough.** uv also records the override in `uv.lock` under
@@ -381,7 +381,7 @@ still live. Force a re-resolution of that one package:
 
 ```bash
 uv lock --upgrade-package <pkg>
-rg '<pkg> = \{' uv.lock          # must print nothing
+grep '<pkg> = {' uv.lock          # must print nothing
 ```
 
 Then confirm the package holds its version on its own, and that the lockfile's `[[package]]`
