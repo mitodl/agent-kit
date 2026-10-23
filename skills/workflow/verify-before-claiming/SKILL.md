@@ -8,6 +8,10 @@ description: >
   any summary or handoff that reports status. Re-fetch live state instead of
   repeating memory or earlier output, check uncommitted work and other worktrees
   before calling work missing, and label each finding verified or inferred.
+  Also covers shell work in any shell (bash, zsh, fish, BSD or GNU tools): put
+  anything beyond a single pipeline in a script file, edit source with the edit
+  tool instead of sed -i or heredocs, strip CRLF before parsing, avoid pgrep -f
+  in wait loops, and hand the user paste-ready commands with real values.
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -31,3 +35,27 @@ status claim, not only to code review.
    `git worktree list`. Uncommitted changes and other worktrees count.
 4. Label each finding you report "verified (`<command>`)" or "inferred".
    Anything you did not check is inferred, and you say so.
+
+## Shell commands and file edits
+
+The shell may be bash, zsh or fish, and the tools GNU or BSD.
+
+1. Anything beyond a single pipeline or `&&` chain goes in a script file
+   outside the repo (the session scratchpad if your harness gives one, else
+   `mktemp -d`), run with `bash <file>` or `python3 <file>`. No inline loops or
+   multi-line heredoc logic in the interactive shell.
+2. Don't depend on one shell's behavior in a one-liner. Quote every variable.
+   Don't assign to names zsh reserves (`status`, `path`). GNU and BSD tools
+   differ (`sed -i`, `date`, `grep -P`), so do in-place edits of generated or
+   data files in python, not `sed -i`.
+3. Edit source files with your edit tool (Edit, `apply_patch`), never with
+   `sed -i`, a heredoc, or a python rewrite. After any scripted change to a
+   file, read the result back.
+4. Strip CR (`tr -d '\r'`) from a file that may have CRLF line endings before
+   parsing it with `awk`, `cut`, `read` or a `$`-anchored `grep`.
+5. `ps | grep` matches itself, and `pgrep -f` matches the shell wrapping your
+   command. In wait loops, save `$!` and poll `kill -0 "$pid"`, or use a
+   pidfile.
+6. Commands handed to the user to paste use real values, never placeholders,
+   and say which shell they are for. Secrets go through an env var
+   (`"$GITHUB_TOKEN"`), never pasted into the command.
