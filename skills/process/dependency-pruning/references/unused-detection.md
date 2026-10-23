@@ -51,7 +51,7 @@ for d in deps:
 
 for pkg in pkgs:
     # Search including tests/ — test-only use is 'dev-only', not 'unused'
-    result = subprocess.run(['rg', '-l', pkg, '--include=*.py'], capture_output=True, text=True)
+    result = subprocess.run(['grep', '-rlF', '--include=*.py', '--', pkg, '.'], capture_output=True, text=True)
     if not result.stdout.strip():
         print(f'UNUSED: {pkg}')
     else:
@@ -101,11 +101,10 @@ const pkg = require('./package.json');
 const { execSync } = require('child_process');
 const deps = Object.keys({...(pkg.dependencies||{}), ...(pkg.devDependencies||{})});
 for (const dep of deps) {
-  // Escape regex metacharacters (e.g. scoped packages like @org/name)
-  const escaped = dep.replace(/[.*+?^\${}()|[\]\\\\]/g, '\\\\$&');
   try {
+    // -F matches the name literally, so scoped packages like @org/name need no escaping
     const out = execSync(
-      'rg -l \"' + escaped + '\" src/ -g \"*.ts\" -g \"*.tsx\" -g \"*.js\" -g \"*.jsx\"',
+      'grep -rlF --include=\"*.ts\" --include=\"*.tsx\" --include=\"*.js\" --include=\"*.jsx\" -- \"' + dep + '\" src/',
       {stdio:['pipe','pipe','pipe']}
     ).toString();
     console.log(out.trim() ? 'used:   ' + dep : 'UNUSED: ' + dep);
@@ -194,11 +193,11 @@ for section in ['dependencies', 'dev-dependencies', 'build-dependencies']:
 
 for dep in sorted(set(deps)):
     crate_name = dep.replace('-', '_')
-    result = subprocess.run(['rg', '-l', crate_name, 'src/'], capture_output=True, text=True)
+    result = subprocess.run(['grep', '-rlIF', '--exclude-dir=target', '--', crate_name, 'src/'], capture_output=True, text=True)
     if result.stdout.strip():
         print(f'used:   {dep}')
     else:
-        result2 = subprocess.run(['rg', '-l', dep, 'src/'], capture_output=True, text=True)
+        result2 = subprocess.run(['grep', '-rlIF', '--exclude-dir=target', '--', dep, 'src/'], capture_output=True, text=True)
         print(f'UNUSED: {dep}' if not result2.stdout.strip() else f'used:   {dep}')
 "
 ```
@@ -216,7 +215,7 @@ ruby -e "
 require 'bundler'
 Bundler.load.specs.each do |spec|
   next if spec.name == 'bundler'
-  used = \`rg -l '#{spec.name}' lib/ app/ 2>/dev/null\`.strip
+  used = \`grep -rlIF -- '#{spec.name}' lib/ app/ 2>/dev/null\`.strip
   puts used.empty? ? \"UNUSED: #{spec.name}\" : \"used: #{spec.name}\"
 end
 "

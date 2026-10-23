@@ -156,20 +156,20 @@ For each dependency that IS used, check how much of it is actually called.
 ```bash
 # Python: unique symbols imported from a package
 PKG="humanize"
-rg "from ${PKG}(?:\.\w+)? import (\w+)" -g "*.py" -o -r '$1' --no-filename | sort -u
+grep -rhoE "from ${PKG}(\.[A-Za-z_][A-Za-z0-9_]*)* import [A-Za-z_][A-Za-z0-9_]*" --include='*.py' . | sed -E 's/.* import //' | sort -u
 
 # JS/TS: named imports + member accesses
 PKG="lodash"
-rg "import \{([^}]+)\} from ['\"]${PKG}['\"]" --no-filename --include="*.{ts,tsx,js,jsx}"
-rg "${PKG}\.\w+" --no-filename --include="*.{ts,tsx,js,jsx}" -o | sort -u
+grep -rhE "import \{[^}]+\} from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
+grep -rhoE "${PKG}\.[A-Za-z_][A-Za-z0-9_]*" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' . | sort -u
 
-# Go: symbols accessed after package alias
+# Go: files importing the package path, matched literally
 PKG="github.com/pkg/errors"
-rg "\"${PKG}\"" --include="*.go" -l
+grep -rlF "\"${PKG}\"" --include='*.go' .
 
 # Rust: use paths from the crate
 CRATE="serde"
-rg "use ${CRATE}::" --include="*.rs" -o | sort -u
+grep -rhoE "use ${CRATE}::[A-Za-z0-9_:]*" --include='*.rs' . | sort -u
 ```
 
 Count unique symbols. If the count is at or below the threshold (default: 3),
@@ -206,12 +206,12 @@ vendor), check whether its import style is preventing tree-shaking:
 ```bash
 PKG="lodash"
 # Default/namespace imports that load the whole package
-rg "import _ from ['\"]${PKG}['\"]" --include="*.{ts,tsx,js,jsx}"
-rg "import \* as .+ from ['\"]${PKG}['\"]" --include="*.{ts,tsx,js,jsx}"
-rg "const .+ = require\(['\"]${PKG}['\"]" --include="*.{ts,tsx,js,jsx}"
+grep -rnE "import [A-Za-z_][A-Za-z0-9_]* from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
+grep -rnE "import \* as .+ from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
+grep -rnE "require\(['\"]${PKG}['\"]\)" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
 
 # Named imports (tree-shakeable IF the package ships ESM)
-rg "import \{" --include="*.{ts,tsx,js,jsx}" | grep "${PKG}"
+grep -rnE "import \{[^}]*\} from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
 
 # Check if the package ships an ESM build
 ls node_modules/${PKG}/esm 2>/dev/null || cat node_modules/${PKG}/package.json | grep -E '"module"|"exports"' | head -5

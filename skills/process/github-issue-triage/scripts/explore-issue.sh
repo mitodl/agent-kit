@@ -20,7 +20,7 @@
 #                   paths, e.g. {"product:mit-learn": "/home/user/mit-learn"}.
 #                   When provided, the first matching label overrides repo-path.
 #
-# Requires: jq, git, rg (ripgrep)
+# Requires: jq, git, grep
 
 set -euo pipefail
 
@@ -91,14 +91,14 @@ else
 fi
 echo
 
-echo "--- Code references (rg, src/ only) ---"
+echo "--- Code references (grep, src/ only) ---"
 SRC_DIR="${REPO_PATH}/src"
 [[ -d "${SRC_DIR}" ]] || SRC_DIR="${REPO_PATH}"
 if [[ -n "${KEYWORDS}" ]]; then
   for kw in $(echo "${KEYWORDS}" | tr '|' '\n'); do
     echo "  [${kw}]:"
-    rg -l -g "*.py" -g "*.yaml" -g "*.yml" \
-      "${kw}" "${SRC_DIR}" 2>/dev/null | head -5 || true
+    grep -rl --include="*.py" --include="*.yaml" --include="*.yml" \
+      -e "${kw}" "${SRC_DIR}" 2>/dev/null | head -5 || true
   done
 else
   echo "  (no keywords — skipping code search)"

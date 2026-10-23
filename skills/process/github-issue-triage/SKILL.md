@@ -55,7 +55,7 @@ The core pattern is **enumerate → resolve → batch → fan out → synthesize
    so each agent searches one codebase.
 4. Investigate every batch: with a subagent facility, one subagent per batch in
    parallel; otherwise the same batches one at a time, in order (see Phase 3).
-   Either way each batch uses `explore-issue.sh` and targeted `rg` / `git log`
+   Either way each batch uses `explore-issue.sh` and targeted `grep` / `git log`
    searches to gather evidence.
 5. Synthesize per-batch verdicts into a tiered report.
 6. Optionally act on the report with `close-issues.sh`.
@@ -200,7 +200,7 @@ sequential fallback) must include:
 
 - The issue data (number, title, body excerpt, creation date, resolved_path)
 - The verdict rubric (see below)
-- A concrete set of `rg`, `git log`, and file checks calibrated to the batch
+- A concrete set of `grep`, `git log`, and file checks calibrated to the batch
 - **The correct repo path to search** — for tracker repos this is `resolved_path`,
   not the tracker repo itself
 
@@ -247,7 +247,7 @@ Issues:
 <paste batch JSON with resolved_path fields here>
 
 Specific searches to run per issue (adapt the path from resolved_path):
-<list targeted rg / git log / ls commands>
+<list targeted grep / git log / ls commands>
 ```
 
 ### Calibrating per-batch searches
@@ -255,7 +255,7 @@ Specific searches to run per issue (adapt the path from resolved_path):
 ```bash
 # Did the expected artifact get created?
 ls <resolved_path>/src/<expected-path>/ 2>/dev/null
-rg -l -g "*.py" "<keyword>" <resolved_path>/src
+grep -rl --include="*.py" -e "<keyword>" <resolved_path>/src
 
 # Any commits related to this issue since it was opened?
 git -C <resolved_path> log --oneline --since="<issue-created-date>" \
@@ -265,8 +265,8 @@ git -C <resolved_path> log --oneline --since="<issue-created-date>" \
 grep -n "<specific-string>" <resolved_path>/<file> | head -5
 
 # Was the old technology replaced?
-rg -l "<old-tool>" <resolved_path>/src | head  # expect empty
-rg -l "<new-tool>" <resolved_path>/src | head  # expect populated
+grep -rlI --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ -e "<old-tool>" <resolved_path>/src | head  # expect empty
+grep -rlI --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ -e "<new-tool>" <resolved_path>/src | head  # expect populated
 
 # Is there an active feature branch?
 git -C <resolved_path> branch -r | grep -i "<keyword>" | head
