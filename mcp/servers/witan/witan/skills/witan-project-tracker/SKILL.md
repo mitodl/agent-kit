@@ -8,10 +8,13 @@ description: >
   with the slug injected by the context hook/extension), when advancing phases
   (workflow_project_advance), when closing a session (workflow_session_end),
   or when completing a project (workflow_project_complete to create a corpus
-  trace). Requires the witan MCP server. Covers project lifecycle,
-  cross-session linking, parallel sessions, phase transitions, and corpus trace
-  creation for pattern mining. Use it when asked to "continue the X project",
-  "advance the X project", or "pick up where we left off".
+  trace). Also covers the "advance the project" loop: work ready tasks one at
+  a time, closing each only on evidence checked live (merged PR, re-run
+  check), and stop with a numbered decision list. Requires the witan MCP
+  server. Covers project lifecycle, cross-session linking, parallel sessions,
+  phase transitions, and corpus trace creation for pattern mining. Use it
+  when asked to "continue the X project", "advance the X project", or "pick up
+  where we left off".
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -198,6 +201,98 @@ for every item in it, so editing someone else's project turns its author's
 grants into suggestions until the author sets them again. The CLI equivalent is
 `witan project update <slug> --allow "..." --reserve "..."` (repeat a flag per
 item; `--empty-allow` / `--empty-reserve` clear).
+
+## Advancing a Project
+
+"Advance the X project" (or "continue the X project") means: work the
+project's ready tasks one at a time until nothing left can move without a
+human. This is the sequential loop. Claiming, checkpoints and resuming follow
+the `witan-task` skill ("Claim before you work it", "Checkpoint as you go");
+they are not repeated here.
+
+1. `workflow_project_status(slug=...)` gives the phase, the ready tasks
+   (priority order, `p0` first), `counts.open_tasks`, the last session's
+   handoff, and the autonomy envelope. Start a session for the project if you
+   have not.
+2. Reconcile work already in flight before taking new work. Take the
+   `in_progress` tasks from `task_list(project_slug=..., status="in_progress")`
+   that you hold (any of your sessions) or whose lease has expired; leave a
+   teammate's live claim alone. `task_get` each one, since only it returns the
+   description (the done-when), the comments (the `pr-opened` checkpoint) and
+   `branches`. Find the PR from that checkpoint, the task's `external_uri`, or
+   `gh pr list --head <branch>`, and check it live with
+   `gh pr view <n> --json state,mergedAt,url`. Close the tasks whose close
+   condition (below) now holds. Comment on the rest only when what is missing
+   has changed since their last comment.
+3. Claim the top ready task you have not already put on the stop list this
+   session, and `task_get` it. If its last checkpoint is
+   `blocked:` and live state still does not supply what it names, it is
+   waiting on a human: release it, put it on the stop list, and take the next
+   one. Otherwise resume from its last checkpoint, if any.
+4. Implement it, leaving a checkpoint after each durable step.
+5. Re-run the check that proves the task's done-when (a test, a build, a
+   `pulumi preview`, a query) and keep the command and its result for the
+   resolution.
+6. Get one independent review: the `code-review` skill where it is installed,
+   otherwise any fresh-context subagent given the diff and the done-when, so
+   the reviewer reads the code rather than your reasoning about it. Fix its
+   `high` findings (and `medium` ones the done-when depends on), then re-run
+   step 5.
+7. Open the PR (`pr-opened` checkpoint). Merging follows the envelope: merge
+   only when it is pre-authorized and the checks are green. Otherwise the
+   merge is a stop item, and the task stays `in_progress` with its PR for a
+   later pass of step 2 to close.
+8. Close the task if the close condition holds, then go back to step 1.
+
+### The close condition
+
+A task closes on evidence you checked in this session, never on memory or on
+an earlier session's say-so. The `task_close` resolution quotes it, command and
+result:
+
+```text
+task_close(
+    slug="tk-...",
+    resolution="PR https://github.com/<org>/<repo>/pull/<n> merged (gh pr view <n>: MERGED <date>). "
+               "Shipped in <package> <version> (gh release view <tag>). <check command>: <result>.",
+)
+```
+
+- A merged PR is evidence of a merge, not of the whole done-when. When the
+  done-when says the change ships (a release, a deploy, a config live in a
+  running process), check that as well, e.g. the release tag, the published
+  version, or the `deploy-verification` skill (where installed) for a rollout.
+- When the done-when needs a step only a human can take (a real run observed by
+  someone, a reviewer's sign-off, a deploy outside the envelope), the task does
+  not close even with its PR merged. Leave a `checkpoint blocked:` comment
+  naming the step and who can take it, release the task, and carry it to the
+  stop list. Releasing alone would not keep it out of ready work (an `open` or
+  `blocked` task with no open blocker is still ready, and so is an
+  `in_progress` one whose lease lapsed), which is why step 3 reads that
+  checkpoint before working a task.
+- CI that is pending is reported as pending, never as passing. Watch it in a
+  background shell (`gh pr checks <n> --watch`) and move on to the next task
+  instead of blocking on it.
+- A check that failed and that you cannot fix is a stop, not a close.
+
+### When to stop
+
+A reserved decision from the envelope does not stop the loop by itself. Hold
+the task it belongs to (as for a human step above), add the decision to the
+stop list, and keep working the other ready tasks. Stop when:
+
+- no ready task can proceed: everything left is held for a human, waiting on
+  a reserved decision, or waiting on CI or a merge;
+- the phase is done: `counts.open_tasks` is 0, or every open task is already
+  on the stop list. Propose `workflow_project_advance` with a summary of what
+  the phase delivered;
+- a check failed that you cannot fix.
+
+At a stop, give the user one numbered list with a recommendation for each
+item: reserved decisions, merges waiting on approval, tasks held for a human
+step, and the phase proposal. A status report with no recommendations leaves
+every decision with the user. Then end the session with `workflow_session_end`,
+saying what closed (with PR URLs) and what remains.
 
 ## Phase Transitions
 
