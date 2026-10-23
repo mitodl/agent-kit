@@ -1684,12 +1684,14 @@ current repo.
 **Parameters**:
 
 * `--client CHOICE`: Which agent the block's tool-discovery instructions are written for:
-    ``claude`` (``ToolSearch``, the default), ``pi-builtin`` (a
-    ``codemode`` script, for Pi's built-in MCP), or ``pi``
-    (pi-mcp-adapter's ``mcp`` proxy). The Pi extension passes
+    ``claude`` (``ToolSearch``), ``codex`` (``tool_search``),
+    ``pi-builtin`` (a ``codemode`` script, for Pi's built-in MCP), or
+    ``pi`` (pi-mcp-adapter's ``mcp`` proxy). The Pi extension passes
     ``--client pi`` when the adapter's ``mcp`` tool is registered and
-    ``--client pi-builtin`` otherwise; nothing is inferred from the
-    environment. *[choices: claude, pi, pi-builtin]* *[default: claude]*
+    ``--client pi-builtin`` otherwise. Omitted, as in the hook Claude
+    Code and Codex share, it is read off the hook's stdin payload:
+    ``codex`` for a Codex payload, ``claude`` for anything else. Nothing
+    is inferred from the environment. *[choices: claude, codex, pi, pi-builtin]*
 
 ### witan code serve
 
@@ -1831,8 +1833,9 @@ Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
 
 Reads the hook payload from stdin, extracts ``tool_input.file_path`` (or
 ``path``/``filename``) from Claude Code's, or every file a Codex
-``apply_patch`` adds, updates or moves to, and queues each for reindexing
-if it exists. One detached drainer per checkout applies the
+``apply_patch`` names, and queues each: one still on disk is reindexed,
+and one the patch deleted or moved away has its rows purged. One detached
+drainer per checkout applies the
 queue, so parallel agents editing one worktree do not race each other's
 writes to its branch view. Logs from the last drainer are kept in
 ``$TMPDIR/witan-code-<uid>/``. Best-effort: a missing or

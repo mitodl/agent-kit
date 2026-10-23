@@ -127,3 +127,27 @@ def sample_repo(tmp_path, monkeypatch):
     src.mkdir()
     (src / "svc.py").write_text(SAMPLE)
     return src
+
+
+# Field sets of each agent's UserPromptSubmit stdin payload: Codex's from
+# `UserPromptSubmitCommandInput` (codex-rs/hooks/src/schema.rs at
+# rust-v0.162.1), Claude Code's from its hooks reference. `turn_id` is the
+# Codex extension that tells them apart.
+CODEX_PROMPT_PAYLOAD = {
+    "session_id": "019a1b2c-3d4e-7f00-8a9b-0c1d2e3f4a5b",
+    "turn_id": "1",
+    "transcript_path": None,
+    "cwd": "/work/repo",
+    "hook_event_name": "UserPromptSubmit",
+    "model": "gpt-5-codex",
+    "permission_mode": "default",
+    "prompt": "where is helper defined?",
+}
+CLAUDE_PROMPT_PAYLOAD = {
+    "session_id": "abc123",
+    "transcript_path": "/home/u/.claude/projects/x/abc123.jsonl",
+    "cwd": "/work/repo",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "where is helper defined?",
+}
