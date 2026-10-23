@@ -33,7 +33,7 @@ Two commits confirm a full import landed in April 2026.
 Evidence found:
 
 ```bash
-rg "aerogear|keycloak-metrics-spi" src/ -l
+grep -rlIE --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ "aerogear|keycloak-metrics-spi" src/
 # (no output)
 
 grep -n "metrics-enabled" src/ol_infrastructure/applications/keycloak/__main__.py

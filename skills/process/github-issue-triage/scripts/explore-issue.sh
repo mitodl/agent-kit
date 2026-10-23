@@ -20,7 +20,8 @@
 #                   paths, e.g. {"product:mit-learn": "/home/user/mit-learn"}.
 #                   When provided, the first matching label overrides repo-path.
 #
-# Requires: jq, git, rg (ripgrep)
+# Requires: jq, git, grep (GNU or BSD/macOS — uses -I, --include, and
+#           --exclude-dir, which both provide but POSIX does not mandate)
 
 set -euo pipefail
 
@@ -91,14 +92,20 @@ else
 fi
 echo
 
-echo "--- Code references (rg, src/ only) ---"
+echo "--- Code references (grep, src/ only) ---"
 SRC_DIR="${REPO_PATH}/src"
 [[ -d "${SRC_DIR}" ]] || SRC_DIR="${REPO_PATH}"
+# When src/ is absent SRC_DIR falls back to the repo root, so skip the trees ripgrep
+# used to drop via .gitignore — otherwise .git/, vendored deps, and build output
+# produce false code references (and make the search far slower).
+GREP_EXCL=(-I --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv
+           --exclude-dir=venv --exclude-dir=__pycache__ --exclude-dir=dist
+           --exclude-dir=build --exclude-dir=target)
 if [[ -n "${KEYWORDS}" ]]; then
   for kw in $(echo "${KEYWORDS}" | tr '|' '\n'); do
     echo "  [${kw}]:"
-    rg -l -g "*.py" -g "*.yaml" -g "*.yml" \
-      "${kw}" "${SRC_DIR}" 2>/dev/null | head -5 || true
+    grep -rl "${GREP_EXCL[@]}" --include="*.py" --include="*.yaml" --include="*.yml" \
+      -e "${kw}" "${SRC_DIR}" 2>/dev/null | head -5 || true
   done
 else
   echo "  (no keywords — skipping code search)"
