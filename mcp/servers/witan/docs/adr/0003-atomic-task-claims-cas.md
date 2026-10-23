@@ -285,7 +285,7 @@ set.
 
 Grouping does not raise the fenced write ceiling. A fenced write that read
 its head before the commit in flight published is refused when its turn comes,
-locally and without a round trip when this process made that commit. Only a
+locally and without a round trip when this actor's lane made that commit. Only a
 fenced write that read the head the last commit published, or that reaches an
 idle lane, lands. That is the same reason a fenced write was refused before
 grouping, a publish between its read and its write, and group commit publishes
