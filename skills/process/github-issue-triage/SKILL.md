@@ -255,7 +255,7 @@ Specific searches to run per issue (adapt the path from resolved_path):
 ```bash
 # Did the expected artifact get created?
 ls <resolved_path>/src/<expected-path>/ 2>/dev/null
-grep -rl --include="*.py" -e "<keyword>" <resolved_path>/src
+grep -rlI --include="*.py" --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=__pycache__ -e "<keyword>" <resolved_path>/src
 
 # Any commits related to this issue since it was opened?
 git -C <resolved_path> log --oneline --since="<issue-created-date>" \

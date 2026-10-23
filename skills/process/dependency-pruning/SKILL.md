@@ -153,23 +153,38 @@ variable, `dlopen`) or conditionally (`try: import X except ImportError:`) as
 
 For each dependency that IS used, check how much of it is actually called.
 
+**Exclude the dependency trees first.** ripgrep skipped `.gitignore`d directories
+automatically; `grep` does not. Without explicit exclusions these searches read
+`node_modules/`, `.venv/`, `target/`, and `vendor/` — third-party code that imports the
+same package — and the inflated symbol count silently corrupts the vendoring decision.
+Define the exclusion set once and reuse it:
+
+```bash
+EXCL=(-I --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv
+      --exclude-dir=venv --exclude-dir=__pycache__ --exclude-dir=target
+      --exclude-dir=vendor --exclude-dir=dist --exclude-dir=build)
+```
+
+Narrow the search root further (`src/`, `app/`, `lib/`) wherever the project has one —
+the exclusions are the floor, not a substitute for searching the right tree.
+
 ```bash
 # Python: unique symbols imported from a package
 PKG="humanize"
-grep -rhoE "from ${PKG}(\.[A-Za-z_][A-Za-z0-9_]*)* import [A-Za-z_][A-Za-z0-9_]*" --include='*.py' . | sed -E 's/.* import //' | sort -u
+grep -rhoE "${EXCL[@]}" --include='*.py' "from ${PKG}(\.[A-Za-z_][A-Za-z0-9_]*)* import [A-Za-z_][A-Za-z0-9_]*" . | sed -E 's/.* import //' | sort -u
 
 # JS/TS: named imports + member accesses
 PKG="lodash"
-grep -rhE "import \{[^}]+\} from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
-grep -rhoE "${PKG}\.[A-Za-z_][A-Za-z0-9_]*" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' . | sort -u
+grep -rhE "${EXCL[@]}" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' "import \{[^}]+\} from ['\"]${PKG}['\"]" .
+grep -rhoE "${EXCL[@]}" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' "${PKG}\.[A-Za-z_][A-Za-z0-9_]*" . | sort -u
 
 # Go: files importing the package path, matched literally
 PKG="github.com/pkg/errors"
-grep -rlF "\"${PKG}\"" --include='*.go' .
+grep -rlF "${EXCL[@]}" --include='*.go' -- "\"${PKG}\"" .
 
 # Rust: use paths from the crate
 CRATE="serde"
-grep -rhoE "use ${CRATE}::[A-Za-z0-9_:]*" --include='*.rs' . | sort -u
+grep -rhoE "${EXCL[@]}" --include='*.rs' "use ${CRATE}::[A-Za-z0-9_:]*" . | sort -u
 ```
 
 Count unique symbols. If the count is at or below the threshold (default: 3),
@@ -203,15 +218,19 @@ du -sk node_modules/${PKG} 2>/dev/null
 For each JS/TS package that passes the "keep" threshold (too many symbols to
 vendor), check whether its import style is preventing tree-shaking:
 
+`EXCL` is the exclusion array from Phase 3 — `node_modules/` is full of packages importing
+`${PKG}`, and counting those as first-party import sites inverts the tree-shaking verdict.
+
 ```bash
 PKG="lodash"
+EXCL=(-I --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build)
 # Default/namespace imports that load the whole package
-grep -rnE "import [A-Za-z_][A-Za-z0-9_]* from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
-grep -rnE "import \* as .+ from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
-grep -rnE "require\(['\"]${PKG}['\"]\)" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
+grep -rnE "${EXCL[@]}" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' "import [A-Za-z_][A-Za-z0-9_]* from ['\"]${PKG}['\"]" .
+grep -rnE "${EXCL[@]}" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' "import \* as .+ from ['\"]${PKG}['\"]" .
+grep -rnE "${EXCL[@]}" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' "require\(['\"]${PKG}['\"]\)" .
 
 # Named imports (tree-shakeable IF the package ships ESM)
-grep -rnE "import \{[^}]*\} from ['\"]${PKG}['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' .
+grep -rnE "${EXCL[@]}" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' "import \{[^}]*\} from ['\"]${PKG}['\"]" .
 
 # Check if the package ships an ESM build
 ls node_modules/${PKG}/esm 2>/dev/null || cat node_modules/${PKG}/package.json | grep -E '"module"|"exports"' | head -5

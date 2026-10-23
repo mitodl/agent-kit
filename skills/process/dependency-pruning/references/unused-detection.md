@@ -51,7 +51,15 @@ for d in deps:
 
 for pkg in pkgs:
     # Search including tests/ — test-only use is 'dev-only', not 'unused'
-    result = subprocess.run(['grep', '-rlF', '--include=*.py', '--', pkg, '.'], capture_output=True, text=True)
+    # -I and the --exclude-dir set replace what ripgrep got from .gitignore: a local
+    # .venv/ ships a .py file for every installed package, so without them every
+    # declared dependency matches under site-packages/ and nothing reports as unused.
+    result = subprocess.run(
+        ['grep', '-rlIF', '--include=*.py',
+         '--exclude-dir=.git', '--exclude-dir=.venv', '--exclude-dir=venv',
+         '--exclude-dir=node_modules', '--exclude-dir=__pycache__',
+         '--', pkg, '.'],
+        capture_output=True, text=True)
     if not result.stdout.strip():
         print(f'UNUSED: {pkg}')
     else:
@@ -98,15 +106,19 @@ slower.
 ```bash
 node -e "
 const pkg = require('./package.json');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const deps = Object.keys({...(pkg.dependencies||{}), ...(pkg.devDependencies||{})});
+// execFileSync takes an argv array, so no shell parses the dependency name — a package
+// whose name carries a shell metacharacter cannot alter the command.
+const FLAGS = ['-rlIF',
+  '--include=*.ts', '--include=*.tsx', '--include=*.js', '--include=*.jsx',
+  '--exclude-dir=.git', '--exclude-dir=node_modules',
+  '--exclude-dir=dist', '--exclude-dir=build'];
 for (const dep of deps) {
   try {
     // -F matches the name literally, so scoped packages like @org/name need no escaping
-    const out = execSync(
-      'grep -rlF --include=\"*.ts\" --include=\"*.tsx\" --include=\"*.js\" --include=\"*.jsx\" -- \"' + dep + '\" src/',
-      {stdio:['pipe','pipe','pipe']}
-    ).toString();
+    const out = execFileSync('grep', [...FLAGS, '--', dep, 'src/'],
+      {stdio:['pipe','pipe','pipe']}).toString();
     console.log(out.trim() ? 'used:   ' + dep : 'UNUSED: ' + dep);
   } catch { console.log('UNUSED: ' + dep); }
 }
