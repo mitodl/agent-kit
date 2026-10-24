@@ -16,14 +16,13 @@ travel with it (overridable by ``--profile``/``--scope`` at the CLI layer).
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import GlobalConfig, OrgConfig, ScopeConfig
+from .config import GlobalConfig, OrgConfig, ScopeConfig, xdg_base_dir
 from .fetch import fetch_remote, is_remote_uri
 from .manifest import merge_manifest_data, validate_raw_shapes
 from .models import Scope
@@ -125,9 +124,11 @@ def default_manifest_cache_dir() -> Path:
     from the global config is fetched/cached — there's no local manifest
     directory to nest a ``.agent-config-kit-cache`` next to yet, unlike
     ``manifest.py``'s ``default_cache_dir`` for nested skill/hook sources."""
-    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
-    base = Path(xdg_cache_home) if xdg_cache_home else Path.home() / ".cache"
-    return base / "agent-config-kit" / "manifests"
+    return (
+        xdg_base_dir("XDG_CACHE_HOME", Path(".cache"))
+        / "agent-config-kit"
+        / "manifests"
+    )
 
 
 def _materialize(manifest_ref: str, *, cache_dir: Path) -> Path:

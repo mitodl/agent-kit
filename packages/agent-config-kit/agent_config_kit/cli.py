@@ -582,52 +582,33 @@ def _resolve_manifest_arg(
     )
 
 
-def _redirect_project_scope_state_path(
-    manifest_path: Path, scope: Scope, *, default_path: Path, redirect_filename: str
+def _legacy_state_path(
+    manifest_path: Path, scope: Scope, *, suffix: str, redirect_filename: str
 ) -> Path:
-    """O-STATE (spec §9): a manifest resolved via ``[[org]]``/``[[scope]]``/
-    ``default_manifest`` typically lives OUTSIDE the repo it's being
-    applied into — that's the point, a shared bundle referenced from many
-    repos. A manifest-adjacent state file (``<manifest>.lock.json``,
-    ``<manifest>.applied.json``) would then be a single file shared (and
-    clobbered) across every repo applying that same manifest, corrupting
-    what each repo's own project-scope apply believes it wrote. Redirect
-    to a repo-scoped state file whenever the effective write scope is
-    ``project`` and the manifest isn't already inside the repo being
-    applied into — a manifest that already lives in the repo (an explicit
-    local path, or the repo-local zero-arg case) keeps the original,
-    unaffected default. A ``global``-scope apply's target is the same
-    single location regardless of which repo you ran it from, so its
-    state should stay shared too — this redirection is intentionally
-    ``project``-only.
-
-    Shared by both the prune lock file and the staleness-detection
-    applied-state file (``agent-config-kit-config-overlay-spec.md`` S2) —
-    both are manifest-adjacent state with the same cross-repo clobbering
-    risk, so both need the same redirect, just to a different filename
-    (each kind of state is independent — see S2/§9.5 — so they can't share
-    one redirected file either)."""
+    """Where agent-config-kit 0.13 and earlier kept this state: next to the
+    manifest (``<manifest>.lock.json``, ``<manifest>.applied.json``), or at
+    the repo root for a ``project``-scope apply of a manifest from outside
+    the repo. Read only so the first apply after an upgrade carries the
+    state over to ``prune.state_dir`` instead of starting from nothing,
+    which would leave ``--prune`` unable to remove what it wrote before."""
     if scope == Scope.PROJECT:
         repo_root = find_repo_root(Path.cwd())
         if repo_root is not None and repo_root not in manifest_path.resolve().parents:
             return repo_root / redirect_filename
-    return default_path
+    return manifest_path.with_name(manifest_path.name + suffix)
 
 
-def _default_prune_state_path(manifest_path: Path, scope: Scope) -> Path:
-    return _redirect_project_scope_state_path(
+def _state_read_path(path: Path, legacy: Path | None) -> Path:
+    if legacy is not None and legacy.exists() and not path.exists():
+        return legacy
+    return path
+
+
+def _legacy_applied_state_path(manifest_path: Path, scope: Scope) -> Path:
+    return _legacy_state_path(
         manifest_path,
         scope,
-        default_path=default_state_path(manifest_path),
-        redirect_filename=".agent-config-kit-state.json",
-    )
-
-
-def _default_applied_state_path(manifest_path: Path, scope: Scope) -> Path:
-    return _redirect_project_scope_state_path(
-        manifest_path,
-        scope,
-        default_path=default_applied_state_path(manifest_path),
+        suffix=".applied.json",
         redirect_filename=".agent-config-kit-applied-state.json",
     )
 
@@ -815,7 +796,9 @@ def apply_command(
         this, ``apply`` refuses to touch such a path.
     state_file
         Where to read/write the prune state file. Defaults to
-        ``<manifest>.lock.json``. Ignored unless ``--prune`` is given.
+        ``lock.json`` under ``${XDG_STATE_HOME:-~/.local/state}/agent-config-kit/``,
+        in a directory keyed by the manifest (and, for project scope, the
+        CWD). Ignored unless ``--prune`` is given.
     cache_dir
         Where remote (``https://``/``git+``) sources are fetched and
         cached — both a remote ``MANIFEST`` itself and any remote skill/hook
@@ -867,8 +850,13 @@ def apply_command(
     # skill/plugin-hook on every run regardless of whether it changed, so
     # this warning is purely informational, corrected as a side effect of
     # the very apply that reports it.
-    applied_state_path = _default_applied_state_path(manifest_path, resolved_scope)
-    applied_states = load_applied_state(applied_state_path)
+    applied_state_path = default_applied_state_path(manifest_path, resolved_scope)
+    legacy_applied_state_path = _legacy_applied_state_path(
+        manifest_path, resolved_scope
+    )
+    applied_states = load_applied_state(
+        _state_read_path(applied_state_path, legacy_applied_state_path)
+    )
     current_applied_state = bundle_applied_state(bundle)
     stale_skills: set[str] = set()
     stale_hooks: set[str] = set()
@@ -896,12 +884,18 @@ def apply_command(
 
     try:
         if prune:
-            state_path = (
-                state_file
+            state_path = state_file or default_state_path(manifest_path, resolved_scope)
+            legacy_state_path = (
+                None
                 if state_file is not None
-                else _default_prune_state_path(manifest_path, resolved_scope)
+                else _legacy_state_path(
+                    manifest_path,
+                    resolved_scope,
+                    suffix=".lock.json",
+                    redirect_filename=".agent-config-kit-state.json",
+                )
             )
-            states = load_state(state_path)
+            states = load_state(_state_read_path(state_path, legacy_state_path))
             results: dict[str, InstallResult] = {}
             for name in target_platforms:
                 result, current_state = apply_with_prune(
@@ -923,6 +917,8 @@ def apply_command(
                     states[name] = current_state
             if not dry_run:
                 write_state(state_path, manifest_path, states)
+                if legacy_state_path is not None:
+                    legacy_state_path.unlink(missing_ok=True)
         elif platforms is not None:
             results = {
                 name: apply_bundle(
@@ -965,6 +961,7 @@ def apply_command(
             if not result.skipped:
                 applied_states[name] = current_applied_state
         write_applied_state(applied_state_path, manifest_path, applied_states)
+        legacy_applied_state_path.unlink(missing_ok=True)
 
     if _report(results, dry_run=dry_run, show_diff=diff):
         raise SystemExit(1)
@@ -1058,8 +1055,12 @@ def validate_command(
         platforms = detect_installed_platforms()
     _check_hook_skills(bundle, platforms, resolved_scope)
 
-    applied_state_path = _default_applied_state_path(manifest_path, resolved_scope)
-    applied_states = load_applied_state(applied_state_path)
+    applied_states = load_applied_state(
+        _state_read_path(
+            default_applied_state_path(manifest_path, resolved_scope),
+            _legacy_applied_state_path(manifest_path, resolved_scope),
+        )
+    )
     drifts = {
         name: diff_bundle(
             name,

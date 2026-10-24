@@ -18,6 +18,13 @@ def _write_manifest(tmp_path: Path, text: str) -> Path:
     return manifest
 
 
+def _default_lock(manifest: Path) -> Path:
+    from agent_config_kit.models import Scope
+    from agent_config_kit.prune import default_state_path
+
+    return default_state_path(manifest, Scope.GLOBAL)
+
+
 def _run_ok(app, args: list[str]) -> None:
     """cyclopts' default result_action calls ``sys.exit(0)`` even on a
     successful ``None``-returning command, so a clean run must be asserted
@@ -670,7 +677,7 @@ def test_apply_prune_writes_state_file_next_to_manifest(tmp_path, monkeypatch):
 
     _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--prune"])
 
-    state_file = tmp_path / "agent-config.toml.lock.json"
+    state_file = _default_lock(manifest)
     assert state_file.exists()
     state = json.loads(state_file.read_text())
     assert state["platforms"]["claude"]["mcp_servers"] == ["witan"]
@@ -691,7 +698,7 @@ def test_apply_without_prune_never_writes_state_file(tmp_path, monkeypatch):
 
     _run_ok(app, ["apply", str(manifest), "--platform", "claude"])
 
-    assert not (tmp_path / "agent-config.toml.lock.json").exists()
+    assert not _default_lock(manifest).exists()
 
 
 def test_apply_prune_removes_server_dropped_from_manifest_on_second_run(
@@ -750,7 +757,7 @@ def test_apply_prune_dry_run_writes_neither_config_nor_state_file(
     )
 
     assert not (tmp_path / ".claude.json").exists()
-    assert not (tmp_path / "agent-config.toml.lock.json").exists()
+    assert not _default_lock(manifest).exists()
 
 
 def test_apply_prune_state_file_flag_overrides_default_path(tmp_path, monkeypatch):
@@ -781,7 +788,89 @@ def test_apply_prune_state_file_flag_overrides_default_path(tmp_path, monkeypatc
     )
 
     assert custom_state.exists()
-    assert not (tmp_path / "agent-config.toml.lock.json").exists()
+    assert not _default_lock(manifest).exists()
+
+
+def test_apply_writes_nothing_beside_the_manifest(tmp_path, monkeypatch):
+    """A manifest usually sits in a committed repo, so an apply (plain or
+    --prune) must not leave per-machine state there as an untracked file."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "skills" / "commit").mkdir(parents=True)
+    (repo / "skills" / "commit" / "SKILL.md").write_text("# commit")
+    manifest = _write_manifest(
+        repo,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [skills]
+        commit = "skills/commit/SKILL.md"
+        """,
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude"])
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--prune"])
+
+    assert sorted(p.name for p in repo.iterdir()) == ["agent-config.toml", "skills"]
+    assert _default_lock(manifest).is_file()
+
+
+def test_apply_carries_state_over_from_the_pre_xdg_location(
+    tmp_path, monkeypatch, capsys
+):
+    """State written next to the manifest by an older release must still
+    drive the first apply after an upgrade: --prune removes what that state
+    recorded, the staleness check compares against its hashes, and the old
+    files are deleted once the new ones are written (never on --dry-run)."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / "skills" / "commit").mkdir(parents=True)
+    (tmp_path / "skills" / "commit" / "SKILL.md").write_text("# commit v2")
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [skills]
+        commit = "skills/commit/SKILL.md"
+        """,
+    )
+    (tmp_path / ".claude.json").write_text(
+        json.dumps({"mcpServers": {"witan": {"command": "uvx"}, "other": {}}})
+    )
+    legacy_lock = tmp_path / "agent-config.toml.lock.json"
+    legacy_lock.write_text(
+        json.dumps({"platforms": {"claude": {"mcp_servers": ["other", "witan"]}}})
+    )
+    legacy_applied = tmp_path / "agent-config.toml.applied.json"
+    legacy_applied.write_text(
+        json.dumps({"platforms": {"claude": {"skills": {"commit": "sha256:v1"}}}})
+    )
+
+    _run_ok(
+        app, ["apply", str(manifest), "--platform", "claude", "--prune", "--dry-run"]
+    )
+    assert legacy_lock.is_file()
+    assert legacy_applied.is_file()
+    assert "changed upstream since last apply: commit" in capsys.readouterr().out
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--prune"])
+
+    servers = json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]
+    assert "other" not in servers
+    assert "witan" in servers
+    assert not legacy_lock.exists()
+    assert not legacy_applied.exists()
+    lock = json.loads(_default_lock(manifest).read_text())
+    assert lock["platforms"]["claude"]["mcp_servers"] == ["witan"]
 
 
 def test_apply_prune_does_not_record_state_for_a_skipped_platform(
@@ -803,7 +892,7 @@ def test_apply_prune_does_not_record_state_for_a_skipped_platform(
         """,
     )
     _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--prune"])
-    state_file = tmp_path / "agent-config.toml.lock.json"
+    state_file = _default_lock(manifest)
     good_state = json.loads(state_file.read_text())
     assert good_state["platforms"]["claude"]["mcp_servers"] == ["witan"]
 

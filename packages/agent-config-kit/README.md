@@ -298,12 +298,25 @@ the zero-arg "magic" stays legible.
   manifest wrote but that have since been dropped from it (e.g. a deleted
   `[mcp_servers.*]` table, a removed skill or hook). This is opt-in and only
   ever removes what it can prove it wrote itself, tracked in a state file
-  (`<manifest>.lock.json` by default, override with `--state-file PATH`) — a
+  (`lock.json` under `${XDG_STATE_HOME:-~/.local/state}/agent-config-kit/`
+  by default, override with `--state-file PATH`) — a
   manifest's first-ever `--prune` run removes nothing, since there's no
   recorded state yet to diff against, and a hand-edited key that's absent
   from both the previous and current manifest is never touched.
 - `--cache-dir PATH` overrides where remote skill/hook sources are fetched
   and cached (default: `.agent-config-kit-cache` next to the manifest).
+
+Every non-dry-run `apply` also records the content hash of each skill and
+plugin hook it installed (`applied.json`, beside `lock.json`), which is how a
+later `apply` warns that an entry changed upstream and `validate` reports it
+as stale. Both files are per-machine, so they live in a directory under
+`${XDG_STATE_HOME:-~/.local/state}/agent-config-kit/` keyed by the manifest's
+path and, for `project` scope, by the directory `apply` ran from, rather than
+next to a manifest that is usually committed. Releases up to 0.13 kept them
+beside the manifest (`<manifest>.lock.json`, `<manifest>.applied.json`) or at
+the repo root (`.agent-config-kit-state.json`,
+`.agent-config-kit-applied-state.json`). The first `apply` after upgrading
+reads those and deletes them once the new files are written.
 
 Exit codes: `0` success, `1` a platform's target couldn't be parsed (as JSON,
 or as TOML for Codex), `2` the manifest failed to load or a hook's `skill`

@@ -25,6 +25,7 @@ from agent_config_kit.prune import (
     load_applied_state,
     load_state,
     stale_names,
+    state_dir,
     write_applied_state,
     write_state,
 )
@@ -408,7 +409,7 @@ def test_load_state_missing_file_returns_empty(tmp_path):
 def test_write_state_then_load_state_round_trips(tmp_path):
     manifest = tmp_path / "agent-config.toml"
     manifest.write_text("")
-    state_path = default_state_path(manifest)
+    state_path = default_state_path(manifest, Scope.GLOBAL)
 
     write_state(
         state_path,
@@ -427,7 +428,7 @@ def test_write_state_preserves_platforms_not_touched_this_run(tmp_path):
     different platform's previously recorded state (spec §5 step 5)."""
     manifest = tmp_path / "agent-config.toml"
     manifest.write_text("")
-    state_path = default_state_path(manifest)
+    state_path = default_state_path(manifest, Scope.GLOBAL)
     write_state(state_path, manifest, {"pi": PlatformState(mcp_servers=["witan"])})
 
     states = load_state(state_path)
@@ -438,9 +439,61 @@ def test_write_state_preserves_platforms_not_touched_this_run(tmp_path):
     assert set(loaded) == {"pi", "claude"}
 
 
-def test_default_state_path_is_manifest_name_plus_lock_json(tmp_path):
+def test_state_paths_live_under_xdg_state_home_not_next_to_the_manifest(
+    tmp_path, monkeypatch
+):
+    """The state is per-machine, and a manifest usually sits in a committed
+    repo, so the state must not land beside it as an untracked file."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    manifest = tmp_path / "repo" / "agent-config.toml"
+
+    lock = default_state_path(manifest, Scope.GLOBAL)
+    applied = default_applied_state_path(manifest, Scope.GLOBAL)
+
+    assert lock.parent == applied.parent
+    assert lock.parent.parent == tmp_path / "state" / "agent-config-kit"
+    assert lock.parent.name.startswith("agent-config.toml-")
+    assert (lock.name, applied.name) == ("lock.json", "applied.json")
+
+
+def test_state_dir_falls_back_to_home_local_state(tmp_path, monkeypatch):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    path = state_dir(tmp_path / "agent-config.toml", Scope.GLOBAL)
+
+    assert path.parent == tmp_path / ".local" / "state" / "agent-config-kit"
+
+
+def test_state_dir_ignores_a_relative_xdg_state_home(tmp_path, monkeypatch):
+    """The XDG spec says to ignore a relative value; honoring it would put
+    the state under the CWD, usually a repo."""
+    monkeypatch.setenv("XDG_STATE_HOME", "rel-state")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    path = state_dir(tmp_path / "agent-config.toml", Scope.GLOBAL)
+
+    assert path.parent == tmp_path / ".local" / "state" / "agent-config-kit"
+
+
+def test_state_dir_is_keyed_by_cwd_for_project_scope_only(tmp_path, monkeypatch):
+    """Project targets are relative to the CWD, so one manifest applied into
+    two repos needs two states; a global apply writes the same files from
+    anywhere, so it keeps one."""
     manifest = tmp_path / "agent-config.toml"
-    assert default_state_path(manifest) == tmp_path / "agent-config.toml.lock.json"
+    repo_a = tmp_path / "a"
+    repo_b = tmp_path / "b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    monkeypatch.chdir(repo_a)
+    project_a = state_dir(manifest, Scope.PROJECT)
+    global_a = state_dir(manifest, Scope.GLOBAL)
+    monkeypatch.chdir(repo_b)
+
+    assert state_dir(manifest, Scope.PROJECT) != project_a
+    assert state_dir(manifest, Scope.GLOBAL) == global_a
+    assert state_dir(tmp_path / "other.toml", Scope.GLOBAL) != global_a
 
 
 def test_apply_with_prune_ignores_path_traversal_skill_entry(tmp_path, monkeypatch):
@@ -493,7 +546,7 @@ def test_apply_with_prune_hook_removal_does_not_crash_on_directory(
 def test_write_state_leaves_no_tmp_file_behind_after_success(tmp_path):
     manifest = tmp_path / "agent-config.toml"
     manifest.write_text("")
-    state_path = default_state_path(manifest)
+    state_path = default_state_path(manifest, Scope.GLOBAL)
 
     write_state(state_path, manifest, {"claude": PlatformState(mcp_servers=["witan"])})
 
@@ -547,7 +600,7 @@ def test_stale_names_only_flags_keys_present_in_both_with_a_different_hash():
 def test_write_applied_state_then_load_applied_state_round_trips(tmp_path):
     manifest = tmp_path / "agent-config.toml"
     manifest.write_text("")
-    path = default_applied_state_path(manifest)
+    path = default_applied_state_path(manifest, Scope.GLOBAL)
     state = AppliedState(
         skills={"commit": "sha256:abc"}, hooks={"plugin:x.ts": "sha256:def"}
     )
@@ -568,7 +621,7 @@ def test_write_applied_state_preserves_other_platforms_not_in_this_write(tmp_pat
     existing file, must not erase every other platform's recorded state."""
     manifest = tmp_path / "agent-config.toml"
     manifest.write_text("")
-    path = default_applied_state_path(manifest)
+    path = default_applied_state_path(manifest, Scope.GLOBAL)
     write_applied_state(
         path,
         manifest,
@@ -590,7 +643,7 @@ def test_write_applied_state_preserves_other_platforms_not_in_this_write(tmp_pat
 def test_write_applied_state_leaves_no_tmp_file_behind_after_success(tmp_path):
     manifest = tmp_path / "agent-config.toml"
     manifest.write_text("")
-    path = default_applied_state_path(manifest)
+    path = default_applied_state_path(manifest, Scope.GLOBAL)
 
     write_applied_state(path, manifest, {"claude": AppliedState()})
 
