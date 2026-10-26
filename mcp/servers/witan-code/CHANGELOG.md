@@ -10,7 +10,7 @@ a MINOR bump may include breaking changes).
 
 ## [0.27.1] - 2026-10-26
 
-### Security
+### Changed
 
 - Requires witan-core 0.46.0, whose device login sends PKCE (`S256`). The
   `witan-cli` Keycloak client will require PKCE, and `witan-code login` on an older
