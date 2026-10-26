@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.44.0"
+version = "0.44.1"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -239,7 +239,12 @@ dependencies = [
   # batch of its own. Before 0.44.1 the CLI transport put its params on argv,
   # so on a local or s3 target that write failed with `Argument list too long`
   # after the load had committed, and every re-run failed the same way.
-  "witan-core[cli,remote,observability,sentry]>=0.44.1,<1",
+  #
+  # ★ >=0.46 IS A BEHAVIOUR FLOOR: the device login in `witan_core.remote.oidc`
+  # sends PKCE (`S256`) only from 0.46.0, and the `witan-cli` Keycloak client
+  # is switched to require it once that is out. 0.45 imports and runs, then
+  # every `witan login` is refused by Keycloak.
+  "witan-core[cli,remote,observability,sentry]>=0.46,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -306,7 +311,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.44.0"
+current_version = "0.44.1"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
