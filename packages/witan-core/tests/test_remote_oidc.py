@@ -8,6 +8,7 @@ directly against a tmp cache and an httpx2.MockTransport.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import multiprocessing
 import os
@@ -789,3 +790,112 @@ def test_an_invalid_scope_body_on_a_500_is_not_retried(auth):
             sleep=lambda _s: None,
         )
     assert seen == ["hit"], "invalid_scope on a non-400 must not be retried"
+
+
+# ── PKCE (RFC 7636, S256) on the device grant ─────────────────────────────
+# Keycloak enforces PKCE on the device flow once the client carries
+# `pkce.code.challenge.method=S256`: the device endpoint then rejects a request
+# without `code_challenge`, and the token endpoint a poll without the matching
+# `code_verifier`.
+
+
+def _s256(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _pkce_flow_handler(
+    device_forms: list[dict],
+    poll_forms: list[dict],
+    *,
+    refuse_offline_access: bool = False,
+    pending_polls: int = 0,
+):
+    access = _jwt({"sub": "u"})
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        form = dict(urllib.parse.parse_qsl(req.content.decode()))
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            device_forms.append(form)
+            if refuse_offline_access and "offline_access" in form["scope"]:
+                return httpx2.Response(400, json={"error": "invalid_scope"})
+            return httpx2.Response(
+                200, json={"device_code": f"dev-{len(device_forms)}", "user_code": "C"}
+            )
+        poll_forms.append(form)
+        if len(poll_forms) <= pending_polls:
+            return httpx2.Response(400, json={"error": "authorization_pending"})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
+
+    return handler
+
+
+def test_login_sends_an_s256_challenge_and_its_verifier_on_every_poll(auth):
+    device_forms: list[dict] = []
+    poll_forms: list[dict] = []
+    auth.login(
+        on_prompt=lambda _d: None,
+        client=_client(_pkce_flow_handler(device_forms, poll_forms, pending_polls=2)),
+        sleep=lambda _s: None,
+    )
+    [device] = device_forms
+    assert device["code_challenge_method"] == "S256"
+    assert len(poll_forms) == 3
+    verifiers = {form["code_verifier"] for form in poll_forms}
+    assert len(verifiers) == 1
+    [verifier] = verifiers
+    # RFC 7636 §4.1: 43-128 characters from the unreserved set.
+    assert 43 <= len(verifier) <= 128
+    assert set(verifier) <= set(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
+    assert device["code_challenge"] == _s256(verifier)
+
+
+def test_the_offline_access_fallback_carries_the_same_challenge(auth):
+    device_forms: list[dict] = []
+    poll_forms: list[dict] = []
+    auth.login(
+        on_prompt=lambda _d: None,
+        client=_client(
+            _pkce_flow_handler(device_forms, poll_forms, refuse_offline_access=True)
+        ),
+        sleep=lambda _s: None,
+    )
+    assert [form["scope"] for form in device_forms] == [
+        "openid offline_access",
+        "openid",
+    ]
+    [poll] = poll_forms
+    for form in device_forms:
+        assert form["code_challenge_method"] == "S256"
+        assert form["code_challenge"] == _s256(poll["code_verifier"])
+
+
+def test_a_fresh_device_code_gets_a_fresh_verifier(auth):
+    access = _jwt({"sub": "u"})
+    challenges: list[str] = []
+    verifiers: list[str] = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        form = dict(urllib.parse.parse_qsl(req.content.decode()))
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            challenges.append(form["code_challenge"])
+            return httpx2.Response(
+                200, json={"device_code": f"dev-{len(challenges)}", "user_code": "C"}
+            )
+        verifiers.append(form["code_verifier"])
+        if form["device_code"] == "dev-1":
+            return httpx2.Response(400, json={"error": "expired_token"})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
+
+    auth.login(
+        on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
+    )
+    assert len(challenges) == 2
+    assert challenges[0] != challenges[1]
+    assert [_s256(v) for v in verifiers] == challenges
