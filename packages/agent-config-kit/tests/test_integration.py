@@ -305,13 +305,17 @@ def test_prune_state_is_not_shared_across_repos_applying_the_same_org_manifest(
     _init_git_repo(repo_b)
     _add_remote(repo_b, "origin", "https://github.com/mitodl/repo-b.git")
 
+    from agent_config_kit.models import Scope
+    from agent_config_kit.prune import default_state_path
+
     monkeypatch.chdir(repo_a)
     _run_ok(app, ["apply", "--platform", "claude", "--prune"])
+    state_a = default_state_path(org_manifest, Scope.PROJECT)
     monkeypatch.chdir(repo_b)
     _run_ok(app, ["apply", "--platform", "claude", "--prune"])
+    state_b = default_state_path(org_manifest, Scope.PROJECT)
 
-    state_a = repo_a / ".agent-config-kit-state.json"
-    state_b = repo_b / ".agent-config-kit-state.json"
+    assert state_a != state_b
     assert state_a.is_file()
     assert state_b.is_file()
     assert not (tmp_path / "org" / "agent-config.toml.lock.json").is_file()
@@ -333,3 +337,55 @@ def test_prune_state_is_not_shared_across_repos_applying_the_same_org_manifest(
 
     assert "witan" not in json.loads((repo_a / ".mcp.json").read_text())["mcpServers"]
     assert json.loads((repo_b / ".mcp.json").read_text())["mcpServers"]["witan"]
+
+
+def test_project_scope_prune_carries_over_the_pre_xdg_repo_root_state(
+    tmp_path, monkeypatch
+):
+    """Older releases kept a project-scope apply's state for a manifest from
+    outside the repo at the repo root. The first --prune after upgrading must
+    still prune what that file recorded, then delete it, leaving nothing but
+    the platform's own target in the repo."""
+    from agent_config_kit.cli import app
+    from agent_config_kit.models import Scope
+    from agent_config_kit.prune import default_state_path
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write(
+        tmp_path / "shared" / "agent-config.toml",
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+    repo = tmp_path / "code" / "repo"
+    _init_git_repo(repo)
+    _write(
+        repo / ".mcp.json",
+        json.dumps({"mcpServers": {"witan": {"command": "uvx"}, "other": {}}}),
+    )
+    legacy = _write(
+        repo / ".agent-config-kit-state.json",
+        json.dumps({"platforms": {"claude": {"mcp_servers": ["other", "witan"]}}}),
+    )
+
+    monkeypatch.chdir(repo)
+    _run_ok(
+        app,
+        [
+            "apply",
+            str(manifest),
+            "--platform",
+            "claude",
+            "--scope",
+            "project",
+            "--prune",
+        ],
+    )
+
+    assert "other" not in json.loads((repo / ".mcp.json").read_text())["mcpServers"]
+    assert not legacy.exists()
+    assert sorted(p.name for p in repo.iterdir()) == [".git", ".mcp.json"]
+    state = json.loads(default_state_path(manifest, Scope.PROJECT).read_text())
+    assert state["platforms"]["claude"]["mcp_servers"] == ["witan"]

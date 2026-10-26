@@ -193,6 +193,7 @@ def _redirect() -> None:
     os.environ["XDG_CONFIG_HOME"] = str(home / ".config")
     os.environ["XDG_CACHE_HOME"] = str(home / ".cache")
     os.environ["XDG_DATA_HOME"] = str(home / ".local" / "share")
+    os.environ["XDG_STATE_HOME"] = str(home / ".local" / "state")
 
     # The state files whose defaults are module-level `Path.home()` constants
     # (witan_core.config_file, witan_core.remote.oidc). Moving HOME is not
@@ -318,6 +319,7 @@ def _strict() -> bool:
 _WATCHED_TREES = (
     (REAL_HOME / ".local" / "share" / "witan", 3),
     (REAL_HOME / ".config" / "witan", 2),
+    (REAL_HOME / ".local" / "state" / "agent-config-kit", 2),
 )
 
 # Watched as FILES, by size and mtime, because the agent-kit#282 leak was an
