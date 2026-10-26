@@ -1,7 +1,9 @@
 """OIDC device-authorization-grant login + token cache (ADR-0005, path a).
 
 The device grant (RFC 8628) is the standard flow for CLI tools: no client
-secret, no local redirect listener, works over SSH. The caller prints a URL +
+secret, no local redirect listener, works over SSH. Each device code is bound to
+a PKCE (RFC 7636, ``S256``) verifier, so a realm can require PKCE of this public
+client. The caller prints a URL +
 user code (via ``on_prompt``), the human approves in a browser, and
 :meth:`DeviceAuth.login` polls the token endpoint until it gets a JWT. Tokens
 are cached (mode ``0600``, keyed by issuer+client_id so multiple deployments
@@ -19,10 +21,12 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import json
 import logging
 import math
 import os
+import secrets
 import threading
 import time
 import uuid
@@ -36,6 +40,7 @@ import httpx2
 _log = logging.getLogger(__name__)
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+_PKCE_METHOD = "S256"
 
 # A device code that lapses before a human approves it (RFC 8628 §3.5's
 # `expired_token`) is not a reason to fail the whole login — it is cheap to
@@ -325,6 +330,13 @@ def discover_endpoints(issuer: str, *, client: httpx2.Client | None = None) -> d
     return meta
 
 
+def _pkce_pair() -> tuple[str, str]:
+    """A fresh RFC 7636 ``(code_verifier, code_challenge)`` pair for ``S256``."""
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return verifier, base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 def decode_claims(access_token: str) -> dict:
     """Base64url-decode a JWT's payload for display. Does NOT verify anything."""
     try:
@@ -518,7 +530,7 @@ class DeviceAuth:
         return params
 
     def _request_device_code(
-        self, meta: dict, client: httpx2.Client
+        self, meta: dict, client: httpx2.Client, code_challenge: str
     ) -> httpx2.Response:
         """Start the device grant, asking for a session that outlives one call.
 
@@ -554,9 +566,12 @@ class DeviceAuth:
         cost a real diagnosis.
         """
         endpoint = meta["device_authorization_endpoint"]
-        resp = client.post(
-            endpoint, data={**self._auth_params(), "scope": _LOGIN_SCOPE}
-        )
+        params = {
+            **self._auth_params(),
+            "code_challenge": code_challenge,
+            "code_challenge_method": _PKCE_METHOD,
+        }
+        resp = client.post(endpoint, data={**params, "scope": _LOGIN_SCOPE})
         if resp.status_code == 200:
             return resp
         # ★ THE STATUS IS PART OF THE TEST, not just the body. RFC 6749 §5.2
@@ -569,8 +584,7 @@ class DeviceAuth:
             and _json_safe(resp).get("error") == "invalid_scope"
         ):
             resp = client.post(
-                endpoint,
-                data={**self._auth_params(), "scope": _FALLBACK_LOGIN_SCOPE},
+                endpoint, data={**params, "scope": _FALLBACK_LOGIN_SCOPE}
             )
         resp.raise_for_status()
         return resp
@@ -591,7 +605,9 @@ class DeviceAuth:
         local deadline passing with no answer yet — treated the same, since
         both mean nobody approved it in time) is retried with a FRESH code up
         to ``_MAX_DEVICE_CODE_ATTEMPTS`` times rather than failing the login
-        outright. ``sleep`` is injectable so tests don't wait. Returns the
+        outright. Each fresh code gets its own PKCE verifier, since the IdP
+        binds the challenge to the code it issues. ``sleep`` is injectable so
+        tests don't wait. Returns the
         decoded JWT claims of the freshly-minted access token.
         """
         owns = client is None
@@ -599,7 +615,8 @@ class DeviceAuth:
         try:
             meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
             for attempt in range(1, _MAX_DEVICE_CODE_ATTEMPTS + 1):
-                resp = self._request_device_code(meta, client)
+                verifier, challenge = _pkce_pair()
+                resp = self._request_device_code(meta, client, challenge)
                 device = _json(resp, "device authorization endpoint")
                 on_prompt(device)
 
@@ -609,6 +626,7 @@ class DeviceAuth:
                     **self._auth_params(),
                     "grant_type": DEVICE_GRANT,
                     "device_code": device["device_code"],
+                    "code_verifier": verifier,
                 }
                 while time.time() < deadline:
                     sleep(interval)
