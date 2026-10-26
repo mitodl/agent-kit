@@ -45,7 +45,7 @@ the site build, not committed.
 
 ### Recommended Pre-requisites
 
-We recommend installined the [ripgrep](https://github.com/burntsushi/ripgrep) tool
+We recommend installing the [ripgrep](https://github.com/burntsushi/ripgrep) tool
 for best performance of the skills.
 
 Setup for this repo's own MCP servers and skills is driven by
