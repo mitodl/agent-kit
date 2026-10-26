@@ -8,6 +8,7 @@ or a real detached drainer. The lock itself is real: a kernel flock.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,8 @@ import tempfile
 import pytest
 
 from witan_code import context, hooks
+
+from .conftest import requires_stack
 
 
 @pytest.fixture
@@ -132,9 +135,18 @@ def test_reindex_hook_noop_without_tool_input(_indexed):
     assert _indexed == []
 
 
-def test_reindex_hook_noop_when_file_missing(tmp_path, _indexed):
-    hooks.reindex_hook(_payload(tmp_path / "does-not-exist.py"))
+def test_reindex_hook_noop_when_a_file_it_never_indexed_is_missing(tmp_path, _indexed):
+    hooks.reindex_hook(_payload(tmp_path / "does-not-exist.md"))
     assert _indexed == []
+
+
+def test_reindex_hook_purges_a_missing_source_file(tmp_path, _indexed):
+    """Gone from disk, so indexing it as it is now drops its rows."""
+    gone = tmp_path / "does-not-exist.py"
+
+    hooks.reindex_hook(_payload(gone))
+
+    assert _indexed == [gone]
 
 
 def test_reindex_hook_outside_a_repo_indexes_in_the_foreground(tmp_path, _indexed):
@@ -202,7 +214,7 @@ def _codex_post_tool_use(cwd, patch: str) -> str:
     )
 
 
-def test_reindex_hook_reads_every_file_a_codex_patch_leaves(
+def test_reindex_hook_reads_every_file_a_codex_patch_names(
     tmp_path, monkeypatch, _indexed
 ):
     monkeypatch.chdir(tmp_path)
@@ -228,10 +240,13 @@ def test_reindex_hook_reads_every_file_a_codex_patch_leaves(
 
     hooks.reindex_hook(_codex_post_tool_use(tmp_path, patch))
 
+    # old.py and deleted.py are gone, so these two calls purge them.
     assert _indexed == [
         tmp_path / "added.py",
         tmp_path / "updated.py",
+        tmp_path / "old.py",
         tmp_path / "moved.py",
+        tmp_path / "deleted.py",
     ]
 
 
@@ -333,13 +348,32 @@ def test_drain_pending_marks_the_checkout_busy_while_it_works(_repo, monkeypatch
     assert context.indexing_in_progress() is False
 
 
-def test_drain_pending_skips_a_target_deleted_since_it_was_queued(_repo, _indexed):
+def test_drain_pending_purges_a_target_deleted_since_it_was_queued(_repo, _indexed):
     hooks._enqueue(_repo, _repo / "gone.py")
 
     hooks.drain_pending(_repo, hooks._try_lock(_repo))
 
-    assert _indexed == []
+    assert _indexed == [_repo / "gone.py"]
     assert not hooks._has_pending(_repo)
+
+
+def test_drain_pending_skips_a_deleted_target_it_never_indexed(_repo, _indexed):
+    hooks._enqueue(_repo, _repo / "gone.md")
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _indexed == []
+
+
+def test_drain_pending_skips_targets_of_a_removed_checkout(_repo, _indexed):
+    """git would resolve them against whatever repo encloses the old path."""
+    hooks._enqueue(_repo, _repo / "gone.py")
+    lock_fd = hooks._try_lock(_repo)
+    shutil.rmtree(_repo)
+
+    hooks.drain_pending(_repo, lock_fd)
+
+    assert _indexed == []
 
 
 def test_drain_pending_continues_past_a_failing_target(_repo, monkeypatch):
@@ -441,3 +475,64 @@ def test_a_path_with_a_newline_is_not_queued(_repo):
     hooks._enqueue(_repo, _repo / "a\nb.py")
 
     assert not hooks._has_pending(_repo)
+
+
+# ── End to end: a Codex patch that deletes and renames ───────────────────────
+
+
+@requires_stack
+def test_a_codex_patch_that_deletes_and_renames_leaves_neither_old_path(
+    tmp_path, monkeypatch, _state, _spawned
+):
+    """The hook queues, the drainer applies, and the graph ends up matching
+    the disk: nothing left at the deleted path or at the rename's source."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import store as store_mod
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    src = tmp_path / "repo"
+    (src / "pkg").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=src, check=True)
+    (src / "keep.py").write_text("def keep():\n    return 1\n")
+    (src / "deleted.py").write_text("def deleted():\n    return 1\n")
+    (src / "pkg" / "old.py").write_text("def renamed():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    client = OmnigraphClient(
+        str(store_mod.store_for_repo("https://github.com/test/cg", cfg)),
+        cfg.queries_dir,
+    )
+
+    def _files() -> set[str]:
+        rows = client.read("code_read.gq", "all_file_hashes", {})
+        return {r["slug"].split("#", 1)[1] for r in rows}
+
+    assert _files() == {"keep.py", "deleted.py", "pkg/old.py"}
+
+    # What Codex's apply_patch leaves on disk; the hook runs after it. The
+    # rename empties pkg/, so the directory goes too.
+    (src / "deleted.py").unlink()
+    (src / "new.py").write_text((src / "pkg" / "old.py").read_text())
+    (src / "pkg" / "old.py").unlink()
+    (src / "pkg").rmdir()
+    monkeypatch.chdir(src)
+    patch = (
+        "*** Begin Patch\n"
+        "*** Delete File: deleted.py\n"
+        "*** Update File: pkg/old.py\n"
+        "*** Move to: new.py\n"
+        "*** End Patch\n"
+    )
+
+    hooks.reindex_hook(_codex_post_tool_use(src, patch))
+    assert _spawned  # stubbed, so the drainer runs in-process below
+    checkout = hooks.repo_module.root(src)
+    hooks.drain_pending(checkout, hooks._try_lock(checkout))
+
+    assert _files() == {"keep.py", "new.py"}
+    renamed = client.read("code_read.gq", "find_by_name", {"name": "renamed"})
+    assert [r["file_id"].split("#", 1)[1] for r in renamed] == ["new.py"]
+    assert client.read("code_read.gq", "find_by_name", {"name": "deleted"}) == []

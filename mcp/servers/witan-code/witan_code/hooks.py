@@ -44,14 +44,18 @@ _LOG_MAX_BYTES = 1024 * 1024
 # Codex edits files with its `apply_patch` tool, whose hook payload carries the
 # patch text (`tool_input.command`) rather than a path; its `Edit|Write`
 # matcher selects that tool by alias. These are the patch grammar's
-# file-header lines that name a file left on disk (codex-rs/apply-patch
-# parser.rs: ADD_FILE_MARKER, UPDATE_FILE_MARKER, MOVE_TO_MARKER). Codex
-# accepts an indented Add/Update header (streaming_parser.rs trims the line
+# file-header lines (codex-rs/apply-patch parser.rs: ADD_FILE_MARKER,
+# DELETE_FILE_MARKER, UPDATE_FILE_MARKER, MOVE_TO_MARKER). Every path they
+# name is queued, including the ones the patch removed: a Delete File, and the
+# Update File source of a Move to. The drainer indexes the ones still on disk
+# and purges the rest (`indexer.index_path` on a vanished file). Codex accepts
+# an indented Add/Delete/Update header (streaming_parser.rs trims the line
 # outside an update hunk) but only a column-0 Move to. Added content starts
 # with `+`, so it can't name a file; an update hunk's context line that quotes
-# a header can, and at worst reindexes an unchanged file.
+# a header can, and at worst reindexes an unchanged file or purges one that is
+# already gone.
 _APPLY_PATCH_TARGET = re.compile(
-    r"^(?:[ \t]*\*\*\* (?:Add File|Update File)|\*\*\* Move to): (.+)$",
+    r"^(?:[ \t]*\*\*\* (?:Add File|Delete File|Update File)|\*\*\* Move to): (.+)$",
     re.MULTILINE,
 )
 
@@ -80,7 +84,9 @@ def reindex_hook(payload: str) -> None:
     over and the file is indexed in the foreground, as before.
 
     Claude Code's payload names one file; Codex's ``apply_patch`` payload
-    names every file in the patch, and each is reindexed.
+    names every file in the patch, and each is reindexed. A named file that is
+    no longer on disk (deleted, or the old side of a rename) has its rows
+    purged instead.
 
     Best-effort: a missing/malformed payload, an untracked tool, or a parse
     failure all degrade to a silent no-op rather than interrupting the agent.
@@ -114,10 +120,13 @@ def _reindex_one(raw: str) -> None:
     path = Path(raw)
     if not path.is_absolute():
         path = Path.cwd() / path
-    if not path.is_file():
-        return
+    if path.exists():
+        if not path.is_file():
+            return
+    elif not indexer.indexable(path):
+        return  # never had rows, so nothing to purge
 
-    root = repo_module.root(path.parent)
+    root = repo_module.root(indexer.anchor_dir(path))
     if root is None:
         try:
             indexer.index_path(path, force=False)
@@ -141,8 +150,13 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
         try:
             busy.touch()
             for target in _take_pending(checkout):
-                if not target.exists():
-                    continue  # deleted or moved since it was queued
+                # One gone from disk is indexed too, which purges its rows,
+                # unless the whole checkout went with it: git would then
+                # resolve the path against whatever repo encloses it.
+                if not target.exists() and not (
+                    checkout.is_dir() and indexer.indexable(target)
+                ):
+                    continue
                 try:
                     indexer.index_path(target, force=False)
                 except Exception as exc:  # noqa: BLE001 — one target must not stop the rest

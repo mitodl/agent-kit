@@ -704,7 +704,11 @@ A Pi equivalent of all four lives in one extension,
   exact `mcp__<server>__` name, then `tools.<name>({...})`), and
   `--client pi`, which it passes when pi-mcp-adapter's `mcp` tool is
   registered, gives the adapter's proxy (`mcp({ search: ... })`, then
-  `mcp({ tool: ..., args: {...} })`). The default stays Claude's.
+  `mcp({ tool: ..., args: {...} })`). Codex runs the same bare hook command
+  as Claude Code, so without `--client` the block is chosen from the hook's
+  stdin payload: a Codex payload (it carries `turn_id`) gets Codex's
+  `tool_search` and the `witan-code` skill instead of `ToolSearch` and
+  `/witan-code`, and anything else gets Claude's.
   Independent of `witan`'s own `inject-context` hook (no cross-package
   coupling) — register it alone for a witan-code-only install. Prints
   nothing when the repo has neither a store nor an index in flight.
