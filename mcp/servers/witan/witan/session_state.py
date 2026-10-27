@@ -94,9 +94,12 @@ def write_private(path: Path, text: str) -> None:
     temp file is created ``0600`` (umask-independent) because what lands here
     (project/task titles, PR state) lives in a shared temp dir.
     """
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp: Path | None = None
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        tmp = Path(tmp_name)
         try:
             os.write(fd, text.encode())
         finally:
@@ -108,7 +111,8 @@ def write_private(path: Path, text: str) -> None:
         # read-only temp dir.
         logger.debug("witan.session_state.write_failed", path=str(path), exc_info=True)
         try:
-            tmp.unlink(missing_ok=True)
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
         except OSError:
             # Nothing left to try, and the temp file is in a temp dir. Silence
             # is right here: reporting a failed cleanup of a failed write would
