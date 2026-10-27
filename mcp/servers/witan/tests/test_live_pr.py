@@ -411,6 +411,35 @@ def test_the_local_hook_shows_live_state_for_the_in_flight_branch_task(
 
 
 @requires_omnigraph
+def test_the_local_hook_does_not_cache_a_lookup_cut_off_by_the_deadline(
+    gh, tmp_path, monkeypatch
+):
+    """Cached, the render would hide the PR line for the whole TTL, when the
+    next prompt's lookup might well answer."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    monkeypatch.setenv("WITAN_CONTEXT_DEADLINE", "1")
+    monkeypatch.setattr(live_pr, "_GH_TIMEOUT_SECONDS", 2)
+    gh.mode("hang")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/lt")
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/slow")
+    monkeypatch.chdir(base)
+
+    task = _unwrap(srv.task_create)(
+        title="linked work", description="x", external_uri=PR_URL
+    )
+    _unwrap(srv.task_claim)(task["slug"])
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "linked work" in text
+    assert "witan context partial: linked PR state timed out after 1s" in text
+    repo, branch = ctx_module._cached_repo_and_branch()
+    assert ctx_module._read_output_cache(str(store), repo, branch) is None
+
+
+@requires_omnigraph
 def test_project_status_carries_how_old_the_project_text_is(tmp_path, monkeypatch):
     """`witan project status` prints it, so the rollup has to send it."""
     from witan import server as srv

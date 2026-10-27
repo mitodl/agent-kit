@@ -10,7 +10,9 @@
   shown project with a `github_pr`, each in-flight-branch task, and each held
   task with a linked PR (in a new `## Work You Hold` block when no other block
   names the task). At most 5 lookups per render, run concurrently under the
-  hook's shared deadline. A lookup that fails or misses it renders nothing.
+  hook's shared deadline. A lookup that fails renders nothing. One that misses
+  the deadline is named in the hook's `witan context partial:` line, and that
+  render is not cached, so the next prompt looks it up again.
 - `witan task show`, `witan project` and `witan project status` print the live
   line too, and `witan project status` prints the project's `updated_at`.
 - Comments in the hook's `New Comments on Work You Hold` block carry their

@@ -366,6 +366,23 @@ _READ_BLOCKS = {
     "live": "linked PR state",
 }
 
+
+def _partial_line(
+    fetched: dict[str, object], budget: float, *, debug: bool = False
+) -> str | None:
+    """The line naming the blocks whose reads timed out, or ``None``.
+
+    The renderer shows it and skips the output cache for a render that has it.
+    """
+    timed_out = sorted(k for k, v in fetched.items() if isinstance(v, _TimedOut))
+    if not timed_out:
+        return None
+    _dbg(debug, f"reads cut off at the {budget:g}s deadline: {timed_out}")
+    cut = {_READ_BLOCKS[key.split(":")[0]] for key in timed_out}
+    blocks = [b for b in dict.fromkeys(_READ_BLOCKS.values()) if b in cut]
+    return f"witan context partial: {', '.join(blocks)} timed out after {budget:g}s"
+
+
 # Lookups per render. Each is a `gh` call of ~2s (measured 2026-10-23), run
 # concurrently, so the cap bounds GitHub API use more than latency.
 _LIVE_LOOKUP_LIMIT = 5
@@ -459,9 +476,12 @@ def inject_context(
 
     The graph reads here are local and not bounded, but the linked-PR lookups
     go to GitHub, so they run concurrently under the same shared deadline the
-    remote path uses (:func:`_context_deadline`).
+    remote path uses (:func:`_context_deadline`). A lookup cut off by it,
+    including one the graph reads left no time for, marks the render partial
+    so it is not cached and the next prompt retries the lookup.
     """
-    deadline = time.monotonic() + _context_deadline()
+    budget = _context_deadline()
+    deadline = time.monotonic() + budget
     try:
         # Kept inside the try so the hook still degrades to "" on the off chance
         # any of this raises — the module contract is that it never does.
@@ -568,7 +588,9 @@ def inject_context(
     commented = _held_task_comments(held, comments_for, graph_uri, debug=debug)
 
     live_urls = _live_urls(held, open_branch_tasks, projects)
-    live = _live_lines(_gather(_live_calls(live_urls), deadline), live_urls)
+    looked_up = _gather(_live_calls(live_urls), deadline)
+    live = _live_lines(looked_up, live_urls)
+    partial = _partial_line(looked_up, budget, debug=debug)
 
     # Shared with ``task_ready`` so the injected list and the tool agree —
     # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
@@ -594,6 +616,7 @@ def inject_context(
         commented=commented,
         live=live,
         stale_repo_case=stale_repo_case,
+        partial=partial,
         debug=debug,
     )
 
@@ -1125,19 +1148,7 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
     second.update(_live_calls(live_urls))
     fetched = _gather(second, deadline)
 
-    timed_out = sorted(
-        key
-        for key, value in {**done, **fetched}.items()
-        if isinstance(value, _TimedOut)
-    )
-    partial = None
-    if timed_out:
-        _dbg(debug, f"reads cut off at the {budget:g}s deadline: {timed_out}")
-        cut = {_READ_BLOCKS[key.split(":")[0]] for key in timed_out}
-        blocks = [b for b in dict.fromkeys(_READ_BLOCKS.values()) if b in cut]
-        partial = (
-            f"witan context partial: {', '.join(blocks)} timed out after {budget:g}s"
-        )
+    partial = _partial_line({**done, **fetched}, budget, debug=debug)
 
     sessions_by_project: dict[str, list[dict]] = {}
     for p in projects[:3]:
