@@ -8,6 +8,14 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.44.1] - 2026-10-26
+
+### Changed
+
+- Requires witan-core 0.46.0, whose device login sends PKCE (`S256`). The
+  `witan-cli` Keycloak client will require PKCE, and `witan login` on an older
+  witan-core will then fail.
+
 ## [0.44.0] - 2026-10-21
 
 ### Changed
