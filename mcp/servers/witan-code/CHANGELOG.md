@@ -8,14 +8,6 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
-## [0.27.2] - 2026-10-27
-
-### Fixed
-
-- `reindex-hook` purges files a Codex `apply_patch` deletes or renames away. It read only the headers naming a file left on disk, so a `*** Delete File:` path and the `*** Update File:` source of a `*** Move to:` kept their symbols in the graph until the next SessionStart full refresh, and `code_find_definition` went on returning the old path. The hook now queues those paths too, and indexing a file that is no longer on disk (`index_path`, which the hook's drainer calls) drops its rows and its cross-repo bindings. The drainer used to skip a queued file deleted before it ran; it now purges it the same way.
-
-- `inject-context` gives Codex guidance for tools Codex has. `witan-code setup` registers one bare `UserPromptSubmit` hook for Claude Code and Codex, so Codex got Claude's block, which says to load the `code_*` tools with `ToolSearch` and to run `/witan-code`; Codex has neither. Without `--client`, the command now reads the hook's stdin payload, and a Codex payload (it carries `turn_id`) gets Codex's `tool_search` call and a pointer to the `witan-code` skill. Any other payload, or none, gets the Claude block as before. `--client codex` selects the Codex block explicitly.
-
 ## [0.27.1] - 2026-10-26
 
 ### Changed
