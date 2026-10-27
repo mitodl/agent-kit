@@ -682,13 +682,16 @@ query get_workflow_project($slug: String) {
 // Repo membership can't be expressed as a match-shorthand on the `repos` list,
 // so callers fetch by status (or all) and Python-filter on list membership.
 
+// `github_pr` is selected (here and in `list_all_projects`, which shares the
+// row shape) for the context hook, which shows the linked PR's live state
+// under each active project.
 query list_projects_by_status($status: String) {
     match {
         $p: WorkflowProject { status: $status }
     }
     return {
         $p.slug, $p.title, $p.repos, $p.phase, $p.author,
-        $p.status, $p.updated_at, $p.github_issue, $p.tags,
+        $p.status, $p.updated_at, $p.github_issue, $p.github_pr, $p.tags,
         $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
         $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
@@ -705,7 +708,7 @@ query list_all_projects() {
     }
     return {
         $p.slug, $p.title, $p.repos, $p.phase, $p.author,
-        $p.status, $p.updated_at, $p.github_issue, $p.tags,
+        $p.status, $p.updated_at, $p.github_issue, $p.github_pr, $p.tags,
         $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
         $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
@@ -1211,7 +1214,8 @@ query code_branch_tasks($branch_slug: String) {
         $b workson $t
     }
     return {
-        $t.slug, $t.title, $t.status, $t.priority, $t.assignee, $t.claimed_at
+        $t.slug, $t.title, $t.status, $t.priority, $t.assignee, $t.claimed_at,
+        $t.external_uri
     }
 }
 

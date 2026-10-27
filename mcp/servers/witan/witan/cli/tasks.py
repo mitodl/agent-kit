@@ -6,6 +6,7 @@ import cyclopts
 from rich.prompt import Prompt
 
 from .. import config as cfg_module
+from .. import live_pr
 from ._common import (
     _PRIORITY_STYLE,
     _STATUS_STYLE,
@@ -24,6 +25,7 @@ from ._common import (
     console,
     esc,
     print_error,
+    print_live_pr,
     render_table,
 )
 from .output import dump_record, get_output_format
@@ -239,6 +241,7 @@ def _task_show(slug: str) -> None:
     if not t:
         print_error(f"No task {slug!r}.", stderr=True)
         raise SystemExit(1)
+    t = live_pr.annotate(t, live_pr.LINKED_FIELDS["task_get"])
 
     fmt = get_output_format()
     if fmt != "txt":
@@ -259,6 +262,7 @@ def _task_show(slug: str) -> None:
     ):
         if t.get(key):
             console.print(f"  {label}: {t[key]}")
+    print_live_pr(t)
     if t.get("project_slug"):
         project = _fn(s.workflow_project_get)(slug=t["project_slug"])
         if project:

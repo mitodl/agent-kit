@@ -139,6 +139,18 @@ def no_real_merge_watermarks(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(marks))
 
 
+@pytest.fixture(autouse=True)
+def no_real_github(monkeypatch):
+    """Keep linked-PR lookups (``witan.live_pr``) from running the real ``gh``.
+
+    The CLI's ``task show`` and ``project status`` and the context hook look up
+    any GitHub URL a record carries, and fixtures use ``github.com`` URLs
+    freely. Unguarded, a test would call GitHub as whoever runs it. Tests of
+    the lookups turn them back on and put a stub ``gh`` first on ``PATH``.
+    """
+    monkeypatch.setenv("WITAN_LIVE_PR", "0")
+
+
 @pytest.fixture
 def tmp_state_dir(tmp_path, monkeypatch):
     """Redirect the system temp dir, which is where witan parks process state.

@@ -9,7 +9,7 @@ from rich.markup import escape
 from rich.prompt import Prompt
 
 from .. import config as cfg_module
-from .. import envelope
+from .. import envelope, live_pr
 from ._common import (
     _STATUS_STYLE,
     ProjectStatusFilter,
@@ -25,6 +25,7 @@ from ._common import (
     console,
     esc,
     print_error,
+    print_live_pr,
     render_table,
 )
 from .output import dump_record, get_output_format
@@ -122,6 +123,7 @@ def _project_show(slug: str) -> None:
     if not p:
         print_error(f"No project {slug!r}.", stderr=True)
         raise SystemExit(1)
+    p = live_pr.annotate(p, live_pr.LINKED_FIELDS["workflow_project_get"])
     console.print(f"[bold]{p['slug']}[/bold]  {esc(p.get('title'))}")
     console.print(
         f"  status={_styled(p.get('status', ''), _STATUS_STYLE)}  "
@@ -131,6 +133,7 @@ def _project_show(slug: str) -> None:
         console.print(f"  issue: {p['github_issue']}")
     if p.get("github_pr"):
         console.print(f"  pr: {p['github_pr']}")
+    print_live_pr(p)
     if p.get("blocked_by"):
         blockers = {
             b["slug"]: b for b in _fn(s.workflow_project_get_blockers)(slug=slug)
@@ -212,6 +215,13 @@ def project_status(
         print_error(f"No project {slug!r}.", stderr=True)
         raise SystemExit(1)
 
+    st = {
+        **st,
+        "project": live_pr.annotate(
+            st["project"], live_pr.LINKED_FIELDS["workflow_project_get"]
+        ),
+    }
+
     fmt = get_output_format()
     if fmt == "txt" and json:
         fmt = "json"
@@ -226,8 +236,13 @@ def project_status(
         f"  phase={p.get('phase')}  "
         f"status={_styled(p.get('status', ''), _STATUS_STYLE)}  repos={repos_s}"
     )
+    # The project text is as old as this, and the resume view is where an
+    # agent reads it as the current plan.
+    if p.get("updated_at"):
+        console.print(f"  [dim]last updated {esc(p['updated_at'])}[/dim]")
     if p.get("github_pr"):
         console.print(f"  pr: {p['github_pr']}")
+    print_live_pr(p)
     if st["blockers"]:
         console.print(f"  [yellow]blocked by[/yellow]: {', '.join(st['blockers'])}")
     _print_envelope(p)

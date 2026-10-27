@@ -29,7 +29,8 @@
       "reserved_decisions_set_by": "fixtures",
       "slug": "wp-fixture-001",
       "status": "active",
-      "title": "Witan UI"
+      "title": "Witan UI",
+      "updated_at": "2026-01-01T00:00:00+00:00"
     },
     "ready_tasks": [
       {

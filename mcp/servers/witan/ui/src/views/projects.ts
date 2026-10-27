@@ -140,7 +140,7 @@ function blockedByBadge(
  *
  * The four reads are drawn separately rather than merged: `workflow_project_get`
  * and `workflow_project_status` return DIFFERENT projections of the same node
- * (the rollup's `project` is eleven fields; the detail is nineteen), and folding
+ * (the rollup's `project` is twelve fields; the detail is nineteen), and folding
  * them into one object is what made an earlier cut unable to reach
  * `description` and `blocks`.
  */
