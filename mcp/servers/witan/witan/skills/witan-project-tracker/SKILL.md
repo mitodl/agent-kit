@@ -220,10 +220,15 @@ they are not repeated here.
    teammate's live claim alone. `task_get` each one, since only it returns the
    description (the done-when), the comments (the `pr-opened` checkpoint) and
    `branches`. Find the PR from that checkpoint, the task's `external_uri`, or
-   `gh pr list --head <branch>`, and check it live with
+   `gh pr list --head <branch> --state all` (the default lists open PRs only,
+   so a merged one would be missed), and check it live with
    `gh pr view <n> --json state,mergedAt,url`. Close the tasks whose close
    condition (below) now holds. Comment on the rest only when what is missing
-   has changed since their last comment.
+   has changed since their last comment. A task this session holds with no PR
+   yet is unfinished, not waiting: its live lease keeps it out of the ready
+   list step 3 reads, so re-call `task_claim` with the same `session_id` to
+   renew the lease and resume it from its last checkpoint before claiming new
+   work. Leave one held live by another of your sessions to that session.
 3. Claim the top ready task you have not already put on the stop list this
    session, and `task_get` it. If its last checkpoint is
    `blocked:` and live state still does not supply what it names, it is
@@ -283,9 +288,10 @@ stop list, and keep working the other ready tasks. Stop when:
 
 - no ready task can proceed: everything left is held for a human, waiting on
   a reserved decision, or waiting on CI or a merge;
-- the phase is done: `counts.open_tasks` is 0, or every open task is already
-  on the stop list. Propose `workflow_project_advance` with a summary of what
-  the phase delivered;
+- the phase is done: `counts.open_tasks` is 0. Propose
+  `workflow_project_advance` with a summary of what the phase delivered. Open
+  tasks that are all on the stop list are the previous stop, not a finished
+  phase, since each is still missing its close evidence;
 - a check failed that you cannot fix.
 
 At a stop, give the user one numbered list with a recommendation for each
