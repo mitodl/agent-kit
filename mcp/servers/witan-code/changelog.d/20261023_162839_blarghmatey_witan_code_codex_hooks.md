@@ -1,3 +1,0 @@
-### Fixed
-
-- `reindex-hook` purges files a Codex `apply_patch` deletes or renames away. It read only the headers naming a file left on disk, so a `*** Delete File:` path and the `*** Update File:` source of a `*** Move to:` kept their symbols in the graph until the next SessionStart full refresh, and `code_find_definition` went on returning the old path. The hook now queues those paths too, and indexing a file that is no longer on disk (`index_path`, which the hook's drainer calls) drops its rows and its cross-repo bindings. The drainer used to skip a queued file deleted before it ran; it now purges it the same way.
