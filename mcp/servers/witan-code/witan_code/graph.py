@@ -315,7 +315,7 @@ class OmnigraphClient(_BaseOmnigraphClient):
         classification of every other read — see
         :meth:`~witan_core.omnigraph.OmnigraphClient.statement`. Against the
         cluster that is an HTTP POST rather than a process, including on a
-        branched client, which the named-query path still cannot use.
+        branched client.
 
         One row per branch, ``{"name": ...}``, under the same ``rows``
         envelope a named read returns — verified identical on both transports
@@ -422,31 +422,18 @@ class OmnigraphClient(_BaseOmnigraphClient):
         reaper treats it accordingly (:mod:`witan_code.reaper`).
 
         ``omnigraph branch list`` returns bare names, so staleness has to come
-        from the commit log: ``commit list --branch`` returns every reachable
-        commit, each tagged with the ``manifest_branch`` it landed on, so the
-        branch's own writes are the ones tagged with it.
+        from the commit log: :meth:`commit_list` returns every reachable
+        commit, each tagged with the branch it landed on, so the branch's own
+        writes are the ones tagged with it.
 
-        Output that isn't the expected JSON shape **raises**, and must not
-        degrade to ``None``: ``None`` is load-bearing here — it tells the
-        reaper never to touch this view — so a format change or a stray
-        warning line on stdout would quietly turn a scheduled reaper into a
-        no-op that reports success while branch sprawl grows unbounded. Same
-        convention as the base client's :meth:`read`.
+        Output that isn't the expected JSON shape **raises** (in
+        :meth:`commit_list`), and must not degrade to ``None``: ``None`` is
+        load-bearing here — it tells the reaper never to touch this view — so
+        a format change or a stray warning line on stdout would quietly turn a
+        scheduled reaper into a no-op that reports success while branch sprawl
+        grows unbounded. Same convention as the base client's :meth:`read`.
         """
-        result = self._run("commit", "list", "--branch", name, "--json")
-        try:
-            parsed = json.loads(result)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"omnigraph commit list returned non-JSON for branch "
-                f"{name!r}: {result!r}"
-            ) from exc
-        commits = parsed.get("commits") if isinstance(parsed, dict) else parsed
-        if not isinstance(commits, list):
-            raise RuntimeError(  # noqa: TRY004 - bad omnigraph output, not a caller error
-                f"omnigraph commit list returned no commit array for branch "
-                f"{name!r}: {parsed!r}"
-            )
+        commits = self.commit_list(name)
         # ★ TWO FIELD NAMES, ONE MEANING. omnigraph's 2026-08-20 vocabulary
         # sweep (upstream ecf1d6aedd, #538) renamed `manifest_branch` to
         # `graph_branch` in `commit list --json` without bumping the reported
@@ -469,7 +456,8 @@ class OmnigraphClient(_BaseOmnigraphClient):
         # optimize/cleanup compact the whole store (every branch), not a single
         # one, so they never take --branch even on a branched client. `commit`
         # names its branch as its own flag, so injecting this client's would
-        # either duplicate it or silently retarget the call.
+        # either duplicate it or silently retarget the call. Over HTTP, query
+        # and mutate send the `--branch` returned here as the body's `branch`.
         #
         # `branch` is NOT in this list any more because nothing runs it: branch
         # work goes through `statement`, which bypasses `_extra_args` entirely

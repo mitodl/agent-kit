@@ -194,7 +194,13 @@ dependencies = [
     # same change (omnigraph 0.14 `--target` addressing). 0.46 imports fine,
     # then the first `schema plan` check raises TypeError, so
     # `just check-core-floor` cannot see it.
-    "witan-core[cli,remote,observability,sentry]>=0.48,<1",
+    #
+    # ★ >=0.49 IS A RUNTIME AND BEHAVIOUR FLOOR: `graph.branch_last_write`
+    # calls `OmnigraphClient.commit_list`, added in witan-core 0.49.0 in the
+    # same change, so on 0.48 the reaper raises AttributeError. 0.49 is also
+    # the first that sends a branch view's reads and writes over HTTP; on 0.48
+    # they shell out, which the 0.14 CLI refuses for a plain-http server.
+    "witan-core[cli,remote,observability,sentry]>=0.49,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled

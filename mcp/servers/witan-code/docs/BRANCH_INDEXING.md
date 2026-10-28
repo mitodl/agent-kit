@@ -210,8 +210,10 @@ witan-code reap-views                                  # report every local stor
 witan-code reap-views --store https://… --graph code-x --apply   # the scheduled job
 ```
 
-Idleness comes from `omnigraph commit list --branch`, filtered to commits whose
-`manifest_branch` is the view itself — `branch list` returns bare names, with no
+Idleness comes from the view's commit list (`GET /graphs/<id>/commits?branch=`
+on a deployed server, `omnigraph commit list --branch` on a local store),
+filtered to commits whose `graph_branch` (`manifest_branch` before omnigraph's
+2026-08-20 rename) is the view itself — `branch list` returns bare names, with no
 date, owner, or size. Two rules follow:
 
 * **`main` is never reaped**, however idle. It is the view every reader falls
