@@ -18,9 +18,59 @@ OCC recovery sidecar '01M2V544QY00SSGZA0PSRK3B9X' found original commit id
 '01M2V54457QR0XB7ZW47H5V88H' but its manifest delta differs
 ```
 
-witan reports this as `StoreQuarantined` and names the sidecar's operation id in
-the message. It is a refusal, not a transient failure: nothing clears it but an
-operator, and retrying only spends the caller's deadline.
+It is a refusal, not a transient failure: nothing clears it but an operator,
+and retrying only spends the caller's deadline.
+
+## Which stores this applies to
+
+Only a store still at storage format 8 or 9, written by omnigraph 0.11.x.
+
+omnigraph 0.12.0 removed recovery sidecars altogether ([RFC 0067][v012]): every
+write stages its table effects as detached commits that one manifest commit
+publishes, so an interrupted write leaves the graph unchanged and there is
+nothing to recover. A store at format 14 or later cannot be quarantined this
+way. That covers every deployed graph (the 0.13 cutover rebuilt them onto
+format 14 on 2026-10-14) and any local store `witan migrate storage` has
+converted.
+
+A witan still pinned to omnigraph 0.11 reports this as `StoreQuarantined` and
+names the sidecar's operation id. A current witan never gets that far, because
+its omnigraph cannot open a format 8 or 9 store at all. You meet the sidecar instead
+when converting the store:
+
+- `witan migrate storage` fails with "No available omnigraph binary can read
+  this store", and the attempt it quotes carries the sidecar error above; or
+- `omnigraph upgrade --check` refuses the store as `source_recovery_required`.
+
+**Try the cheap fix first.** `source_recovery_required` also covers a leftover
+recovery file that 0.11 resolves by itself on a read-write open, and an
+unfinished schema apply (a `.staging` root schema object). So stop every
+writer, then open the store read-write with the 0.11 binary (below):
+
+```bash
+$OG snapshot --store <store-uri> --json
+```
+
+If that succeeds, the open has removed the recovery files (or finished or
+rolled back the schema apply), and you can go straight to step 9. If it refuses
+with the OCC sidecar error, the sidecar is contradictory and the full procedure
+below applies. If it refuses naming a choice between the live and the staging
+schema, that is a property-only schema apply left half done, which this page
+does not cover: see the [upgrade guide][upgrade].
+
+**Every `omnigraph` command before step 9 runs with the 0.11 binary.** The
+current binary cannot open a format 8 or 9 store read-write, rejects `repair
+--confirm` and `--force` (repair has only diagnosed since 0.12), and on 0.14 does
+not take `--store`. `witan setup` keeps each outgoing binary beside the new one
+as `omnigraph-<version>`, so it is usually already installed:
+
+```bash
+OG=~/.local/bin/omnigraph-0.11.0
+$OG version   # must print 0.11.x
+```
+
+If it is missing, download the 0.11.0 release asset for your platform from
+[ModernRelay/omnigraph][releases] rather than downgrading the binary witan uses.
 
 ## What causes it
 
@@ -29,23 +79,12 @@ with no arbiter between them. The loser's recovery sidecar records a delta that
 does not match the commit that actually landed, and the store refuses to open
 rather than choose.
 
-**It is an omnigraph defect, and it is already fixed upstream but not yet
-released.** [ModernRelay/omnigraph#602][602] is the same failure: a sidecar left
+It was an omnigraph defect, [ModernRelay/omnigraph#602][602]: a sidecar left
 `Armed` when its confirmation write is lost, blocking every read-write reopen
-store-wide. [PR #716][716] makes recovery compare the original committed
-snapshot and the Lance transaction at each planned table version and, when they
-match, record the operation as `RolledForward` and remove the sidecar by itself.
-
-That PR merged 2026-09-15, two days after the v0.11.0 tag, and no release has
-carried it yet, so the binary we pin still bricks.
-
-**It narrows this procedure rather than retiring it.** #716 heals a sidecar
-whose planned effect still MATCHES what was committed; its own description is
-explicit that "contradictory sidecars still refuse recovery". So once a release
-carries it, the common case resolves itself and what is left here is the
-genuinely contradictory sidecar, which still opens to nothing and still needs
-an operator. Read the steps below as the procedure for that case, not as
-scaffolding to delete.
+store-wide. 0.12.0 fixed it by removing the sidecars. What 0.11.x itself can
+heal is narrower: its recovery rolls a sidecar forward on its own only when the
+planned effect matches what was committed ([PR #716][716]), and a contradictory
+sidecar still opens to nothing. The steps below are for that case.
 
 Since agent-kit#364, `witan serve` serialises writes to one `s3://` root across
 its own threads (`witan_core.omnigraph.store_write_lock`), so two concurrent
@@ -92,7 +131,7 @@ you did not check is not a rollback plan.
 
 **3. Preserve the evidence, separately from the backup.** The sidecar is the
 only record of what the losing writer intended, and step 5 moves it out of the
-way. Keep it where a later upstream report can reach it:
+way. Keep it where a later report can reach it:
 
 ```bash
 aws s3 cp <store-uri>/__recovery/<operation>.json \
@@ -111,8 +150,8 @@ entity changes, and the rollback commit it recorded did not exist. That is the
 shape that makes a forward repair safe: the committed state is the intended
 state, and only the published table heads disagree with it.
 
-**5. Quarantine the sidecar.** `omnigraph repair` cannot open the graph while it
-is active, so move it aside. Do not delete it: step 3's copy is evidence, not a
+**5. Quarantine the sidecar.** `repair` cannot open the graph while it is
+active, so move it aside. Do not delete it: step 3's copy is evidence, not a
 substitute.
 
 ```bash
@@ -123,7 +162,7 @@ aws s3 mv <store-uri>/__recovery/<operation>.json \
 **6. Preview the repair, and read it.** Never go straight to `--confirm`:
 
 ```bash
-omnigraph repair --store <store-uri> --json
+$OG repair --store <store-uri> --json
 ```
 
 Expect `suspicious` for exactly the datasets the sidecar named, each with a
@@ -140,19 +179,19 @@ forcing through them can discard committed rows. Stop and investigate instead.
 **7. Repair.**
 
 ```bash
-omnigraph repair --store <store-uri> --confirm --force
+$OG repair --store <store-uri> --confirm --force
 ```
 
-**8. Verify, rather than assume.** All four:
+**8. Verify, rather than assume.** Still with the 0.11 binary, since the store
+is still on its old format:
 
 ```bash
 # No drift anywhere, and no sidecar left behind.
-omnigraph repair --store <store-uri> --json
+$OG repair --store <store-uri> --json
 aws s3 ls <store-uri>/__recovery/
 
-# Real reads and writes through witan itself, not just the CLI.
-witan memory --target <target> <a term you know is indexed>
-witan tasks --target <target>
+# A read-write open succeeds.
+$OG snapshot --store <store-uri> --json
 ```
 
 The 2026-09-18 recovery ended with `no_drift` on all 27 datasets, zero active
@@ -172,7 +211,42 @@ aws s3 sync --delete \
   s3://<bucket>/backups/quarantine-<stamp>/ <store-uri>
 ```
 
-**9. Restart the writers — but not all of them directly.** Bringing every
+**9. Convert the store to the format witan pins.** The repaired store is still
+format 8 or 9, which witan's omnigraph cannot open. Convert it with the binary
+`witan setup` installed, not a newer omnigraph: a newer release converts to a
+newer format, and the pinned witan cannot read that either.
+
+Take a fresh backup first, and check it as in step 2. Step 2's copy is the
+pre-repair state, so restoring it would also undo the repair. The conversion
+rewrites the store in place, and the backup is the only way back if it stops
+part-way.
+
+For a local store, `witan migrate storage` does this: it takes a
+`.pre-migrate` copy, then runs the conversion. For a direct `s3://` store, back
+it up with `aws s3 sync` as in step 2, then:
+
+```bash
+omnigraph upgrade --check <store-uri>
+omnigraph upgrade <store-uri>
+```
+
+A `source_recovery_required` refusal here means a recovery file is still in
+place: repeat the read-write open from "Try the cheap fix first", and do not
+move anything aside by hand without going through steps 3 to 8. The
+[upgrade guide][upgrade] covers the other refusals.
+
+This in-place conversion is for a standalone (direct) store only. omnigraph
+refuses to upgrade a cluster-managed graph below format 14 in place. That graph
+takes the guide's export/import rebuild, with the 0.11 binary doing the export.
+
+**10. Verify through witan itself**, not just the CLI:
+
+```bash
+witan memory --target <target> <a term you know is indexed>
+witan tasks --target <target>
+```
+
+**11. Restart the writers, but not all of them directly.** Bringing every
 writer back up against one `s3://` store rebuilds the exact topology this page
 opens by calling unsupported, and with it the race that produced the sidecar.
 So:
@@ -183,18 +257,12 @@ So:
   (`https://…`), which is the supported arrangement for a shared root. One
   that cannot be pointed at a served target stays down until it can.
 
-If only ever one writer was direct, this is just "start it again" — but check
+If only ever one writer was direct, this is just "start it again", but check
 rather than assume, because the incident is itself evidence that something was
 writing concurrently.
 
-## Afterwards
-
-Add what you saw to [omnigraph#602][602] if it differs from what is already
-recorded there. Our 2026-09-18 occurrence matches the production report in that
-thread in every respect except the trigger: two concurrent writers rather than a
-lost confirmation write. The preserved sidecar from step 3, the commit history
-around the original commit, and the repair preview from step 6 are what makes an
-occurrence worth adding.
-
 [602]: https://github.com/ModernRelay/omnigraph/issues/602
 [716]: https://github.com/ModernRelay/omnigraph/pull/716
+[v012]: https://github.com/ModernRelay/omnigraph/releases/tag/v0.12.0
+[releases]: https://github.com/ModernRelay/omnigraph/releases
+[upgrade]: https://github.com/ModernRelay/omnigraph/blob/v0.13.0/docs/user/operations/upgrade.md
