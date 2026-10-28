@@ -58,9 +58,11 @@ and `omnigraph version --json` reports `"http_contract": "0.14"`,
 `"internal_schema": {"writes": 16, "serves": [14, 16]}`, `"channel": "stable"`
 and `"protocols": {"target": 2, "credential": 2, "access": 2}`.
 
-There is no 0.14.x patch release. Main is 19 commits past the tag and
-versioned 0.14.1-dev (`crates/omnigraph-cli/Cargo.toml:3` at `dc4a79d`). None
-of those commits touches target addressing (D3). If a 0.14.1 ships before the
+There is no 0.14.x patch release. Main is 19 commits past the tag (GitHub
+compare `v0.14.0...main`) and already carries `version = "0.14.1"`
+(`crates/omnigraph-cli/Cargo.toml:3` at `dc4a79d`). None of those commits
+touches target addressing: `scope.rs` and `operator_schema/validation.rs` are
+identical to the tag (D3). If a 0.14.1 ships before the
 pin bump, re-read its notes and take it, because nothing in this spec depends
 on 0.14.0 specifically.
 
@@ -70,9 +72,9 @@ Verified (source): `INTERNAL_MANIFEST_SCHEMA_VERSION = 16` and
 `MIN_SUPPORTED_INTERNAL_SCHEMA_VERSION = 14`
 (`crates/omnigraph-catalog/src/migrations.rs:155,163`). Normal open serves 14
 to 16, and a branch's first publish under 0.14 stamps it 16
-(`migrations.rs:157-162`). The release notes say format 15 (`v0.14.0.md:227`).
-That entry describes an intermediate edge build. The tag writes 16, and the
-binary agrees.
+(`migrations.rs:157-162`). One release-note entry says format 15
+(`v0.14.0.md:227`), but a later one says the release retains "graph storage
+format 16" (`v0.14.0.md:846`). The tag writes 16, and the binary agrees.
 
 That gives us:
 
@@ -88,6 +90,24 @@ That gives us:
   writes, is enough to stop a 0.13 server from booting on that root.
 - Upstream's rule is to upgrade the CLI, server and SDK together and not mix
   versions against one root (`upgrade-0.14.md:11-12`, main).
+
+ol-infrastructure's format guards assume every format change is a rebuild,
+and that doesn't fit an in-place upgrade. `validate_image_internal_schema`
+(`src/ol_infrastructure/applications/omnigraph/storage.py:262-276`) fails
+preview when the image's `edu.mit.ol.omnigraph.internal-schema` label differs
+from `omnigraph:internal_schema_version`, and tells the operator to arm a
+migration. `validate_internal_schema_version` (`storage.py:161-170`) requires
+that number to match the `fmt<N>` in `omnigraph:storage_prefix`. All three
+stacks pin `fmt14` and `14` (`Pulumi.CI.yaml:66,74`, `Pulumi.QA.yaml:51,54`,
+`Pulumi.Production.yaml:54,57`). Moving the label to 16 fails preview
+everywhere, and keeping it at 14 makes the label lie. This needs a decision in
+the cutover task (be7663). I propose that the image also carry the range it
+serves (e.g. a second label with `14-16`, read from `version --json`), and
+that the guard accept an image whose range contains the root's format. Then
+`internal_schema_version` records what the root holds (16 after cutover)
+while the prefix stays `fmt14`, because renaming the prefix would mean
+copying the root. `validate_internal_schema_version` then has to stop
+requiring the prefix name and the version to match.
 
 So within one environment, omnigraph-server, witan, witan-council, the
 maintenance Job and the CI indexer move together. Environments move one at a
@@ -119,6 +139,12 @@ That breaks four callers:
 - Recovery. An outstanding deployment on an S3 root can't be reconciled with
   released tools (ModernRelay/omnigraph#1163). That is a gap in the 0.14 tier
   whatever we pick for maintenance.
+- witan's own direct `s3://` stores. A personal target can name an S3 graph
+  with `s3_profile`/`s3_region` (`mcp/servers/witan/README.md:108-136`;
+  `store_subprocess_env`, `witan_core/omnigraph.py:1343-1345`). The pooled
+  transport skips `s3://`, so every call goes to the CLI, and stock 0.14
+  refuses the inline `s3://` target. These stores stop working under every
+  option below unless the patched CLI also reaches witan's installer.
 
 ol-infrastructure's storage-migration Job
 (`src/ol_infrastructure/applications/omnigraph/scripts/migrate_storage_format.py:968`)
@@ -142,8 +168,9 @@ Upstream state on 2026-10-28:
   still implements an earlier protocol. #1175 (Cedar `maintain`/`reclaim`
   actions, which installed policies would have to grant) is a draft.
 - The 0.14 lease takeover helps only the server. A restarted server takes
-  over its predecessor's S3 lock after 45s of heartbeat silence
-  (`OMNIGRAPH_CLUSTER_LEASE_SECONDS`), but "CLI writers keep the exact-ID
+  over its predecessor's S3 lock after a lease and a half of heartbeat
+  silence (default lease 30s, `crates/omnigraph-cluster/src/lease.rs:65`, so
+  45s; `OMNIGRAPH_CLUSTER_LEASE_SECONDS` changes it), but "CLI writers keep the exact-ID
   unlock" (`v0.14.0.md:748-755`). A CLI optimize still leaves a lock that
   someone has to force-unlock.
 - An older binary is not a way out. 0.13 refuses the version-3 lock record
@@ -188,6 +215,14 @@ carries it, and to served maintenance when #1186/#1177 ship. (c) is worth
 doing once the data tier has TLS, because it removes the boot-time CLI, but
 it doesn't unblock maintenance and shouldn't gate the upgrade.
 
+(e) leaves witan's direct `s3://` stores unreachable, because the witan
+images and `omnigraph_install.py` stay stock. Either witan refuses an `s3://`
+store under 0.14 with a message pointing at a local store or a served one,
+or the patched CLI also becomes what `omnigraph_install.py` installs, which
+is (d). I lean toward refusing, since I know of no shared deployment that
+uses a direct S3 witan store. Who uses personal S3 targets today is
+unverified, and this is part of the reserved decision.
+
 The full comparison is on tk-decide-how-optimize-cleanup-force-unlock-and-boo-58bab2.
 
 Under (e), `tk-rework-the-omnigraph-server-entrypoint-maintenan-4311a3` keeps
@@ -203,6 +238,13 @@ the 0.13 shape:
   its successor. Whether the entrypoint can stop reading a `serve` lock at all
   depends on `cluster status` reporting a released version-3 record as
   unlocked. That is unverified.
+- 0.14 adds a new server exit. An S3 owner none of whose heartbeats is
+  answered for two thirds of a lease "stops every storage write and exits 2"
+  (`v0.14.0.md:753-754`). The entrypoint `exec`s the server, so the exit
+  reaches Kubernetes directly, and a restart then waits out the lease and
+  takes the lock over. Check that the Deployment's restart policy and the
+  startup probe budget allow for that wait (at least 45s with the default
+  lease).
 
 ## D4. witan stops using the CLI against a deployed server (decided)
 
@@ -236,8 +278,8 @@ The remote CLI calls that have to move:
   `:2693`) and `export_to` (`:2610`). This is
   tk-move-witan-s-remote-load-batch-and-export-to-off-d82169, in progress.
   Export is `POST`, not `GET` as that task's description says. 0.14 `load
-  --json` drops `uri` and adds `actor_id` (`upgrade-0.14.md:179-180`, main),
-  and witan reads neither.
+  --json` drops `uri` (`upgrade-0.14.md:180`, main), and actor fields
+  everywhere become `actor_id` (`:179`). witan reads neither.
 - witan-code's branched clients. `_http_transport` returns `None` for any
   client whose `_extra_args` adds flags (`witan_core/omnigraph.py:2381-2384`),
   and witan-code adds `--branch` (and `--from main` on load) for its per-user
@@ -256,8 +298,11 @@ local stores, and for an `https://` remote if anyone runs one (D5).
 
 ## D5. Per-actor tokens through a generated operator config (decided)
 
-Verified (source): 0.14 removes `--store`, `--server` and `--profile`, and
-replaces them with `--target` (`upgrade-0.14.md:116-133`, main). The CLI
+Verified (source): 0.14 removes `--store` and `--server`, and resource
+profiles stop being a separate selector: `--profile NAME` becomes `--target
+NAME` once the binding is recreated as a target (`upgrade-0.14.md:116-133`,
+main). A global `--profile` survives, but only for control-plane profiles
+(`crates/omnigraph-cli/src/cli.rs:37`). The CLI
 reads no implicit token variable (`upgrade-0.14.md:111-114`, main;
 `v0.14.0.md:36`). A token comes only from a target's `auth`, and
 `TokenSource::Env { env }` accepts any name matching `[A-Za-z_][A-Za-z0-9_]*`
@@ -304,9 +349,18 @@ The `--profile` at `witan_core/omnigraph.py:1273` is the AWS CLI's
 (`aws configure export-credentials --profile`), not omnigraph's, so 0.14
 doesn't touch it. The 60fdc8 task description lists it, and it can come off.
 
-Docs and guidance to update: `mcp/servers/witan/config/operator-config.example.yaml`
-(still the RFC-008 `profiles:` shape, which 0.14 rejects); `witan/cli/migrate.py:99,122`
-(tells users to export `OMNIGRAPH_BEARER_TOKEN` for the CLI); `witan setup`.
+Docs and guidance to update:
+
+- `mcp/servers/witan/config/operator-config.example.yaml` (still the RFC-008
+  `profiles:` shape, which 0.14 rejects);
+- `witan/cli/migrate.py:99,122` (tells users to export `OMNIGRAPH_BEARER_TOKEN`
+  for the CLI);
+- `witan setup`;
+- the witan README and the guides that use `--store`, `--server` or
+  `OMNIGRAPH_BEARER_TOKEN`: `docs/guides/migration-runbook.md`,
+  `store-quarantine-runbook.md` and `branch-indexing.md`. Most of
+  `docs/guides/` is mirrored from the packages, so edit the source file and
+  run `just docs-gen`.
 
 witan's pooled transport also falls back to an ambient `OMNIGRAPH_BEARER_TOKEN`
 (`_resolve_token`, `witan_core/omnigraph.py:2402`). That fallback is witan's
@@ -325,7 +379,7 @@ witan sends and checks `Omnigraph-Http-Api: 0.13`
 (`witan_core/omnigraph_http.py:177,184,437-447,605,679`).
 ol-infrastructure's council probe does the same
 (`src/ol_infrastructure/applications/omnigraph/scripts/check_council_health.py:133-134`).
-A 0.13 client and a 0.14 server refuse each other, and so do the reverse, so
+A 0.13 client and a 0.14 server refuse each other in both directions, so
 there is no mixed window (D2).
 
 Verified (source): every server error body carries `code` and `disposition:
@@ -386,8 +440,9 @@ falls through to the text markers.
   instead of a deploy.
 - Search fixes (tk-re-test-task-and-memory-search-against-0-14-s-an-80b1fc).
   Full-text functions apply the analyzer as soon as rows are written
-  (`v0.14.0.md:1111`, #909), and `bm25()` no longer depends on the query's
-  filters for rows written after the index was built (`v0.14.0.md:987`, #839).
+  (`v0.14.0.md:1111`), and `bm25()` no longer depends on the query's filters
+  for rows written after the index was built (`v0.14.0.md:987`). The task
+  tracks these as upstream #909 and #839.
   Both bear on `task_search`, `memory_search` and `workflow_project_search`
   (`mcp/servers/witan/queries/read.gq`). Whether the fix-task-search-bm25 work
   is still needed is that task's result, not this spec's.
@@ -457,8 +512,8 @@ D3.
 2. D3 decision (tmacey). Under (e), build and qualify the patched CLI against
    a copy of a real S3 root in CI, then land 4311a3 on that path.
 3. The pin bump (e7e5c7), the last code step. It moves together:
-   - `_OMNIGRAPH_VERSION`, `_OMNIGRAPH_RELEASE_TAG` and the digests in
-     `witan_core/omnigraph_install.py:56,88`;
+   - `_OMNIGRAPH_VERSION`, `_OMNIGRAPH_RELEASE_TAG` and the digests
+     (`witan_core/omnigraph_install.py:56,88`, assets from `:121`);
    - the Dockerfile pins (`just check-omnigraph-pins`);
    - `_OMNIGRAPH_INTERNAL_SCHEMA` 14 to 16 (`omnigraph_install.py:119`) and
      the `edu.mit.ol.omnigraph.internal-schema` labels;
@@ -477,8 +532,8 @@ D3.
       reaper, and scale the writers to zero.
    3. Take a whole-root S3 backup, `__cluster/` included, and verify it
       (object count and bytes against the source prefix).
-   4. Roll the omnigraph-server image, then the witan and witan-council
-      images. Bump the council probe's contract header in the same
+   4. Land the format-guard change (D2) in the stack. Roll the
+      omnigraph-server image, then the witan and witan-council images. Bump the council probe's contract header in the same
       ol-infrastructure change.
    5. Re-run representative reads, a controlled write per graph, and the
       search cases from 80b1fc.
@@ -504,3 +559,6 @@ back. Writes made under 0.14 are lost.
   CLI. Upstream showed only status, apply and force-unlock. Unverified.
 - The build time and image size of a CLI-only cargo build in
   `docker/omnigraph-server.Dockerfile`. Unmeasured.
+- The shape of ol-infrastructure's format guard for an in-place upgrade (D2).
+  Proposed, not decided.
+- Whether anyone relies on a direct `s3://` witan store (D3). Unverified.
