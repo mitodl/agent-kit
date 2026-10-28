@@ -286,9 +286,8 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     )
     print("  data commands still refuse an inline S3 root")
 
+    # optimize and cleanup take no --as; the CLI refuses the flag on them.
     refused = s3.run(
-        "--as",
-        ACTOR,
         "--graph",
         GRAPH,
         "cleanup",
@@ -305,12 +304,10 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     s3.assert_unlocked("after the refused cleanup")
 
     before = _object_count(s3_root)
-    s3.json("--as", ACTOR, "--graph", GRAPH, "optimize")
+    s3.json("--graph", GRAPH, "optimize")
     s3.unlock_retained("optimize")
     optimized = _object_count(s3_root)
     s3.json(
-        "--as",
-        ACTOR,
         "--graph",
         GRAPH,
         "cleanup",
