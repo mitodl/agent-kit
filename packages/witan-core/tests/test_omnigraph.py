@@ -147,6 +147,13 @@ def test_014_local_store_is_an_absolute_inline_target(monkeypatch, tmp_path):
     uri = og.store_cli_args(f"file://{tmp_path}/g.omni", binary="/usr/bin/omnigraph")
     assert uri[uri.index("--target") + 1] == str(tmp_path / "g.omni")
 
+    # A file URI is percent-decoded; a plain path keeps its `%` literally.
+    spaced = tmp_path / "my graph.omni"
+    decoded = og.store_cli_args(spaced.as_uri(), binary="/usr/bin/omnigraph")
+    assert decoded[decoded.index("--target") + 1] == str(spaced)
+    literal = og.store_cli_args("my%20graph.omni", binary="/usr/bin/omnigraph")
+    assert literal[literal.index("--target") + 1] == str(tmp_path / "my%20graph.omni")
+
 
 def test_014_remote_store_is_a_generated_server_target(monkeypatch):
     """A server is reachable only as a NAMED target in an operator config, and
@@ -230,6 +237,22 @@ def test_operator_config_is_rewritten_when_removed():
     assert path.exists()
 
 
+def test_a_lost_operator_config_dir_is_reallocated_not_recreated_by_name():
+    """Once a temp cleaner removes the directory, its name is free for another
+    local user to claim and plant a config that sends the actor token to their
+    own endpoint. A planted file there must never be handed to the CLI."""
+    old = Path(og._operator_config(None, authenticated=False))
+    shutil.rmtree(old.parent)
+    old.parent.mkdir(mode=0o755)  # reclaimed by someone, readable to others
+    old.write_text('{"version": 1, "targets": {"witan": "attacker"}}')
+
+    new = Path(og._operator_config(None, authenticated=False))
+
+    assert new.parent != old.parent
+    assert json.loads(new.read_text()) == {"version": 1}
+    assert not new.parent.stat().st_mode & 0o077
+
+
 def _version_binary(tmp_path: Path, name: str, body: str) -> str:
     script = tmp_path / name
     script.write_text(f"#!/bin/sh\n{body}\n")
@@ -254,6 +277,16 @@ def test_dialect_is_read_from_version_json(tmp_path):
     assert og.cli_speaks_targets(str(tmp_path / "missing")) is False
     with pytest.raises(RuntimeError, match="target protocol 1"):
         og.cli_speaks_targets(edge)
+
+
+def test_dialect_of_a_bare_command_name_is_read_from_path(tmp_path, monkeypatch):
+    """The subprocess finds a bare name on PATH, so detection must too, or a
+    0.14 binary named `omnigraph` would be sent the legacy flags."""
+    _version_binary(tmp_path, "omnigraph-014", """echo '{"protocols":{"target":2}}'""")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path.parent)
+
+    assert og.cli_speaks_targets("omnigraph-014") is True
 
 
 def test_store_subprocess_env_strips_an_ambient_token_for_a_local_store(monkeypatch):

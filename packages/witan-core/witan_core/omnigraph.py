@@ -59,6 +59,7 @@ import os
 import random
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -1282,11 +1283,16 @@ def cli_speaks_targets(binary: str) -> bool:
     asks the new one. A binary that cannot be stat'ed or run is answered
     ``False`` so the command itself is what reports it missing, as before.
     """
+    # Resolved the way the subprocess will be: a bare command name is found on
+    # PATH, not in the working directory.
+    resolved = shutil.which(binary)
+    if resolved is None:
+        return False
     try:
-        st = os.stat(binary)
+        st = os.stat(resolved)
     except OSError:
         return False
-    return _speaks_targets(os.path.realpath(binary), st.st_mtime_ns, st.st_size)
+    return _speaks_targets(os.path.realpath(resolved), st.st_mtime_ns, st.st_size)
 
 
 @functools.cache
@@ -1332,11 +1338,36 @@ def _remote_token(token: str | None) -> str | None:
     return token or os.environ.get(BEARER_TOKEN_ENV_VAR) or None
 
 
-@functools.cache
+_operator_dir: Path | None = None
+_operator_dir_lock = threading.Lock()
+
+
+def _is_private_dir(path: Path) -> bool:
+    """Ours alone: a real directory, owned by this user, closed to everyone
+    else. Nothing but this user (or root) can then create a file inside it."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return (
+        stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077
+    )
+
+
 def _operator_config_dir() -> Path:
-    path = Path(tempfile.mkdtemp(prefix="witan-omnigraph-"))
-    atexit.register(shutil.rmtree, path, ignore_errors=True)
-    return path
+    """The private directory generated configs live in, re-allocated when lost.
+
+    Never recreated by name. It sits in the shared temp dir, so once a temp
+    cleaner removes it the name is free for another local user to claim and
+    plant a config whose ``witan`` target would receive this process's actor
+    token.
+    """
+    global _operator_dir
+    with _operator_dir_lock:
+        if _operator_dir is None or not _is_private_dir(_operator_dir):
+            _operator_dir = Path(tempfile.mkdtemp(prefix="witan-omnigraph-"))
+            atexit.register(shutil.rmtree, _operator_dir, ignore_errors=True)
+        return _operator_dir
 
 
 def _operator_config(server_url: str | None, *, authenticated: bool) -> str:
@@ -1350,7 +1381,8 @@ def _operator_config(server_url: str | None, *, authenticated: bool) -> str:
     JSON is written because it is valid YAML and needs no YAML library. The
     file holds no secret (the token is named by variable), so it is
     content-addressed and shared by every call with the same endpoint. It is
-    rewritten if a temp cleaner removed it under a long-lived server.
+    rewritten if a temp cleaner removed it under a long-lived server, in a
+    fresh directory if the cleaner took that too (:func:`_operator_config_dir`).
     """
     doc: dict = {"version": 1}
     if server_url is not None:
@@ -1366,7 +1398,6 @@ def _operator_config(server_url: str | None, *, authenticated: bool) -> str:
     directory = _operator_config_dir()
     path = directory / f"{hashlib.sha256(text.encode()).hexdigest()[:16]}.yaml"
     if not path.exists():
-        directory.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -1443,7 +1474,11 @@ def store_cli_args(
             "store directly (its inline targets are local paths only); reach it "
             "through an omnigraph-server, or with a pre-0.14 binary."
         )
-    path = os.path.abspath(os.path.expanduser(graph_uri.removeprefix("file://")))
+    if graph_uri.startswith("file://"):
+        # A file URI is percent-encoded (`Path.as_uri()` writes a space as
+        # %20); a plain path is taken literally, `%` and all.
+        graph_uri = urllib.parse.unquote(urllib.parse.urlsplit(graph_uri).path)
+    path = os.path.abspath(os.path.expanduser(graph_uri))
     return [
         "--operator-config",
         _operator_config(None, authenticated=False),
