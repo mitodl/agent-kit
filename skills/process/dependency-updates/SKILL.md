@@ -13,7 +13,10 @@ description: >
   release-age cooldown — a zero-day or CVE fix refused by uv's exclude-newer,
   Yarn's npmMinimalAgeGate, npm's min-release-age, or Renovate's
   minimumReleaseAge — when an override is justified, and how to scope it so it
-  survives the next lockfile maintenance run.
+  survives the next lockfile maintenance run. Covers pinning a security floor
+  where it actually propagates: a resolver constraint guards your own lockfile
+  and reaches no consumer, so a published library has to declare the floor and
+  release it, and keep it correct as the dependency graph moves.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -369,13 +372,29 @@ or pnpm `overrides`. The floor outlives the cooldown override: keep it when you 
 dated entry. It also turns a future silent downgrade into a hard failure — with a floor in
 place, `uv lock --upgrade` errors out instead of quietly restoring the vulnerable version.
 
+**If the repo publishes packages, a constraint is not enough.** `constraint-dependencies` is
+never part of a built wheel's metadata, so it steers your lockfile and reaches no consumer: a
+library carrying only a constraint ships a package whose consumers can resolve the vulnerable
+version right back in, while its own CI stays green. Declare the floor in
+`[project] dependencies` of the packages that need it — **and release them**. For an
+application, which publishes nothing, constraint-only is correct and complete.
+
 Bypassing the window also skips the soak that would have caught a malicious release, so audit
 what you let through: upstream tag matches the published artifact, the diff matches the
 advisory, attestations present, maintainer set unchanged.
 
+Then make the floor self-checking, because which packages need one is a property of the
+dependency graph and the graph moves. No scanner catches a package that gains the dependency
+indirectly, or reaches it only through a sibling it declares unpinned: once the floor holds
+the dependency resolves *safe* in your lockfile, so scanners stay green while the published
+metadata is wrong. `uvx mitol-dependency-floors check` fails on both, and on a lockfile that
+has fallen under a floor.
+
 See [references/release-age-cooldowns.md](references/release-age-cooldowns.md) for per-tool
 settings, the Renovate and Dependabot interaction, how to read Yarn's default out of its
-bundled binary, and sweeping expired overrides.
+bundled binary, and sweeping expired overrides. See
+[references/dependency-floors.md](references/dependency-floors.md) for the constraint-versus-
+declaration distinction, configuring the checks, and how reachability is decided.
 
 ---
 

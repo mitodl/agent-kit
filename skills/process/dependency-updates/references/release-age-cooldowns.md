@@ -265,6 +265,11 @@ Two Renovate details worth having right:
   `uv lock --upgrade-package <dep>`. Renovate's generic documentation says lockFileMaintenance
   deletes the lock file first — that is **not** what the uv processor does; it updates in place.
 - The default schedule is weekly; a shared org preset may override it.
+- `osvVulnerabilityAlerts` queries OSV directly rather than going through GitHub, but its
+  documentation is explicit that it only covers **direct** dependencies. Since most CVEs land
+  in transitive ones, it will not fire for the common case; the Dependabot-backed
+  `vulnerabilityAlerts` is what covers transitive, and only where Dependabot alerts are
+  enabled on the repo.
 
 **Dependabot** — `cooldown`, with an implicit 3-day default and `include` / `exclude` lists.
 Documented as applying to **version updates only, not security updates**, so Dependabot's
@@ -312,6 +317,16 @@ range over an exact pin where the tool allows one, and revisit them.
 Do not reach for uv's `override-dependencies` to raise a floor. It replaces what other
 packages declare regardless of validity; `constraint-dependencies` expresses "at least this"
 without overriding anyone's legitimate pin.
+
+**The transitive column above is complete only for a repo that publishes nothing.** None of
+those four mechanisms appear in a built artifact's metadata: `constraint-dependencies` is
+absent from `requires-dist`, and npm `overrides` / Yarn `resolutions` / pnpm `overrides` are
+consumer-side directives a dependent never sees. They protect your resolution and nobody
+else's. If the repo publishes packages, the floor also has to be declared in
+`[project] dependencies` (or `dependencies` in `package.json`) of the packages that need it,
+and those packages released. See
+[dependency-floors.md](dependency-floors.md), which also covers keeping a narrowly-declared
+floor correct as the graph changes.
 
 ### How the floor interacts with the cooldown
 
