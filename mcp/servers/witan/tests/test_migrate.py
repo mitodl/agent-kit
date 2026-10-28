@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import SCHEMA, _Tools, requires_omnigraph
+from .conftest import SCHEMA, _Tools, requires_omnigraph, requires_omnigraph_server
 
 
 def _init_store(path):
@@ -2139,6 +2139,54 @@ def test_store_merge_leaves_someone_elses_rows_alone(server, tmp_path, monkeypat
         "read.gq", "get_memory", {"slug": "mem-written-by-them-bbbbb"}
     )
     assert rows[0]["author"] == "pytest"
+
+
+@requires_omnigraph_server
+def test_store_merge_into_a_served_graph_never_shells_out(
+    served, tmp_path, monkeypatch
+):
+    """The deployed migrate path: export the graph, reconcile, load the winners.
+
+    Both ends of it used to shell out to `omnigraph export`/`load --server`,
+    which the 0.14 CLI refuses against a plain-http server, the deployed data
+    tier's scheme. With the CLI refused for both verbs, this only passes if
+    they went over the pooled HTTP transport, and the rows only come back if
+    the served routes accepted what the CLI used to send.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+    from witan_core import omnigraph as og
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-merged-over-http-aaaaa",
+        content="naïve café",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    rows = _export_rows(source)
+    _, url = served
+    real_run = og.subprocess.run
+
+    def no_remote_cli(cmd, *args, **kwargs):
+        remote = any(url in arg for arg in cmd)
+        assert not (cmd[1] in ("load", "export") and remote), cmd
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(og.subprocess, "run", no_remote_cli)
+
+    result = srv.store_merge(rows)
+
+    assert result["rows_loaded"] == 1
+    merged = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-merged-over-http-aaaaa"}
+    )
+    assert merged[0]["content"] == "naïve café"
+    # Exported back over HTTP: a second merge finds the row already there.
+    assert srv.store_merge(rows)["rows_loaded"] == 0
 
 
 @requires_omnigraph
