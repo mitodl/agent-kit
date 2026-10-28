@@ -841,7 +841,7 @@ class BranchedClient(OmnigraphClient):
     """witan-code's branched view, as far as the base client can see it."""
 
     def _extra_args(self, subcommand):
-        return ["--branch", "act-alice/wip"]
+        return [] if subcommand == "commit" else ["--branch", "act-alice/wip"]
 
 
 def _branched(monkeypatch, queries_dir) -> BranchedClient:
@@ -962,6 +962,27 @@ def test_commit_list_asks_the_server_for_the_branch(
     (request,) = _sent()
     assert request["method"] == "GET"
     assert request["path"] == "/graphs/council/commits?branch=act-bob%2Fother"
+
+
+def test_commit_list_with_an_injected_commit_arg_stays_on_the_subprocess(
+    monkeypatch, queries_dir, _fake_http
+):
+    """The commits route has no field for it, so it is not dropped there."""
+
+    class SnapshotClient(OmnigraphClient):
+        def _extra_args(self, subcommand):
+            return ["--snapshot", "s1"] if subcommand == "commit" else []
+
+    ran = []
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    monkeypatch.setattr(
+        SnapshotClient, "_run", lambda self, *args, **kw: ran.append(args) or "[]"
+    )
+    client = SnapshotClient("http://host:8080", queries_dir, graph_id="council")
+
+    assert client.commit_list("main") == []
+    assert ran == [("commit", "list", "--branch", "main", "--json")]
+    assert _sent() == []
 
 
 @pytest.mark.parametrize(

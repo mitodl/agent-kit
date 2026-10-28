@@ -3101,8 +3101,15 @@ class OmnigraphClient:
         Output that is not a commit array raises rather than reading as an
         empty history, which a caller could not tell from a branch with no
         commits of its own.
+
+        A subclass arg injected into ``commit`` has no field on that route, so
+        one keeps the call on the CLI rather than being dropped.
         """
-        transport = self._http_transport(carries_extra_args=False)
+        transport = (
+            None
+            if self._extra_args("commit")
+            else self._http_transport(carries_extra_args=False)
+        )
         if transport is not None:
             token = self._resolve_token()
 

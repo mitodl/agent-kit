@@ -255,9 +255,10 @@ def reap(
         )
 
     # Disabled means disabled: `select_stale` would return nothing anyway, but
-    # only after `survey` had already spent one `commit list` call per view. On a shared graph carrying every developer's every branch that is a
-    # full scan to reach a foregone conclusion, on whatever schedule the job
-    # runs. The empty report is honest — nothing was scanned.
+    # only after `survey` had already spent one `commit list` call per view.
+    # On a shared graph carrying every developer's every branch that is a full
+    # scan to reach a foregone conclusion, on whatever schedule the job runs.
+    # The empty report is honest — nothing was scanned.
     if max_idle <= 0:
         return ReapReport(graph=graph, now=now)
 
