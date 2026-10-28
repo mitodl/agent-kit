@@ -968,6 +968,19 @@ def _mirror_adrs(mapping: dict[str, str]) -> None:
         source_rel = str(path.relative_to(REPO_ROOT))
         dest_rel = f"explanation/decisions/{path.name}"
         body = rewrite_links(path.read_text(), source_rel, dest_rel, mapping)
+        # Strip YAML frontmatter. ADRs carry machine metadata (`applies_to`
+        # globs, read by the write-adr/implement-plan skills) that is for
+        # agents working in the repo, not for site readers -- and the banner is
+        # PREPENDED, so leaving it would render the block as a horizontal rule,
+        # raw `applies_to:` text, and another rule partway down the page.
+        # Guard on the CLOSING delimiter too. str.partition returns
+        # (whole, "", "") when the separator is absent, so assigning the third
+        # element to a document that merely opens with a thematic break would
+        # blank it -- emitting a page containing nothing but the banner, with
+        # docs-check still green because the output matches the generator.
+        if body.startswith("---\n") and "\n---\n" in body:
+            _, _, body = body.partition("\n---\n")
+            body = body.lstrip("\n")
         emit(DOCS / dest_rel, MIRROR_BANNER.format(source=source_rel) + body)
 
     if dupes := {n: f for n, f in by_number.items() if len(f) > 1}:
