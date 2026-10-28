@@ -12,16 +12,19 @@
 repo = "builtin"
 
 # The omnigraph store fixtures are binary Lance data whose manifests sniff as
-# text; "fixing" them corrupts the stores the contract suite opens.
+# text; "fixing" them corrupts the stores the contract suite opens. The vendored
+# upstream patches under docker/patches/ are excluded because a unified diff's
+# blank context line is a lone space, and stripping it stops `git apply`
+# matching the hunk.
 [[repos.hooks]]
 id = "trailing-whitespace"
 priority = 0
-exclude = "^packages/witan-core/tests/fixtures/omnigraph-stores/"
+exclude = "^(packages/witan-core/tests/fixtures/omnigraph-stores|docker/patches)/"
 
 [[repos.hooks]]
 id = "end-of-file-fixer"
 priority = 0
-exclude = "^packages/witan-core/tests/fixtures/omnigraph-stores/"
+exclude = "^(packages/witan-core/tests/fixtures/omnigraph-stores|docker/patches)/"
 
 [[repos.hooks]]
 id = "check-merge-conflict"

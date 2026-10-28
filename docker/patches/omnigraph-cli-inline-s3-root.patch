@@ -1,0 +1,412 @@
+omnigraph CLI: accept an inline s3:// cluster root for deployment, recovery
+and maintenance.
+
+Backport of https://github.com/ModernRelay/omnigraph/pull/1189 (commit
+32722615815bfdf54add87a616ce4c828ad7f1c8 on blarghmatey:cli-s3-direct-roots)
+onto the v0.14.0 tag (60bfd19db780fdff3a5178f959c1204143420114). The PR is
+based on upstream main; its crates/ hunks apply to v0.14.0 as they are (two at
+line offsets), so this is that diff regenerated against the tag. Its docs/,
+skills/ and changelog.d/ hunks are left out: none of them touch the build, and
+one targets a page v0.14.0 does not have.
+
+docker/omnigraph-server.Dockerfile's cli-patched stage applies it with
+`git apply`, which skips this header. Delete this file and that stage once a
+release or an immutable edge build carries the change.
+
+diff --git a/crates/omnigraph-cli/src/planes.rs b/crates/omnigraph-cli/src/planes.rs
+index 2273b7ac..600c64eb 100644
+--- a/crates/omnigraph-cli/src/planes.rs
++++ b/crates/omnigraph-cli/src/planes.rs
+@@ -176,6 +176,26 @@ pub(crate) fn root_input(command: &Command) -> bool {
+     )
+ }
+ 
++/// The commands that may name an `s3://` cluster root inline: stopped-writer
++/// deployment and recovery, and the direct maintenance commands. A cluster
++/// whose server is down has no served route for any of them (#1163, #1082).
++/// Every other command reaches cloud storage through a server.
++pub(crate) fn admits_inline_s3_root(command: &Command) -> bool {
++    matches!(
++        command,
++        Command::Cluster {
++            command: ClusterCommand::Plan { .. }
++                | ClusterCommand::Apply { .. }
++                | ClusterCommand::Status { .. }
++                | ClusterCommand::ForceUnlock { .. }
++                | ClusterCommand::UpgradeLedger { .. },
++        } | Command::Optimize(_)
++            | Command::Cleanup(_)
++            | Command::Repair(_)
++            | Command::RebuildFullTextIndexes(_)
++    )
++}
++
+ /// Whether the operation addresses one graph of `target`, so `--graph` or the
+ /// target's `default_graph` must select it before any I/O.
+ pub(crate) fn selects_graph(command: &Command, target: &ResolvedTarget) -> bool {
+diff --git a/crates/omnigraph-cli/src/scope.rs b/crates/omnigraph-cli/src/scope.rs
+index 7e22d39f..d94120c2 100644
+--- a/crates/omnigraph-cli/src/scope.rs
++++ b/crates/omnigraph-cli/src/scope.rs
+@@ -124,7 +124,10 @@ pub(crate) fn resolve(
+             "this selection requires a registered target name",
+         ));
+     }
++    let inline_s3 =
++        inline && selection.starts_with("s3://") && planes::admits_inline_s3_root(&cli.command);
+     if inline
++        && !inline_s3
+         && (crate::graph_http::server_scheme(selection).is_some()
+             || selection.contains("://") && !selection.starts_with("file://"))
+     {
+@@ -132,10 +135,23 @@ pub(crate) fn resolve(
+     }
+     let target = if inline {
+         let binding = {
++            let root =
++                init_uri.is_none() && (planes::root_input(&cli.command) || cli.graph.is_some());
++            if inline_s3 && !root {
++                return Err(targets::refusal(
++                    "target_invalid",
++                    "an inline s3:// target is a cluster root; select its graph with --graph",
++                ));
++            }
+             let uri = targets::normalize_storage_uri(selection, cwd)
+                 .map_err(|error| targets::refusal("target_invalid", error.to_string()))?;
+-            let provider = StorageProvider::Local;
+-            if init_uri.is_none() && (planes::root_input(&cli.command) || cli.graph.is_some()) {
++            let provider = if inline_s3 {
++                StorageProvider::capture(&uri)
++                    .map_err(|error| targets::refusal("target_invalid", error.to_string()))?
++            } else {
++                StorageProvider::Local
++            };
++            if root {
+                 TargetBinding::DirectRoot {
+                     uri,
+                     provider,
+@@ -582,4 +598,116 @@ defaults: {target: local, profile: work}
+         assert!(selected(&["version", "--target", "cluster"], &input, dir.path()).is_err());
+         assert!(selected(&["version", "--auth", "me"], &input, dir.path()).is_err());
+     }
++
++    #[test]
++    fn inline_s3_root_reaches_only_stopped_writer_and_maintenance_commands_issue_1163() {
++        let (dir, input) = fixture();
++        let root = "s3://bucket/cluster";
++        let id = "01K00000000000000000000000:1:01K00000000000000000000001";
++        for args in [
++            vec!["cluster", "plan", "--config", "."],
++            vec!["cluster", "apply", "--config", "."],
++            vec![
++                "cluster",
++                "apply",
++                "--deployment-id",
++                id,
++                "--writers-stopped",
++            ],
++            vec!["cluster", "status", "--deployment-id", id],
++            vec!["cluster", "force-unlock", "lock-one"],
++            vec!["cluster", "upgrade-ledger", "--writers-stopped"],
++            vec!["optimize", "--graph", "knowledge"],
++            vec![
++                "cleanup",
++                "--graph",
++                "knowledge",
++                "--keep",
++                "1",
++                "--confirm",
++            ],
++            vec!["repair", "--graph", "knowledge"],
++            vec!["rebuild-full-text-indexes", "--graph", "knowledge"],
++        ] {
++            let mut args = args;
++            args.extend(["--target", root]);
++            let parsed =
++                parse_from(std::iter::once("omnigraph").chain(args.iter().copied())).unwrap();
++            assert!(
++                planes::admits_inline_s3_root(&parsed.cli.command),
++                "{args:?}"
++            );
++            // Applicability of an S3 root, independent of the environment.
++            let s3_root = ResolvedTarget::new(
++                TargetBinding::DirectRoot {
++                    uri: root.into(),
++                    provider: StorageProvider::S3 {
++                        region: "us-east-1".into(),
++                        endpoint: None,
++                        virtual_hosted_style: false,
++                    },
++                    default_graph: None,
++                },
++                TargetProvenance::Inline {
++                    address: root.into(),
++                },
++            );
++            planes::validate_target(&parsed.cli, &s3_root, parsed.explicit_config)
++                .unwrap_or_else(|error| panic!("{args:?}: {error}"));
++            if planes::selects_graph(&parsed.cli.command, &s3_root) {
++                graph_selection(&s3_root, parsed.cli.graph.as_deref()).unwrap();
++            }
++            // The resolver captures the ambient AWS settings, so the only
++            // refusal it may return here is that capture.
++            match selected(&args, &input, dir.path()) {
++                Ok(target) => assert!(
++                    matches!(
++                        target.unwrap().binding,
++                        TargetBinding::DirectRoot { ref uri, provider: StorageProvider::S3 { .. }, .. }
++                            if uri.starts_with(root)
++                    ),
++                    "{args:?}"
++                ),
++                Err(error) => {
++                    let message = error.to_string();
++                    assert!(
++                        error
++                            .downcast_ref::<targets::TargetError>()
++                            .is_some_and(|e| e.code == "target_invalid")
++                            && !message.contains("cluster root"),
++                        "{args:?}: {message}"
++                    );
++                }
++            }
++        }
++        for args in [
++            vec!["query", "-e", "q", "--graph", "knowledge", "--target", root],
++            vec!["snapshot", "--graph", "knowledge", "--target", root],
++            vec!["branch", "list", "--graph", "knowledge", "--target", root],
++            vec!["schema", "show", "--graph", "knowledge", "--target", root],
++            vec!["cluster", "observe", "--target", root],
++            vec!["policy", "validate", "--target", root],
++            vec!["init", "s3://bucket/graph", "--schema", "schema.pg"],
++            vec![
++                "optimize",
++                "--graph",
++                "knowledge",
++                "--target",
++                "az://container/cluster",
++            ],
++        ] {
++            let error = selected(&args, &input, dir.path()).unwrap_err();
++            assert!(
++                error.to_string().contains("local storage only"),
++                "{args:?}: {error}"
++            );
++        }
++        let error = selected(&["optimize", "--target", root], &input, dir.path()).unwrap_err();
++        assert!(
++            error
++                .to_string()
++                .contains("cluster root; select its graph with --graph"),
++            "{error}"
++        );
++    }
+ }
+diff --git a/crates/omnigraph-cli/src/targets.rs b/crates/omnigraph-cli/src/targets.rs
+index 1fdf8612..82fd7252 100644
+--- a/crates/omnigraph-cli/src/targets.rs
++++ b/crates/omnigraph-cli/src/targets.rs
+@@ -1,6 +1,5 @@
+ //! Complete target bindings and conservative operator-file administration.
+ 
+-#[cfg(test)]
+ use std::collections::BTreeMap;
+ use std::io::Write;
+ use std::path::Path;
+@@ -134,7 +133,14 @@ impl StorageProvider {
+             _ => bail!("provider kind does not match the storage URI"),
+         }
+     }
+-    #[cfg(test)]
++    /// An inline cloud address captures ambient destination settings once.
++    /// Registered targets never call this.
++    pub(crate) fn capture(uri: &str) -> Result<Self> {
++        let environment = std::env::vars_os()
++            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
++            .collect();
++        Self::capture_from(uri, &environment)
++    }
+     fn capture_from(uri: &str, environment: &BTreeMap<String, String>) -> Result<Self> {
+         let nonempty = |names: &[&str]| {
+             names.iter().find_map(|name| {
+@@ -193,7 +199,7 @@ impl StorageProvider {
+                 .or(aliases(&["AWS_ENDPOINT_URL", "AWS_ENDPOINT"])?);
+             if nonempty(&["AWS_PROFILE"]).is_some() && endpoint.is_none() {
+                 bail!(
+-                    "inline S3 with AWS_PROFILE needs an explicit AWS_ENDPOINT_URL_S3 so its endpoint can be captured; alternatively register a target with provider settings"
++                    "inline S3 with AWS_PROFILE needs an explicit AWS_ENDPOINT_URL_S3 so its endpoint can be captured"
+                 );
+             }
+             Self::S3 {
+diff --git a/crates/omnigraph-cli/tests/integration/cli_cluster_e2e.rs b/crates/omnigraph-cli/tests/integration/cli_cluster_e2e.rs
+index 99f64b06..2a2f4141 100644
+--- a/crates/omnigraph-cli/tests/integration/cli_cluster_e2e.rs
++++ b/crates/omnigraph-cli/tests/integration/cli_cluster_e2e.rs
+@@ -49,6 +49,133 @@ fn cluster_e2e_azure_live_apply_without_restart() {
+     live_apply_changes_schema_queries_and_adds_graph_without_restart(Some(&root));
+ }
+ 
++/// With no server, an inline S3 root takes the stopped-writer doors a local
++/// root has: deploy, observe and replay by ID, unlock by exact ID, and run
++/// direct maintenance on one of its graphs (#1163, #1082).
++#[test]
++fn cluster_e2e_s3_direct_root_deploys_unlocks_and_maintains_issue_1163() {
++    let Ok(bucket) = std::env::var("OMNIGRAPH_S3_TEST_BUCKET") else {
++        eprintln!("skipping s3 direct root: OMNIGRAPH_S3_TEST_BUCKET is not set");
++        return;
++    };
++    let prefix = std::env::var("OMNIGRAPH_S3_TEST_PREFIX")
++        .ok()
++        .filter(|value| !value.trim().is_empty())
++        .unwrap_or_else(|| "omnigraph-itests".into());
++    let root = format!(
++        "s3://{bucket}/{prefix}/direct-root/{}",
++        uuid::Uuid::new_v4()
++    );
++    let temp = tempdir().unwrap();
++    write_cluster_config_fixture(temp.path());
++    let rooted = |args: &[&str]| {
++        let mut command = cli();
++        command.args(["--target", &root]).args(args);
++        command
++    };
++    let status = || {
++        parse_stdout_json(&output_success(&mut rooted(&[
++            "cluster", "status", "--json",
++        ])))
++    };
++    let unlock = |lock_id: &str| {
++        let unlocked = parse_stdout_json(&output_success(&mut rooted(&[
++            "cluster",
++            "force-unlock",
++            lock_id,
++            "--json",
++        ])));
++        assert_eq!(unlocked["unlocked"], true, "{unlocked}");
++    };
++
++    let output = output_success(
++        rooted(&[
++            "--as",
++            "act-cluster-test",
++            "cluster",
++            "apply",
++            "--json",
++            "--config",
++        ])
++        .arg(temp.path()),
++    );
++    let stderr = String::from_utf8_lossy(&output.stderr);
++    assert!(
++        stderr.contains("direct root") && stderr.contains("provider=S3"),
++        "{stderr}"
++    );
++    let deployed = parse_stdout_json(&output);
++    assert_eq!(deployed["status"], "complete", "{deployed}");
++    assert_eq!(deployed["result"]["converged"], true, "{deployed}");
++    let id = deployed["result"]["id"].as_str().unwrap();
++
++    let observed = parse_stdout_json(&output_success(&mut rooted(&[
++        "cluster",
++        "status",
++        "--deployment-id",
++        id,
++        "--json",
++    ])));
++    assert_eq!(observed["lookup"], deployed);
++    let lock_id = observed["lock_id"].as_str().unwrap().to_owned();
++    let replayed = parse_stdout_json(&output_success(&mut rooted(&[
++        "cluster",
++        "apply",
++        "--deployment-id",
++        id,
++        "--writers-stopped",
++        "--json",
++    ])));
++    assert_eq!(replayed, deployed, "a terminal ID is lookup only");
++    unlock(&lock_id);
++
++    let plan = parse_stdout_json(&output_success(
++        rooted(&["cluster", "plan", "--json", "--config"]).arg(temp.path()),
++    ));
++    assert!(plan["changes"].as_array().unwrap().is_empty(), "{plan}");
++
++    // A non-local cleanup still needs --yes, and refuses before admission.
++    let unconfirmed = output_failure(&mut rooted(&[
++        "cleanup",
++        "--graph",
++        "knowledge",
++        "--keep",
++        "1",
++        "--confirm",
++        "--json",
++    ]));
++    assert!(
++        String::from_utf8_lossy(&unconfirmed.stdout).contains("refusing destructive `cleanup`")
++            || String::from_utf8_lossy(&unconfirmed.stderr)
++                .contains("refusing destructive `cleanup`"),
++        "{unconfirmed:?}"
++    );
++    assert!(status()["lock_id"].is_null());
++
++    for maintenance in [
++        vec!["optimize", "--graph", "knowledge", "--json"],
++        vec![
++            "cleanup",
++            "--graph",
++            "knowledge",
++            "--keep",
++            "1",
++            "--confirm",
++            "--yes",
++            "--json",
++        ],
++    ] {
++        output_success(&mut rooted(&maintenance));
++        let retained = status();
++        unlock(
++            retained["lock_id"]
++                .as_str()
++                .unwrap_or_else(|| panic!("{maintenance:?} retains its lock: {retained}")),
++        );
++    }
++    assert!(status()["lock_id"].is_null());
++}
++
+ fn live_apply_changes_schema_queries_and_adds_graph_without_restart(storage_root: Option<&str>) {
+     use std::sync::{
+         Arc,
+diff --git a/crates/omnigraph-cli/tests/integration/cli_data.rs b/crates/omnigraph-cli/tests/integration/cli_data.rs
+index 5caadb47..3a11a669 100644
+--- a/crates/omnigraph-cli/tests/integration/cli_data.rs
++++ b/crates/omnigraph-cli/tests/integration/cli_data.rs
+@@ -4469,8 +4469,9 @@ fn cleanup_against_non_local_scope_refuses_without_yes() {
+         ]);
+         command
+     };
+-    // Cloud-direct selection is not in the version-1 grammar, with or without
+-    // either confirmation flag. Refusal must precede credential/storage I/O.
++    // An inline S3 address reaches cleanup only as a cluster root with
++    // --graph (#1163); a graph URI refuses before any storage I/O, with or
++    // without either confirmation flag.
+     for flags in [vec![], vec!["--confirm"], vec!["--confirm", "--yes"]] {
+         let output = output_failure(
+             s3().args([
+@@ -4489,7 +4490,7 @@ fn cleanup_against_non_local_scope_refuses_without_yes() {
+             String::from_utf8_lossy(&output.stderr)
+         );
+         assert!(
+-            diagnostic.contains("inline access supports local storage only"),
++            diagnostic.contains("cluster root; select its graph with --graph"),
+             "{diagnostic}"
+         );
+     }
+@@ -4510,7 +4511,7 @@ fn cleanup_against_non_local_scope_refuses_without_yes() {
+         String::from_utf8_lossy(&refused.stderr)
+     );
+     assert!(
+-        diagnostic.contains("inline access supports local storage only")
++        diagnostic.contains("cluster root; select its graph with --graph")
+             || diagnostic.contains("invalid duration 'invalid'"),
+         "{diagnostic}"
+     );
