@@ -80,6 +80,21 @@
 				"Verifies the bump survives a full re-resolution (uv lock --upgrade --dry-run) and checks uv's exit status rather than only grepping for an Update line, since a failed resolution and an unchanged one both print no Update line",
 				"Audits the fast-tracked release in place of the skipped soak period — upstream tag matches the published artifact, the diff matches the advisory, attestations/provenance present, maintainer set unchanged"
 			]
+		},
+		{
+			"id": 7,
+			"prompt": "A critical advisory landed against `certifi` and the fix is in 2026.10.19. certifi is transitive for us — nothing imports it directly, it arrives via `requests`. Our repo is a uv workspace that publishes about twenty `mitol-django-*` packages to PyPI. I've bumped the lockfile and added `[tool.uv] constraint-dependencies = [\"certifi>=2026.10.19\"]`. Is that enough?",
+			"expected_output": "A clear no, with the reason: constraint-dependencies never appears in wheel metadata, so it protects the repo's own resolution and propagates nothing to consumers of the published packages. Recommends declaring the floor in [project] dependencies of the packages that reach certifi and releasing them, and setting up a check so the narrow set does not go stale.",
+			"files": [],
+			"expectations": [
+				"States plainly that it is NOT enough, and gives the mechanism: `[tool.uv] constraint-dependencies` is a resolver directive that never appears in a built wheel's `requires-dist`, so a consumer installing the published package can still resolve a vulnerable certifi",
+				"Distinguishes the publishing case from an application: for a repo that publishes nothing a constraint is correct and complete, and the problem here is specifically that this repo ships packages to PyPI",
+				"Recommends declaring `certifi>=2026.10.19` in `[project] dependencies` of the packages that actually reach certifi, rather than in all twenty uniformly — a floor in a package that never resolves certifi forces an unnecessary dependency on its consumers",
+				"States that the packages carrying a newly declared floor have to be released, because a declared floor in an unreleased package reaches no consumer",
+				"Identifies that a package reaching certifi only through a workspace sibling must require that sibling at a version that carries the floor, since an unpinned sibling dependency can be satisfied by an older pre-floor release",
+				"Recommends an automated check (such as `uvx --from mitol-dependency-floors dependency-floors check` in CI or as a pre-commit hook) rather than relying on someone remembering, and explains why a vulnerability scanner cannot cover this — once the floor holds, certifi resolves to a safe version in the lockfile, so scanners stay green while the published metadata is wrong",
+				"Does NOT recommend keeping the constraint-dependencies entry alone, and does not treat the lockfile bump as the end of the work"
+			]
 		}
 	]
 }
