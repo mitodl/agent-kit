@@ -22,7 +22,7 @@ decides.
 What must not fork is the POLICY. Both transports produce an ``_AttemptResult``
 carrying one of the classification kinds, and ``_with_retry_policy`` runs the
 same loop over either — so a restarting server, an admission cap, a
-compare-and-swap conflict or a store needing repair behaves identically however
+compare-and-swap conflict or a drifted store behaves identically however
 the call was made. Only the CLASSIFICATION differs: stderr text for the
 subprocess, HTTP status for the transport.
 

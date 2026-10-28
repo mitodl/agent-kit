@@ -296,9 +296,7 @@ def test_the_self_clearing_recovery_barrier_keeps_its_own_classification():
 
 
 def test_repair_wins_over_retryable_when_both_words_appear():
-    """`_execute` repairs before it sleeps, so the classifier must agree.
-
-    A message naming both conditions has to resolve to drift, or the client
+    """A message naming both conditions has to resolve to drift, or the client
     retries a store that cannot succeed until it is reconciled.
     """
     message = "stale view: head is ahead of manifest, run omnigraph repair"

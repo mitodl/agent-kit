@@ -78,7 +78,7 @@ module in the package: its output is the identity of a repository everywhere in
 witan.
 
 **`omnigraph.OmnigraphClient`** — the subprocess wrapper around the pinned
-`omnigraph` binary, holding the write lock, the retry/repair logic, and the
+`omnigraph` binary, holding the write lock, the conflict retry logic, and the
 admission-cap backoff. Each server subclasses it: `witan-council` adds
 `apply_schema`, `witan-code` adds branch operations and bulk `load`.
 
