@@ -13,5 +13,5 @@
   `direct` target and `defaults.target`, with a commented server target). It
   documents running the CLI by hand; witan passes its own generated operator
   config on 0.14 and does not read this file.
-- Raised the `witan-core` floor to `>=0.47` for `store_address` and
+- Raised the `witan-core` floor to `>=0.48` for `store_address` and
   `store_cli_args(..., binary=)`.
