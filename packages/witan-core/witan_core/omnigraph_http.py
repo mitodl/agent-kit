@@ -773,6 +773,10 @@ class PooledTransport:
         while True:
             try:
                 chunk = response.read(EXPORT_CHUNK_BYTES)
+                if not chunk and response.length:
+                    # A Content-Length body cut short reads as b"" with bytes
+                    # still owed: http.client's read(amt) does not raise there.
+                    raise http.client.IncompleteRead(b"", response.length)
             except (http.client.HTTPException, OSError) as exc:
                 self._discard()
                 return Outcome(

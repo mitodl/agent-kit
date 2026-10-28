@@ -19,6 +19,7 @@ write failure read as a connect failure re-sends a write that may have committed
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import os
 import shutil
@@ -52,6 +53,9 @@ def _isolate_transport_cache(monkeypatch):
 
 
 class FakeResponse:
+    # What http.client reports for a chunked body: no Content-Length to owe.
+    length = None
+
     def __init__(
         self,
         status: int,
@@ -1760,6 +1764,41 @@ def test_an_export_cut_off_midstream_is_retried_from_an_empty_file(
     assert len(_sent()) == 2
     assert out.read_text() == _EXPORT_BODY
     assert FakeConnection.created[0].closed  # the cut-off connection is not reused
+
+
+def test_a_sized_export_cut_short_is_retried_not_kept(
+    monkeypatch, queries_dir, tmp_path, _fake_http
+):
+    """A real HTTPResponse with Content-Length reads b"" at a premature EOF
+    instead of raising, which looks exactly like the end of the body. Kept, the
+    truncated file would reach merge reconciliation as the whole graph."""
+
+    class _Socket:
+        def __init__(self, data: bytes):
+            self._file = io.BytesIO(data)
+
+        def makefile(self, mode):
+            return self._file
+
+    head = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/x-ndjson\r\n"
+        f"Content-Length: {len(_EXPORT_BODY)}\r\n"
+        f"{ogh.HTTP_API_CONTRACT_HEADER}: {ogh.HTTP_API_CONTRACT}\r\n\r\n"
+    )
+    truncated = http.client.HTTPResponse(
+        _Socket(head.encode() + _EXPORT_BODY.encode()[:10])
+    )
+    truncated.begin()
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [truncated, FakeResponse(200, _EXPORT_BODY)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+    out = tmp_path / "export.jsonl"
+
+    client.export_to(out)
+
+    assert len(_sent()) == 2
+    assert out.read_text() == _EXPORT_BODY
 
 
 def test_an_export_refusal_is_raised_with_the_servers_message(
