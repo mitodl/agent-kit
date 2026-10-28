@@ -28,6 +28,28 @@ def test_create_defaults(server):
     node = server.task_get(res["slug"])
     assert node["type"] == "task"
     assert node["priority"] == "p2"
+    assert "ui_url" not in res
+    assert "ui_url" not in node
+
+
+@requires_omnigraph
+def test_tasks_and_projects_carry_their_ui_link(server, monkeypatch):
+    from witan import ui_routes
+
+    monkeypatch.setattr(ui_routes, "_public_ui", lambda: "https://w.example/ui/")
+
+    task = server.task_create(title="do a thing", description="x")
+    project = server.workflow_project_create(title="a project", description="d")
+
+    task_link = ui_routes.task_url(task["slug"])
+    project_link = ui_routes.project_url(project["slug"])
+    assert task_link and project_link
+    assert task["ui_url"] == server.task_get(task["slug"])["ui_url"] == task_link
+    assert (
+        project["ui_url"]
+        == server.workflow_project_get(project["slug"])["ui_url"]
+        == project_link
+    )
 
 
 # ── Task search (tk-phase-0-bm25-task-search-project-search) ────────────────

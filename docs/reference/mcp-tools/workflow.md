@@ -26,6 +26,10 @@ all repos, not just this one — the same objective tracked from a
 different repo is still a duplicate), a soft duplicate check. It never
 blocks creation.
 
+Against a deployment that serves the web UI, it also carries ``ui_url``:
+the link that opens the project there. Hand a person that link rather than
+building one.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `title` | str | **required** | Short name for the project. Used in listings and injected context. |
@@ -64,6 +68,10 @@ carries ``live_pr``: that PR's state fetched from GitHub just now
 ``{"error": ...}`` when it could not be fetched. The description is a
 snapshot from when it was written; where ``live_pr`` disagrees with it,
 ``live_pr`` is current.
+
+Against a deployment that serves the web UI, the project also carries
+``ui_url``: the link that opens it there. Hand a person that link rather
+than building one.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

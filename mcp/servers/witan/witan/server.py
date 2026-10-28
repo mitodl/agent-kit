@@ -5037,6 +5037,10 @@ def workflow_project_create(
     different repo is still a duplicate), a soft duplicate check. It never
     blocks creation.
 
+    Against a deployment that serves the web UI, it also carries ``ui_url``:
+    the link that opens the project there. Hand a person that link rather than
+    building one.
+
     Parameters
     ----------
     title:
@@ -5105,7 +5109,10 @@ def workflow_project_create(
             "updated_at": now,
         },
     )
-    return {"slug": slug, "repos": repo_set, "phase": phase, "similar": similar}
+    return _with_ui_url(
+        {"slug": slug, "repos": repo_set, "phase": phase, "similar": similar},
+        ui_routes.project_url(slug),
+    )
 
 
 @_tool
@@ -5137,6 +5144,10 @@ def workflow_project_get(slug: str) -> dict | None:
     snapshot from when it was written; where ``live_pr`` disagrees with it,
     ``live_pr`` is current.
 
+    Against a deployment that serves the web UI, the project also carries
+    ``ui_url``: the link that opens it there. Hand a person that link rather
+    than building one.
+
     Parameters
     ----------
     slug:
@@ -5151,7 +5162,9 @@ def workflow_project_get(slug: str) -> dict | None:
     all_rows = client.read("read.gq", "list_projects_by_status", {"status": "active"})
     blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
     project["blocks"] = blocks
-    return live_pr.tool_result("workflow_project_get", project)
+    return live_pr.tool_result(
+        "workflow_project_get", _with_ui_url(project, ui_routes.project_url(slug))
+    )
 
 
 def _live_sessions(rows: list[dict]) -> list[dict]:
@@ -6703,6 +6716,11 @@ _PRIORITY_ORDER = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 _MAX_TASK_LIMIT = 10000
 
 
+def _with_ui_url(record: dict, url: str | None) -> dict:
+    """``record`` with ``ui_url`` set to ``url``, or unchanged when there is none."""
+    return {**record, "ui_url": url} if url else record
+
+
 def _with_lease_flag(row: dict) -> dict:
     """Stamp ``lease_expired`` onto an ``in_progress`` row; pass anything else through.
 
@@ -7040,6 +7058,10 @@ async def task_create(
     duplicate check. It never blocks creation; review it and close this task
     as a duplicate (``task_close``) if one of them is really the same work.
 
+    Against a deployment that serves the web UI, it also carries ``ui_url``:
+    the link that opens the task there. Hand a person that link rather than
+    building one.
+
     Parameters
     ----------
     title, description:
@@ -7138,12 +7160,15 @@ async def task_create(
         )
     await _offload(client.change_many, steps)
 
-    return {
-        "slug": slug,
-        "status": status,
-        "repo": detected_repo,
-        "similar": similar,
-    }
+    return _with_ui_url(
+        {
+            "slug": slug,
+            "status": status,
+            "repo": detected_repo,
+            "similar": similar,
+        },
+        ui_routes.task_url(slug),
+    )
 
 
 @_tool
@@ -7172,6 +7197,10 @@ def task_get(slug: str) -> dict | None:
     fetched. The description and comments are snapshots from when they were
     written; where ``live_pr`` disagrees with them, ``live_pr`` is current.
 
+    Against a deployment that serves the web UI, the node also carries
+    ``ui_url``: the link that opens the task there. Hand a person that link
+    rather than building one.
+
     Parameters
     ----------
     slug:
@@ -7194,15 +7223,18 @@ def task_get(slug: str) -> dict | None:
     blocks = client.read("read.gq", "blocks_to_slugs", {"from": slug})
     return live_pr.tool_result(
         "task_get",
-        {
-            **_with_lease_flag(rows[0]),
-            "comments": _task_comments(slug),
-            "blocks": [r["slug"] for r in blocks],
-            "children": [
-                {k: c.get(k) for k in ("slug", "title", "status")} for c in children
-            ],
-            "branches": _task_branches(slug),
-        },
+        _with_ui_url(
+            {
+                **_with_lease_flag(rows[0]),
+                "comments": _task_comments(slug),
+                "blocks": [r["slug"] for r in blocks],
+                "children": [
+                    {k: c.get(k) for k in ("slug", "title", "status")} for c in children
+                ],
+                "branches": _task_branches(slug),
+            },
+            ui_routes.task_url(slug),
+        ),
     )
 
 

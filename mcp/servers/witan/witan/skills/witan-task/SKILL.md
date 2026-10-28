@@ -281,6 +281,13 @@ task_create(
 For an **epic with sub-issues**: create the epic first (`type="epic"`), then
 create each child with `parent="<epic slug>"`. Report the new slug(s).
 
+**A link to a task is its `ui_url`.** `task_create` and `task_get` return it
+(and `workflow_project_create` / `workflow_project_get` for a project) when the
+deployed witan serves the web UI. Hand that over as-is. List, search and claim
+results never carry it, so for a task you found there, call `task_get`. If
+`task_get` has no `ui_url`, there is no UI to link to: say so and give the
+slug.
+
 ## List tasks
 
 Call `task_list()` (optionally `task_list(status="open")`,
