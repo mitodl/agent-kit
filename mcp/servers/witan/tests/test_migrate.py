@@ -8,10 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from testsupport.omnigraph_server import requires_omnigraph_server
 
 from witan_core import omnigraph as og
 
-from .conftest import SCHEMA, _Tools, requires_omnigraph, requires_omnigraph_server
+from .conftest import SCHEMA, _Tools, requires_omnigraph
 
 
 def _init_store(path):
