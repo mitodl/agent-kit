@@ -872,6 +872,24 @@ def test_head_drift_needs_repair_in_both_vocabularies(stderr):
     assert og._classify_cli_error(stderr) == _http.NEEDS_REPAIR
 
 
+@pytest.mark.parametrize("is_write", [True, False])
+@pytest.mark.parametrize("stderr", [_DRIFT_OLD, _DRIFT_NEW])
+def test_head_drift_is_terminal_on_the_first_attempt(monkeypatch, stderr, is_write):
+    """Neither the 0.13 nor the 0.14 CLI can reconcile drift (`omnigraph repair`
+    only diagnoses there), so a retry meets the same drift every time. ONE
+    subprocess call, which also proves no `omnigraph repair` was run, and the
+    store's own message reaches the caller."""
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=stderr)
+
+    with pytest.raises(RuntimeError, match="Retrying will not clear it") as raised:
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=is_write)
+
+    assert calls["n"] == 1
+    assert "Lance HEAD version 9" in str(raised.value)
+    assert "omnigraph repair --json" in str(raised.value)
+
+
 @pytest.mark.parametrize("stderr", [_RECLAIMED_OLD, _RECLAIMED_NEW])
 def test_a_reclaimed_historical_version_stays_fatal_in_both_vocabularies(stderr):
     """The reason `_RETRYABLE` matches "expected published dataset version" and
@@ -1407,7 +1425,7 @@ def test_stderr_wins_when_the_binary_wrote_both():
     [
         "plain text\n",
         # Rows a read printed before it died. Their text is user content, and
-        # this one would otherwise classify as NEEDS_REPAIR and run a repair.
+        # this one would otherwise classify as NEEDS_REPAIR and fail the call.
         '{"rows": [{"m.content": "run omnigraph repair, then stale view"}]}',
         '["not", "an", "object"]',
         '{"error": {"not": "a string"}}',
@@ -1934,17 +1952,13 @@ def test_a_quarantined_store_refuses_a_read_too(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_a_quarantined_store_is_not_sent_to_omnigraph_repair(monkeypatch):
-    """`_repair` shells out to `omnigraph repair --confirm --force`, which
-    cannot open a graph in this state either. Classifying the sidecar as
-    repairable would turn one legible refusal into a repair that fails the same
-    way, eight times over."""
+def test_a_quarantined_store_is_not_reported_as_drift(monkeypatch):
+    """`omnigraph repair` cannot open a graph in this state either, so a
+    sidecar message that also names it must still read as a quarantine and
+    point the operator at the runbook, not at a repair that fails the same
+    way."""
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
-    repairs = []
-    monkeypatch.setattr(
-        OmnigraphClient, "_repair", lambda self, env: repairs.append(env)
-    )
     _stub_run(
         monkeypatch,
         returncode=1,
@@ -1953,8 +1967,6 @@ def test_a_quarantined_store_is_not_sent_to_omnigraph_repair(monkeypatch):
 
     with pytest.raises(og.StoreQuarantined):
         client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
-
-    assert repairs == []
 
 
 def test_an_unnamed_sidecar_is_still_a_quarantine(monkeypatch):
@@ -2880,7 +2892,7 @@ def test_full_text_rebuild_required_is_terminal_on_the_cli_path():
 
 
 def test_full_text_rebuild_is_not_confused_with_a_repair():
-    """NEEDS_REPAIR would run `omnigraph repair --force` on a graph that is not
-    damaged. Upstream is explicit that ordinary reads stay available and only
-    the full-text index is refused."""
+    """NEEDS_REPAIR would send an operator to `omnigraph repair` for a graph
+    that is not damaged. Upstream is explicit that ordinary reads stay
+    available and only the full-text index is refused."""
     assert og._classify_cli_error(_FTS_REBUILD_STDERR) != _http.NEEDS_REPAIR
