@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from witan_core import omnigraph as og
+
 from .conftest import SCHEMA, _Tools, requires_omnigraph
 
 
@@ -149,6 +151,11 @@ _UPGRADING_BINARY = """#!/bin/sh
 store=""
 for arg in "$@"; do store="$arg"; done
 case "$1" in
+version)
+    # A pre-0.14 CLI: `version` takes no --json, so witan addresses it with --store.
+    echo "error: unexpected argument '--json' found" >&2
+    exit 2
+    ;;
 snapshot)
     if [ -f "$store/upgraded" ]; then
         echo "internal_schema_version: 14"
@@ -740,7 +747,11 @@ def test_merge_accepts_an_export_jsonl_as_source(server, tmp_path):
     export = tmp_path / "handover.jsonl"
     with open(export, "w", encoding="utf-8") as f:
         subprocess.run(
-            ["omnigraph", "export", "--store", source.graph_uri],
+            [
+                "omnigraph",
+                "export",
+                *og.store_cli_args(source.graph_uri, binary=source._binary),
+            ],
             check=True,
             stdout=f,
             text=True,
@@ -797,6 +808,9 @@ def test_merge_addresses_a_remote_target_as_server_and_graph(
     """
     from witan import server as srv
 
+    # The address this asserts is the pre-0.14 one; witan-core's tests cover
+    # how 0.14 renders the same resolved server and graph.
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
     source = tmp_path / "empty.jsonl"
     source.write_text("")
     exports = []
@@ -848,6 +862,8 @@ def test_store_client_matches_the_configured_graph_across_spellings(monkeypatch)
         is_remote = True
 
     monkeypatch.setattr(srv, "client", _Configured())
+    # Pre-0.14 flags: a 0.14 CLI refuses a token over plain http outright.
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
     base = _Configured.server_url
 
     for uri in (base, f"{base}/", f"{base}/graphs/council"):

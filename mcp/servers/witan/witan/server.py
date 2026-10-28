@@ -46,6 +46,7 @@ from witan_core.omnigraph import (
     release_store_flock,
     schema_apply,
     schema_apply_if_changed,
+    store_address,
     store_cli_args,
 )
 from witan_core.refusal import Refusal
@@ -1795,13 +1796,13 @@ def migrate_repo_keys() -> dict:
 
 
 def _snapshot(binary: str, store: str) -> tuple[bool, str]:
-    """Run ``<binary> snapshot --store <store>``; returns (ok, output).
+    """Run ``<binary> snapshot`` against ``store``; returns (ok, output).
 
     On failure, stdout and stderr are both included — the mismatch text isn't
     guaranteed to land on stderr alone.
     """
     result = subprocess.run(
-        [binary, "snapshot", "--store", store],
+        [binary, "snapshot", *store_cli_args(store, binary=binary)],
         capture_output=True,
         text=True,
         check=False,
@@ -1934,7 +1935,7 @@ def _upgrade_check_passes(binary: str, store: str) -> bool:
     anything older, which still has to be rebuilt by export and load.
     """
     result = subprocess.run(
-        [binary, "upgrade", "--check", "--json", store],
+        [binary, "upgrade", "--check", "--json", *store_cli_args(store, binary=binary)],
         capture_output=True,
         text=True,
         check=False,
@@ -1981,7 +1982,10 @@ def _upgrade_in_place(binary: str, store: str) -> dict:
             f"{store_path}; a store reads its branches by that path."
         )
         try:
-            _run_omnigraph([binary, "upgrade", store], label="upgrade")
+            _run_omnigraph(
+                [binary, "upgrade", *store_cli_args(store, binary=binary)],
+                label="upgrade",
+            )
         except RuntimeError as exc:
             raise RuntimeError(f"{exc}\n\n{restore}") from exc
         verify_ok, verify_out = _snapshot(binary, store)
@@ -2135,7 +2139,7 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
 
             with open(exported, "w", encoding="utf-8") as f:
                 _run_omnigraph(
-                    [old, "export", "--store", store],
+                    [old, "export", *store_cli_args(store, binary=old)],
                     label="export (old binary)",
                     stdout=f,
                 )
@@ -2148,8 +2152,7 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
                 [
                     new_binary,
                     "load",
-                    "--store",
-                    str(rebuilt),
+                    *store_cli_args(str(rebuilt), binary=new_binary),
                     "--data",
                     str(data_file),
                     "--mode",
@@ -2824,8 +2827,8 @@ def _store_client(
     The configured store's own token is reused when ``uri`` names it (the
     in-cluster maintenance case, where ``WITAN_MEMORY_TOKEN`` is the only
     credential in the pod); any *other* remote store falls back to the ambient
-    ``OMNIGRAPH_BEARER_TOKEN``, the omnigraph CLI's documented spelling — which
-    is what passing ``token=None`` leaves in place (see ``store_subprocess_env``).
+    ``OMNIGRAPH_BEARER_TOKEN``, which is what passing ``token=None`` leaves in
+    place (see ``store_subprocess_env``).
 
     "Names it" is decided on the *resolved* address, not on the raw string. A
     deployment sets ``WITAN_MEMORY_URI`` to a bare server URL plus a separate
@@ -2855,11 +2858,10 @@ def _store_client(
         else None
     )
     try:
-        args = store_cli_args(uri, fallback)
+        address = store_address(uri, fallback)
     except ValueError as exc:
         raise RuntimeError(f"{uri}: {exc}") from exc
-    configured = store_cli_args(client.graph_uri, client.graph_id)
-    is_configured = args == configured
+    is_configured = address == store_address(client.graph_uri, client.graph_id)
     token = client.token if is_configured else None
     if s3 is None:
         s3 = cfg.s3 if is_configured else cfg_module.S3Credentials()
@@ -2907,7 +2909,8 @@ def _check_export_source(source: str) -> None:
         raise RuntimeError(
             f"{source}: no such export file. A `.jsonl` source is read as an "
             "`omnigraph export`, not a store — produce one with "
-            f"`omnigraph export --store <store> > {source}`."
+            f"`omnigraph export --target <store> > {source}` (`--store` before "
+            "omnigraph 0.14)."
         )
 
 

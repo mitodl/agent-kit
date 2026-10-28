@@ -8,7 +8,10 @@ see docs/internals/design/omnigraph-0-11-upgrade-spec.md, D2.
 
 import json
 import re
+import shutil
 import subprocess
+
+from witan_core.omnigraph import store_cli_args
 
 from .conftest import SCHEMA, _Tools, requires_omnigraph
 
@@ -341,8 +344,7 @@ def test_a_010_export_with_duplicate_edges_rebuilds_into_a_keyed_graph(tmp_path)
         [
             "omnigraph",
             "load",
-            "--store",
-            str(store),
+            *store_cli_args(str(store), binary=shutil.which("omnigraph")),
             "--data",
             str(data_file),
             "--mode",
@@ -353,7 +355,11 @@ def test_a_010_export_with_duplicate_edges_rebuilds_into_a_keyed_graph(tmp_path)
         text=True,
     )
     out = subprocess.run(
-        ["omnigraph", "export", "--store", str(store)],
+        [
+            "omnigraph",
+            "export",
+            *store_cli_args(str(store), binary=shutil.which("omnigraph")),
+        ],
         check=True,
         capture_output=True,
         text=True,

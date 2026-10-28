@@ -1,31 +1,45 @@
-# ~/.omnigraph/config.yaml — personal operator config (RFC-008, not committed).
+# ~/.omnigraph/config.yaml: personal operator config for omnigraph 0.14+
+# (target and credential protocol 2, YAML `version: 1`; not committed).
 #
-# Copy this file to ~/.omnigraph/config.yaml and adjust the store path if you
-# used a non-default WITAN_DATA_DIR when running install.sh.
+# This is for running the omnigraph CLI by hand. witan never reads it: every
+# CLI call witan makes passes its own generated `--operator-config`, because
+# 0.14 refuses a whole command when any entry in this file is invalid.
 #
-# This replaces the deprecated cli:/aliases: sections of omnigraph.yaml.
+# Copy it to ~/.omnigraph/config.yaml and set the absolute path of your store
+# (a direct target's `uri` must be an absolute file:// URI; no `~`). The
+# default is ~/.local/share/witan/graph.omni unless WITAN_DATA_DIR says
+# otherwise. Before 0.14 this file used `profiles: <name>: store:`, which 0.14
+# rejects; there is no importer.
 
-profiles:
+version: 1
+targets:
   witan:
-    store: ~/.local/share/witan/graph.omni
-    branch: main
+    kind: direct
+    scope: graph
+    uri: file:///home/YOU/.local/share/witan/graph.omni
+  # A deployed omnigraph-server. 0.14 sends a token only over HTTPS; plain
+  # http:// is accepted only for an anonymous loopback server.
+  # witan-deployed:
+  #   kind: server
+  #   endpoint: https://omnigraph.example.com
+  #   auth: {provider: token, source: {env: OMNIGRAPH_SERVICE_TOKEN}}
+  #   default_graph: council
 
 defaults:
+  target: witan
   output: json
 
-# With the profile set, common queries shorten to:
+# With the default target set, common queries shorten to:
 #
-#   omnigraph --profile witan query --query queries/read.gq search_memories \
+#   omnigraph query --query queries/read.gq search_memories \
 #     --params '{"query":"uv","repo":"https://github.com/mitodl/ol-infrastructure","kind":null}'
 #
-#   omnigraph --profile witan query --query queries/read.gq get_memory \
+#   omnigraph query --query queries/read.gq get_memory \
 #     --params '{"slug":"pat-always-use-uv"}'
 #
-#   omnigraph --profile witan mutate --query queries/mutations.gq insert_memory \
+#   omnigraph mutate --query queries/mutations.gq insert_memory \
 #     --params '{"slug":"pat-...","kind":"pattern","title":"...","content":"...",
 #               "author":"you","created_at":"2026-06-22T00:00:00Z",
 #               "updated_at":"2026-06-22T00:00:00Z"}'
 #
-# Note: the old omnigraph.yaml aliases (RFC-006) required a running omnigraph-server
-# to migrate to the new `aliases:` format (RFC-011). The --profile flag covers the
-# most common need (avoiding --store repetition) without a server dependency.
+# Or select one explicitly: `omnigraph --target witan-deployed query ...`.

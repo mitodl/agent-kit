@@ -119,7 +119,9 @@ def _target_store_uri(name: str, block) -> str:
         _fail(
             f"Target {name!r} declares a `token` for its remote store, and the "
             "merge path has no way to carry a per-store credential. Export it "
-            "as OMNIGRAPH_BEARER_TOKEN and name the store directly instead."
+            "as OMNIGRAPH_BEARER_TOKEN, which witan hands to the omnigraph CLI "
+            "for any remote store without one of its own, and name the store "
+            "directly instead."
         )
     base = server.rstrip("/")
     if "/graphs/" in base:

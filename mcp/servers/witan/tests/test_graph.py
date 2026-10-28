@@ -43,17 +43,26 @@ def _capture_schema_apply(monkeypatch, client):
     return captured["cmd"]
 
 
-def test_apply_schema_local_passes_store_positionally(monkeypatch, tmp_path):
+def test_apply_schema_local_is_addressed_like_every_other_command(
+    monkeypatch, tmp_path
+):
+    """0.14 removed `schema apply`'s positional URI, so a local store takes the
+    same addressing flags as every other command, in either dialect."""
     store = str(tmp_path / "graph.omni")
     client = _client(monkeypatch, store)
+
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
     cmd = _capture_schema_apply(monkeypatch, client)
-    # local `schema apply` takes the store as a trailing positional, not --store
-    assert cmd[-1] == store
+    assert cmd[cmd.index("--store") + 1] == store
+
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: True)
+    cmd = _capture_schema_apply(monkeypatch, client)
+    assert cmd[cmd.index("--target") + 1] == store
     assert "--store" not in cmd
-    assert "--server" not in cmd
 
 
 def test_apply_schema_remote_uses_server_and_graph(monkeypatch):
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
     client = _client(monkeypatch, "http://host:8080", graph_id="council")
     cmd = _capture_schema_apply(monkeypatch, client)
     assert cmd[cmd.index("--server") + 1] == "http://host:8080"
