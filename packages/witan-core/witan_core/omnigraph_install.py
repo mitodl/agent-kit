@@ -53,7 +53,7 @@ from pathlib import Path
 #:
 #: 0.13.0 (2026-10-07) moves it again, to 14, and 0.12 was never pinned. See
 #: docs/internals/design/omnigraph-0-13-upgrade-spec.md.
-_OMNIGRAPH_VERSION = "0.13.0"
+_OMNIGRAPH_VERSION = "0.14.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
