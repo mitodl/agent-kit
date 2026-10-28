@@ -14,6 +14,9 @@
   an entry it cannot parse (e.g. a 0.13-format `profiles:` block).
 - `store_address(uri, graph_id)`, the binary-independent identity of a store,
   for callers that compare two spellings of one store.
+- `init_cli_args(binary)`: the generated empty operator config for
+  `omnigraph init` on 0.14, which keeps its positional URI but still reads
+  `~/.omnigraph/config.yaml`.
 - `write_quiet_args(binary)`: `--quiet` on writes for a pre-0.14 CLI only,
   since 0.14 removed the flag and exits 64 on it.
 
@@ -27,7 +30,7 @@
   configured token, over the CLI and the HTTP transport alike.
 - `schema_apply` addresses its store with `store_cli_args`, because 0.14
   dropped `schema apply`'s positional URI.
-- On a 0.14 binary, `store_cli_args` raises `ValueError` for what that CLI
+- On a 0.14 binary, `store_cli_args` raises `RuntimeError` for what that CLI
   cannot reach: a direct `s3://` or `az://` store, and a plain `http://`
   server other than an anonymous loopback one (0.14 sends a token only over
   HTTPS). Reads and writes that go over the pooled HTTP transport are not

@@ -43,6 +43,7 @@ from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
     WriteContention,
     acquire_store_flock,
+    init_cli_args,
     release_store_flock,
     schema_apply,
     schema_apply_if_changed,
@@ -162,7 +163,14 @@ def _ensure_graph(graph_uri: str) -> None:
     binary = OmnigraphClient._find_binary()
     store.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [binary, "init", "--schema", str(_SCHEMA_FILE), str(store)],
+        [
+            binary,
+            "init",
+            *init_cli_args(binary),
+            "--schema",
+            str(_SCHEMA_FILE),
+            str(store),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -2145,7 +2153,14 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
                 )
             edges_collapsed = _rewrite_export_for_load(exported, data_file)
             _run_omnigraph(
-                [new_binary, "init", "--schema", str(_SCHEMA_FILE), str(rebuilt)],
+                [
+                    new_binary,
+                    "init",
+                    *init_cli_args(new_binary),
+                    "--schema",
+                    str(_SCHEMA_FILE),
+                    str(rebuilt),
+                ],
                 label="init (new binary)",
             )
             _run_omnigraph(

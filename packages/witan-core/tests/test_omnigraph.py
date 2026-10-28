@@ -190,17 +190,28 @@ def test_014_refuses_what_its_cli_cannot_address(monkeypatch):
     reason, instead of as an opaque CLI refusal on the first call."""
     _speaks_targets(monkeypatch, True)
     monkeypatch.delenv(og.BEARER_TOKEN_ENV_VAR, raising=False)
-    with pytest.raises(ValueError, match="cannot open an s3://"):
+    with pytest.raises(RuntimeError, match="cannot open an s3://"):
         og.store_cli_args("s3://bucket/graph", binary="/b")
-    with pytest.raises(ValueError, match="only over HTTPS"):
+    with pytest.raises(RuntimeError, match="only over HTTPS"):
         og.store_cli_args(
             "http://omnigraph-server.ns:8080", "council", binary="/b", token="t"
         )
     # Anonymous is not enough off loopback, and a token is not allowed on it.
-    with pytest.raises(ValueError, match="only over HTTPS"):
+    with pytest.raises(RuntimeError, match="only over HTTPS"):
         og.store_cli_args("http://omnigraph-server.ns:8080", "council", binary="/b")
-    with pytest.raises(ValueError, match="only over HTTPS"):
+    with pytest.raises(RuntimeError, match="only over HTTPS"):
         og.store_cli_args("http://localhost:8080", "council", binary="/b", token="t")
+
+
+def test_014_init_carries_the_generated_operator_config(monkeypatch):
+    """`init` keeps its positional URI on both dialects, but 0.14 still reads
+    ~/.omnigraph/config.yaml for it, so a stale personal file would stop a
+    fresh store from being created."""
+    _speaks_targets(monkeypatch, True)
+    args = og.init_cli_args("/b")
+    assert _operator_doc(args) == {"version": 1}
+    _speaks_targets(monkeypatch, False)
+    assert og.init_cli_args("/b") == []
 
 
 def test_014_drops_the_removed_quiet_flag(monkeypatch):

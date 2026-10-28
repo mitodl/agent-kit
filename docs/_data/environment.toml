@@ -179,6 +179,9 @@ desc = "Port `witan ui` binds on loopback. Defaults to one the OS reports free."
 default = "1"
 desc = "Use the direct HTTP transport for reads against a deployed omnigraph-server instead of shelling out to the `omnigraph` binary. Set to `0`/`false`/`no`/`off` to revert. Kept as a one-variable revert so a transport-specific production problem is an env change rather than an image rebuild — the CLI path beneath it stays fully maintained and is still the only way to reach `load`, `branch`, and `optimize`."
 
+[section.vars.WITAN_OMNIGRAPH_TOKEN]
+desc = "Set by witan, not by you: the per-call bearer token on an omnigraph 0.14 CLI subprocess, read through the server target in the `--operator-config` witan generates. A pre-0.14 CLI gets the same token as `OMNIGRAPH_BEARER_TOKEN`. witan overwrites or strips it on every subprocess, so exporting it has no effect."
+
 [section.vars.WITAN_GROUP_COMMIT]
 default = "1"
 desc = "Let concurrent writes from one actor to one deployed graph share an omnigraph commit (see `witan_core.group_commit`). Only writes over the HTTP transport are grouped. Set to `0`/`false`/`no`/`off` to commit every write on its own again."

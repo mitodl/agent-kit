@@ -4,7 +4,8 @@
   `snapshot`, `export`, `load` in `witan migrate storage`, and the export in
   `witan migrate merge`) addresses its store with `store_cli_args`, so it
   takes `--target` on omnigraph 0.14 and `--store` before it. 0.14 removed
-  the positional store URI from `schema apply` and `upgrade`.
+  the positional store URI from `schema apply` and `upgrade`. `init` passes
+  the generated operator config on 0.14 (`init_cli_args`).
 - `witan migrate merge` decides whether a store is the configured one by its
   resolved server and graph (`store_address`) rather than by comparing CLI
   flags, which now depend on the binary.

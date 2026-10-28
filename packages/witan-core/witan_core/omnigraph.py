@@ -1404,8 +1404,9 @@ def store_cli_args(
     that server target authenticates; the value itself goes in the subprocess
     env (:func:`store_subprocess_env`), never in the file.
 
-    Raises ``ValueError`` for what a 0.14 CLI cannot address at all: a direct
-    ``s3://``/``az://`` store (cloud-direct access was removed), and a plain
+    Raises ``RuntimeError`` (what witan's callers already report) for what a
+    0.14 CLI cannot address at all: a direct ``s3://``/``az://`` store
+    (cloud-direct access was removed), and a plain
     ``http://`` server unless it is an anonymous loopback one (the CLI's own
     endpoint rule; it sends a credential only over HTTPS).
     """
@@ -1421,7 +1422,7 @@ def store_cli_args(
         if server_url.startswith("http://") and (
             authenticated or not _is_loopback(server_url)
         ):
-            raise ValueError(
+            raise RuntimeError(
                 f"{server_url}: omnigraph 0.14's CLI reaches a server only over "
                 "HTTPS (plain HTTP is allowed for an anonymous loopback server "
                 "alone), so it cannot run this command against it. Serve the "
@@ -1437,7 +1438,7 @@ def store_cli_args(
             resolved,
         ]
     if graph_uri.startswith(_CLOUD_SCHEMES):
-        raise ValueError(
+        raise RuntimeError(
             f"{graph_uri}: omnigraph 0.14's CLI cannot open an s3:// or az:// "
             "store directly (its inline targets are local paths only); reach it "
             "through an omnigraph-server, or with a pre-0.14 binary."
@@ -1449,6 +1450,15 @@ def store_cli_args(
         "--target",
         path,
     ]
+
+
+def init_cli_args(binary: str) -> list[str]:
+    """Flags for ``omnigraph init``, which keeps its positional store URI on
+    both dialects. 0.14 still reads ``~/.omnigraph/config.yaml`` for it, so it
+    gets the same empty generated config as every other local call."""
+    if not cli_speaks_targets(binary):
+        return []
+    return ["--operator-config", _operator_config(None, authenticated=False)]
 
 
 def write_quiet_args(binary: str) -> list[str]:
