@@ -718,6 +718,23 @@ class _AttemptResult(NamedTuple):
     status: int | None = None
 
 
+def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
+    """One HTTP attempt's outcome, in the shape the retry loop consumes."""
+    return _AttemptResult(
+        outcome.kind,
+        body=outcome.body,
+        error=outcome.error,
+        retry_after=outcome.retry_after,
+        status=outcome.status,
+    )
+
+
+#: The CLI flags a subclass may inject into ``load`` (via ``_extra_args``) and
+#: the ``/load/ndjson`` query parameter each one is. witan-code's branched
+#: clients inject ``--branch <view> --from main``.
+_LOAD_FLAG_PARAMS = {"--branch": "branch", "--from": "from_branch"}
+
+
 class _CliFailure(NamedTuple):
     #: What to show: stderr, or a rendering of the error object on stdout.
     message: str
@@ -2359,14 +2376,24 @@ class OmnigraphClient:
            ``_extra_args`` rather than against ``branch`` so any FUTURE subclass
            arg is caught by the same guard instead of quietly being dropped.
 
-        ``carries_extra_args=False`` switches condition 3 off, and only
-        :meth:`statement` passes it. The condition exists because an injected
-        arg would be DROPPED on the HTTP body; a call that injects none has
-        nothing to drop. omnigraph 0.11's branch statements are exactly that
-        case — the CLI's own help says they take "no name, params, --branch or
-        --snapshot" — so a branched client may run one over HTTP without its
-        ``--branch`` going missing, because there was never a ``--branch`` to
-        send. Do not reuse this for anything that has a branch to target.
+        ``carries_extra_args=False`` switches condition 3 off. The condition
+        exists because an injected arg would be DROPPED on the HTTP body; a
+        call that injects none, or carries its own on the wire, has nothing to
+        drop. Three callers pass it:
+
+        - :meth:`statement`. omnigraph 0.11's branch statements take "no name,
+          params, --branch or --snapshot" (the CLI's own help), so a branched
+          client may run one over HTTP without its ``--branch`` going missing,
+          because there was never a ``--branch`` to send.
+        - :meth:`export_to`. Its CLI form never took ``_extra_args`` either
+          (it is built from ``_store_args`` alone), so it exports ``main`` on
+          both transports.
+        - :meth:`load_batch`, which DOES have a branch to target and carries
+          it as the route's query parameters (see :meth:`_load_target`), and
+          refuses any injected flag it cannot carry.
+
+        Do not reuse this for anything else that has a branch to target
+        without carrying it the same way.
 
         Built lazily and cached: constructing it parses a URL and allocates a
         ``threading.local``, and witan builds a fresh client per request to keep
@@ -2452,13 +2479,7 @@ class OmnigraphClient:
                 outcome = transport.mutate(
                     self.graph_id, source, params, token, if_graph_commit
                 )
-            result = _AttemptResult(
-                outcome.kind,
-                body=outcome.body,
-                error=outcome.error,
-                retry_after=outcome.retry_after,
-                status=outcome.status,
-            )
+            result = _attempt_result(outcome)
             if attempts is not None:
                 attempts.append(result)
             return result
@@ -2626,10 +2647,36 @@ class OmnigraphClient:
 
         ``label`` names the export in any error message ("export (target)"),
         since a merge runs two against different stores.
+
+        A deployed server is exported over the pooled HTTP transport
+        (``POST /graphs/<id>/export``), streamed to ``path`` the same way. The
+        subprocess stays for local and ``s3://`` stores, and for a remote one
+        only behind :data:`HTTP_TRANSPORT_ENV_VAR`: the 0.14 CLI refuses a
+        plain-http server target, which is what the deployed data tier is.
         """
-        cmd = [self._binary, "export", *self._store_args()]
         env = self._subprocess_env()
         out = Path(path)
+        transport = self._http_transport(carries_extra_args=False)
+        if transport is not None:
+            token = self._resolve_token()
+
+            def http_attempt() -> _AttemptResult:
+                # "wb", truncating per attempt for the reason the CLI attempt
+                # below does: a retry must not append to a failed prefix.
+                try:
+                    with open(out, "wb") as fh:
+                        return _attempt_result(
+                            transport.export(self.graph_id, fh, token)
+                        )
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"omnigraph {label} could not write {out}: {exc}"
+                    ) from exc
+
+            self._with_retry_policy(http_attempt, label, env=env, is_write=False)
+            return
+
+        cmd = [self._binary, "export", *self._store_args()]
 
         def attempt() -> _AttemptResult:
             # Truncate per attempt ("w", not "a"): a retry must overwrite
@@ -2661,14 +2708,23 @@ class OmnigraphClient:
         self._with_retry_policy(attempt, label, env=env, is_write=False)
 
     def load_batch(self, records: list[dict], mode: str = "merge") -> str:
-        """Bulk-load one batch of node/edge records via ``omnigraph load``.
+        """Bulk-load one batch of node/edge records in one ``omnigraph load``.
 
-        Returns the CLI's stdout (empty for an empty batch) — the load summary,
-        which ``merge_store`` reports back to the user. Most callers ignore it.
+        Returns the load summary (empty for an empty batch), which
+        ``merge_store`` reports back to the user: the CLI's stdout for a local
+        store, or the server's ``GraphBatchLoadOutput`` JSON for a deployed
+        one. Most callers ignore it.
+
+        A deployed server is loaded over the pooled HTTP transport
+        (``POST /graphs/<id>/load/ndjson``), with the same NDJSON as the body
+        that the CLI would have posted from its ``--data`` file. The subprocess
+        stays for local and ``s3://`` stores, and for a remote one only behind
+        :data:`HTTP_TRANSPORT_ENV_VAR`: the 0.14 CLI refuses a plain-http
+        server target, which is what the deployed data tier is.
 
         Each record is a JSONL line: ``{"type": Node, "data": {...}}`` for a
         node or ``{"edge": Edge, "from": key, "to": key}`` for an edge. One
-        subprocess replaces a ``mutate`` per record.
+        load replaces a ``mutate`` per record.
 
         Deliberately **one** batch and no splitting — a caller writing to a
         deployed server must bound the batch itself with
@@ -2680,6 +2736,22 @@ class OmnigraphClient:
         """
         if not records:
             return ""
+        transport = self._http_transport(carries_extra_args=False)
+        if transport is not None:
+            target = self._load_target()
+            data = "".join(json.dumps(record) + "\n" for record in records)
+            token = self._resolve_token()
+
+            def attempt() -> _AttemptResult:
+                return _attempt_result(
+                    transport.load_ndjson(
+                        self.graph_id, data, token, mode=mode, **target
+                    )
+                )
+
+            return self._with_retry_policy(
+                attempt, "load", env=self._subprocess_env(), is_write=True
+            )
         fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="omnigraph-load-")
         try:
             # Explicit UTF-8, not the platform default: witan rows carry prose
@@ -2693,6 +2765,27 @@ class OmnigraphClient:
             return self._run("load", "--data", tmp, "--mode", mode)
         finally:
             Path(tmp).unlink(missing_ok=True)
+
+    def _load_target(self) -> dict[str, str]:
+        """``_extra_args("load")`` as :meth:`PooledTransport.load_ndjson` keywords.
+
+        The HTTP load has to target what the CLI load would have, and the only
+        record of that is the flags a subclass injects. Each one maps to a
+        query parameter of the route (``_LOAD_FLAG_PARAMS``); a flag with no
+        mapping is refused rather than dropped, because dropping ``--branch``
+        is the WIP-reindex-into-``main`` failure ``_http_transport`` exists to
+        prevent.
+        """
+        args = self._extra_args("load")
+        target: dict[str, str] = {}
+        for flag, value in zip(args[::2], args[1::2], strict=True):
+            if flag not in _LOAD_FLAG_PARAMS:
+                raise RuntimeError(
+                    f"{type(self).__name__} injects {flag!r} into `load`, which "
+                    "has no /load/ndjson query parameter; refusing to drop it"
+                )
+            target[_LOAD_FLAG_PARAMS[flag]] = value
+        return target
 
     def _store_args(self) -> list[str]:
         """The CLI flags that address this store. A remote omnigraph-server
@@ -2797,10 +2890,11 @@ class OmnigraphClient:
         cannot be walked around. Gating the HTTP branch alone left two real
         remote-write paths ungated:
 
-        * ``load_batch`` shells out to ``omnigraph load`` — it has no HTTP form
-          at all — so every batch of a ``store_merge`` bypassed the bound. Two
-          people migrating at once is precisely the multi-user burst this exists
-          to bound.
+        * ``load_batch`` shelled out to ``omnigraph load`` (it had no HTTP form
+          then, and still does not behind :data:`HTTP_TRANSPORT_ENV_VAR`), so
+          every batch of a ``store_merge`` bypassed the bound. Two people
+          migrating at once is precisely the multi-user burst this exists to
+          bound.
         * witan-code's BRANCHED clients deliberately fall back to the CLI
           (``_transport`` returns ``None`` when ``_extra_args`` is non-empty,
           because 0.8.1's HTTP API has no request-side branch selector), so

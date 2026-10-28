@@ -46,12 +46,13 @@ def _built_client(monkeypatch, uri, *, queries_dir=None, **kwargs):
 def _force_cli(monkeypatch):
     """Pin a remote client to the CLI subprocess for tests that assert argv/env.
 
-    A remote store now prefers the pooled HTTP transport for `query`/`mutate`
-    (see omnigraph_http), so a test reaching the subprocess *through* `read()`
-    would otherwise stop exercising the thing it names. The CLI path is not
-    legacy — it is still the only way to `load`, `branch`, `optimize`, `cleanup`,
-    `schema apply` or `repair` — so these contracts keep mattering, and the
-    escape hatch is the supported way to select it.
+    A remote store now prefers the pooled HTTP transport for `query`, `mutate`,
+    `load` and `export` (see omnigraph_http), so a test reaching the subprocess
+    *through* `read()` would otherwise stop exercising the thing it names. The
+    CLI path is not legacy — it is every local store's transport, and still the
+    only way to `optimize`, `cleanup`, `schema apply` or `repair` — so these
+    contracts keep mattering, and the escape hatch is the supported way to
+    select it.
     """
     monkeypatch.setenv(og.HTTP_TRANSPORT_ENV_VAR, "0")
 
@@ -1806,6 +1807,15 @@ def test_the_ordinary_recovery_barrier_is_not_read_as_a_quarantine():
 
 
 # ── export_to: streaming, under the same retry policy ──────────────
+#
+# The subprocess half. A remote export goes over HTTP by default (see
+# test_omnigraph_http.py), so these pin the CLI with the escape hatch: the
+# connect-refusal budget they test is remote-only.
+
+
+def _cli_export_client(monkeypatch):
+    _force_cli(monkeypatch)
+    return _client(monkeypatch)
 
 
 def _export_stub(monkeypatch, outcomes):
@@ -1840,7 +1850,7 @@ def test_export_retries_a_connect_refusal_until_the_server_returns(
     already rode this out; `export` did not, because `store_merge` shelled out
     around the client instead of through it.
     """
-    client = _client(monkeypatch)
+    client = _cli_export_client(monkeypatch)
     _fake_clock(monkeypatch)
     out = tmp_path / "target.jsonl"
     calls = _export_stub(monkeypatch, [(1, ""), (1, ""), (0, '{"type":"Memory"}\n')])
@@ -1859,7 +1869,7 @@ def test_export_truncates_between_attempts(monkeypatch, tmp_path):
     produce a file with duplicated rows — which `_parse_export` would happily
     read, silently doubling the merge's target index.
     """
-    client = _client(monkeypatch)
+    client = _cli_export_client(monkeypatch)
     _fake_clock(monkeypatch)
     out = tmp_path / "target.jsonl"
     calls = _export_stub(
@@ -1877,7 +1887,7 @@ def test_export_gives_up_as_store_unavailable(monkeypatch, tmp_path):
     """Exhausting the budget raises the typed error, so a caller can say
     something useful — `store_merge` turns it into "temporarily unavailable,
     safe to re-run" instead of relaying a ClusterIP the user cannot reach."""
-    client = _client(monkeypatch)
+    client = _cli_export_client(monkeypatch)
     _fake_clock(monkeypatch)
     calls = _export_stub(monkeypatch, [(1, "")])
 
@@ -1893,7 +1903,7 @@ def test_export_streams_rather_than_buffering(monkeypatch, tmp_path):
     """Output must be redirected to the file, never captured into a string —
     an export is the whole graph, and capturing it would hold it in memory on
     top of the parsed rows."""
-    client = _client(monkeypatch)
+    client = _cli_export_client(monkeypatch)
     seen = {}
 
     def fake_run(cmd, **kwargs):
@@ -2134,8 +2144,9 @@ def test_the_cli_write_path_is_gated_too(monkeypatch):
     """★ THE BOUND MUST NOT BE WALKABLE-AROUND BY CHOOSING A TRANSPORT.
 
     Gating only ``_http_execute`` left two real remote-write paths unbounded,
-    and both are ones a burst actually travels: ``load_batch`` shells out to
-    ``omnigraph load`` (there is no HTTP form of it), so every batch of a
+    and both are ones a burst actually travels: ``load_batch`` shelled out to
+    ``omnigraph load`` (it had no HTTP form then, and still shells out behind
+    ``WITAN_OMNIGRAPH_HTTP=0``), so every batch of a
     ``store_merge`` escaped — two people migrating at once being exactly the
     multi-user burst this exists to bound — and witan-code's branched clients
     fall back to the CLI by design, so every write from a branch view escaped

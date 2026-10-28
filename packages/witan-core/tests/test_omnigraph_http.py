@@ -19,6 +19,7 @@ write failure read as a connect failure re-sends a write that may have committed
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import os
 import shutil
@@ -52,6 +53,9 @@ def _isolate_transport_cache(monkeypatch):
 
 
 class FakeResponse:
+    # What http.client reports for a chunked body: no Content-Length to owe.
+    length = None
+
     def __init__(
         self,
         status: int,
@@ -59,13 +63,19 @@ class FakeResponse:
         will_close: bool = False,
         headers: dict | None = None,
         stamped: bool = True,
+        fail_after_body: BaseException | None = None,
     ):
         """``stamped`` adds the contract header an omnigraph-server 0.13
         puts on every response. Pass ``False`` for a 0.11 server or a proxy
-        answering in the server's place."""
+        answering in the server's place.
+
+        ``fail_after_body`` is raised by a sized ``read()`` once ``body`` has
+        been handed out, the way an aborted chunked body fails part-way."""
         self.status = status
         self.will_close = will_close
         self._body = body.encode()
+        self._offset = 0
+        self._fail_after_body = fail_after_body
         # A real HTTPMessage, so repeated headers and case-insensitive lookup
         # behave as they do on a live response. A list value repeats the header.
         self.headers = http.client.HTTPMessage()
@@ -75,8 +85,14 @@ class FakeResponse:
             for item in value if isinstance(value, list) else [value]:
                 self.headers.add_header(name, item)
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        if amt is None:
+            return self._body
+        chunk = self._body[self._offset : self._offset + amt]
+        self._offset += len(chunk)
+        if not chunk and self._fail_after_body is not None:
+            raise self._fail_after_body
+        return chunk
 
     def getheader(self, name: str, default=None):
         return self.headers.get(name, default)
@@ -1585,6 +1601,299 @@ def test_two_actors_tokens_do_not_race_through_the_shared_pool(
 
     sent = [r["headers"]["Authorization"] for r in _fake_http.created[0].requests]
     assert sent == ["Bearer actor-a-token", "Bearer actor-b-token"]
+
+
+# ── load and export over HTTP ────────────────────────────────────────
+#
+# The 0.14 CLI refuses a plain-http server target, and the deployed data tier
+# is one, so a remote load or export through the subprocess stops working at
+# the pin bump. These routes are the ones the 0.13 CLI itself posts to.
+
+
+def _sent(fake=FakeConnection) -> list[dict]:
+    """Every request sent, across every connection the transport opened."""
+    return [request for conn in fake.created for request in conn.requests]
+
+
+_RECORDS = [
+    {"type": "Memory", "data": {"slug": "m-1", "title": "café"}},
+    {"edge": "Tagged", "from": "m-1", "to": "t-1"},
+]
+
+
+def test_a_remote_load_posts_the_ndjson_body_to_the_load_route(
+    monkeypatch, queries_dir, _fake_http
+):
+    """The body is byte-for-byte what `omnigraph load --data` would have read
+    from its file, so the server sees the same records on either transport."""
+    summary = {"branch": "main", "total_entities": 2, "actor_id": None}
+    _fake_http.script = [ok(summary)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    out = client.load_batch(_RECORDS, "merge")
+
+    (request,) = _sent()
+    assert request["method"] == "POST"
+    assert request["path"] == "/graphs/council/load/ndjson?mode=merge"
+    assert request["headers"]["Content-Type"] == "application/x-ndjson"
+    assert request["body"] == ("".join(json.dumps(r) + "\n" for r in _RECORDS).encode())
+    assert json.loads(out) == summary
+
+
+def test_a_branched_load_carries_its_branch_as_query_parameters(
+    monkeypatch, queries_dir, _fake_http
+):
+    """witan-code's branched view injects `--branch <view> --from main` into
+    `load`. Over HTTP those are the route's `branch` and `from` parameters; a
+    load that lost them would land a WIP reindex in `main`."""
+
+    class BranchedClient(OmnigraphClient):
+        def _extra_args(self, subcommand):
+            if subcommand == "load":
+                return ["--branch", "act-alice/wip", "--from", "main"]
+            return ["--branch", "act-alice/wip"]
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    _fake_http.script = [ok({"branch": "act-alice/wip"})]
+    client = BranchedClient("http://host:8080", queries_dir, graph_id="council")
+
+    client.load_batch(_RECORDS, "merge")
+
+    (request,) = _sent()
+    assert request["path"] == (
+        "/graphs/council/load/ndjson?mode=merge&branch=act-alice%2Fwip&from=main"
+    )
+
+
+def test_a_load_flag_with_no_query_parameter_is_refused_not_dropped(
+    monkeypatch, queries_dir, _fake_http
+):
+    class SnapshotClient(OmnigraphClient):
+        def _extra_args(self, subcommand):
+            return ["--snapshot", "abc"]
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = SnapshotClient("http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(RuntimeError, match="'--snapshot'.*refusing to drop it"):
+        client.load_batch(_RECORDS, "merge")
+    assert _sent() == []
+
+
+def test_a_load_lost_midflight_is_not_resent(monkeypatch, queries_dir, _fake_http):
+    """A load whose response never arrived may have committed. Re-sending it
+    is the duplicate write the transport's `idempotent=False` exists to stop."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [ConnectionResetError("reset by peer"), ok({})]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(RuntimeError, match="reset by peer"):
+        client.load_batch(_RECORDS, "merge")
+    assert len(_sent()) == 1
+
+
+def test_a_load_refused_before_effects_is_retried(monkeypatch, queries_dir, _fake_http):
+    """The route's documented 409 is "prepared load authority changed before
+    effects": nothing was written, so the retry policy re-sends it."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, "prepared load authority changed before effects", "conflict"),
+        ok({"total_entities": 2}),
+    ]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    client.load_batch(_RECORDS, "merge")
+
+    assert len(_sent()) == 2
+
+
+def test_a_load_body_is_utf8_whatever_it_contains(_fake_http):
+    """http.client encodes a str body as ISO-8859-1 and raises outside it, so
+    the transport encodes it. witan rows are routinely non-ASCII prose."""
+    _fake_http.script = [ok({})]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    outcome = transport.load_ndjson("g", '{"t": "naïve ✓"}\n', None, mode="merge")
+
+    assert outcome.kind == ogh.OK
+    (request,) = _sent()
+    assert request["body"] == '{"t": "naïve ✓"}\n'.encode()
+    assert request["headers"]["Content-Length"] == str(len(request["body"]))
+
+
+_EXPORT_BODY = '{"type":"Memory","data":{"slug":"m-1"}}\n{"edge":"Tagged"}\n'
+
+
+def test_a_remote_export_streams_the_export_route_into_the_file(
+    monkeypatch, queries_dir, tmp_path, _fake_http
+):
+    _fake_http.script = [FakeResponse(200, _EXPORT_BODY)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+    out = tmp_path / "export.jsonl"
+
+    client.export_to(out)
+
+    (request,) = _sent()
+    assert request["method"] == "POST"
+    assert request["path"] == "/graphs/council/export"
+    assert json.loads(request["body"]) == {"type_names": []}
+    assert request["headers"]["Accept"] == "application/x-ndjson"
+    assert out.read_text() == _EXPORT_BODY
+
+
+def test_an_export_cut_off_midstream_is_retried_from_an_empty_file(
+    monkeypatch, queries_dir, tmp_path, _fake_http
+):
+    """omnigraph aborts the chunked body of an export it cannot finish, since
+    the 200 is already sent. That is a read failing mid-flight, so it is
+    retried, and the retry must overwrite the prefix rather than append to it."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        FakeResponse(
+            200,
+            '{"type":"Memory","data":{"slug":"ha',
+            fail_after_body=http.client.IncompleteRead(b""),
+        ),
+        FakeResponse(200, _EXPORT_BODY),
+    ]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+    out = tmp_path / "export.jsonl"
+
+    client.export_to(out, label="export (target)")
+
+    assert len(_sent()) == 2
+    assert out.read_text() == _EXPORT_BODY
+    assert FakeConnection.created[0].closed  # the cut-off connection is not reused
+
+
+def test_a_sized_export_cut_short_is_retried_not_kept(
+    monkeypatch, queries_dir, tmp_path, _fake_http
+):
+    """A real HTTPResponse with Content-Length reads b"" at a premature EOF
+    instead of raising, which looks exactly like the end of the body. Kept, the
+    truncated file would reach merge reconciliation as the whole graph."""
+
+    class _Socket:
+        def __init__(self, data: bytes):
+            self._file = io.BytesIO(data)
+
+        def makefile(self, mode):
+            return self._file
+
+    head = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/x-ndjson\r\n"
+        f"Content-Length: {len(_EXPORT_BODY)}\r\n"
+        f"{ogh.HTTP_API_CONTRACT_HEADER}: {ogh.HTTP_API_CONTRACT}\r\n\r\n"
+    )
+    truncated = http.client.HTTPResponse(
+        _Socket(head.encode() + _EXPORT_BODY.encode()[:10])
+    )
+    truncated.begin()
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [truncated, FakeResponse(200, _EXPORT_BODY)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+    out = tmp_path / "export.jsonl"
+
+    client.export_to(out)
+
+    assert len(_sent()) == 2
+    assert out.read_text() == _EXPORT_BODY
+
+
+def test_an_export_refusal_is_raised_with_the_servers_message(
+    monkeypatch, queries_dir, tmp_path, _fake_http
+):
+    _fake_http.script = [err(403, "policy denied action 'export'", "forbidden")]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"(?s)export \(target\) failed.*policy denied action 'export'",
+    ):
+        client.export_to(tmp_path / "export.jsonl", label="export (target)")
+
+
+def test_an_unstamped_export_is_not_streamed_into_the_file(
+    monkeypatch, queries_dir, tmp_path, _fake_http, contract_required
+):
+    """A 200 without the contract stamp is not the server's export. Its body
+    is left unread, so the connection holding it is discarded too."""
+    _fake_http.script = [FakeResponse(200, _EXPORT_BODY, stamped=False)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+    out = tmp_path / "export.jsonl"
+
+    with pytest.raises(RuntimeError, match="Omnigraph-Http-Api"):
+        client.export_to(out)
+    assert out.read_text() == ""
+    assert FakeConnection.created[0].closed
+
+
+def test_an_export_that_cannot_write_its_file_is_not_retried(
+    monkeypatch, queries_dir, tmp_path, _fake_http
+):
+    """A local write failure is not a restarting server, so it must not spend
+    the 150s unavailable budget before saying so."""
+    _fake_http.script = [FakeResponse(200, _EXPORT_BODY)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(RuntimeError, match="could not write"):
+        client.export_to(tmp_path / "missing-dir" / "export.jsonl")
+    assert len(_sent()) == 0
+
+
+def test_a_sink_that_fails_midstream_drops_the_half_read_connection(
+    monkeypatch, _fake_http
+):
+    """A full disk part-way through an export leaves the response unread. Kept
+    in the pool, that connection would fail the thread's next request after it
+    was sent, which for a mutate is an indeterminate write."""
+    monkeypatch.setattr(ogh, "EXPORT_CHUNK_BYTES", 8)
+
+    class FullDisk:
+        writes = 0
+
+        def write(self, chunk):
+            self.writes += 1
+            if self.writes == 2:
+                raise OSError(28, "No space left on device")
+
+    _fake_http.script = [
+        ok({"rows": []}),
+        FakeResponse(200, _EXPORT_BODY),
+        ok({"rows": []}),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+    # Warm the connection, so the export reuses it and the next call would too.
+    transport.query("council", "query q() { return 1 }", {}, None)
+
+    with pytest.raises(OSError, match="No space left"):
+        transport.export("council", FullDisk(), None)
+    transport.query("council", "query q() { return 1 }", {}, None)
+
+    assert [len(conn.requests) for conn in FakeConnection.created] == [2, 1]
+    assert FakeConnection.created[0].closed
+
+
+@pytest.mark.parametrize("uri", ["/var/lib/witan/graph.omni", "s3://bucket/graph"])
+def test_a_local_load_and_export_stay_on_the_cli(
+    monkeypatch, queries_dir, tmp_path, _fake_http, uri
+):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd[1])
+        return og.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    monkeypatch.setattr(og, "store_write_lock", lambda store: og.nullcontext())
+    client = _client(monkeypatch, uri, queries_dir, graph_id="council")
+
+    client.load_batch(_RECORDS, "merge")
+    client.export_to(tmp_path / "export.jsonl")
+
+    assert calls == ["load", "export"]
+    assert _sent() == []
 
 
 # ── against a real server (opt-in) ────────────────────────────────────
