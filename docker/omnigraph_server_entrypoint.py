@@ -12,7 +12,7 @@ WHY THIS IS NOT A SHELL SCRIPT ANY MORE
 From 0.12 on, every writer of a cluster root persists an exclusive lock at
 `<root>/__cluster/lock.json` and keeps it after it exits: the server leaves
 `serve` (on 0.13 also after a clean SIGTERM, and after a start that fails), a
-direct `cluster apply` that changed anything leaves `deployment`, `optimize`
+direct `cluster apply` leaves `deployment` (a no-op one too), `optimize`
 and `cleanup` leave `graph_operation`. The next writer is refused with
 `state_lock_held` until someone runs `cluster force-unlock <id>`. 0.14 releases
 a server's lock on a clean shutdown, and on S3 a restarted server takes over a
@@ -893,7 +893,8 @@ def release_previous_lock(cluster: Cluster) -> None:
 def release_apply_lock(cluster: Cluster) -> None:
     """Remove the `deployment` lock this boot's own apply just left.
 
-    0.14's apply releases it itself only when it changed nothing.
+    0.14's apply releases it itself only on a refusal before any effect
+    started; a converged no-op apply still leaves it.
     """
     lock = cluster.lock()
     if not lock["locked"]:

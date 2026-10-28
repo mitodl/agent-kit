@@ -211,8 +211,8 @@ and does not scale the server back up if it appears during the window.
 
 Outside Kubernetes (no `KUBERNETES_SERVICE_HOST`) the Lease and the pod check
 are skipped, and the entrypoint refuses to force-unlock unless
-`OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1` is set. A `cluster apply` that changes
-anything leaves a lock, so a local `docker run` needs it even on an empty root. Set it only when this
+`OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1` is set. `cluster apply` always leaves a lock,
+so a local `docker run` needs it even on an empty root. Set it only when this
 container is the only writer of the cluster root.
 
 ## Base image / glibc
