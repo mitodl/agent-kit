@@ -21,7 +21,7 @@ from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
 from witan_core.refusal import Refusal
 
-# ── store addressing: local --store vs remote --server/--graph ─────
+# ── store addressing: per CLI dialect, local vs remote ─────────────
 
 
 # `some_query`/`q` cover every no-params `.read(...)` call below — the CLI
@@ -90,17 +90,28 @@ def test_remote_graph_id_parsed_from_uri_path(monkeypatch):
     assert client.graph_id == "code"
 
 
-def test_store_cli_args_addresses_a_store_with_no_client():
+def _speaks_targets(monkeypatch, value: bool) -> None:
+    """Pin the CLI dialect, so an argv assertion does not depend on which
+    omnigraph happens to be installed."""
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: value)
+
+
+def test_store_cli_args_addresses_a_store_with_no_client(monkeypatch):
     """The free-function form, for a tool driving a store it holds no client
     for — `witan migrate merge` addresses a source and a target through one
     client's binary, and hardcoding `--store` there is what made a deployed
     graph unreachable from the merge path."""
-    assert og.store_cli_args("/var/lib/witan/graph.omni") == [
+    _speaks_targets(monkeypatch, False)
+    b = "/usr/bin/omnigraph"
+    assert og.store_cli_args("/var/lib/witan/graph.omni", binary=b) == [
         "--store",
         "/var/lib/witan/graph.omni",
     ]
-    assert og.store_cli_args("s3://bucket/graph") == ["--store", "s3://bucket/graph"]
-    assert og.store_cli_args("http://host:8080", "council") == [
+    assert og.store_cli_args("s3://bucket/graph", binary=b) == [
+        "--store",
+        "s3://bucket/graph",
+    ]
+    assert og.store_cli_args("http://host:8080", "council", binary=b) == [
         "--server",
         "http://host:8080",
         "--graph",
@@ -108,7 +119,7 @@ def test_store_cli_args_addresses_a_store_with_no_client():
     ]
     # A remote store can be named completely in one argument, which is what
     # lets `--target` take a deployed graph with no second flag.
-    assert og.store_cli_args("http://host:8080/graphs/council") == [
+    assert og.store_cli_args("http://host:8080/graphs/council", binary=b) == [
         "--server",
         "http://host:8080",
         "--graph",
@@ -116,26 +127,151 @@ def test_store_cli_args_addresses_a_store_with_no_client():
     ]
 
 
+def _operator_doc(args: list[str]) -> dict:
+    return json.loads(Path(args[args.index("--operator-config") + 1]).read_text())
+
+
+def test_014_local_store_is_an_absolute_inline_target(monkeypatch, tmp_path):
+    """0.14 removed `--store`; a local store is an inline `--target`, made
+    absolute because 0.14 resolves a relative `..` against the wrong base. It
+    still carries a generated operator config: without one the CLI reads
+    ~/.omnigraph/config.yaml and refuses the whole call over any stale entry."""
+    _speaks_targets(monkeypatch, True)
+    monkeypatch.chdir(tmp_path)
+
+    args = og.store_cli_args("graph.omni", binary="/usr/bin/omnigraph")
+    assert args[args.index("--target") + 1] == str(tmp_path / "graph.omni")
+    assert "--store" not in args
+    assert _operator_doc(args) == {"version": 1}
+
+    uri = og.store_cli_args(f"file://{tmp_path}/g.omni", binary="/usr/bin/omnigraph")
+    assert uri[uri.index("--target") + 1] == str(tmp_path / "g.omni")
+
+
+def test_014_remote_store_is_a_generated_server_target(monkeypatch):
+    """A server is reachable only as a NAMED target in an operator config, and
+    its token comes from that target's provider. The generated config names an
+    env var rather than holding the token, so one file serves every actor and
+    each subprocess carries its own token (ADR-0004)."""
+    _speaks_targets(monkeypatch, True)
+    monkeypatch.delenv(og.BEARER_TOKEN_ENV_VAR, raising=False)
+
+    args = og.store_cli_args(
+        "https://og.example.com/graphs/council", binary="/b", token="secret"
+    )
+    assert args[args.index("--target") + 1] == "witan"
+    assert args[args.index("--graph") + 1] == "council"
+    assert not {"--server", "--store"} & set(args)
+    doc = _operator_doc(args)
+    assert doc["targets"]["witan"] == {
+        "kind": "server",
+        "endpoint": "https://og.example.com",
+        "auth": {"provider": "token", "source": {"env": og.OPERATOR_TOKEN_ENV_VAR}},
+    }
+    assert "secret" not in json.dumps(doc)
+
+    anonymous = og.store_cli_args("http://127.0.0.1:8080", "council", binary="/b")
+    assert _operator_doc(anonymous)["targets"]["witan"]["auth"] == {
+        "provider": "anonymous"
+    }
+
+
+def test_014_ambient_token_selects_the_token_provider(monkeypatch):
+    """The ambient token is the same fallback over both transports, so a 0.14
+    call with only `OMNIGRAPH_BEARER_TOKEN` exported must still authenticate."""
+    _speaks_targets(monkeypatch, True)
+    monkeypatch.setenv(og.BEARER_TOKEN_ENV_VAR, "ambient")
+    args = og.store_cli_args("https://og.example.com", "council", binary="/b")
+    assert _operator_doc(args)["targets"]["witan"]["auth"]["provider"] == "token"
+
+
+def test_014_refuses_what_its_cli_cannot_address(monkeypatch):
+    """A direct s3:// store and a token over plain http fail here, naming the
+    reason, instead of as an opaque CLI refusal on the first call."""
+    _speaks_targets(monkeypatch, True)
+    monkeypatch.delenv(og.BEARER_TOKEN_ENV_VAR, raising=False)
+    with pytest.raises(ValueError, match="cannot open an s3://"):
+        og.store_cli_args("s3://bucket/graph", binary="/b")
+    with pytest.raises(ValueError, match="only over HTTPS"):
+        og.store_cli_args(
+            "http://omnigraph-server.ns:8080", "council", binary="/b", token="t"
+        )
+    # Anonymous is not enough off loopback, and a token is not allowed on it.
+    with pytest.raises(ValueError, match="only over HTTPS"):
+        og.store_cli_args("http://omnigraph-server.ns:8080", "council", binary="/b")
+    with pytest.raises(ValueError, match="only over HTTPS"):
+        og.store_cli_args("http://localhost:8080", "council", binary="/b", token="t")
+
+
+def test_014_drops_the_removed_quiet_flag(monkeypatch):
+    _speaks_targets(monkeypatch, True)
+    assert og.write_quiet_args("/b") == []
+    _speaks_targets(monkeypatch, False)
+    assert og.write_quiet_args("/b") == ["--quiet"]
+
+
+def test_operator_config_is_rewritten_when_removed():
+    """A long-lived server outlives a temp cleaner; the next call recreates the
+    file instead of handing the CLI a path that no longer exists."""
+    path = Path(og._operator_config(None, authenticated=False))
+    path.unlink()
+    assert Path(og._operator_config(None, authenticated=False)) == path
+    assert path.exists()
+
+
+def _version_binary(tmp_path: Path, name: str, body: str) -> str:
+    script = tmp_path / name
+    script.write_text(f"#!/bin/sh\n{body}\n")
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_dialect_is_read_from_version_json(tmp_path):
+    """0.14 answers `version --json` with `protocols.target`; 0.13 rejects the
+    flag (exit 2), which is what keeps the legacy flags selected for it."""
+    new = _version_binary(
+        tmp_path, "new", """echo '{"version":"0.14.0","protocols":{"target":2}}'"""
+    )
+    old = _version_binary(tmp_path, "old", "echo 'unexpected argument' >&2; exit 2")
+    edge = _version_binary(
+        tmp_path,
+        "edge",
+        """echo '{"version":"0.14.0-edge","protocols":{"target":1}}'""",
+    )
+    assert og.cli_speaks_targets(new) is True
+    assert og.cli_speaks_targets(old) is False
+    assert og.cli_speaks_targets(str(tmp_path / "missing")) is False
+    with pytest.raises(RuntimeError, match="target protocol 1"):
+        og.cli_speaks_targets(edge)
+
+
 def test_store_subprocess_env_strips_an_ambient_token_for_a_local_store(monkeypatch):
     """A local path or s3:// root has no server to present a token to, so an
     ambient one is removed rather than merely not set — otherwise a token
     exported for cluster use rides into every local subprocess."""
     monkeypatch.setenv(og.BEARER_TOKEN_ENV_VAR, "ambient-secret")
+    monkeypatch.setenv(og.OPERATOR_TOKEN_ENV_VAR, "ambient-operator")
 
     local = og.store_subprocess_env("/var/lib/witan/graph.omni")
     assert og.BEARER_TOKEN_ENV_VAR not in local
+    assert og.OPERATOR_TOKEN_ENV_VAR not in local
 
     s3 = og.store_subprocess_env("s3://bucket/graph", "explicit")
     assert og.BEARER_TOKEN_ENV_VAR not in s3
+    assert og.OPERATOR_TOKEN_ENV_VAR not in s3
 
-    # A remote store takes the explicit token when given...
+    # A remote store takes the explicit token when given, under both names:
+    # a pre-0.14 CLI reads OMNIGRAPH_BEARER_TOKEN, 0.14 reads the variable its
+    # generated operator config names...
     remote = og.store_subprocess_env("http://host:8080", "explicit")
     assert remote[og.BEARER_TOKEN_ENV_VAR] == "explicit"
+    assert remote["WITAN_OMNIGRAPH_TOKEN"] == "explicit"
 
-    # ...and otherwise inherits the ambient one, the CLI's documented fallback
-    # and the spelling an in-cluster maintenance pod relies on.
+    # ...and otherwise the ambient one, the spelling an in-cluster maintenance
+    # pod relies on.
     inherited = og.store_subprocess_env("http://host:8080")
     assert inherited[og.BEARER_TOKEN_ENV_VAR] == "ambient-secret"
+    assert inherited[og.OPERATOR_TOKEN_ENV_VAR] == "ambient-secret"
 
 
 def test_explicit_graph_id_overrides_uri_path(monkeypatch):
