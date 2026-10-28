@@ -11,13 +11,15 @@ the subprocess costs 2-3x the raw spawn — the rest is per-invocation CLI work
 every time). See docs/internals/design/omnigraph-remote-call-overhead-spike.md.
 
 This module is that connection. It is deliberately NOT a second
-``OmnigraphClient``: omnigraph-server 0.8.1 exposes only ``query``, ``mutate``
-and ``graphs`` over HTTP, while the client's surface also includes ``load``,
-``branch``, ``commit``, ``optimize``, ``cleanup``, ``schema apply`` and
-``repair``, none of which have an HTTP form. A second client class would have to
-either drop those (breaking witan-code's branch views and both servers'
-maintenance) or shell out for them anyway. So this is a transport for the two
-verbs that have an HTTP equivalent, and everything else stays on the CLI.
+``OmnigraphClient``: when it was written, omnigraph-server 0.8.1 exposed only
+``query``, ``mutate`` and ``graphs`` over HTTP, while the client's surface also
+includes ``branch``, ``commit``, ``optimize``, ``cleanup``, ``schema apply`` and
+``repair``. A second client class would have to either drop those or shell out
+for them anyway. So this is a transport for the verbs that have an HTTP
+equivalent, and everything else stays on the CLI. ``load`` and ``export``
+joined that set later (see :meth:`PooledTransport.load_ndjson` and
+:meth:`PooledTransport.export`), because the 0.14 CLI refuses a plain-http
+server target and the deployed data tier is one.
 
 WHY IT RETURNS AN OUTCOME RATHER THAN RAISING
 
@@ -48,7 +50,7 @@ import ssl
 import threading
 import time
 import urllib.parse
-from typing import NamedTuple
+from typing import BinaryIO, NamedTuple
 
 from .omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
 
@@ -214,6 +216,14 @@ IDLE_REUSE_MAX_SECONDS = 5.0
 # server-side serialization limit that grows with load — so this only fires on a
 # genuinely wedged server rather than on a slow-but-working one.
 DEFAULT_TIMEOUT_SECONDS = 120.0
+
+JSON_CONTENT_TYPE = "application/json"
+NDJSON_CONTENT_TYPE = "application/x-ndjson"
+
+#: How much of a streamed export body is read per ``read()``. Only bounds the
+#: memory one chunk holds; the socket timeout still applies per read, so a
+#: large export that keeps producing never trips it.
+EXPORT_CHUNK_BYTES = 1 << 20
 
 
 class Outcome(NamedTuple):
@@ -555,8 +565,13 @@ class PooledTransport:
         *,
         idempotent: bool,
         if_graph_commit: str | None = None,
+        sink: BinaryIO | None = None,
     ) -> Outcome:
-        """POST ``payload`` as JSON to ``path`` and classify the result."""
+        """POST ``payload`` as JSON to ``path`` and classify the result.
+
+        With ``sink``, a successful body is streamed into it rather than
+        returned, and the outcome's ``body`` is empty. See :meth:`export`.
+        """
         return self._send(
             "POST",
             path,
@@ -564,6 +579,7 @@ class PooledTransport:
             token,
             idempotent,
             if_graph_commit=if_graph_commit,
+            sink=sink,
         )
 
     def get(self, path: str, token: str | None) -> Outcome:
@@ -576,9 +592,11 @@ class PooledTransport:
         path: str,
         body: str | None,
         token: str | None,
-        idempotent: bool,  # positional from two private callers
+        idempotent: bool,  # positional from private callers
         *,
         if_graph_commit: str | None = None,
+        content_type: str = JSON_CONTENT_TYPE,
+        sink: BinaryIO | None = None,
     ) -> Outcome:
         """Send one request and classify the result.
 
@@ -599,14 +617,21 @@ class PooledTransport:
           gets one immediate retry on a fresh connection when idempotent. That
           is the stale-keep-alive case, and it is a fast path, not a different
           safety rule.
+
+        ``sink`` streams a successful body into a binary file instead of
+        buffering it, see :meth:`_stream`. An error body is still read whole,
+        since it is the server's short JSON envelope.
         """
         headers = {
-            "Accept": "application/json",
+            "Accept": NDJSON_CONTENT_TYPE if sink is not None else JSON_CONTENT_TYPE,
             HTTP_API_CONTRACT_HEADER: HTTP_API_CONTRACT,
         }
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            headers["Content-Length"] = str(len(body.encode()))
+        # Encoded here rather than by http.client, which encodes a str body as
+        # ISO-8859-1 and so raises on any character outside it.
+        payload = None if body is None else body.encode("utf-8")
+        if payload is not None:
+            headers["Content-Type"] = content_type
+            headers["Content-Length"] = str(len(payload))
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if if_graph_commit is not None:
@@ -640,9 +665,10 @@ class PooledTransport:
                 )
 
             try:
-                conn.request(method, path, body=body, headers=headers)
+                conn.request(method, path, body=payload, headers=headers)
                 response = conn.getresponse()
-                raw = response.read()
+                streaming = sink is not None and 200 <= response.status < 300
+                raw = b"" if streaming else response.read()
             except (http.client.HTTPException, OSError) as exc:
                 self._discard()
                 if reused and idempotent and attempt == 0:
@@ -671,9 +697,10 @@ class PooledTransport:
                     ),
                 )
 
-            self._local.last_used = time.monotonic()
-            if response.will_close:
-                self._discard()
+            if not streaming:
+                self._local.last_used = time.monotonic()
+                if response.will_close:
+                    self._discard()
 
             succeeded = 200 <= response.status < 300
             contract_values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
@@ -681,6 +708,10 @@ class PooledTransport:
             if violation is not None and (
                 succeeded or not idempotent or contract_values
             ):
+                if streaming:
+                    # The body was never read, so this connection cannot carry
+                    # another request.
+                    self._discard()
                 # Checked before the body is decoded or the status classified.
                 # Without the server's stamp, a 2xx body is not a result and a
                 # 429/503/409 is not the server saying "nothing was applied",
@@ -699,6 +730,14 @@ class PooledTransport:
                     ),
                     status=response.status,
                 )
+            if streaming:
+                failed = self._stream(response, sink, path, idempotent, started)
+                if failed is not None:
+                    return failed
+                self._local.last_used = time.monotonic()
+                if response.will_close:
+                    self._discard()
+                return Outcome(kind=OK, status=response.status)
             text = raw.decode("utf-8", errors="replace")
             if succeeded:
                 return Outcome(kind=OK, body=text, status=response.status)
@@ -712,6 +751,50 @@ class PooledTransport:
 
         # Unreachable: the loop either returns or continues exactly once.
         raise AssertionError("_send() retry loop fell through")
+
+    def _stream(
+        self,
+        response: http.client.HTTPResponse,
+        sink: BinaryIO,
+        path: str,
+        idempotent: bool,
+        started: float,
+    ) -> Outcome | None:
+        """Copy a successful body into ``sink``. ``None`` once it is all there.
+
+        A read failure part-way is classified exactly as a mid-flight failure
+        in :meth:`_send`, because it is one: the server stopped answering, or
+        aborted the chunked body (omnigraph ends an export it could not finish
+        by dropping the stream rather than with a status, since the 200 is
+        already sent). A failure to WRITE ``sink`` is not the server's and is
+        raised as the ``OSError`` it is, so a full disk is not retried as a
+        restarting server.
+        """
+        while True:
+            try:
+                chunk = response.read(EXPORT_CHUNK_BYTES)
+                if not chunk and response.length:
+                    # A Content-Length body cut short reads as b"" with bytes
+                    # still owed: http.client's read(amt) does not raise there.
+                    raise http.client.IncompleteRead(b"", response.length)
+            except (http.client.HTTPException, OSError) as exc:
+                self._discard()
+                return Outcome(
+                    kind=UNAVAILABLE if idempotent else FATAL,
+                    error=(
+                        f"request to {self.server_url}{path} failed while "
+                        f"reading its body: {self._describe(exc, started)}"
+                    ),
+                )
+            if not chunk:
+                return None
+            try:
+                sink.write(chunk)
+            except OSError:
+                # The rest of the body is unread, so this connection cannot
+                # carry another request on this thread.
+                self._discard()
+                raise
 
     def query(
         self,
@@ -766,6 +849,63 @@ class PooledTransport:
             token,
             idempotent=False,
             if_graph_commit=if_graph_commit,
+        )
+
+    def load_ndjson(
+        self,
+        graph_id: str,
+        data: str,
+        token: str | None,
+        *,
+        mode: str,
+        branch: str | None = None,
+        from_branch: str | None = None,
+    ) -> Outcome:
+        """``POST /graphs/<id>/load/ndjson`` — one bulk load. A write.
+
+        The route the omnigraph CLI's own remote ``load`` posts to (0.13.0 and
+        0.14.0 alike): ``data`` is the raw NDJSON as the body and the target is
+        query parameters, so the server reads the same bytes it would have read
+        from ``omnigraph load --data <file>``. ``branch`` defaults to ``main``
+        server-side and must already exist unless ``from_branch`` names the
+        branch to fork it from.
+
+        ``idempotent=False``: a lost response may follow a committed load, which
+        is no safer to replay blind than a mutate. A 409 still comes back
+        RETRYABLE, which is safe here for the reason it is safe for a mutate:
+        the server documents it as "prepared load authority changed before
+        effects".
+        """
+        query = {"mode": mode}
+        if branch is not None:
+            query["branch"] = branch
+        if from_branch is not None:
+            query["from"] = from_branch
+        return self._send(
+            "POST",
+            f"/graphs/{graph_id}/load/ndjson?{urllib.parse.urlencode(query)}",
+            data,
+            token,
+            False,
+            content_type=NDJSON_CONTENT_TYPE,
+        )
+
+    def export(self, graph_id: str, sink: BinaryIO, token: str | None) -> Outcome:
+        """``POST /graphs/<id>/export`` — all of ``main``, streamed into ``sink``.
+
+        POST with a JSON body (``branch``, ``type_names``), not a GET, on both
+        0.13.0 and 0.14.0. An empty ``type_names`` exports every type and an
+        absent ``branch`` is ``main``, which is what ``omnigraph export``
+        without flags asks for. A read, so safe to repeat; a caller retrying
+        must truncate ``sink`` first, since a failed attempt may have written a
+        prefix.
+        """
+        return self.post(
+            f"/graphs/{graph_id}/export",
+            {"type_names": []},
+            token,
+            idempotent=True,
+            sink=sink,
         )
 
     def graphs(self, token: str | None):

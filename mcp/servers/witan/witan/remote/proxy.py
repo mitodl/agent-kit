@@ -15,7 +15,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import subprocess
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
@@ -25,7 +24,6 @@ from typing import Any
 
 from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records, describe_budget
 from witan_core.export_rows import normalize_export
-from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.journal import JournalEntry
 from witan_core.remote.proxy import (
     RemoteCredentialRejected,
@@ -40,7 +38,7 @@ from witan_core.remote.proxy import (
 
 from .. import merge_bounds, merge_report, readiness, session_state
 from .. import repo as repo_module
-from ..config import RemoteConfig, S3Credentials
+from ..config import _QUERIES_DIR, RemoteConfig, S3Credentials
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +63,7 @@ def _source_export(source: str, s3: S3Credentials | None = None) -> Iterator[Pat
     where it lies. The export has to happen client-side — the deployment shares
     no filesystem with the caller, which is the whole reason this path exists.
 
-    Streams the subprocess straight to a file rather than capturing it, for the
+    Streams the export straight to a file rather than capturing it, for the
     same reason ``_run_omnigraph`` does in-process: a real personal store's
     export is megabytes, and holding it as a string *and* as a parsed list at
     once doubles the peak for no gain.
@@ -102,26 +100,23 @@ def _source_export(source: str, s3: S3Credentials | None = None) -> Iterator[Pat
 
     from ..graph import OmnigraphClient
 
-    binary = OmnigraphClient._find_binary()
+    # Through the client rather than a bare `omnigraph export`, so a source on a
+    # deployed server goes over HTTP: the 0.14 CLI refuses a plain-http server
+    # target. Export reads no query file, so the queries dir is only a formality.
+    client = OmnigraphClient(
+        source,
+        _QUERIES_DIR,
+        s3_profile=s3.profile if s3 else None,
+        s3_region=s3.region if s3 else None,
+    )
     with tempfile.TemporaryDirectory(prefix="witan-remote-merge-") as tmp:
         export = Path(tmp) / "source.jsonl"
-        with open(export, "w", encoding="utf-8") as fh:
-            result = subprocess.run(
-                [binary, "export", *store_cli_args(source, binary=binary)],
-                stdout=fh,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=store_subprocess_env(
-                    source,
-                    s3_profile=s3.profile if s3 else None,
-                    s3_region=s3.region if s3 else None,
-                ),
-                check=False,
-            )
-        if result.returncode != 0:
+        try:
+            client.export_to(export, label="export (source)")
+        except RuntimeError as exc:
             raise RemoteToolUnavailable(
-                f"omnigraph export of {source} failed:\n{(result.stderr or '').strip()}"
-            )
+                f"omnigraph export of {source} failed:\n{exc}"
+            ) from exc
         yield export
 
 

@@ -625,6 +625,40 @@ def test_the_source_export_subprocess_gets_the_source_s_s3_profile(monkeypatch):
     assert captured["env"]["AWS_REGION"] == "us-east-1"
 
 
+def test_a_served_source_is_exported_through_the_client_not_the_cli(monkeypatch):
+    """The 0.14 CLI refuses a plain-http server target, so a deployed source
+    must go through `export_to`, which sends a remote store over HTTP. A
+    refusal there still surfaces as the merge's own error type."""
+    from witan.graph import OmnigraphClient
+    from witan.remote import proxy as proxy_mod
+    from witan_core.remote.proxy import RemoteToolUnavailable
+
+    monkeypatch.setattr(
+        OmnigraphClient, "_find_binary", staticmethod(lambda: "omnigraph")
+    )
+    exported = []
+
+    def fake_export_to(self, path, *, label="export"):
+        exported.append((self.server_url, self.graph_id, label))
+        Path(path).write_text('{"type":"Memory","data":{"slug":"m-1"}}\n')
+
+    monkeypatch.setattr(OmnigraphClient, "export_to", fake_export_to)
+
+    with proxy_mod._source_export("http://host:8080/graphs/council") as export:
+        assert export.read_text().startswith('{"type":"Memory"')
+    assert exported == [("http://host:8080", "council", "export (source)")]
+
+    def refused(self, path, *, label="export"):
+        raise RuntimeError("omnigraph export (source) failed: policy denied")
+
+    monkeypatch.setattr(OmnigraphClient, "export_to", refused)
+    with (
+        pytest.raises(RemoteToolUnavailable, match="policy denied"),
+        proxy_mod._source_export("http://host:8080/graphs/council"),
+    ):
+        pass
+
+
 # ── which of witan's tools write ──────────────────────────────────────────
 # Consulted when a gateway cuts a call off after dispatching it: a write's
 # outcome is then INDETERMINATE and must be reported as such, while a read's is

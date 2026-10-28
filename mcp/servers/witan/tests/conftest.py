@@ -8,8 +8,12 @@ is not on PATH.
 
 import asyncio
 import inspect
+import os
 import shutil
+import socket
 import subprocess
+import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -216,3 +220,105 @@ def server(tmp_path, monkeypatch, tmp_state_dir, no_background_optimize):
     client = graph_mod.OmnigraphClient(str(store), cfg_mod.load().queries_dir)
     monkeypatch.setattr(srv, "client", client)
     return _Tools(srv)
+
+
+# ── a real omnigraph-server ───────────────────────────────────────────
+#
+# ``omnigraph-server`` ships in the omnigraph release tarball but ``witan
+# setup`` installs only the CLI; ``bin/install_omnigraph_server.py`` fetches
+# it. Set ``OMNIGRAPH_SERVER_BIN``, or put it on PATH; otherwise a module
+# marked ``requires_omnigraph_server`` skips, unless ``WITAN_REQUIRE_OMNIGRAPH``
+# is set, as it is in CI.
+SERVER_BIN = os.environ.get("OMNIGRAPH_SERVER_BIN") or shutil.which("omnigraph-server")
+_REQUIRED = os.environ.get("WITAN_REQUIRE_OMNIGRAPH", "") not in ("", "0", "false")
+requires_omnigraph_server = pytest.mark.skipif(
+    SERVER_BIN is None and not _REQUIRED,
+    reason="omnigraph-server not found (set OMNIGRAPH_SERVER_BIN)",
+)
+SERVED_GRAPH = "council"
+SERVED_REPO = "https://github.com/test/repo"
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _cli() -> str:
+    sibling = Path(SERVER_BIN).with_name("omnigraph")
+    return str(sibling) if sibling.exists() else "omnigraph"
+
+
+@pytest.fixture
+def served(tmp_path, monkeypatch, tmp_state_dir, no_background_optimize):
+    """witan's tools pointed at a fresh one-graph omnigraph-server."""
+    cluster = tmp_path / "cluster"
+    cluster.mkdir()
+    shutil.copy(SCHEMA, cluster / "schema.pg")
+    (cluster / "cluster.yaml").write_text(
+        f"version: 1\ngraphs:\n  {SERVED_GRAPH}:\n    schema: schema.pg\n"
+    )
+    applied = subprocess.run(
+        [_cli(), "cluster", "apply", "--config", str(cluster)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    # A direct apply leaves its admission lock behind for the operator to
+    # release, and the server refuses to boot while it is held.
+    lock = next(
+        line.split()[2].rstrip(";")
+        for line in applied.stderr.splitlines() + applied.stdout.splitlines()
+        if line.startswith("Admission lock:")
+    )
+    subprocess.run(
+        [_cli(), "cluster", "force-unlock", "--config", str(cluster), lock],
+        check=True,
+        capture_output=True,
+    )
+    port = _free_port()
+    log = (tmp_path / "server.log").open("w")
+    proc = subprocess.Popen(
+        [
+            SERVER_BIN,
+            "--cluster",
+            str(cluster),
+            "--unauthenticated",
+            "--bind",
+            f"127.0.0.1:{port}",
+        ],
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    url = f"http://127.0.0.1:{port}"
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            urllib.request.urlopen(f"{url}/healthz", timeout=1).close()
+            break
+        except OSError:
+            assert proc.poll() is None, (tmp_path / "server.log").read_text()
+            assert time.monotonic() < deadline, "omnigraph-server never came up"
+            time.sleep(0.1)
+
+    monkeypatch.setenv("WITAN_REPO", SERVED_REPO)
+    monkeypatch.setenv("WITAN_AUTHOR", "pytest")
+    for var in ("CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    client = graph_mod.OmnigraphClient(
+        url, cfg_mod.load().queries_dir, graph_id=SERVED_GRAPH
+    )
+    assert client._groups_writes()
+    monkeypatch.setattr(srv, "client", client)
+    try:
+        yield _Tools(srv), url
+    finally:
+        proc.terminate()
+        proc.wait(10)
+        log.close()
