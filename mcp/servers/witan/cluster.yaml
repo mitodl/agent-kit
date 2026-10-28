@@ -5,7 +5,8 @@
 #   - CI lint:    omnigraph lint --query queries/read.gq --schema schema/schema.pg
 #
 # Operator-local settings (default store URI, output format) belong in
-# ~/.omnigraph/config.yaml — see config/operator-config.example.yaml.
+# ~/.omnigraph/config.yaml (omnigraph 0.14 format): see
+# config/operator-config.example.yaml. witan itself never reads that file.
 #
 # State directory (__cluster/) is git-ignored.
 

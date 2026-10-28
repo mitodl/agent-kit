@@ -92,7 +92,8 @@ def _source_export(source: str, s3: S3Credentials | None = None) -> Iterator[Pat
             raise RemoteToolUnavailable(
                 f"{source}: no such export file. A `.jsonl` source is read as "
                 "an `omnigraph export`, not a store — produce one with "
-                f"`omnigraph export --store <store> > {source}`."
+                f"`omnigraph export --target <store> > {source}` (`--store` before "
+                "omnigraph 0.14)."
             )
         yield Path(source)
         return

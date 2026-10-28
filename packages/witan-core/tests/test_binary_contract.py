@@ -51,6 +51,7 @@ from pathlib import Path
 
 import pytest
 
+from witan_core.omnigraph import store_cli_args
 from witan_core.omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
 
 _BINARY = shutil.which("omnigraph")
@@ -213,6 +214,13 @@ def _run(*args: str, expect_ok: bool = True) -> subprocess.CompletedProcess:
     return result
 
 
+def _at(store: str) -> list[str]:
+    """The flags addressing ``store`` in the installed binary's dialect, the
+    same way witan addresses it (``--store`` before 0.14, ``--target`` after).
+    With no binary on PATH it falls through to ``_run``'s own failure."""
+    return store_cli_args(store, binary=_BINARY or "omnigraph")
+
+
 def _doc(slug: str, note: str | None = None) -> dict:
     return {
         "type": "Doc",
@@ -280,7 +288,7 @@ def store(tmp_path_factory) -> str:
         )
         + "\n"
     )
-    _run("load", "--store", path, "--data", str(data), "--mode", "merge")
+    _run("load", *_at(path), "--data", str(data), "--mode", "merge")
     return path
 
 
@@ -319,7 +327,7 @@ def scratch_store(tmp_path) -> str:
 
 
 def _export_records(store: str) -> list[dict]:
-    out = _run("export", "--store", store).stdout
+    out = _run("export", *_at(store)).stdout
     return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 
@@ -512,7 +520,7 @@ def keyed_store(tmp_path, contract) -> str:
     _run("init", "--schema", str(schema), path)
     docs = tmp_path / "docs.jsonl"
     docs.write_text(json.dumps(_doc("doc-a")) + "\n" + json.dumps(_doc("doc-b")) + "\n")
-    _run("load", "--store", path, "--data", str(docs), "--mode", "merge")
+    _run("load", *_at(path), "--data", str(docs), "--mode", "merge")
     return path
 
 
@@ -521,7 +529,7 @@ def _load_edges(store: str, edges: list[dict], expect_ok: bool = True):
     with open(data, "w") as fh:
         fh.writelines(json.dumps(e) + "\n" for e in edges)
     return _run(
-        "load", "--store", store, "--data", data, "--mode", "merge", expect_ok=expect_ok
+        "load", *_at(store), "--data", data, "--mode", "merge", expect_ok=expect_ok
     )
 
 
@@ -570,7 +578,7 @@ def test_export_is_jsonl_one_record_per_line(store):
     """`witan_core.chunking` and `witan.remote.proxy._read_export` both read an
     export line-by-line, and `OmnigraphClient.export` streams it to a file
     precisely so it is never materialised whole."""
-    lines = [ln for ln in _run("export", "--store", store).stdout.splitlines() if ln]
+    lines = [ln for ln in _run("export", *_at(store)).stdout.splitlines() if ln]
 
     assert len(lines) == 3
     for line in lines:
@@ -586,7 +594,7 @@ def test_export_is_jsonl_one_record_per_line(store):
 
 def _query_rows(store: str, query_file: str) -> list[dict]:
     out = _run(
-        "query", "--store", store, "--query", query_file, "all_docs", "--format", "json"
+        "query", *_at(store), "--query", query_file, "all_docs", "--format", "json"
     ).stdout
     parsed = json.loads(out)
     assert isinstance(parsed, dict), f"expected an envelope object, got {type(parsed)}"
@@ -634,7 +642,7 @@ def test_query_renders_datetimes_as_iso_strings_on_every_format(store, query_fil
 
 
 def _commits(store: str, branch: str = "main") -> list[dict]:
-    out = _run("commit", "list", "--store", store, "--branch", branch, "--json").stdout
+    out = _run("commit", "list", *_at(store), "--branch", branch, "--json").stdout
     parsed = json.loads(out)
     assert isinstance(parsed, dict), f"expected an envelope object, got {type(parsed)}"
     return parsed["commits"]
@@ -681,7 +689,7 @@ def test_a_branchs_own_commits_are_tagged_with_its_name(scratch_store):
     "None means the branch has no commits of its own". A test asserting main
     were tagged would be asserting the opposite of the real behaviour.
     """
-    _run("branch", "create", "view-x", "--store", scratch_store)
+    _run("branch", "create", "view-x", *_at(scratch_store))
 
     before = _commits(scratch_store, "view-x")
     assert not [c for c in before if _branch_of(c) == "view-x"], (
@@ -694,8 +702,7 @@ def test_a_branchs_own_commits_are_tagged_with_its_name(scratch_store):
         fh.write(json.dumps(_doc("on-the-branch")) + "\n")
     _run(
         "load",
-        "--store",
-        scratch_store,
+        *_at(scratch_store),
         "--data",
         data,
         "--mode",
@@ -734,7 +741,7 @@ def test_branch_list_is_a_query_statement_returning_name_rows(store):
     answering the same `rows` envelope a named query does, one `{"name": ...}`
     per branch."""
     parsed = json.loads(
-        _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
+        _run("query", *_at(store), "-e", "branch list", "--format", "json").stdout
     )
 
     assert parsed["columns"] == ["name"]
@@ -748,15 +755,14 @@ def test_a_branch_statement_needs_its_name_quoted(store):
     every namespaced view's does."""
     unquoted = _run(
         "mutate",
-        "--store",
-        store,
+        *_at(store),
         "-e",
         "branch create act-x/v from main",
         expect_ok=False,
     )
     assert "parse error" in unquoted.stderr
 
-    quoted = _run("mutate", "--store", store, "-e", 'branch create "act-x/v" from main')
+    quoted = _run("mutate", *_at(store), "-e", 'branch create "act-x/v" from main')
     assert "act-x/v" in quoted.stdout
 
 
@@ -771,8 +777,7 @@ def test_a_quote_inside_a_branch_name_parses_and_is_refused_a_layer_down(store):
     It parses; what stops it is one level down."""
     escaped = _run(
         "mutate",
-        "--store",
-        store,
+        *_at(store),
         "-e",
         'branch create "we\\"ird" from main',
         expect_ok=False,
@@ -806,13 +811,11 @@ def test_branch_segments_may_be_unicode_alphabetic(store, name):
     not ASCII's and not Python's. `witan_code.graph._is_quotable_branch` has to
     match the ENGINE's rule: narrower, and the reaper refuses to delete views
     omnigraph created quite happily."""
-    created = _run(
-        "mutate", "--store", store, "-e", f'branch create "{name}" from main'
-    )
+    created = _run("mutate", *_at(store), "-e", f'branch create "{name}" from main')
     assert name in created.stdout
 
     rows = json.loads(
-        _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
+        _run("query", *_at(store), "-e", "branch list", "--format", "json").stdout
     )["rows"]
     assert name in [row["name"] for row in rows]
 
@@ -827,7 +830,7 @@ def test_snapshot_reports_the_stores_internal_schema(store):
     """The store's own format version. Paired with the reader's, it says
     exactly which deployed graphs need rebuilding — without opening each one
     and catching the failure."""
-    out = _run("snapshot", "--store", store).stdout
+    out = _run("snapshot", *_at(store)).stdout
 
     line = next(
         (
@@ -848,7 +851,7 @@ def _store_format(store: str) -> int:
     return int(
         next(
             ln
-            for ln in _run("snapshot", "--store", store).stdout.splitlines()
+            for ln in _run("snapshot", *_at(store)).stdout.splitlines()
             if "internal_schema_version" in ln
         ).split(":")[-1]
     )
@@ -942,8 +945,7 @@ def test_keyed_load_respects_this_formats_row_cap(scratch_store, bulk_data, cont
     cap = contract["keyed_row_cap"]
     result = _run(
         "load",
-        "--store",
-        scratch_store,
+        *_at(scratch_store),
         "--data",
         bulk_data,
         "--mode",
@@ -989,8 +991,7 @@ def test_overwrite_is_never_subject_to_the_row_cap(scratch_store, bulk_data):
     part."""
     result = _run(
         "load",
-        "--store",
-        scratch_store,
+        *_at(scratch_store),
         "--data",
         bulk_data,
         "--mode",

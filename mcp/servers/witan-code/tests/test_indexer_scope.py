@@ -428,7 +428,11 @@ def test_index_path_addresses_the_provisioned_cluster_graph(tmp_path, monkeypatc
     """
     from witan_code import config as cfg_module
     from witan_code import store as store_mod
+    from witan_core import omnigraph as og
 
+    # Pins the pre-0.14 flags; witan-core's tests cover how 0.14 renders the
+    # same server and graph id.
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
     _repo(tmp_path, monkeypatch)
     cfg = _cluster_cfg(
         monkeypatch,

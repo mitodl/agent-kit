@@ -18,6 +18,7 @@ import pytest
 
 from witan_code import store as store_module
 from witan_core import omnigraph_http as http_module
+from witan_core.omnigraph import store_cli_args
 
 from .conftest import requires_stack
 
@@ -256,7 +257,7 @@ def _plan(cfg, store) -> dict:
             "--schema",
             str(cfg.bridge_schema_file),
             "--json",
-            str(store),
+            *store_cli_args(str(store), binary=store_module._binary()),
         ],
         capture_output=True,
         text=True,

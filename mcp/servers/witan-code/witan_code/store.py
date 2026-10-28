@@ -33,10 +33,12 @@ from pathlib import Path
 from witan_core import omnigraph_http as _http
 from witan_core.observability import get_logger
 from witan_core.omnigraph import (
+    init_cli_args,
     schema_apply,
     schema_apply_if_changed,
     schema_stamp_path,
     shared_transport,
+    store_cli_args,
     store_write_lock,
 )
 from witan_core.refusal import Refusal
@@ -452,7 +454,14 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
         # ASSUMPTION: `omnigraph init --schema <file> <store>` is the per-store
         # init form, matching witan/install.sh.
         subprocess.run(
-            [binary, "init", "--schema", str(cfg.schema_file), str(store)],
+            [
+                binary,
+                "init",
+                *init_cli_args(binary),
+                "--schema",
+                str(cfg.schema_file),
+                str(store),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -488,7 +497,7 @@ def _schema_change_unsupported(binary: str, schema_file: Path, store: Path) -> b
                 "--schema",
                 str(schema_file),
                 "--json",
-                str(store),
+                *store_cli_args(str(store), binary=binary),
             ],
             capture_output=True,
             text=True,
@@ -554,7 +563,14 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
 
         store.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            [binary, "init", "--schema", str(cfg.bridge_schema_file), str(store)],
+            [
+                binary,
+                "init",
+                *init_cli_args(binary),
+                "--schema",
+                str(cfg.bridge_schema_file),
+                str(store),
+            ],
             check=True,
             capture_output=True,
             text=True,

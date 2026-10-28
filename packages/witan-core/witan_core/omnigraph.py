@@ -1,9 +1,8 @@
 """Shared base for the omnigraph client.
 
-Both servers drive omnigraph the same way: store addressing that picks
-``--store <uri>`` for local/s3 stores and ``--server <url> --graph <id>``
-for a deployed omnigraph-server (omnigraph 0.8.1 rejects an http(s) ``--store``),
-a per-store advisory write lock for local stores, a retry/repair loop for
+Both servers drive omnigraph the same way: store addressing in whichever
+dialect the installed CLI speaks (``store_cli_args``: ``--store``/``--server``
+before 0.14, ``--target`` with a generated operator config from 0.14), a per-store advisory write lock for local stores, a retry/repair loop for
 optimistic-concurrency drift, self-backoff for the deployed omnigraph-server's
 per-actor admission cap and for the window in which it is restarting, and named
 read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here.
@@ -48,8 +47,11 @@ NOT re-exported from ``witan_core``'s package root — import it as
 
 from __future__ import annotations
 
+import atexit
 import fcntl
+import functools
 import hashlib
+import ipaddress
 import json
 import logging
 import math
@@ -57,6 +59,7 @@ import os
 import random
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -420,13 +423,13 @@ _UNAVAILABLE_MAX_WAIT = 150.0
 _UNAVAILABLE_BASE_DELAY = 0.5
 _UNAVAILABLE_MAX_DELAY = 10.0
 
-# How a bearer token reaches the omnigraph CLI. Per its token-resolution order
-# (docs/user/cli/reference.md): a server-name-specific `OMNIGRAPH_TOKEN_<NAME>`,
-# then a `[<name>]` section in ~/.omnigraph/credentials, then THIS as the
-# default fallback for any server. No subcommand takes a token flag — only
-# `omnigraph login` does — so the env fallback is the only per-invocation form.
+# How a bearer token reaches a pre-0.14 omnigraph CLI: its last-resort
+# fallback for any server, and the only per-invocation form (no subcommand
+# takes a token flag). omnigraph 0.14 no longer reads it at all; there the
+# token travels as OPERATOR_TOKEN_ENV_VAR below. witan still reads it as the
+# ambient token for a remote store with none configured (`_remote_token`).
 #
-# That matters: witan resolves a DIFFERENT per-actor token per request
+# Per-invocation matters: witan resolves a DIFFERENT per-actor token per request
 # (ADR-0004), and a credentials file is process-global state that concurrent
 # requests for two actors would race. An env var set on each subprocess does
 # not, which is why this stays a per-call `env` rather than a login at startup.
@@ -437,6 +440,22 @@ _UNAVAILABLE_MAX_DELAY = 10.0
 # by analogy — a variable the CLI has never read, which left every remote call
 # from both servers unauthenticated and crash-looped the deployed migration Job.
 BEARER_TOKEN_ENV_VAR = "OMNIGRAPH_BEARER_TOKEN"
+
+# omnigraph 0.14 replaced the routing flags (`--store`, `--server`, `--graph`
+# on a server URL, `--profile`) with one `--target NAME|ADDRESS`. An inline
+# ADDRESS is a local path or `file://` URI only; a server must be a NAMED target
+# in an operator config, and its token comes from that target's single `auth`
+# provider. witan generates that config itself (`_operator_config`) with
+# `auth: {provider: token, source: {env: OPERATOR_TOKEN_ENV_VAR}}` and sets the
+# variable on each subprocess, which keeps the per-actor isolation above: the
+# file holds no secret and is shared, the token is per call.
+#
+# The CLI that speaks this is identified by `omnigraph version --json`
+# reporting `protocols.target == 2`; a pre-0.14 `version` takes no `--json`
+# (0.13 exits 2), which is how the legacy flags stay selected for it.
+OPERATOR_TOKEN_ENV_VAR = "WITAN_OMNIGRAPH_TOKEN"
+_TARGET_PROTOCOL = 2
+_OPERATOR_TARGET = "witan"
 
 # Escape hatch for the pooled HTTP transport (see ``_http_transport``). Set to
 # "0"/"false"/"no" to force every call back onto the CLI subprocess.
@@ -468,9 +487,10 @@ _PRECONDITION_FAILED_STATUS = 412
 _DELETE_STATEMENT_RE = re.compile(r"^\s*delete\b", re.MULTILINE)
 
 # A deployed omnigraph-server is reached over http(s); local files and s3://
-# roots are opened directly. Only http(s) needs the `--server`/`--graph`
-# addressing split — s3:// keeps `--store` (omnigraph opens it directly).
+# roots are opened directly. Only http(s) needs the server/graph addressing
+# split. s3:// is a direct store, which only a pre-0.14 CLI can open.
 _SERVER_SCHEMES = ("http://", "https://")
+_CLOUD_SCHEMES = ("s3://", "az://")
 # omnigraph graph ids: letters, digits, hyphens; 1-64 chars. NO underscores
 # (the engine reserves them) and no path separators — see the naming decision
 # in memory pf-decision-cluster-graph-names-track-package.
@@ -1161,7 +1181,14 @@ def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
     """
     try:
         res = subprocess.run(
-            [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
+            [
+                binary,
+                "schema",
+                "apply",
+                "--schema",
+                str(schema_file),
+                *store_cli_args(str(store), binary=binary),
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -1251,8 +1278,159 @@ def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
     return server_url, resolved
 
 
-def store_cli_args(graph_uri: str, graph_id: str | None = None) -> list[str]:
-    """The CLI flags addressing ``graph_uri``, for a store with no client.
+def store_address(
+    graph_uri: str, graph_id: str | None = None
+) -> tuple[str, str | None]:
+    """The binary-independent identity of a store: ``(server_url, graph_id)``
+    for a deployed server, ``(graph_uri, None)`` for anything opened directly.
+
+    For a caller that needs to ask whether two spellings name the same store
+    without rendering CLI flags, whose shape depends on the binary.
+    """
+    if graph_uri.startswith(_SERVER_SCHEMES):
+        return _split_server_uri(graph_uri, graph_id)
+    return graph_uri, None
+
+
+def cli_speaks_targets(binary: str) -> bool:
+    """Whether ``binary`` is an omnigraph CLI addressed with 0.14's ``--target``.
+
+    Memoized per binary file: the answer is a property of the executable, and a
+    ``witan setup`` that replaces it in place changes its mtime, so the next call
+    asks the new one. A binary that cannot be stat'ed or run is answered
+    ``False`` so the command itself is what reports it missing, as before.
+    """
+    # Resolved the way the subprocess will be: a bare command name is found on
+    # PATH, not in the working directory.
+    resolved = shutil.which(binary)
+    if resolved is None:
+        return False
+    try:
+        st = os.stat(resolved)
+    except OSError:
+        return False
+    return _speaks_targets(os.path.realpath(resolved), st.st_mtime_ns, st.st_size)
+
+
+@functools.cache
+def _speaks_targets(binary: str, _mtime_ns: int, _size: int) -> bool:
+    try:
+        result = subprocess.run(
+            [binary, "version", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        # Before 0.14, `version` takes no `--json`; 0.13 exits 2 on it.
+        return False
+    protocol = json.loads(result.stdout)["protocols"]["target"]
+    if protocol != _TARGET_PROTOCOL:
+        # Upstream: "clients selecting a CLI must require these exact versions;
+        # protocol 1 appeared in multiple incompatible edge builds".
+        raise RuntimeError(
+            f"{binary} speaks omnigraph target protocol {protocol}; witan "
+            f"supports {_TARGET_PROTOCOL} (omnigraph 0.14) or a pre-0.14 CLI."
+        )
+    return True
+
+
+def _is_loopback(server_url: str) -> bool:
+    """The 0.14 CLI's own rule (operator_schema/validation.rs): ``localhost``
+    or a loopback IP literal."""
+    host = urllib.parse.urlsplit(server_url).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _remote_token(token: str | None) -> str | None:
+    """The token a remote call presents: the configured one, else the ambient
+    ``OMNIGRAPH_BEARER_TOKEN``. One rule for both transports and every binary."""
+    return token or os.environ.get(BEARER_TOKEN_ENV_VAR) or None
+
+
+_operator_dir: Path | None = None
+_operator_dir_lock = threading.Lock()
+
+
+def _is_private_dir(path: Path) -> bool:
+    """Ours alone: a real directory, owned by this user, closed to everyone
+    else. Nothing but this user (or root) can then create a file inside it."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return (
+        stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077
+    )
+
+
+def _operator_config_dir() -> Path:
+    """The private directory generated configs live in, re-allocated when lost.
+
+    Never recreated by name. It sits in the shared temp dir, so once a temp
+    cleaner removes it the name is free for another local user to claim and
+    plant a config whose ``witan`` target would receive this process's actor
+    token.
+    """
+    global _operator_dir
+    with _operator_dir_lock:
+        if _operator_dir is None or not _is_private_dir(_operator_dir):
+            _operator_dir = Path(tempfile.mkdtemp(prefix="witan-omnigraph-"))
+            atexit.register(shutil.rmtree, _operator_dir, ignore_errors=True)
+        return _operator_dir
+
+
+def _operator_config(server_url: str | None, *, authenticated: bool) -> str:
+    """Path to an operator config naming one server target, or none.
+
+    Every 0.14 call passes one, local ones included: without ``--operator-config``
+    the CLI reads ``~/.omnigraph/config.yaml`` and refuses the WHOLE call when
+    any entry in it is invalid, so a personal file still in the 0.13 format
+    would break witan's local store too.
+
+    JSON is written because it is valid YAML and needs no YAML library. The
+    file holds no secret (the token is named by variable), so it is
+    content-addressed and shared by every call with the same endpoint. It is
+    rewritten if a temp cleaner removed it under a long-lived server, in a
+    fresh directory if the cleaner took that too (:func:`_operator_config_dir`).
+    """
+    doc: dict = {"version": 1}
+    if server_url is not None:
+        auth = (
+            {"provider": "token", "source": {"env": OPERATOR_TOKEN_ENV_VAR}}
+            if authenticated
+            else {"provider": "anonymous"}
+        )
+        doc["targets"] = {
+            _OPERATOR_TARGET: {"kind": "server", "endpoint": server_url, "auth": auth}
+        }
+    text = json.dumps(doc, sort_keys=True)
+    directory = _operator_config_dir()
+    path = directory / f"{hashlib.sha256(text.encode()).hexdigest()[:16]}.yaml"
+    if not path.exists():
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    return str(path)
+
+
+def store_cli_args(
+    graph_uri: str,
+    graph_id: str | None = None,
+    *,
+    binary: str,
+    token: str | None = None,
+) -> list[str]:
+    """The CLI flags addressing ``graph_uri`` for ``binary``, for a store with
+    no client.
 
     The free-function form of :meth:`OmnigraphClient._store_args`, which
     delegates here. It exists because a tool can legitimately need to address a
@@ -1265,11 +1443,80 @@ def store_cli_args(graph_uri: str, graph_id: str | None = None) -> list[str]:
     A remote graph id may come from ``graph_id`` or be encoded in the URI as
     ``.../graphs/<id>`` — the latter is what lets a caller name a remote store
     completely in one argument, with no second flag to thread through.
+
+    ``binary`` decides the dialect (:func:`cli_speaks_targets`). A pre-0.14 CLI
+    takes ``--store <uri>`` or ``--server <url> --graph <id>``. A 0.14 CLI takes
+    ``--operator-config <generated> --target <abs path>`` for a local store and
+    ``--operator-config <generated> --target witan --graph <id>`` for a server.
+    ``token`` (or the ambient one, :func:`_remote_token`) only chooses whether
+    that server target authenticates; the value itself goes in the subprocess
+    env (:func:`store_subprocess_env`), never in the file.
+
+    Raises ``RuntimeError`` (what witan's callers already report) for what a
+    0.14 CLI cannot address at all: a direct ``s3://``/``az://`` store
+    (cloud-direct access was removed), and a plain
+    ``http://`` server unless it is an anonymous loopback one (the CLI's own
+    endpoint rule; it sends a credential only over HTTPS).
     """
+    if not cli_speaks_targets(binary):
+        if graph_uri.startswith(_SERVER_SCHEMES):
+            server_url, resolved = _split_server_uri(graph_uri, graph_id)
+            return ["--server", server_url, "--graph", resolved]
+        return ["--store", graph_uri]
+
     if graph_uri.startswith(_SERVER_SCHEMES):
         server_url, resolved = _split_server_uri(graph_uri, graph_id)
-        return ["--server", server_url, "--graph", resolved]
-    return ["--store", graph_uri]
+        authenticated = _remote_token(token) is not None
+        if server_url.startswith("http://") and (
+            authenticated or not _is_loopback(server_url)
+        ):
+            raise RuntimeError(
+                f"{server_url}: omnigraph 0.14's CLI reaches a server only over "
+                "HTTPS (plain HTTP is allowed for an anonymous loopback server "
+                "alone), so it cannot run this command against it. Serve the "
+                "graph over https://, or use a pre-0.14 binary."
+            )
+        config = _operator_config(server_url, authenticated=authenticated)
+        return [
+            "--operator-config",
+            config,
+            "--target",
+            _OPERATOR_TARGET,
+            "--graph",
+            resolved,
+        ]
+    if graph_uri.startswith(_CLOUD_SCHEMES):
+        raise RuntimeError(
+            f"{graph_uri}: omnigraph 0.14's CLI cannot open an s3:// or az:// "
+            "store directly (its inline targets are local paths only); reach it "
+            "through an omnigraph-server, or with a pre-0.14 binary."
+        )
+    if graph_uri.startswith("file://"):
+        # A file URI is percent-encoded (`Path.as_uri()` writes a space as
+        # %20); a plain path is taken literally, `%` and all.
+        graph_uri = urllib.parse.unquote(urllib.parse.urlsplit(graph_uri).path)
+    path = os.path.abspath(os.path.expanduser(graph_uri))
+    return [
+        "--operator-config",
+        _operator_config(None, authenticated=False),
+        "--target",
+        path,
+    ]
+
+
+def init_cli_args(binary: str) -> list[str]:
+    """Flags for ``omnigraph init``, which keeps its positional store URI on
+    both dialects. 0.14 still reads ``~/.omnigraph/config.yaml`` for it, so it
+    gets the same empty generated config as every other local call."""
+    if not cli_speaks_targets(binary):
+        return []
+    return ["--operator-config", _operator_config(None, authenticated=False)]
+
+
+def write_quiet_args(binary: str) -> list[str]:
+    """``--quiet`` for a pre-0.14 write; 0.14 removed the flag (it always prints
+    the resolved target to stderr) and refuses it with exit 64."""
+    return [] if cli_speaks_targets(binary) else ["--quiet"]
 
 
 def _aws_profile_env(profile: str) -> dict[str, str]:
@@ -1349,13 +1596,21 @@ def store_subprocess_env(
     wrapper script or plaintext credentials in witan's config. ``s3_region``
     supplies both standard AWS region spellings. Local and http(s) stores ignore
     both S3 settings. A remote store takes ``token`` when given and otherwise
-    inherits the CLI's documented ambient fallback.
+    the ambient ``OMNIGRAPH_BEARER_TOKEN`` (:func:`_remote_token`).
+
+    The token is set under both names a CLI may read it from, so this needs no
+    binary: ``OMNIGRAPH_BEARER_TOKEN`` for a pre-0.14 CLI, and
+    ``OPERATOR_TOKEN_ENV_VAR`` for 0.14, whose generated operator config names
+    that variable (:func:`store_cli_args`). Each binary ignores the other one.
     """
     env = dict(os.environ)
-    if not graph_uri.startswith(_SERVER_SCHEMES):
+    resolved = _remote_token(token) if graph_uri.startswith(_SERVER_SCHEMES) else None
+    if resolved is None:
         env.pop(BEARER_TOKEN_ENV_VAR, None)
-    elif token:
-        env[BEARER_TOKEN_ENV_VAR] = token
+        env.pop(OPERATOR_TOKEN_ENV_VAR, None)
+    else:
+        env[BEARER_TOKEN_ENV_VAR] = resolved
+        env[OPERATOR_TOKEN_ENV_VAR] = resolved
 
     if graph_uri.startswith("s3://") and s3_profile:
         # Do not combine a freshly exported access/secret pair with an ambient
@@ -1838,10 +2093,10 @@ class OmnigraphClient:
         # — a listing, an existence check — where waiting 150s to report "no"
         # is strictly worse than reporting it now.
         self.connect_retry = connect_retry
-        # http(s) stores are a remote omnigraph-server, addressed with
-        # `--server <url> --graph <id>`; local paths and s3:// roots keep
-        # `--store <uri>`. Resolve the split once at construction so a bad
-        # graph id fails fast rather than on the first subprocess.
+        # http(s) stores are a remote omnigraph-server, addressed by server URL
+        # plus graph id; local paths and s3:// roots are opened directly.
+        # Resolve the split once at construction so a bad graph id fails fast
+        # rather than on the first subprocess.
         self.is_remote = graph_uri.startswith(_SERVER_SCHEMES)
         if self.is_remote:
             self.server_url, self.graph_id = _split_server_uri(graph_uri, graph_id)
@@ -2328,7 +2583,7 @@ class OmnigraphClient:
             self._binary,
             verb,
             *self._store_args(),
-            *(["--quiet"] if is_write else []),
+            *(write_quiet_args(self._binary) if is_write else []),
             "-e",
             source,
             *cli_args,
@@ -2414,10 +2669,12 @@ class OmnigraphClient:
     def _resolve_token(self) -> str | None:
         """The bearer token to present over HTTP.
 
-        Mirrors what the CLI subprocess would resolve, and the fallback is the
-        load-bearing half: a remote client with no configured token deliberately
-        inherits an ambient ``OMNIGRAPH_BEARER_TOKEN`` (the CLI's own documented
-        last resort, and a supported way to drive a remote graph). Sending only
+        The same token the CLI subprocess is handed (:func:`_remote_token`),
+        and the fallback is the load-bearing half: a remote client with no
+        configured token deliberately inherits an ambient
+        ``OMNIGRAPH_BEARER_TOKEN`` (a pre-0.14 CLI's own last resort, which
+        witan keeps reading for both transports, and a supported way to drive a
+        remote graph). Sending only
         ``self.token`` would silently drop that and turn a working setup into
         unauthenticated 401s — the same class of failure as the
         wrong-variable-name bug this env var is named for.
@@ -2426,7 +2683,7 @@ class OmnigraphClient:
         resolve it at the same moment, and so a test or a process that exports
         the variable late behaves the same either way.
         """
-        return self.token or os.environ.get(BEARER_TOKEN_ENV_VAR) or None
+        return _remote_token(self.token)
 
     def _query_source(self, query_file: str, query_name: str) -> str:
         """The named query's text, for the HTTP body (which takes it inline)."""
@@ -2788,18 +3045,20 @@ class OmnigraphClient:
         return target
 
     def _store_args(self) -> list[str]:
-        """The CLI flags that address this store. A remote omnigraph-server
-        (http(s)) is ``--server <url> --graph <id>`` (omnigraph 0.8.1 rejects an
-        http(s) ``--store``); local paths and s3:// roots are ``--store <uri>``.
+        """The CLI flags that address this store with this client's binary;
+        :func:`store_cli_args` has the per-dialect forms.
 
         Passes the already-resolved ``graph_id`` rather than re-deriving it, so
         a client built from a bare server URL plus ``WITAN_MEMORY_GRAPH`` keeps
         addressing the same graph.
         """
-        return store_cli_args(self.graph_uri, self.graph_id)
+        return store_cli_args(
+            self.graph_uri, self.graph_id, binary=self._binary, token=self.token
+        )
 
     def _run(self, subcommand: str, *args: str, surface_conflict: bool = False) -> str:
-        quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
+        is_write = subcommand in _WRITE_SUBCOMMANDS
+        quiet = write_quiet_args(self._binary) if is_write else []
         cmd = [
             self._binary,
             subcommand,
@@ -2811,7 +3070,7 @@ class OmnigraphClient:
         return self._execute(
             cmd,
             subcommand,
-            is_write=subcommand in _WRITE_SUBCOMMANDS,
+            is_write=is_write,
             surface_conflict=surface_conflict,
         )
 
@@ -2856,8 +3115,7 @@ class OmnigraphClient:
         # to present a bearer token to, and s3 authenticates with AWS
         # credentials instead, so an ambient token is stripped rather than
         # merely not set. A remote store with no explicit token deliberately
-        # keeps whatever the environment already carries: that is the CLI's own
-        # documented fallback (see BEARER_TOKEN_ENV_VAR), and `export
+        # takes the ambient one (see BEARER_TOKEN_ENV_VAR), and `export
         # OMNIGRAPH_BEARER_TOKEN=…` with no token in config is a supported way
         # to drive it. Both rules live in `store_subprocess_env`.
         return store_subprocess_env(
@@ -3223,7 +3481,7 @@ class OmnigraphClient:
                 *self._store_args(),
                 "--confirm",
                 "--force",
-                "--quiet",
+                *write_quiet_args(self._binary),
             ],
             capture_output=True,
             text=True,

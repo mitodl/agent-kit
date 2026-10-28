@@ -96,14 +96,17 @@ def _ensure_omnigraph_on_path() -> None:
 
     The stub is a no-op rather than an error: with the store pre-created above,
     the only thing that runs it is ``schema_apply_if_changed``, which is
-    comparing a schema against a store nothing will ever read.
+    comparing a schema against a store nothing will ever read. It answers
+    ``version --json`` the way a pre-0.14 CLI does (exit 2), because
+    ``cli_speaks_targets`` reads a zero exit there as a 0.14 binary and parses
+    its stdout.
     """
     if shutil.which("omnigraph") or (Path.home() / ".local/bin/omnigraph").exists():
         return
     stub_dir = Path(tempfile.gettempdir()) / "witan-docs-generation" / "bin"
     stub_dir.mkdir(parents=True, exist_ok=True)
     stub = stub_dir / "omnigraph"
-    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.write_text('#!/bin/sh\n[ "$1 $2" = "version --json" ] && exit 2\nexit 0\n')
     stub.chmod(0o755)
     os.environ["PATH"] = f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 

@@ -25,6 +25,7 @@ from witan_code.graph import (
     _gq_branch_name,
 )
 from witan_code.reaper import ViewAge, reap, select_stale
+from witan_core.omnigraph import store_cli_args
 
 from .conftest import requires_omnigraph
 
@@ -337,7 +338,13 @@ def test_last_write_comes_from_the_branchs_own_commits(tmp_path, monkeypatch):
     client = OmnigraphClient(str(store), tmp_path)
     for name in ("act-alice/written", "act-bob/untouched"):
         subprocess.run(
-            [binary, "branch", "create", "--store", f"file://{store}", name],
+            [
+                binary,
+                "branch",
+                "create",
+                *store_cli_args(f"file://{store}", binary=binary),
+                name,
+            ],
             check=True,
             capture_output=True,
         )
@@ -378,7 +385,13 @@ def test_the_reaper_deletes_what_it_selected(tmp_path):
     )
     for name in ("act-alice/stale", "act-bob/fresh"):
         subprocess.run(
-            [binary, "branch", "create", "--store", f"file://{store}", name],
+            [
+                binary,
+                "branch",
+                "create",
+                *store_cli_args(f"file://{store}", binary=binary),
+                name,
+            ],
             check=True,
             capture_output=True,
         )
@@ -443,7 +456,13 @@ def test_a_branch_client_does_not_leak_its_branch_into_commit_list(tmp_path):
         capture_output=True,
     )
     subprocess.run(
-        [binary, "branch", "create", "--store", f"file://{store}", "other"],
+        [
+            binary,
+            "branch",
+            "create",
+            *store_cli_args(f"file://{store}", binary=binary),
+            "other",
+        ],
         check=True,
         capture_output=True,
     )
