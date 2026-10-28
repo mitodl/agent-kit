@@ -139,7 +139,20 @@ stub in tests). See `witan_code/github_app.py`.
   interrupted apply, and on a `cluster.yaml` that drops a graph (0.13 deletes
   a dropped graph's storage). The module docstring has the sequence;
   [the 0.13 upgrade spec](../docs/internals/design/omnigraph-0-13-upgrade-spec.md)
-  (D3, D4) has the reasoning.
+  (D3, D4) has the reasoning. On 0.14 a server that shut down cleanly leaves
+  no lock, so the unlock only runs after a crash or a kill; the boot's direct
+  apply still refuses any held lock, and CLI writers still keep theirs.
+- **Speaks the 0.13 and the 0.14 CLI.** The scripts read `omnigraph version
+  --json` (0.13 has no `--json`) and pick the argument shapes: 0.13's
+  `--config <dir>` and `--cluster <root>`, or 0.14's `--config <dir> --target
+  <root>` and `--target <root>`, where the root is `cluster.yaml`'s `storage`.
+  0.14's `cluster status` reports no lock operation, so the 0.14 path reads
+  the lock from `cluster plan`. A stock 0.14 CLI refuses an inline `s3://`
+  target; the image needs the CLI patched with
+  [ModernRelay/omnigraph#1189](https://github.com/ModernRelay/omnigraph/pull/1189),
+  which takes the region from `AWS_REGION` or `AWS_DEFAULT_REGION` and refuses
+  `AWS_PROFILE` without an explicit endpoint. See
+  [the 0.14 upgrade spec](../docs/internals/design/omnigraph-0-14-upgrade-spec.md) (D3).
 - **Carries the two commands that run beside the server**, for the
   `omnigraph` stack to use as a Job's `command`:
   - [`omnigraph_plan_gate.py`](./omnigraph_plan_gate.py) runs the
@@ -198,8 +211,8 @@ and does not scale the server back up if it appears during the window.
 
 Outside Kubernetes (no `KUBERNETES_SERVICE_HOST`) the Lease and the pod check
 are skipped, and the entrypoint refuses to force-unlock unless
-`OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1` is set. `cluster apply` always leaves a lock,
-so a local `docker run` needs it even on an empty root. Set it only when this
+`OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1` is set. A `cluster apply` that changes
+anything leaves a lock, so a local `docker run` needs it even on an empty root. Set it only when this
 container is the only writer of the cluster root.
 
 ## Base image / glibc

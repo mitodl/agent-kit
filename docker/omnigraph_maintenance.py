@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Nightly maintenance window for the omnigraph data tier (omnigraph 0.13).
+"""Nightly maintenance window for the omnigraph data tier (omnigraph 0.13, 0.14).
 
 `omnigraph optimize` and `cleanup` are direct writers of the storage root.
 From 0.12 on a direct writer is refused with `state_lock_held` while the
-server holds its `serve` lock, and there are no HTTP maintenance routes, so
-maintenance needs the server stopped. This command owns that window:
+server holds its `serve` lock, and there are no HTTP maintenance routes (0.14
+has none either), so maintenance needs the server stopped. This command owns
+that window:
 
     skip if a migration is armed or the Deployment is already at 0 replicas
     take the unlock Lease, waiting out a server that has just booted
     scale the server Deployment to 0
     wait until no live pod matches the Deployment's own selector
-    status  -> force-unlock the `serve` lock; any other lock: stop
+    lock    -> force-unlock the `serve` lock; any other lock: stop
     per graph: optimize, force-unlock
     on a cleanup day, per graph: cleanup, force-unlock
     restore the replica count, release the Lease
@@ -41,8 +42,15 @@ WHAT IS RESTORED, AND WHEN IT IS NOT
   `graph_operation` lock on every boot. The council probe's first run after
   the window is the alert, and the runbook clears the lock and scales back up.
 
-Design: docs/internals/design/omnigraph-0-13-upgrade-spec.md (D5). The Lease,
-the pod check and the CLI wrappers are the server entrypoint's
+On 0.14 a server stopped cleanly leaves no `serve` lock, so the unlock after
+the scale-down only runs when the server was killed or had uncertain storage
+work. Every command still leaves its `graph_operation` lock on 0.14: only a
+server's `serve` lock is leased and released on its own (omnigraph v0.14.0
+`crates/omnigraph-cluster/src/state_lock.rs:74-87`).
+
+Design: docs/internals/design/omnigraph-0-13-upgrade-spec.md (D5) and
+omnigraph-0-14-upgrade-spec.md (D3). The Lease, the pod check, the CLI
+wrappers and their two dialects are the server entrypoint's
 (omnigraph_server_entrypoint.py), which this is installed beside.
 """
 
@@ -59,7 +67,6 @@ from pathlib import Path
 from typing import Any
 
 import omnigraph_server_entrypoint as handoff
-import yaml
 from omnigraph_server_entrypoint import (
     BootRefused,
     Cluster,
@@ -174,17 +181,6 @@ def cleanup_nights_before(day: date, weekdays: frozenset[int]) -> int:
     )
 
 
-def cluster_layout(config_dir: Path) -> tuple[str, list[str]]:
-    """The storage root and graph ids `cluster.yaml` declares.
-
-    Maintenance addresses a graph as `--cluster <root> --graph <id>`. A config
-    directory is accepted there only when the root is that directory, which is
-    the case when `cluster.yaml` names no `storage`.
-    """
-    declared = yaml.safe_load((config_dir / "cluster.yaml").read_text())
-    return declared.get("storage") or str(config_dir), list(declared["graphs"])
-
-
 def migration_armed(deployment: dict[str, Any]) -> bool:
     annotations = deployment["metadata"].get("annotations") or {}
     return MIGRATION_ARMED_ANNOTATION in annotations
@@ -231,7 +227,7 @@ class Window:
         self._resource_version = deployment["metadata"]["resourceVersion"]
         self._selector = pod_selector(deployment)
         self._cluster = Cluster(settings.config_dir, None, lease)
-        self._root, self._graphs = cluster_layout(settings.config_dir)
+        _, self._graphs = handoff.cluster_layout(settings.config_dir)
         self._deadline = time.monotonic() + settings.window_seconds
         self._terminated = threading.Event()
         self._may_have_stopped_server = False
@@ -352,7 +348,7 @@ class Window:
         first = night % len(self._graphs)
         for graph in self._graphs[first:] + self._graphs[:first]:
             # `--yes` because an s3:// root is a non-local scope, and a
-            # destructive write there refuses without a TTY.
+            # destructive write there refuses without a TTY (0.13 and 0.14).
             self._maintain(
                 graph,
                 "cleanup",
@@ -373,7 +369,7 @@ class Window:
         self._ran_command = True
         try:
             result = handoff.run_omnigraph(
-                [command, "--cluster", self._root, "--graph", graph, *args],
+                self._cluster.graph_command(command, graph, *args),
                 self._lease,
                 timeout_seconds=self._settings.command_timeout_seconds,
                 interrupt=self._check_terminated,

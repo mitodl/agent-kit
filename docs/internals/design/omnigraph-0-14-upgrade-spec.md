@@ -241,16 +241,23 @@ the 0.13 shape:
   them different flags (Verified (binary), `cluster <cmd> --help`):
   - Plan and apply: `cluster plan|apply --config <dir> --target <s3 root>`.
     `--config` is the source directory only.
-  - Lock observation: `cluster observe --config <dir> --target <s3 root>
-    --json`, in place of `cluster status --config <dir> --json`. 0.14's
+  - Lock observation: `cluster plan --config <dir> --target <s3 root>
+    --json`, reading its `state_observations`, in place of `cluster status
+    --config <dir> --json`. 0.14's
     `status` takes no `--config` and prints a ledger-only `DeploymentStatus`
     with `lock_id` and `outstanding_id` but no `lock_operation` and no
     `state_observations` (`crates/omnigraph-cluster/src/deployment.rs:263-272`,
     printed at `crates/omnigraph-cli/src/commands/cluster/mod.rs:172-187`), so
-    `Cluster.lock()` (entrypoint `:624-639`) can't read it. `observe` prints
-    the `state_observations` envelope (`StateSyncOutput`,
-    `crates/omnigraph-cluster/src/types.rs:281-292`) without taking writer
-    admission.
+    `Cluster.lock()` (entrypoint `:624-639`) can't read it. `observe` would
+    print the envelope, but #1189 admits an inline `s3://` root only for plan,
+    apply, status, force-unlock and upgrade-ledger (`planes.rs`
+    `admits_inline_s3_root`). `PlanOutput` carries the same
+    `state_observations` (`types.rs:229-245`) and never takes writer admission
+    (`:231`). A plan refused before it reaches the root (an invalid config, a
+    storage mismatch) still prints `locked: false`
+    (`crates/omnigraph-cluster/src/lib.rs:250-284`), while the lock is read
+    before the ledger (`:287-306`). So the entrypoint trusts it when
+    `state_found` is true, or when there is no ledger and no error.
   - Unlock: `cluster force-unlock --target <s3 root> <id>`. It takes no
     `--config` and refuses without an explicit `--target`
     (`commands/cluster/mod.rs:190-193`).

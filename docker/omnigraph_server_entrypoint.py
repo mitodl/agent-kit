@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entrypoint for the omnigraph-server data-tier image (omnigraph 0.13).
+"""Entrypoint for the omnigraph-server data-tier image (omnigraph 0.13 and 0.14).
 
 omnigraph-server serves the graphs that `omnigraph cluster apply` has created
 under the storage root and never creates them itself, so this converges the
@@ -11,10 +11,16 @@ WHY THIS IS NOT A SHELL SCRIPT ANY MORE
 
 From 0.12 on, every writer of a cluster root persists an exclusive lock at
 `<root>/__cluster/lock.json` and keeps it after it exits: the server leaves
-`serve` (also after a clean SIGTERM, and after a start that fails), a direct
-`cluster apply` leaves `deployment`, `optimize` and `cleanup` leave
-`graph_operation`. The next writer is refused with `state_lock_held` until
-someone runs `cluster force-unlock <id>`. This pod restarts on its own (hourly
+`serve` (on 0.13 also after a clean SIGTERM, and after a start that fails), a
+direct `cluster apply` that changed anything leaves `deployment`, `optimize`
+and `cleanup` leave `graph_operation`. The next writer is refused with
+`state_lock_held` until someone runs `cluster force-unlock <id>`. 0.14 releases
+a server's lock on a clean shutdown, and on S3 a restarted server takes over a
+crashed one's lock once its lease has gone silent, but only a `serve`
+acquisition does that: the direct apply below still refuses the lock, and CLI
+writers still keep theirs (omnigraph v0.14.0
+`crates/omnigraph-cluster/src/state_lock.rs:74-87,336-343`,
+`crates/omnigraph-server/src/lib.rs:4004-4029`). This pod restarts on its own (hourly
 token-sync, config-hash rollouts, liveness kills, evictions, drains), so the
 unlock has to happen here, and it is only safe once the previous owner's I/O
 is over. The lock records a pid and no host, so that evidence comes from
@@ -40,13 +46,24 @@ BOOT SEQUENCE
     render policy group membership from the token map
     plan    -> exit 1 on an outstanding deployment, on a graph removal that
                is not allow-listed, or on any other plan error
-    status  -> serve / deployment lock: force-unlock; anything else: exit 1
+    lock    -> serve / deployment lock: force-unlock; anything else: exit 1
     apply
-    status  -> force-unlock the deployment lock apply left
+    lock    -> force-unlock the deployment lock apply left
     exec omnigraph-server
 
 Design and the binary-verified facts behind each step:
-docs/internals/design/omnigraph-0-13-upgrade-spec.md (D3, D4).
+docs/internals/design/omnigraph-0-13-upgrade-spec.md (D3, D4) and
+docs/internals/design/omnigraph-0-14-upgrade-spec.md (D3).
+
+TWO CLI DIALECTS
+
+The image ships 0.13 until the pin bump, so the CLI's own `version --json`
+picks the argument shapes (`cli_speaks_targets`). 0.14 takes the destination
+as `--target <root>` and `--config` as source only, and its `cluster status`
+reports no lock operation, so a lock is read from `cluster plan`'s
+`state_observations` there. The root is `cluster.yaml`'s `storage`; an inline
+`s3://` target needs the patched CLI (ModernRelay/omnigraph#1189), which reads
+the region from `AWS_REGION` or `AWS_DEFAULT_REGION`.
 
 Outside Kubernetes (a local `docker run`) there is no API to ask, so the Lease
 and the pod check are skipped. Nothing then shows that a lock's owner has
@@ -57,6 +74,7 @@ a `docker run` pointed at a served root would unlock the live server.
 
 from __future__ import annotations
 
+import functools
 import http.client
 import json
 import os
@@ -76,6 +94,8 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, NoReturn
 
+import yaml
+
 SERVER_BINARY = "omnigraph-server"
 RENDER_SCRIPT = "/usr/local/bin/render-policy-groups.py"
 DEFAULT_CLUSTER_DIR = "/etc/omnigraph/cluster"
@@ -91,8 +111,9 @@ LEASE_RENEW_DEADLINE_SECONDS = 20
 CHILD_STOP_SECONDS = 30
 # A force-unlock must finish inside the Lease it was confirmed under.
 UNLOCK_BUDGET_SECONDS = 15
-# `cluster status` and `force-unlock` read and write two small objects. One
-# still running after this is a stalled storage call, not slow progress.
+# Reading the lock (0.13 `cluster status`, 0.14 `cluster plan`) and
+# `force-unlock` read the ledger and write at most the lock. One still running
+# after this is a stalled storage call, not slow progress.
 LOCK_COMMAND_TIMEOUT_SECONDS = 60
 # Other holders write renewTime from their own clock.
 LEASE_CLOCK_SKEW_SECONDS = 5
@@ -107,6 +128,11 @@ KUBERNETES_TIMEOUT_SECONDS = 5
 EXITED_POD_PHASES = frozenset({"Failed", "Succeeded"})
 
 OUTSTANDING_DEPLOYMENT = "cluster_deployment_outstanding"
+
+# `omnigraph version --json` reports this for 0.14's `--target` addressing.
+# Upstream: clients selecting a CLI must require the exact protocol, because
+# protocol 1 appeared in several incompatible edge builds.
+TARGET_PROTOCOL = 2
 
 if (
     LEASE_DURATION_SECONDS - LEASE_RENEW_DEADLINE_SECONDS
@@ -598,8 +624,57 @@ def run_omnigraph(
             raise
 
 
+@functools.cache
+def cli_speaks_targets() -> bool:
+    """Whether the `omnigraph` CLI is addressed with 0.14's ``--target``.
+
+    0.13's `version` takes no ``--json`` and exits 2 on it.
+
+    :raises BootRefused: on a CLI that speaks another target protocol.
+    """
+    result = subprocess.run(
+        ["omnigraph", "version", "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    protocol = json.loads(result.stdout)["protocols"]["target"]
+    if protocol != TARGET_PROTOCOL:
+        msg = (
+            f"the omnigraph CLI speaks target protocol {protocol}; this image "
+            f"supports {TARGET_PROTOCOL} (omnigraph 0.14) or a pre-0.14 CLI"
+        )
+        raise BootRefused(msg)
+    return True
+
+
+def cluster_layout(config_dir: Path) -> tuple[str, list[str]]:
+    """The storage root and graph ids `cluster.yaml` declares.
+
+    Without `storage`, the config directory is the root.
+    """
+    declared = yaml.safe_load((config_dir / "cluster.yaml").read_text())
+    return declared.get("storage") or str(config_dir.absolute()), list(
+        declared["graphs"]
+    )
+
+
+# Diagnostics `cluster plan` attaches when the lock exists but cannot be read.
+# The lock then reads as unlocked, or as locked without an id.
+LOCK_READ_DIAGNOSTICS = frozenset(
+    {"state_lock_read_error", "invalid_state_lock", "unsupported_state_lock_version"}
+)
+
+
 class Cluster:
-    """The `omnigraph cluster` commands against one config directory."""
+    """The omnigraph commands against one config directory and its root.
+
+    The CLI's own version picks the argument shapes (``cli_speaks_targets``).
+
+    :raises BootRefused: on a CLI whose dialect this does not know.
+    """
 
     def __init__(
         self, config_dir: Path, actor: str | None, lease: UnlockLease | NoPeers
@@ -607,6 +682,13 @@ class Cluster:
         self._config_dir = str(config_dir)
         self._as = ["--as", actor] if actor else []
         self._lease = lease
+        self._targets = cli_speaks_targets()
+        if self._targets:
+            root, _ = cluster_layout(config_dir)
+            self._target = ["--target", root]
+            self._source = ["--config", self._config_dir, *self._target]
+        else:
+            self._source = ["--config", self._config_dir]
 
     def _run(self, *args: str) -> CommandResult:
         return run_omnigraph(["cluster", *args], self._lease)
@@ -622,36 +704,66 @@ class Cluster:
             raise BootRefused(str(exc)) from exc
 
     def lock(self) -> dict[str, Any]:
-        """The ``state_observations`` of `cluster status`.
+        """The lock's ``state_observations``.
+
+        0.13 reads them from `cluster status`. 0.14's `status` reports no
+        lock operation and `cluster observe` takes no inline `s3://` root, so
+        they come from `cluster plan`, which reads the root without taking
+        the lock.
 
         :raises BootRefused: if the lock's state cannot be read.
         """
-        result = self._run_lock_command(
-            "status", "--config", self._config_dir, "--json"
-        )
-        if result.returncode != 0:
-            msg = f"`cluster status` failed (exit {result.returncode})"
-            raise BootRefused(msg)
+        if not self._targets:
+            result = self._run_lock_command("status", *self._source, "--json")
+            if result.returncode != 0:
+                msg = f"`cluster status` failed (exit {result.returncode})"
+                raise BootRefused(msg)
+            try:
+                return result.json()["state_observations"]
+            except (ValueError, KeyError) as exc:
+                msg = f"`cluster status` printed no lock state: {result.stdout[:200]!r}"
+                raise BootRefused(msg) from exc
+        result = self._run_lock_command("plan", *self._source, "--json")
         try:
-            return result.json()["state_observations"]
+            plan = result.json()
+            observations = plan["state_observations"]
         except (ValueError, KeyError) as exc:
-            msg = f"`cluster status` printed no lock state: {result.stdout[:200]!r}"
+            msg = f"`cluster plan` printed no lock state: {result.stdout[:200]!r}"
             raise BootRefused(msg) from exc
+        # A plan refused before it reaches the root (an invalid config, a
+        # storage mismatch) still prints `locked: false`. The lock is read
+        # before the ledger, so a ledger found means the lock was read too;
+        # without one only an error-free plan has reached the root. Errors
+        # after that (a schema change planned without an actor) say nothing
+        # about the lock.
+        diagnostics = plan["diagnostics"]
+        unread = [d for d in diagnostics if d["code"] in LOCK_READ_DIAGNOSTICS]
+        if not observations["state_found"]:
+            unread += [d for d in diagnostics if d["severity"] == "error"]
+        if unread:
+            msg = f"`cluster plan` could not read the lock: {json.dumps(unread)}"
+            raise BootRefused(msg)
+        return observations
 
     def plan(self) -> dict[str, Any]:
         """The plan, which reads the root without taking the writer lock.
 
         A plan that finds problems exits non-zero and still prints its JSON.
         """
-        result = self._run("plan", "--config", self._config_dir, *self._as, "--json")
+        result = self._run("plan", *self._source, *self._as, "--json")
         try:
-            return result.json()
+            plan = result.json()
         except ValueError as exc:
             msg = f"`cluster plan` printed no plan (exit {result.returncode})"
             raise BootRefused(msg) from exc
+        if "state_observations" not in plan:
+            # 0.14 refuses a target before planning with an `error` object.
+            msg = f"`cluster plan` printed no plan: {result.stdout[:500]!r}"
+            raise BootRefused(msg)
+        return plan
 
     def apply(self) -> None:
-        result = self._run("apply", "--config", self._config_dir, *self._as, "--json")
+        result = self._run("apply", *self._source, *self._as, "--json")
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
             msg = f"`cluster apply` failed (exit {result.returncode})"
@@ -659,13 +771,21 @@ class Cluster:
 
     def force_unlock(self, lock_id: str) -> None:
         self._lease.confirm(UNLOCK_BUDGET_SECONDS)
-        result = self._run_lock_command(
-            "force-unlock", "--config", self._config_dir, lock_id
-        )
+        # 0.14's force-unlock takes no `--config` and needs an explicit target.
+        scope = self._target if self._targets else self._source
+        result = self._run_lock_command("force-unlock", *scope, lock_id)
         if result.returncode != 0:
             msg = f"`cluster force-unlock {lock_id}` failed (exit {result.returncode})"
             raise BootRefused(msg)
         sys.stdout.write(result.stdout)
+
+    def graph_command(self, command: str, graph: str, *args: str) -> list[str]:
+        """The argv of a direct maintenance command on one graph of the root."""
+        if self._targets:
+            scope = self._target
+        else:
+            scope = ["--cluster", cluster_layout(Path(self._config_dir))[0]]
+        return [command, *scope, "--graph", graph, *args]
 
 
 # ── Boot sequence ────────────────────────────────────────────────────────────
@@ -749,6 +869,11 @@ def release_previous_lock(cluster: Cluster) -> None:
     belongs to a process that has exited. A `graph_operation` lock is a
     maintenance run's, which is not in the pod list, so it is never taken
     over here.
+
+    On 0.14 a server that shut down cleanly leaves no lock, so this unlocks
+    only after a crash, a kill or uncertain storage work. It still has to:
+    the direct apply that follows refuses a held lock, leased or not, where
+    only the server's own `serve` acquisition would take one over.
     """
     lock = cluster.lock()
     if not lock["locked"]:
@@ -766,7 +891,10 @@ def release_previous_lock(cluster: Cluster) -> None:
 
 
 def release_apply_lock(cluster: Cluster) -> None:
-    """Remove the `deployment` lock this boot's own apply just left."""
+    """Remove the `deployment` lock this boot's own apply just left.
+
+    0.14's apply releases it itself only when it changed nothing.
+    """
     lock = cluster.lock()
     if not lock["locked"]:
         return
@@ -862,8 +990,9 @@ def main(argv: list[str]) -> NoReturn:
     cluster_arg = cluster_argument(argv, env)
     if cluster_arg.startswith(("s3://", "http://", "https://")):
         # Serving straight from a storage-root URI: there is no local
-        # cluster.yaml to converge. Nothing releases a lock a previous
-        # server left on that root.
+        # cluster.yaml to converge. On 0.13 nothing releases a lock a
+        # previous server left on that root; 0.14 on S3 takes over a crashed
+        # server's lock once its lease has been silent for 45s.
         log(f"--cluster is a storage URI ({cluster_arg}); skipping cluster bootstrap")
     else:
         try:

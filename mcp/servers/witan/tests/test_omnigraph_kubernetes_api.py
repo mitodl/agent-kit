@@ -26,6 +26,7 @@ from .test_omnigraph_server_entrypoint import (
     POD,
     FakeKubernetes,
     FakeOmnigraph,
+    dialect,  # noqa: F401  (fixture)
     entrypoint,
 )
 
@@ -293,23 +294,33 @@ def execvp(monkeypatch) -> list:
 
 
 def test_main_converges_then_execs_the_server_with_its_arguments(
-    monkeypatch, execvp, tmp_path
+    monkeypatch,
+    execvp,
+    tmp_path,
+    dialect,  # noqa: F811
 ):
-    fake = FakeOmnigraph()
+    fake = FakeOmnigraph(dialect)
     monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
     monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
     monkeypatch.setenv("OMNIGRAPH_UNLOCK_WITHOUT_PEERS", "1")
     argv = ["--cluster", str(tmp_path), "--bind", "0.0.0.0:8080"]
     with pytest.raises(Exec):
         entrypoint.main(argv)
-    assert fake.commands == ["plan", "status", "apply", "status", "force-unlock"]
+    lock = dialect.lock_command
+    assert fake.commands == ["plan", lock, "apply", lock, "force-unlock"]
     assert execvp == [("omnigraph-server", ["omnigraph-server", *argv])]
 
 
 def test_main_exits_1_without_starting_the_server_when_the_boot_is_refused(
-    monkeypatch, execvp, tmp_path, capsys
+    monkeypatch,
+    execvp,
+    tmp_path,
+    capsys,
+    dialect,  # noqa: F811
 ):
-    fake = FakeOmnigraph(lock={"id": "01MAINTENANCE", "operation": "graph_operation"})
+    fake = FakeOmnigraph(
+        dialect, lock={"id": "01MAINTENANCE", "operation": "graph_operation"}
+    )
     monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
     monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
     with pytest.raises(SystemExit) as exited:
@@ -347,13 +358,15 @@ class ApplyHook(FakeOmnigraph):
 
 
 def test_a_lease_lost_between_the_two_unlocks_leaves_the_apply_lock(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    dialect,  # noqa: F811
 ):
     """Held for the first unlock is not held for the second."""
     kube = FakeKubernetes()
     lease = entrypoint.UnlockLease(kube, LEASE, POD)
     lease.acquire()
-    fake = ApplyHook(lock={"id": "01PREVIOUS", "operation": "serve"})
+    fake = ApplyHook(dialect, lock={"id": "01PREVIOUS", "operation": "serve"})
     fake.after_apply = lambda: kube.hold_as("operator#aa", renewed_ago=0)
     monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
     try:
@@ -366,9 +379,11 @@ def test_a_lease_lost_between_the_two_unlocks_leaves_the_apply_lock(
 
 
 def test_a_lock_that_is_not_the_applys_is_not_released_after_apply(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    dialect,  # noqa: F811
 ):
-    fake = ApplyHook()
+    fake = ApplyHook(dialect)
     fake.after_apply = lambda: setattr(
         fake, "lock", {"id": "01SOMEONE", "operation": "serve"}
     )
