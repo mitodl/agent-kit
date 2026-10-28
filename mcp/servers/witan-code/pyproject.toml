@@ -188,7 +188,13 @@ dependencies = [
     # sends PKCE (`S256`) only from 0.46.0, and the `witan-cli` Keycloak client
     # is switched to require it once that is out. 0.45 imports and runs, then
     # every `witan-code login` is refused by Keycloak.
-    "witan-core[cli,remote,observability,sentry]>=0.46,<1",
+    #
+    # ★ >=0.47 IS A RUNTIME FLOOR of the `strict` kind above: `store.py` calls
+    # `store_cli_args(..., binary=)`, a keyword witan-core 0.47.0 added in the
+    # same change (omnigraph 0.14 `--target` addressing). 0.46 imports fine,
+    # then the first `schema plan` check raises TypeError, so
+    # `just check-core-floor` cannot see it.
+    "witan-core[cli,remote,observability,sentry]>=0.47,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled

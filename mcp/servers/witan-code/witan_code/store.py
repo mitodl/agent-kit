@@ -37,6 +37,7 @@ from witan_core.omnigraph import (
     schema_apply_if_changed,
     schema_stamp_path,
     shared_transport,
+    store_cli_args,
     store_write_lock,
 )
 from witan_core.refusal import Refusal
@@ -488,7 +489,7 @@ def _schema_change_unsupported(binary: str, schema_file: Path, store: Path) -> b
                 "--schema",
                 str(schema_file),
                 "--json",
-                str(store),
+                *store_cli_args(str(store), binary=binary),
             ],
             capture_output=True,
             text=True,
