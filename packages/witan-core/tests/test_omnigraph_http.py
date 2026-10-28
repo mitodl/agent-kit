@@ -837,53 +837,161 @@ def test_a_remote_store_uses_http(monkeypatch, queries_dir):
     assert client._http_transport() is not None
 
 
-def test_a_client_injecting_extra_cli_args_stays_on_the_subprocess(
+class BranchedClient(OmnigraphClient):
+    """witan-code's branched view, as far as the base client can see it."""
+
+    def _extra_args(self, subcommand):
+        return ["--branch", "act-alice/wip"]
+
+
+def _branched(monkeypatch, queries_dir) -> BranchedClient:
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    return BranchedClient("http://host:8080", queries_dir, graph_id="council")
+
+
+def test_a_client_injecting_an_arg_with_no_body_field_stays_on_the_subprocess(
     monkeypatch, queries_dir
 ):
-    """THE SAFETY PROPERTY. witan-code's branched clients add `--branch <view>`.
+    """THE SAFETY PROPERTY. Sending a call over HTTP without an arg the
+    subclass injects would execute it somewhere else than asked, so an arg
+    with no request-body field keeps the client on the CLI. The guard is on
+    `_extra_args`, not on a `branch` attribute, so a future subclass arg is
+    caught by the same check instead of being silently dropped."""
 
-    omnigraph 0.8.1's HTTP API documents no request-side branch selector, so
-    routing such a call over HTTP would execute it against `main` — a WIP
-    reindex landing in the shared graph, which is the exact thing branch views
-    exist to prevent. The guard is on `_extra_args`, not on a `branch`
-    attribute, so a future subclass arg is caught by the same check instead of
-    being silently dropped.
-    """
-
-    class BranchedClient(OmnigraphClient):
+    class SnapshotClient(OmnigraphClient):
         def _extra_args(self, subcommand):
-            return ["--branch", "act-alice/wip"]
+            return ["--branch", "act-alice/wip", "--snapshot", "abc"]
 
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
-    client = BranchedClient("http://host:8080", queries_dir, graph_id="council")
+    client = SnapshotClient("http://host:8080", queries_dir, graph_id="council")
 
     assert client._http_transport() is None
 
 
-def test_a_branched_client_does_use_http_for_a_statement(
+def test_a_branched_read_carries_its_branch_in_the_body(
+    monkeypatch, queries_dir, _fake_http
+):
+    """witan-code's views inject `--branch <view>`. Over HTTP that is the
+    body's `branch`, which the 0.13.0 and 0.14.0 servers both read; a read
+    that lost it would answer from `main`."""
+    _fake_http.script = [ok({"rows": []})]
+    client = _branched(monkeypatch, queries_dir)
+
+    client.read("read.gq", "find_memory", {"slug": "a"})
+
+    (request,) = _sent()
+    assert request["path"] == "/graphs/council/query"
+    assert json.loads(request["body"])["branch"] == "act-alice/wip"
+
+
+@pytest.mark.parametrize("if_commit", [None, "01M08E24Y"])
+def test_a_branched_write_carries_its_branch_in_the_body(
+    monkeypatch, tmp_path, _fake_http, if_commit
+):
+    """Through the group committer, and on the conditional route too."""
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _branched(monkeypatch, _mutation_dir(tmp_path))
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"}, if_commit=if_commit)
+
+    (request,) = _sent()
+    assert json.loads(request["body"])["branch"] == "act-alice/wip"
+
+
+def test_a_branched_batch_carries_its_branch_in_the_body(
+    monkeypatch, tmp_path, _fake_http
+):
+    monkeypatch.setenv(og.GROUP_COMMIT_ENV_VAR, "0")
+    _fake_http.script = [ok({"affected_nodes": 2, "affected_edges": 0})]
+    client = _branched(monkeypatch, _mutation_dir(tmp_path))
+
+    client.change_many(
+        [
+            ("mutations.gq", "claim", {"slug": "t-1"}),
+            ("mutations.gq", "claim", {"slug": "t-2"}),
+        ]
+    )
+
+    (request,) = _sent()
+    assert json.loads(request["body"])["branch"] == "act-alice/wip"
+
+
+def test_two_views_never_share_a_group_commit(monkeypatch, tmp_path):
+    """The lane's leader sends its OWN branch for every write on the lane, so
+    two views on one lane would commit one view's writes to the other."""
+    keys = []
+    monkeypatch.setattr(
+        og._GROUP_COMMITTER, "submit", lambda key, *a, **k: keys.append(key)
+    )
+    queries = _mutation_dir(tmp_path)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+
+    class OtherView(OmnigraphClient):
+        def _extra_args(self, subcommand):
+            return ["--branch", "act-bob/wip"]
+
+    for cls in (BranchedClient, OtherView, OmnigraphClient):
+        cls("http://host:8080", queries, graph_id="council").change(
+            "mutations.gq", "claim", {"slug": "t-1"}
+        )
+
+    assert len(set(keys)) == 3
+
+
+def test_a_missing_branch_is_terminal_not_retried(monkeypatch, queries_dir, _fake_http):
+    """What 0.13.0 and 0.14.0 answer for a branch that does not exist (on 0.8.1
+    it was a 500). Waiting cannot create the branch, so one attempt."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [err(404, "branch 'act-alice/wip' not found", "not_found")]
+    client = _branched(monkeypatch, queries_dir)
+
+    with pytest.raises(RuntimeError, match="branch 'act-alice/wip' not found"):
+        client.read("read.gq", "find_memory", {"slug": "a"})
+    assert len(_sent()) == 1
+
+
+def test_commit_list_asks_the_server_for_the_branch(
+    monkeypatch, queries_dir, _fake_http
+):
+    commits = [{"graph_commit_id": "c1", "graph_branch": "act-alice/wip"}]
+    _fake_http.script = [ok({"commits": commits})]
+    client = _branched(monkeypatch, queries_dir)
+
+    assert client.commit_list("act-bob/other") == commits
+
+    (request,) = _sent()
+    assert request["method"] == "GET"
+    assert request["path"] == "/graphs/council/commits?branch=act-bob%2Fother"
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [("warning: something\n", "non-JSON"), ('{"oops": 1}', "no commit array")],
+)
+def test_commit_list_output_that_is_not_a_commit_array_raises(
+    monkeypatch, queries_dir, _fake_http, body, match
+):
+    _fake_http.script = [FakeResponse(200, body)]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(RuntimeError, match=match):
+        client.commit_list("act-alice/wip")
+
+
+def test_a_branched_client_sends_no_branch_with_a_statement(
     _fake_http, monkeypatch, queries_dir
 ):
-    """...and the exception that proves the rule above states it correctly.
+    """...and the one call that must NOT carry it.
 
-    The guard exists because an injected arg would be DROPPED on the HTTP body.
-    A GQ branch statement takes no `--branch` on either transport — the CLI's
-    own help says "no name, params, --branch or --snapshot" — so there is
-    nothing to drop, and `statement` opts out. Without this, every branch
-    create and delete on the cluster would stay a subprocess purely because the
-    client happens to be branched, which is what this change removes.
-
-    Driven end to end rather than asserted on `_http_transport` alone: what
-    matters is that the statement reaches the wire, at the right route, with no
-    trace of the `--branch` this client injects everywhere else.
+    A GQ branch statement takes no `--branch` on either transport (the CLI's
+    own help says "no name, params, --branch or --snapshot"), and the server
+    refuses one sent with a `branch` field, so `statement` opts out of the
+    injected args. Driven end to end: what matters is that the statement
+    reaches the wire, at the right route, with no trace of the `--branch` this
+    client sends with everything else.
     """
-
-    class BranchedClient(OmnigraphClient):
-        def _extra_args(self, subcommand):
-            return ["--branch", "act-alice/wip"]
-
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     FakeConnection.script = [ok({"outcome": {"kind": "created", "name": "x"}})]
-    client = BranchedClient("http://host:8080", queries_dir, graph_id="council")
+    client = _branched(monkeypatch, queries_dir)
 
     client.statement("mutate", 'branch create "act-alice/wip" from main')
 
@@ -1689,7 +1797,7 @@ def test_a_load_flag_with_no_query_parameter_is_refused_not_dropped(
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     client = SnapshotClient("http://host:8080", queries_dir, graph_id="council")
 
-    with pytest.raises(RuntimeError, match="'--snapshot'.*refusing to drop it"):
+    with pytest.raises(RuntimeError, match="'--snapshot'.*refusing to drop"):
         client.load_batch(_RECORDS, "merge")
     assert _sent() == []
 
