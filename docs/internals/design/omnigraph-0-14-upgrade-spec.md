@@ -11,8 +11,9 @@ one it got:
 
 - "Verified (binary)": run against the released v0.14.0 linux-x86_64 tarball
   (sha256 `02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9`,
-  matching the published `.sha256`). Only `omnigraph version` and
-  `omnigraph version --json` were run.
+  matching the published `.sha256`). Only `omnigraph version`,
+  `omnigraph version --json`, `--help` and commands that fail argument
+  parsing were run.
 - "Verified (source)": read in ModernRelay/omnigraph at the v0.14.0 tag
   (`60bfd19`) unless another ref is named. The 0.13 to 0.14 upgrade guide,
   `docs/user/operations/upgrade-0.14.md`, landed after the tag (#1144), so it
@@ -111,8 +112,15 @@ requiring the prefix name and the version to match.
 
 So within one environment, omnigraph-server, witan, witan-council, the
 maintenance Job and the CI indexer move together. Environments move one at a
-time (Sequencing). Rollback after a 0.14 server has run is a restore of the
-whole-root backup, `__cluster/` included, never an image rollback alone.
+time (Sequencing). Rollback after the first 0.14 CLI write or the first 0.14
+server start, whichever comes first, is a restore of the whole-root backup,
+`__cluster/` included, never an image rollback alone. Under D3 (e) the
+entrypoint's 0.14 CLI calls (force-unlock, then `cluster apply`) run before
+the server starts, so the boundary is that first boot, not the server start.
+An apply that changes a schema publishes, and a branch's first publish under
+0.14 stamps it 16 (`migrations.rs:157-162`). Whether a no-op apply or a
+force-unlock writes anything a 0.13 binary refuses is unverified, so the
+boundary holds either way.
 
 ## D3. Maintenance and boot converge on the S3 root (open, reserved for tmacey)
 
@@ -229,22 +237,48 @@ Under (e), `tk-rework-the-omnigraph-server-entrypoint-maintenan-4311a3` keeps
 the 0.13 shape:
 
 - `--cluster <root> --graph <g>` becomes `--target <s3 root> --graph <g>`.
-- `cluster ... --config <dir>` becomes `cluster ... --config <dir> --target
-  <s3 root>`.
+- The entrypoint's three kinds of `cluster` call split, because 0.14 gives
+  them different flags (Verified (binary), `cluster <cmd> --help`):
+  - Plan and apply: `cluster plan|apply --config <dir> --target <s3 root>`.
+    `--config` is the source directory only.
+  - Lock observation: `cluster observe --config <dir> --target <s3 root>
+    --json`, in place of `cluster status --config <dir> --json`. 0.14's
+    `status` takes no `--config` and prints a ledger-only `DeploymentStatus`
+    with `lock_id` and `outstanding_id` but no `lock_operation` and no
+    `state_observations` (`crates/omnigraph-cluster/src/deployment.rs:263-272`,
+    printed at `crates/omnigraph-cli/src/commands/cluster/mod.rs:172-187`), so
+    `Cluster.lock()` (entrypoint `:624-639`) can't read it. `observe` prints
+    the `state_observations` envelope (`StateSyncOutput`,
+    `crates/omnigraph-cluster/src/types.rs:281-292`) without taking writer
+    admission.
+  - Unlock: `cluster force-unlock --target <s3 root> <id>`. It takes no
+    `--config` and refuses without an explicit `--target`
+    (`commands/cluster/mod.rs:190-193`).
 - The Lease and pod check stay, because CLI locks are still exact-ID.
 - The force-unlock of a previous server's `serve` lock (`release_previous_lock`,
-  entrypoint `:744`) should become rare. A clean shutdown now releases writer
-  admission (`v0.14.0.md:891`), and a crashed server's lock is taken over by
-  its successor. Whether the entrypoint can stop reading a `serve` lock at all
-  depends on `cluster status` reporting a released version-3 record as
-  unlocked. That is unverified.
+  entrypoint `:744`) stays, guards included. Only a `serve` acquisition
+  takes over a silent leased owner. Every other acquisition, `cluster apply`
+  included, refuses a held lock at once (`SERVE_OPERATION`,
+  `crates/omnigraph-cluster/src/state_lock.rs:276-279`, filter at `:341-343`).
+  converge() runs a direct apply before it execs the server, so without the
+  exact-ID unlock a crashed server's lock would refuse that apply on every
+  restart. A clean shutdown leaves a released record, which `observe` reports
+  as `locked: false` (`types.rs:124-131`) and which the next acquisition
+  replaces (`state_lock.rs:334-340`), so `release_previous_lock` returns early
+  on that path. It can come out only when boot no longer runs a direct apply
+  (e.g. (c)). `release_apply_lock` stays too. A direct apply's `deployment`
+  lock is unleased (`state_lock.rs:80-87`), and the apply releases it itself
+  only when it started no effects (`deployment/execution.rs:1694-1703`), so an
+  apply that changed anything still leaves it for an exact-ID unlock.
 - 0.14 adds a new server exit. An S3 owner none of whose heartbeats is
   answered for two thirds of a lease "stops every storage write and exits 2"
   (`v0.14.0.md:753-754`). The entrypoint `exec`s the server, so the exit
-  reaches Kubernetes directly, and a restart then waits out the lease and
-  takes the lock over. Check that the Deployment's restart policy and the
-  startup probe budget allow for that wait (at least 45s with the default
-  lease).
+  reaches Kubernetes directly. The restarted entrypoint then finds that
+  unreleased `serve` lock before its apply and unlocks it by exact ID once the
+  Lease and pod check pass, as it does after a crash today. The 45s lease
+  takeover applies only to a server started without converge (a `--cluster
+  s3://` start). Check that the Deployment's restart policy allows repeated
+  exit-2 restarts.
 
 ## D4. witan stops using the CLI against a deployed server (decided)
 
@@ -276,10 +310,15 @@ The remote CLI calls that have to move:
 
 - `OmnigraphClient.load_batch` (`witan_core/omnigraph.py:2663`, CLI at
   `:2693`) and `export_to` (`:2610`). This is
-  tk-move-witan-s-remote-load-batch-and-export-to-off-d82169, in progress.
-  Export is `POST`, not `GET` as that task's description says. 0.14 `load
-  --json` drops `uri` (`upgrade-0.14.md:180`, main), and actor fields
+  tk-move-witan-s-remote-load-batch-and-export-to-off-d82169, in progress in
+  #562. Export is `POST`, not `GET` as that task's description says. 0.14
+  `load --json` drops `uri` (`upgrade-0.14.md:180`, main), and actor fields
   everywhere become `actor_id` (`:179`). witan reads neither.
+- The remote merge's source export. `_source_export`
+  (`witan/remote/proxy.py:60`) runs `export` itself with
+  `store_cli_args(source)` (`:104-109`), so moving `export_to` alone doesn't
+  cover it. #562 covers it too, by sending it through the client's export
+  path and its HTTP transport.
 - witan-code's branched clients. `_http_transport` returns `None` for any
   client whose `_extra_args` adds flags (`witan_core/omnigraph.py:2381-2384`),
   and witan-code adds `--branch` (and `--from main` on load) for its per-user
@@ -343,7 +382,25 @@ that build `--store`/`--server` flags today:
 - witan's storage-migration helpers, which run the new binary with `--store`
   (`witan/server.py:1804` `snapshot`, `:2147-2156` `load`). The old binary's
   `export --store` at `:2138` stays as is, because that binary is still 0.13;
+- the hand-built `schema apply` and `schema plan` commands, which pass the
+  store positionally and so bypass `store_cli_args`: `schema_apply`
+  (`witan_core/omnigraph.py:1147`), `OmnigraphClient.apply_schema` for a
+  local store (`witan/graph.py:50`) and witan-code's
+  `_schema_change_unsupported` (`witan_code/store.py:474-492`). Verified
+  (binary): 0.14 refuses the positional store on both commands ("unexpected
+  argument", usage `omnigraph schema apply|plan [OPTIONS] --schema
+  <SCHEMA>`). `init` keeps its positional URI (`omnigraph init [OPTIONS]
+  --schema <SCHEMA> [URI]`);
 - tests and fixtures.
+
+PR #564 (tk-replace-store-server-profile-and-omnigraph-beare-60fdc8) makes this
+rewrite behind a version check (`cli_speaks_targets`, which reads `version
+--json`). It covers all three `schema` call sites, `upgrade`, `snapshot`, the
+migration export and load, and the merge-source export, each through
+`store_cli_args(..., binary=)`, and passes `init` an empty generated operator
+config while keeping its positional URI. Its generated server target reads
+the token from `WITAN_OMNIGRAPH_TOKEN`, not `OMNIGRAPH_BEARER_TOKEN` as the
+YAML above shows, and `store_subprocess_env` sets both.
 
 The `--profile` at `witan_core/omnigraph.py:1273` is the AWS CLI's
 (`aws configure export-credentials --profile`), not omnigraph's, so 0.14
@@ -449,8 +506,10 @@ falls through to the text markers.
 - Lock lease and clean restart (D3, last part). A crashed server's S3 lock is
   taken over after 45s, a clean shutdown releases admission, and a definite
   or uncertain storage failure on a served write no longer stops the server
-  (`v0.14.0.md:891`, `:950`). The entrypoint takeover code that this makes
-  redundant comes out in 4311a3.
+  (`v0.14.0.md:891`, `:950`). This doesn't make the entrypoint's guarded
+  unlock redundant under (e): boot still runs a direct `cluster apply`, which
+  can't take over a lease, so 4311a3 keeps `release_previous_lock` (D3). It
+  comes out when boot stops running a direct apply.
 
 ## D8. Checked and not applicable (decided)
 
@@ -507,7 +566,14 @@ D3.
 
 1. Before the bump, safe on 0.13, in any order:
    - D4's HTTP moves (d82169, and the witan-code branched transport);
-   - D5's config generation and flag rewrite behind a version check;
+   - D5's config generation and flag rewrite behind a version check (#564),
+     including dropping `--quiet`. 0.14 refuses it at parse time (Verified
+     (binary): "unexpected argument '--quiet' found"; a removed flag in the
+     `removed_flags_fail_before_configuration_or_io` test,
+     `crates/omnigraph-cli/src/planes.rs:807-823`), and `OmnigraphClient._run`
+     (`witan_core/omnigraph.py:2709`), `statement` (`:2314`) and `_repair`
+     (`:3132`) all add it. #564 sends it only to a pre-0.14 binary
+     (`write_quiet_args`). This has to land before the pin bump;
    - comments on #1163 and #1082.
 2. D3 decision (tmacey). Under (e), build and qualify the patched CLI against
    a copy of a real S3 root in CI, then land 4311a3 on that path.
@@ -519,6 +585,13 @@ D3.
      the `edu.mit.ol.omnigraph.internal-schema` labels;
    - `HTTP_API_CONTRACT` (`omnigraph_http.py:184`);
    - the 0.13-worded CLI markers and exit codes (D6);
+   - `_repair` (`witan_core/omnigraph.py:3123`), which #564 leaves passing
+     `--confirm --force`. Verified (binary, plus a local 0.13.0 install for
+     0.13): neither 0.13's nor 0.14's
+     `repair` takes those flags (both refuse `--confirm` at parse time), and
+     both only diagnose ("Diagnose foreign Lance HEAD movement without
+     adopting it"). `_repair` ignores its exit, so it is already a no-op on
+     0.13. The bump should decide whether it goes;
    - the witan-core floors.
 
    It merges only in the cutover window, because merging ships the images.
@@ -545,16 +618,16 @@ D3.
    developer who goes back to a 0.13 witan needs a copy taken before that
    write.
 
-Rollback: before the first 0.14 server start, roll the images back. After it,
+Rollback: before the first 0.14 CLI write or server start, whichever comes
+first, roll the images back. Under (e) that is the first boot of the rolled
+omnigraph-server pod, whose entrypoint runs the 0.14 CLI before serving (D2).
+After it,
 restore the step-3 backup, including `__cluster/` (D2), and roll the images
 back. Writes made under 0.14 are lost.
 
 ## Open questions
 
 - D3, reserved for tmacey.
-- Whether `cluster status` reports a released version-3 S3 lock record as
-  unlocked. That decides how much of the entrypoint's `serve`-lock handling
-  can go (D3, last part). Unverified.
 - Whether optimize and cleanup run cleanly on S3 through a `scope.rs`-patched
   CLI. Upstream showed only status, apply and force-unlock. Unverified.
 - The build time and image size of a CLI-only cargo build in
