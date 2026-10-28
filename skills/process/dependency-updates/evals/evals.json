@@ -92,7 +92,7 @@
 				"Recommends declaring `certifi>=2026.10.19` in `[project] dependencies` of the packages that actually reach certifi, rather than in all twenty uniformly — a floor in a package that never resolves certifi forces an unnecessary dependency on its consumers",
 				"States that the packages carrying a newly declared floor have to be released, because a declared floor in an unreleased package reaches no consumer",
 				"Identifies that a package reaching certifi only through a workspace sibling must require that sibling at a version that carries the floor, since an unpinned sibling dependency can be satisfied by an older pre-floor release",
-				"Recommends an automated check (such as `uvx --from mitol-dependency-floors dependency-floors check` in CI or as a pre-commit hook) rather than relying on someone remembering, and explains why a vulnerability scanner cannot cover this — once the floor holds, certifi resolves to a safe version in the lockfile, so scanners stay green while the published metadata is wrong",
+				"Recommends an automated check (such as `uvx mitol-dependency-floors check` in CI or as a pre-commit hook) rather than relying on someone remembering, and explains why a vulnerability scanner cannot cover this — once the floor holds, certifi resolves to a safe version in the lockfile, so scanners stay green while the published metadata is wrong",
 				"Does NOT recommend keeping the constraint-dependencies entry alone, and does not treat the lockfile bump as the end of the work"
 			]
 		}

@@ -387,7 +387,7 @@ Then make the floor self-checking, because which packages need one is a property
 dependency graph and the graph moves. No scanner catches a package that gains the dependency
 indirectly, or reaches it only through a sibling it declares unpinned: once the floor holds
 the dependency resolves *safe* in your lockfile, so scanners stay green while the published
-metadata is wrong. `uvx --from mitol-dependency-floors dependency-floors check` fails on both, and on a lockfile that
+metadata is wrong. `uvx mitol-dependency-floors check` fails on both, and on a lockfile that
 has fallen under a floor.
 
 See [references/release-age-cooldowns.md](references/release-age-cooldowns.md) for per-tool

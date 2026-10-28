@@ -81,12 +81,12 @@ this to make sure the floor sticks.
 
 ```bash
 # exit 0 clean, 1 violations, 2 bad config
-uvx --from mitol-dependency-floors dependency-floors check
-uvx --from mitol-dependency-floors dependency-floors explain certifi
+uvx mitol-dependency-floors check
+uvx mitol-dependency-floors explain certifi
 ```
 
-The console script is `dependency-floors`, not the package name, so `uvx` needs
-the `--from`.
+Installed, the command is also available as `dependency-floors`; use the short
+form in CI and hooks.
 
 `check` exits non-zero on violations, so it works as a CI step or a pre-commit
 hook on any platform. `explain` prints each package's classification and the
