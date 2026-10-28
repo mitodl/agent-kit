@@ -1803,6 +1803,39 @@ def test_an_export_that_cannot_write_its_file_is_not_retried(
     assert len(_sent()) == 0
 
 
+def test_a_sink_that_fails_midstream_drops_the_half_read_connection(
+    monkeypatch, _fake_http
+):
+    """A full disk part-way through an export leaves the response unread. Kept
+    in the pool, that connection would fail the thread's next request after it
+    was sent, which for a mutate is an indeterminate write."""
+    monkeypatch.setattr(ogh, "EXPORT_CHUNK_BYTES", 8)
+
+    class FullDisk:
+        writes = 0
+
+        def write(self, chunk):
+            self.writes += 1
+            if self.writes == 2:
+                raise OSError(28, "No space left on device")
+
+    _fake_http.script = [
+        ok({"rows": []}),
+        FakeResponse(200, _EXPORT_BODY),
+        ok({"rows": []}),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+    # Warm the connection, so the export reuses it and the next call would too.
+    transport.query("council", "query q() { return 1 }", {}, None)
+
+    with pytest.raises(OSError, match="No space left"):
+        transport.export("council", FullDisk(), None)
+    transport.query("council", "query q() { return 1 }", {}, None)
+
+    assert [len(conn.requests) for conn in FakeConnection.created] == [2, 1]
+    assert FakeConnection.created[0].closed
+
+
 @pytest.mark.parametrize("uri", ["/var/lib/witan/graph.omni", "s3://bucket/graph"])
 def test_a_local_load_and_export_stay_on_the_cli(
     monkeypatch, queries_dir, tmp_path, _fake_http, uri

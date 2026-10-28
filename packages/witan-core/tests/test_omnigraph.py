@@ -2144,8 +2144,9 @@ def test_the_cli_write_path_is_gated_too(monkeypatch):
     """★ THE BOUND MUST NOT BE WALKABLE-AROUND BY CHOOSING A TRANSPORT.
 
     Gating only ``_http_execute`` left two real remote-write paths unbounded,
-    and both are ones a burst actually travels: ``load_batch`` shells out to
-    ``omnigraph load`` (there is no HTTP form of it), so every batch of a
+    and both are ones a burst actually travels: ``load_batch`` shelled out to
+    ``omnigraph load`` (it had no HTTP form then, and still shells out behind
+    ``WITAN_OMNIGRAPH_HTTP=0``), so every batch of a
     ``store_merge`` escaped — two people migrating at once being exactly the
     multi-user burst this exists to bound — and witan-code's branched clients
     fall back to the CLI by design, so every write from a branch view escaped

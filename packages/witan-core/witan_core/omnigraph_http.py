@@ -784,7 +784,13 @@ class PooledTransport:
                 )
             if not chunk:
                 return None
-            sink.write(chunk)
+            try:
+                sink.write(chunk)
+            except OSError:
+                # The rest of the body is unread, so this connection cannot
+                # carry another request on this thread.
+                self._discard()
+                raise
 
     def query(
         self,
