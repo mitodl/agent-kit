@@ -1,5 +1,5 @@
 # Declarative policy tests for the Layer-1 shared work/knowledge graph bundle.
-# Run: omnigraph policy test --cluster policy --graph memory \
+# Run: omnigraph policy test --target "$PWD/policy" --graph memory \
 #        --tests policy/tests/memory.tests.yaml
 version: 1
 cases:
