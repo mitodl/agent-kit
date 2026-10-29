@@ -23,7 +23,7 @@ from __future__ import annotations
 import mimetypes
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -64,6 +64,36 @@ def set_mcp_path(path: str) -> None:
 def bundle_exists(bundle_dir: Path | None = None) -> bool:
     """Whether a built bundle is present to serve."""
     return ((bundle_dir or BUNDLE_DIR) / INDEX).is_file()
+
+
+def _public_ui() -> str | None:
+    """Where a person opens this server's UI, or None when there is no such place.
+
+    Only a deployment has one: its public origin is ``WITAN_OIDC_RESOURCE_URL``,
+    and ``/ui/`` does not move with the MCP path. A server on a local store has
+    no public origin, and ``witan ui`` is a separate process on a loopback port.
+    A deployment without a bundle or a UI client id would answer the link with
+    a 404 or a 503.
+    """
+    resource = cfg_module.load_identity_config().oidc_resource_url
+    if not (resource and cfg_module.ui_oidc_client_id() and bundle_exists()):
+        return None
+    return f"{resource.rstrip('/')}/ui/"
+
+
+def task_url(slug: str) -> str | None:
+    """The UI link that opens task ``slug``'s detail panel, when there is a UI.
+
+    The fragment is the one ``parseRoute`` in ``ui/src/route.ts`` reads.
+    """
+    base = _public_ui()
+    return f"{base}#board?{urlencode({'slug': slug})}" if base else None
+
+
+def project_url(slug: str) -> str | None:
+    """The UI link that opens project ``slug``, when there is a UI."""
+    base = _public_ui()
+    return f"{base}#projects?{urlencode({'project': slug})}" if base else None
 
 
 def _security_headers(issuer: str | None) -> dict[str, str]:

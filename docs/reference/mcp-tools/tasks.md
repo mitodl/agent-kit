@@ -22,6 +22,10 @@ BM25 matches on ``title`` against existing tasks (any status), a soft
 duplicate check. It never blocks creation; review it and close this task
 as a duplicate (``task_close``) if one of them is really the same work.
 
+Against a deployment that serves the web UI, it also carries ``ui_url``:
+the link that opens the task there. Hand a person that link rather than
+building one.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `title` | str | **required** | Short label and full text of the work. |
@@ -62,6 +66,10 @@ fetched from GitHub just now (``state``, ``draft``, ``review_decision``,
 ``checks``, ``fetched_at``), or ``{"error": ...}`` when it could not be
 fetched. The description and comments are snapshots from when they were
 written; where ``live_pr`` disagrees with them, ``live_pr`` is current.
+
+Against a deployment that serves the web UI, the node also carries
+``ui_url``: the link that opens the task there. Hand a person that link
+rather than building one.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

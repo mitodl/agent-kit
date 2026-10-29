@@ -380,3 +380,51 @@ def test_no_bundle_means_no_routes(tmp_path):
 
     with TestClient(mcp.http_app(path="/mcp")) as client:
         assert client.get("/ui/").status_code == 404
+
+
+# ── Links into the UI ──────────────────────────────────────────────
+
+
+def _deployed_ui(bundle, monkeypatch, tmp_path, **extra):
+    for key, value in _oidc_env(tmp_path, **extra).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ui_routes, "BUNDLE_DIR", bundle)
+
+
+def test_a_deployment_links_tasks_and_projects_into_its_ui(
+    bundle, monkeypatch, tmp_path
+):
+    _deployed_ui(
+        bundle,
+        monkeypatch,
+        tmp_path,
+        WITAN_UI_OIDC_CLIENT_ID="witan-ui",
+        # A trailing slash is an easy operator value to set; it must not
+        # produce `//ui/`.
+        WITAN_OIDC_RESOURCE_URL="https://witan.example.org/",
+    )
+
+    assert (
+        ui_routes.task_url("tk-a-1")
+        == "https://witan.example.org/ui/#board?slug=tk-a-1"
+    )
+    assert (
+        ui_routes.project_url("wp-b-2")
+        == "https://witan.example.org/ui/#projects?project=wp-b-2"
+    )
+
+
+@pytest.mark.parametrize("missing", ["deployment", "client id", "bundle"])
+def test_no_link_without_a_ui_to_open_it_in(bundle, monkeypatch, tmp_path, missing):
+    """Local servers have no public origin; a deployment without a client id
+    answers `/ui/` with a 503 and one without a bundle with a 404."""
+    _deployed_ui(bundle, monkeypatch, tmp_path, WITAN_UI_OIDC_CLIENT_ID="witan-ui")
+    if missing == "deployment":
+        for key in _oidc_env(tmp_path):
+            monkeypatch.delenv(key)
+    elif missing == "client id":
+        monkeypatch.delenv("WITAN_UI_OIDC_CLIENT_ID")
+    else:
+        monkeypatch.setattr(ui_routes, "BUNDLE_DIR", tmp_path / "nothing")
+
+    assert ui_routes.task_url("tk-a-1") is None

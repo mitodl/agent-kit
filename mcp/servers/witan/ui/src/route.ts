@@ -164,6 +164,10 @@ export const DEFAULT_ROUTE: Route = {
  * hand-editing the URL, or following a link written against a later version,
  * should land on the parts that still make sense instead of being reset to the
  * front page.
+ *
+ * The server hands out `#board?slug=` and `#projects?project=` links
+ * (`ui_routes.task_url` / `project_url`), so those names are a contract with
+ * links already given to people.
  */
 export function parseRoute(hash: string): Route {
 	const [head = "", query = ""] = hash.replace(/^#/, "").split("?", 2);
