@@ -5,8 +5,9 @@ locks, so the cases that matter are the ways it ends: the server is back, or
 it is deliberately left down (a migration was armed, or the window's own lock
 could not be removed), and no lock is removed that the window did not own.
 
-The last section runs a window against the real binary and is skipped until
-the pinned omnigraph has persisted locks (storage format 14).
+Every case that drives the scripted CLI runs under 0.13's and 0.14's argument
+shapes. The last section runs a window against whichever real binary is on
+PATH and is skipped until it has persisted locks (storage format 14).
 """
 
 from __future__ import annotations
@@ -26,9 +27,11 @@ import yaml
 from .test_omnigraph_server_entrypoint import (
     LEASE,
     REPO_ROOT,
+    ROOT,
     FakeKubernetes,
     FakeOmnigraph,
     cluster_dir,  # noqa: F401  (fixture)
+    dialect,  # noqa: F401  (fixture)
     entrypoint,
     pod,
     real_env,
@@ -63,7 +66,6 @@ SERVER_POD = "omnigraph-server-7d9f-abcde"
 JOB_POD = "omnigraph-maintenance-28801-xk2p"
 ARMED = maintenance.MIGRATION_ARMED_ANNOTATION
 GRAPHS = ["council", "code-bridge"]
-ROOT = "s3://ol-data-witan-ci/fmt14"
 
 
 class FakeCluster(FakeKubernetes):
@@ -122,24 +124,25 @@ class FakeCluster(FakeKubernetes):
 class FakeCli(FakeOmnigraph):
     """`FakeOmnigraph` plus `optimize` and `cleanup`, which keep a lock too."""
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, cli_dialect, **kwargs) -> None:
+        super().__init__(cli_dialect, **kwargs)
         self.maintained: list[list[str]] = []
         self.fails: set[str] = set()
         self.during: dict[str, object] = {}
-        self.status_output: str | None = None
+        self.lock_output: str | None = None
         self._op_ids = (f"01GRAPHOP{n}" for n in itertools.count(1))
 
     def __call__(
         self, args: list[str], lease, timeout_seconds=None, interrupt=None
     ) -> object:
         if args[0] not in ("optimize", "cleanup"):
-            if self.status_output is not None and args[1] == "status":
+            if self.lock_output is not None and args[1] == self.dialect.lock_command:
                 self.calls.append(args[1:])
-                return entrypoint.CommandResult(0, self.status_output)
+                return entrypoint.CommandResult(0, self.lock_output)
             return super().__call__(args, lease)
         graph = args[args.index("--graph") + 1]
-        assert args[args.index("--cluster") + 1] == ROOT
+        scope = "--target" if self.dialect.targets else "--cluster"
+        assert args[1:3] == [scope, ROOT], args
         if self.lock:
             return self._result(1, {"error": "state_lock_held"})
         self.maintained.append([args[0], graph, *args[5:]])
@@ -164,14 +167,14 @@ def kube(monkeypatch) -> FakeCluster:
 
 
 @pytest.fixture
-def cli(monkeypatch) -> FakeCli:
-    fake = FakeCli(lock={"id": "01SERVE", "operation": "serve"})
+def cli(monkeypatch, dialect) -> FakeCli:  # noqa: F811
+    fake = FakeCli(dialect, lock={"id": "01SERVE", "operation": "serve"})
     monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
     return fake
 
 
 @pytest.fixture
-def env(tmp_path) -> dict[str, str]:
+def env(tmp_path, dialect) -> dict[str, str]:  # noqa: F811
     (tmp_path / "cluster.yaml").write_text(
         yaml.safe_dump(
             {"storage": ROOT, "graphs": {graph: {} for graph in GRAPHS}},
@@ -461,11 +464,11 @@ def test_sigterm_before_the_scale_down_stops_nothing(kube, cli, env, monkeypatch
 def test_an_unreadable_lock_state_at_close_leaves_the_server_down(kube, cli, env):
     """Logged and exited 1, with the Lease released, not a traceback."""
 
-    def break_status() -> None:
-        cli.status_output = "<html>503</html>"
+    def break_lock_read() -> None:
+        cli.lock_output = "<html>503</html>"
         raise maintenance.WindowTerminated
 
-    cli.during["council"] = break_status
+    cli.during["council"] = break_lock_read
     assert maintenance.main(env) == 1
     assert kube.scaled == [0]
     assert kube.spec["holderIdentity"] == ""
@@ -571,16 +574,16 @@ def test_a_command_past_its_timeout_is_stopped(tmp_path, monkeypatch):
 
 def test_the_storage_root_defaults_to_the_config_directory(tmp_path):
     (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"graphs": {"memory": {}}}))
-    assert maintenance.cluster_layout(tmp_path) == (str(tmp_path), ["memory"])
+    assert entrypoint.cluster_layout(tmp_path) == (str(tmp_path), ["memory"])
 
 
 # ── The plan gate ────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def gate_cli(monkeypatch):
+def gate_cli(monkeypatch, dialect):  # noqa: F811
     def install(**kwargs) -> FakeOmnigraph:
-        fake = FakeOmnigraph(**kwargs)
+        fake = FakeOmnigraph(dialect, **kwargs)
         monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
         return fake
 
@@ -618,7 +621,7 @@ def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
 ):
     env = real_env(cluster_dir)
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
-    serve_until_locked_then_stop(cluster_dir, env)
+    serve_until_locked_then_stop(cluster_dir, env, crash=True)
     assert real_lock(cluster_dir)["lock_operation"] == "serve"
 
     kube = FakeCluster()
@@ -649,8 +652,9 @@ def test_real_gate_reads_a_served_root_without_touching_its_lock(
 ):
     env = real_env(cluster_dir)
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
-    serve_until_locked_then_stop(cluster_dir, env)
+    serve_until_locked_then_stop(cluster_dir, env, crash=True)
     held = real_lock(cluster_dir)
+    assert held["lock_operation"] == "serve"
 
     assert plan_gate.main({**env, "OMNIGRAPH_CLUSTER_DIR": str(cluster_dir)}) == 0
     assert real_lock(cluster_dir)["lock_id"] == held["lock_id"]

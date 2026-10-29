@@ -6,8 +6,10 @@ refusals: someone else holds the Lease, another pod is still alive, the Lease
 was lost before the unlock, the lock is one this boot must not take over.
 
 The plan and status payloads are the shapes the released 0.13.0 binary printed
-(2026-10-09). The last section runs the sequence against the real binary and is
-skipped until the pinned omnigraph has persisted locks (storage format 14).
+(2026-10-09). The scripted CLI speaks both dialects, 0.13's `--config`/`--cluster`
+and 0.14's `--target`, and every boot case runs under each. The last section
+runs the sequence against whichever real binary is on PATH and is skipped
+until it has persisted locks (storage format 14).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -43,6 +46,7 @@ KubernetesError = entrypoint.KubernetesError
 LEASE = "omnigraph-unlock"
 POD = "omnigraph-server-7d9f-abcde"
 SELECTOR = "app.kubernetes.io/name=omnigraph-server"
+ROOT = "s3://ol-data-witan-ci/fmt14"
 
 
 def micro_time(moment: datetime) -> str:
@@ -360,34 +364,80 @@ def test_a_converged_plan_passes():
 # ── The boot sequence, against a scripted CLI ────────────────────────────────
 
 
+@dataclass(frozen=True)
+class Dialect:
+    """Which CLI the scripted `omnigraph` is, and the root it is pointed at."""
+
+    targets: bool
+    config_dir: Path
+
+    @property
+    def lock_command(self) -> str:
+        return "plan" if self.targets else "status"
+
+
+@pytest.fixture(params=["0.13", "0.14"])
+def dialect(request, monkeypatch, tmp_path) -> Dialect:
+    """Both CLI dialects, against `cluster.yaml` naming an S3 root."""
+    targets = request.param == "0.14"
+    monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: targets)
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {"council": {}}})
+    )
+    return Dialect(targets, tmp_path)
+
+
 class FakeOmnigraph:
-    """`omnigraph cluster …` with 0.13's lock behaviour.
+    """`omnigraph cluster …` with 0.13's and 0.14's lock behaviour.
 
     apply leaves a `deployment` lock, a second writer is refused while any
-    lock exists, and force-unlock removes exactly the id it is given.
+    lock exists, and force-unlock removes exactly the id it is given. Every
+    call is checked against the argument shape of ``dialect``.
     """
 
-    def __init__(self, lock: dict | None = None, plan: dict | None = None) -> None:
+    def __init__(
+        self, dialect: Dialect, lock: dict | None = None, plan: dict | None = None
+    ) -> None:
+        self.dialect = dialect
         self.lock = lock
         self.plan = plan or {"ok": True, "diagnostics": [], "changes": []}
         self.apply_fails = False
+        self.state_found = True
         self.calls: list[list[str]] = []
         self._ids = iter(f"01APPLY{n}" for n in range(1, 10))
+
+    def check_shape(self, args: list[str]) -> None:
+        config = ["--config", str(self.dialect.config_dir)]
+        target = ["--target", ROOT]
+        command, rest = args[0], args[1:]
+        if not self.dialect.targets:
+            assert "--target" not in args, args
+            assert rest[:2] == config, args
+        elif command == "force-unlock":
+            assert rest == [*target, rest[-1]], args
+        else:
+            assert command != "status", "0.14's status has no lock operation"
+            assert rest[:4] == [*config, *target], args
+
+    def observed(self) -> dict:
+        observed = {"state_found": self.state_found, "locked": self.lock is not None}
+        if self.lock:
+            observed |= {
+                "lock_id": self.lock["id"],
+                "lock_operation": self.lock["operation"],
+            }
+        return observed
 
     def __call__(self, args: list[str], lease, timeout_seconds=None) -> object:
         assert args[0] == "cluster"
         self.calls.append(args[1:])
+        self.check_shape(args[1:])
         command = args[1]
         if command == "status":
-            observed = {"locked": self.lock is not None}
-            if self.lock:
-                observed |= {
-                    "lock_id": self.lock["id"],
-                    "lock_operation": self.lock["operation"],
-                }
-            return self._result(0, {"ok": True, "state_observations": observed})
+            return self._result(0, {"ok": True, "state_observations": self.observed()})
         if command == "plan":
-            return self._result(0 if self.plan["ok"] else 1, self.plan)
+            plan = {**self.plan, "state_observations": self.observed()}
+            return self._result(0 if self.plan["ok"] else 1, plan)
         if command == "apply":
             if self.lock or self.apply_fails:
                 return self._result(1, {"ok": False})
@@ -414,9 +464,9 @@ class FakeOmnigraph:
 
 
 @pytest.fixture
-def cli(monkeypatch):
+def cli(monkeypatch, dialect):
     def install(**kwargs) -> FakeOmnigraph:
-        fake = FakeOmnigraph(**kwargs)
+        fake = FakeOmnigraph(dialect, **kwargs)
         monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
         return fake
 
@@ -435,7 +485,8 @@ def converge(config_dir: Path, lease=None, **env: str) -> None:
 def test_a_fresh_root_is_applied_and_left_unlocked(cli, tmp_path):
     fake = cli()
     converge(tmp_path)
-    assert fake.commands == ["plan", "status", "apply", "status", "force-unlock"]
+    lock = fake.dialect.lock_command
+    assert fake.commands == ["plan", lock, "apply", lock, "force-unlock"]
     assert fake.unlocked == ["01APPLY1"]
     assert fake.lock is None
 
@@ -495,16 +546,17 @@ def test_a_failed_apply_refuses(cli, tmp_path):
     fake.apply_fails = True
     with pytest.raises(BootRefused, match="apply"):
         converge(tmp_path)
-    assert fake.commands == ["plan", "status", "apply"]
+    assert fake.commands == ["plan", fake.dialect.lock_command, "apply"]
 
 
 def test_the_apply_actor_is_passed_to_plan_and_apply(cli, tmp_path):
     fake = cli()
     converge(tmp_path, OMNIGRAPH_APPLY_ACTOR="svc-witan-admin")
-    by_command = {call[0]: call for call in fake.calls}
-    for command in ("plan", "apply"):
-        assert by_command[command][-3:-1] == ["--as", "svc-witan-admin"]
-    assert "--as" not in by_command["force-unlock"]
+    for call in fake.calls:
+        if call[0] == "apply" or call[0] == "plan" and call is fake.calls[0]:
+            assert call[-3:-1] == ["--as", "svc-witan-admin"]
+        else:
+            assert "--as" not in call
 
 
 def test_bundles_without_a_token_map_refuse(cli, tmp_path):
@@ -595,6 +647,180 @@ def test_a_running_command_is_stopped_when_the_lease_is_lost(tmp_path, monkeypat
     assert time.monotonic() - started < 10
 
 
+# ── The two CLI dialects ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def probe(monkeypatch, tmp_path):
+    """Put a scripted `omnigraph` first on PATH for the version probe."""
+
+    def install(script: str) -> None:
+        binary = tmp_path / "bin" / "omnigraph"
+        binary.parent.mkdir()
+        binary.write_text(f"#!/bin/sh\n{script}\n")
+        binary.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{binary.parent}:/usr/bin:/bin")
+        entrypoint.cli_speaks_targets.cache_clear()
+
+    yield install
+    entrypoint.cli_speaks_targets.cache_clear()
+
+
+def test_a_cli_without_version_json_speaks_0_13(probe):
+    probe("echo \"error: unexpected argument '--json' found\" >&2; exit 2")
+    assert entrypoint.cli_speaks_targets() is False
+
+
+def test_target_protocol_2_speaks_0_14(probe):
+    probe("""echo '{"version": "0.14.0", "protocols": {"target": 2}}'""")
+    assert entrypoint.cli_speaks_targets() is True
+
+
+def test_another_target_protocol_refuses(probe):
+    probe("""echo '{"version": "0.14.0-edge", "protocols": {"target": 1}}'""")
+    with pytest.raises(BootRefused, match="target protocol 1"):
+        entrypoint.cli_speaks_targets()
+
+
+def test_0_14_addresses_the_s3_root_with_target(monkeypatch, tmp_path):
+    monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: True)
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {"council": {}}})
+    )
+    fake = FakeOmnigraph(
+        Dialect(True, tmp_path), lock={"id": "01PREVIOUS", "operation": "serve"}
+    )
+    monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
+    converge(tmp_path, OMNIGRAPH_APPLY_ACTOR="svc-witan-admin")
+    source = ["--config", str(tmp_path), "--target", ROOT]
+    assert fake.calls == [
+        ["plan", *source, "--as", "svc-witan-admin", "--json"],
+        ["plan", *source, "--json"],
+        ["force-unlock", "--target", ROOT, "01PREVIOUS"],
+        ["apply", *source, "--as", "svc-witan-admin", "--json"],
+        ["plan", *source, "--json"],
+        ["force-unlock", "--target", ROOT, "01APPLY1"],
+    ]
+    cluster = entrypoint.Cluster(tmp_path, None, entrypoint.NoPeers(may_unlock=True))
+    assert cluster.graph_command("cleanup", "council", "--confirm", "--yes") == [
+        "cleanup",
+        "--target",
+        ROOT,
+        "--graph",
+        "council",
+        "--confirm",
+        "--yes",
+    ]
+
+
+def test_0_13_addresses_a_graph_with_cluster(monkeypatch, tmp_path):
+    monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: False)
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {"council": {}}})
+    )
+    cluster = entrypoint.Cluster(tmp_path, None, entrypoint.NoPeers(may_unlock=True))
+    assert cluster.graph_command("optimize", "council") == [
+        "optimize",
+        "--cluster",
+        ROOT,
+        "--graph",
+        "council",
+    ]
+
+
+def test_the_root_without_storage_is_the_absolute_config_directory(
+    monkeypatch, tmp_path
+):
+    """0.14 reads a bare relative name as a registered target, not a path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cluster").mkdir()
+    (tmp_path / "cluster" / "cluster.yaml").write_text(
+        yaml.safe_dump({"graphs": {"memory": {}}})
+    )
+    assert entrypoint.cluster_layout(Path("cluster")) == (
+        str(tmp_path / "cluster"),
+        ["memory"],
+    )
+
+
+@pytest.mark.parametrize("storage", ["data", "./data"])
+def test_a_relative_storage_targets_the_config_directory(
+    monkeypatch, tmp_path, storage
+):
+    """0.14 resolves a relative `storage` against the config directory, so the
+    `--target` must too, from whatever directory the process runs in."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert entrypoint.inline_target(tmp_path / "cluster", storage) == str(
+        tmp_path / "cluster" / storage
+    )
+
+
+@pytest.mark.parametrize("root", ["s3://bucket/root", "file:///srv/root", "/srv/root"])
+def test_a_uri_or_absolute_storage_is_the_target_unchanged(root):
+    assert entrypoint.inline_target(Path("cluster"), root) == root
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "state_found"),
+    [
+        # Refused before the root is read: the lock reads as unlocked.
+        ({"code": "schema_file_missing", "severity": "error"}, False),
+        ({"code": "state_lock_read_error", "severity": "warning"}, True),
+    ],
+)
+def test_a_0_14_lock_read_that_did_not_reach_the_lock_refuses(
+    monkeypatch, dialect, diagnostic, state_found
+):
+    if not dialect.targets:
+        pytest.skip("0.13 reads the lock from `cluster status`")
+    fake = FakeOmnigraph(
+        dialect, plan={"ok": False, "diagnostics": [diagnostic], "changes": []}
+    )
+    fake.state_found = state_found
+    monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
+    cluster = entrypoint.Cluster(
+        dialect.config_dir, None, entrypoint.NoPeers(may_unlock=True)
+    )
+    with pytest.raises(BootRefused, match=diagnostic["code"]):
+        cluster.lock()
+
+
+def test_a_0_14_plan_error_past_the_ledger_still_reads_the_lock(monkeypatch, dialect):
+    """What a schema change planned without `--as` reports under policy."""
+    if not dialect.targets:
+        pytest.skip("0.13 reads the lock from `cluster status`")
+    no_actor = {"code": "schema_preflight_failed", "severity": "error"}
+    fake = FakeOmnigraph(
+        dialect,
+        lock={"id": "01GRAPHOP", "operation": "graph_operation"},
+        plan={"ok": False, "diagnostics": [no_actor], "changes": []},
+    )
+    monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
+    cluster = entrypoint.Cluster(
+        dialect.config_dir, None, entrypoint.NoPeers(may_unlock=True)
+    )
+    assert cluster.lock()["lock_id"] == "01GRAPHOP"
+
+
+def test_a_target_the_cli_refuses_is_reported(monkeypatch, dialect):
+    refusal = {
+        "error": "target_invalid: inline access supports local storage only",
+        "code": "target_invalid",
+    }
+
+    def refuse(args, lease, timeout_seconds=None):
+        return entrypoint.CommandResult(2, json.dumps(refusal))
+
+    monkeypatch.setattr(entrypoint, "run_omnigraph", refuse)
+    cluster = entrypoint.Cluster(
+        dialect.config_dir, None, entrypoint.NoPeers(may_unlock=True)
+    )
+    with pytest.raises(BootRefused, match="local storage only"):
+        cluster.plan()
+
+
 # ── The real binary ──────────────────────────────────────────────────────────
 
 RENDER_TOKENS = {
@@ -659,8 +885,14 @@ def graph_stores(config: Path) -> set[str]:
     return {path.name for path in (config / "graphs").iterdir()}
 
 
-def serve_until_locked_then_stop(config: Path, env: dict[str, str]) -> None:
-    """Run omnigraph-server until it holds its lock, then SIGTERM it."""
+def serve_until_locked_then_stop(
+    config: Path, env: dict[str, str], *, crash: bool = False
+) -> None:
+    """Run omnigraph-server until it holds its lock, then SIGTERM it.
+
+    :param crash: SIGKILL it instead. A crashed server leaves its `serve`
+        lock on 0.13 and 0.14; a clean shutdown leaves it only on 0.13.
+    """
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -683,7 +915,10 @@ def serve_until_locked_then_stop(config: Path, env: dict[str, str]) -> None:
             assert time.monotonic() < deadline
             time.sleep(0.2)
     finally:
-        server.terminate()
+        if crash:
+            server.kill()
+        else:
+            server.terminate()
         server.wait(timeout=60)
 
 
@@ -703,12 +938,25 @@ def test_real_first_boot_creates_the_graphs_and_leaves_no_lock(cluster_dir):
 @requires_persisted_locks
 @requires_omnigraph_server
 def test_real_restart_takes_over_the_serve_lock(cluster_dir):
-    """Boot, serve, SIGTERM, boot again: the lock handoff this file exists for."""
+    """Boot, serve, crash, boot again: the lock handoff this file exists for."""
+    env = real_env(cluster_dir)
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
+    serve_until_locked_then_stop(cluster_dir, env, crash=True)
+    held = real_lock(cluster_dir)
+    assert (held["locked"], held["lock_operation"]) == (True, "serve")
+
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
+    assert real_lock(cluster_dir)["locked"] is False
+
+
+@requires_persisted_locks
+@requires_omnigraph_server
+def test_real_clean_shutdown_leaves_the_serve_lock_only_on_0_13(cluster_dir):
+    """0.14 releases writer admission after a proved clean shutdown."""
     env = real_env(cluster_dir)
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     serve_until_locked_then_stop(cluster_dir, env)
-    held = real_lock(cluster_dir)
-    assert (held["locked"], held["lock_operation"]) == (True, "serve")
+    assert real_lock(cluster_dir)["locked"] is not entrypoint.cli_speaks_targets()
 
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     assert real_lock(cluster_dir)["locked"] is False
@@ -757,12 +1005,21 @@ def test_real_dropped_graph_is_refused_and_its_storage_kept(cluster_dir):
 def test_real_interrupted_apply_is_reported_as_outstanding(cluster_dir):
     """Pins the signal D3 left unverified: plan's `cluster_deployment_outstanding`."""
     entrypoint.render_policy_groups(cluster_dir, str(cluster_dir / "tokens.json"))
+    target = ["--target", str(cluster_dir)] if entrypoint.cli_speaks_targets() else []
     plan = None
     for attempt in range(40):
         shutil.rmtree(cluster_dir / "__cluster", ignore_errors=True)
         shutil.rmtree(cluster_dir / "graphs", ignore_errors=True)
         apply = subprocess.Popen(
-            ["omnigraph", "cluster", "apply", "--config", str(cluster_dir), "--json"],
+            [
+                "omnigraph",
+                "cluster",
+                "apply",
+                "--config",
+                str(cluster_dir),
+                *target,
+                "--json",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
