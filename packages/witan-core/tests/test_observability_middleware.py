@@ -736,7 +736,6 @@ EXPECTED_LOG_SAFE = {
     # withheld: the message carries an arbitrary upstream string
     ("witan_core.omnigraph", "WriteIndeterminate"): False,
     ("witan_core.omnigraph", "AdmissionCapExceeded"): False,
-    ("witan_core.omnigraph", "StoreQuarantined"): False,
     ("witan_code.ingest", "IngestRefused"): False,
 }
 

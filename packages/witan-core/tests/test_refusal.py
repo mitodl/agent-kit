@@ -16,7 +16,6 @@ from fastmcp.exceptions import ToolError
 from witan_core.identity import ActorTokenMissing
 from witan_core.omnigraph import (
     AdmissionCapExceeded,
-    StoreQuarantined,
     WriteIndeterminate,
     WriteQueueFull,
 )
@@ -26,7 +25,6 @@ REFUSALS = [
     (WriteQueueFull, RuntimeError),
     (WriteIndeterminate, RuntimeError),
     (AdmissionCapExceeded, RuntimeError),
-    (StoreQuarantined, RuntimeError),
     (ActorTokenMissing, LookupError),
 ]
 
