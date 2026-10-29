@@ -279,13 +279,24 @@ added in one commit and deleted in a later one is invisible to it and
 still gets pushed. Scan each commit's content:
 
 ```bash
-gitleaks git --log-opts="origin/<base>..HEAD"   # exit 1 means leaks found
+gitleaks git --log-opts="origin/<base>..HEAD"
 ```
 
-Without gitleaks, read `git log -p origin/<base>..HEAD` for keys, tokens,
-and passwords. Confirm a hit by inspection, never by trying it against a
-service. For a real credential, a commit that deletes it is not enough:
-with the user's OK, rewrite the unpushed branch so no commit contains it.
+A clean scan says "no leaks found" with a nonzero count of commits
+scanned; gitleaks also exits 0 when a bad range leaves nothing to scan.
+
+If `gitleaks` is missing or errors, stop, ask the user to install it, and
+wait: `brew install gitleaks` on macOS, `scoop install gitleaks` or
+`winget install Gitleaks.Gitleaks` on Windows, a release binary from
+<https://github.com/gitleaks/gitleaks/releases> on Linux (inside WSL for
+WSL users). `detect-secrets` is no substitute: it can't scan a commit
+range. Read `git log -p origin/<base>..HEAD` for keys, tokens, and
+passwords yourself only if the user says to go ahead without gitleaks,
+and don't continue to 4d until one of the two has run.
+
+Confirm a hit by inspection, never by trying it against a service. For a
+real credential, a commit that deletes it is not enough: with the user's
+OK, rewrite the unpushed branch so no commit contains it.
 This is a hard stop: don't continue to Step 5 while any unpushed commit
 still contains the credential, whether the user declines the rewrite or
 hasn't answered. If a commit holding it was already pushed, the credential
@@ -293,17 +304,19 @@ is leaked; tell the user it needs rotating before anything else.
 
 ### 4d — Get approval to publish
 
-If 4a–4c changed anything, left a finding the user hasn't decided on, or
-ran 4b inline, show the user before Step 5: the new commits (`git show`),
-the final title and body, any open findings, and which changes landed after
-the last review run. Label those as not independently reviewed; don't
-present them as reviewed. Label an inline 4b review the same way, and name
-why it ran inline — the platform was without a subagent facility, or the
-spawn was refused, errored, or timed out — since "not independently
-reviewed" without the reason doesn't tell the user whether to ask for
-another pass. Then wait for explicit approval. Showing the changes is not
-consent, and the user confirmed a body in Step 3, not code or claims
-changed after it. Don't paste findings tables into the PR body.
+If 4a–4c changed anything, left a finding the user hasn't decided on, ran
+4b inline, or ran 4c by reading the log instead of gitleaks, show the user
+before Step 5: the new commits (`git show`), the final title and body, any
+open findings, and which changes landed after the last review run. Label
+those as not independently reviewed; don't present them as reviewed.
+Label an inline 4b review the same way, and name why it ran inline — the
+platform was without a subagent facility, or the spawn was refused,
+errored, or timed out — since "not independently reviewed" without the
+reason doesn't tell the user whether to ask for another pass. Say so
+when the secret scan was a manual read. Then wait for explicit approval.
+Showing the changes is not consent, and the user confirmed a body in
+Step 3, not code or claims changed after it. Don't paste findings tables
+into the PR body.
 
 ## Step 5 — Push and create the PR
 
