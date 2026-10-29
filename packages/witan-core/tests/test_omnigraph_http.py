@@ -926,16 +926,22 @@ def test_two_views_never_share_a_group_commit(monkeypatch, tmp_path):
     queries = _mutation_dir(tmp_path)
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
 
-    class OtherView(OmnigraphClient):
-        def _extra_args(self, subcommand):
-            return ["--branch", "act-bob/wip"]
+    # One class for both views, so the lane key's type(self) can't tell them
+    # apart and only the branch selector can.
+    class View(OmnigraphClient):
+        def __init__(self, *args, branch, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.branch = branch
 
-    for cls in (BranchedClient, OtherView, OmnigraphClient):
-        cls("http://host:8080", queries, graph_id="council").change(
+        def _extra_args(self, subcommand):
+            return ["--branch", self.branch]
+
+    for branch in ("act-alice/wip", "act-bob/wip"):
+        View("http://host:8080", queries, graph_id="council", branch=branch).change(
             "mutations.gq", "claim", {"slug": "t-1"}
         )
 
-    assert len(set(keys)) == 3
+    assert len(set(keys)) == 2
 
 
 def test_a_missing_branch_is_terminal_not_retried(monkeypatch, queries_dir, _fake_http):
