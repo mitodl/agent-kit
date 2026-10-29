@@ -27,6 +27,11 @@ a MINOR bump may include breaking changes).
   retried and a write raises `WriteIndeterminate`, 64 (a refused command
   line) is fatal, and 75 from a 503 gets the unavailable-server budget
   instead of the admission cap's. Adds the `OUTCOME_UNKNOWN` outcome kind.
+- A write whose HTTP error body carries a 0.14 disposition with `effects`
+  `partial` or `unknown` is classified `OUTCOME_UNKNOWN` and raises
+  `WriteIndeterminate` instead of being retried. 0.14 answers a load whose
+  fork published before its rows were refused with a 409 that says
+  `partial`, which the 409 rule would otherwise have replayed.
 
 ### Removed
 

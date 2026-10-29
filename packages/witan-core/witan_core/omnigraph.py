@@ -812,9 +812,11 @@ class _CliFailure(NamedTuple):
 #: The lines 0.14 prints on stderr before every command (upstream
 #: `scope.rs` `report` and `report_write_scope` at v0.14.0). They name the
 #: graph, branch and paths, which a marker without spaces
-#: (``recovery_required``) could match, so they are not classified.
+#: (``recovery_required``) could match, so they are not classified. The label
+#: is matched up to its provenance rather than as ``\S+``, because an inline
+#: local path can contain spaces.
 _TARGET_REPORT_LINE = re.compile(
-    r"^target (?:write scope: |\S+ \((?:explicit|default|inline)\): ).*\n?",
+    r"^target (?:write scope: |.+? \((?:explicit|default|inline)\): ).*\n?",
     re.MULTILINE,
 )
 
@@ -3413,13 +3415,18 @@ class OmnigraphClient:
                     f"retrying:\n{err.strip()}"
                 ) from None
             if kind == _http.OUTCOME_UNKNOWN and is_write:
-                # The CLI exited 2: it could not tell whether the write took
+                # The CLI exited 2, or the server's disposition said partial
+                # or unknown effects: nobody can tell whether the write took
                 # effect. Anything else falls through to the RuntimeError
                 # below, unretried.
+                said = (
+                    f"exited {result.returncode}, which omnigraph uses"
+                    if result.returncode is not None
+                    else f"got HTTP {result.status} with a disposition"
+                )
                 raise WriteIndeterminate(
-                    f"omnigraph {label} exited {result.returncode}, which "
-                    f"omnigraph uses for partial or unknown effects. ITS "
-                    f"OUTCOME IS INDETERMINATE: the write may or may not "
+                    f"omnigraph {label} {said} for partial or unknown effects. "
+                    f"ITS OUTCOME IS INDETERMINATE: the write may or may not "
                     f"have been applied. Re-read before retrying:\n"
                     f"{err.strip()}"
                 ) from None

@@ -145,11 +145,22 @@ RECOVERY_REQUIRED = "recovery_required"
 #: write: nothing in such a response says whether the write was applied.
 CONTRACT_VIOLATION = "contract_violation"
 
-#: The omnigraph 0.14 CLI exited 2: the command's effects are partial or
-#: unknown, so a write may have landed. CLI only for now; the HTTP side's
-#: ``500 outcome_unknown`` still classifies by status. Never retried, and a
-#: write raises ``WriteIndeterminate``, as for :data:`CONTRACT_VIOLATION`.
+#: The command's effects are partial or unknown, so a write may have landed:
+#: the omnigraph 0.14 CLI exited 2, or a write's error body carried a
+#: disposition in :data:`INDETERMINATE_EFFECTS`. Never retried, and a write
+#: raises ``WriteIndeterminate``, as for :data:`CONTRACT_VIOLATION`.
 OUTCOME_UNKNOWN = "outcome_unknown"
+
+#: The 0.14 ``disposition.effects`` values that say a refused request may
+#: still have changed the graph. Upstream answers a ``/load`` whose fork
+#: published before its rows were refused with HTTP 409 and ``partial``
+#: (crates/omnigraph-server/tests/integration/data_routes.rs at v0.14.0), and
+#: the 409 rule in :func:`classify_status` would otherwise replay it.
+INDETERMINATE_EFFECTS = frozenset({"partial", "unknown"})
+
+#: The kinds the policy loop retries for a write, which a disposition in
+#: :data:`INDETERMINATE_EFFECTS` turns into :data:`OUTCOME_UNKNOWN`.
+_REPLAYED_KINDS = frozenset({RETRYABLE, UNAVAILABLE, ADMISSION_CAP})
 
 #: The conditional-write precondition header (upstream #470). Sent raw and
 #: exactly once, and ONLY to the dedicated routes below — the ordinary
@@ -385,6 +396,21 @@ def classify_status(status: int, message: str) -> str:
         # instead of an answer they could act on.
         return RETRYABLE
     return FATAL
+
+
+def disposition_effects(body: str) -> str | None:
+    """The ``disposition.effects`` of a 0.14 error body, or ``None`` without one."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    disposition = parsed.get("disposition")
+    if not isinstance(disposition, dict):
+        return None
+    effects = disposition.get("effects")
+    return effects if isinstance(effects, str) else None
 
 
 def error_message(status: int, body: str) -> str:
@@ -719,8 +745,20 @@ class PooledTransport:
             if succeeded:
                 return Outcome(kind=OK, body=text, status=response.status)
             message = error_message(response.status, text)
+            kind = classify_status(response.status, message)
+            # A 409, 429 or 503 is retried on the premise that nothing was
+            # applied, and the disposition can say otherwise. Only those
+            # kinds are overridden: 0.14 reports `unknown` for every owned
+            # write that is not a typed refusal, a plain 400 included, and a
+            # FATAL is not replayed here anyway. A read has nothing to replay.
+            if (
+                not idempotent
+                and kind in _REPLAYED_KINDS
+                and disposition_effects(text) in INDETERMINATE_EFFECTS
+            ):
+                kind = OUTCOME_UNKNOWN
             return Outcome(
-                kind=classify_status(response.status, message),
+                kind=kind,
                 error=message,
                 status=response.status,
                 retry_after=parse_retry_after(response.getheader("Retry-After")),

@@ -2893,6 +2893,22 @@ def test_0_14s_target_lines_are_not_classified():
     assert og._classify_cli_error(failure.classify, 1) == _http.RETRYABLE
 
 
+def test_a_target_line_naming_a_path_with_spaces_is_not_classified():
+    """An inline label is a path, and a path can hold a space. Left in, this
+    one's ``too_many_requests`` reads as the admission cap and is retried."""
+    stderr = (
+        "target /tmp/too_many_requests workspace/g.omni (inline): direct graph "
+        "/tmp/too_many_requests workspace/g.omni; provider=Local\n"
+        "target write scope: branch=main\n"
+        "precondition failed on branch 'main': expected head 'A' but current is 'B'\n"
+    )
+    failure = og._cli_failure("", stderr)
+    assert failure.classify == (
+        "precondition failed on branch 'main': expected head 'A' but current is 'B'\n"
+    )
+    assert og._classify_cli_error(failure.classify, 4) == _http.PRECONDITION_FAILED
+
+
 def test_exit_64_is_never_retried_whatever_the_text_says():
     """0.14's usage exit. Verbatim for the `--quiet` 0.14 removed."""
     text = (
