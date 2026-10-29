@@ -91,7 +91,7 @@ ARG OMNIGRAPH_CLI_PATCH_BASE_TAG=v0.14.0
 ARG OMNIGRAPH_CLI_PATCH_BASE_COMMIT=60bfd19db780fdff3a5178f959c1204143420114
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS fetch
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_SHA256_X86_64
@@ -174,7 +174,7 @@ RUN set -eux; \
 FROM cli-${OMNIGRAPH_CLI_SOURCE} AS cli
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA
