@@ -115,6 +115,19 @@ stub in tests). See `witan_code/github_app.py`.
 - Bakes **both** upstream release binaries (`omnigraph-server` to serve,
   `omnigraph` for the boot-time cluster convergence), checksum-verified against
   the release `.sha256`.
+- **Can build its CLI from patched source instead.** The stock 0.14 CLI only
+  addresses a local root inline, so it cannot reach the S3 cluster root the
+  entrypoint, the maintenance window and force-unlock all work on with the
+  server stopped. With `OMNIGRAPH_CLI_SOURCE=patched` the `cli-patched` stage
+  builds `omnigraph` from the release commit plus
+  [`patches/omnigraph-cli-inline-s3-root.patch`](./patches/omnigraph-cli-inline-s3-root.patch)
+  (a backport of upstream
+  [#1189](https://github.com/ModernRelay/omnigraph/pull/1189)), and the image
+  carries `edu.mit.ol.omnigraph.cli-source=patched`. `omnigraph-server`, the
+  `witan` image and `witan setup` keep the stock release binaries.
+  `just check-omnigraph-pins` requires the patched CLI exactly when the release
+  pin is the patch's base tag, and the `omnigraph patched CLI` workflow
+  qualifies it against a copy of a cluster root on S3 (RustFS in CI).
 - Bakes `schema.pg` at `/etc/omnigraph/cluster/schema.pg`. The `omnigraph`
   stack mounts its generated `cluster.yaml` alongside it via a ConfigMap
   `subPath` (single-file overlay) so it does not shadow the baked-in schema.

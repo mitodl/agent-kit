@@ -29,6 +29,9 @@
 # `just check-omnigraph-pins` fails CI if they ever drift — the second belt
 # exists because this file went a full release cycle claiming the manager
 # covered it when it did not, and a partial bump is silent until deploy.
+#
+# The CLI is the one exception to "both binaries come from the release
+# tarball": see OMNIGRAPH_CLI_SOURCE below.
 
 ARG OMNIGRAPH_VERSION=0.13.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
@@ -60,6 +63,32 @@ ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
 ARG OMNIGRAPH_INTERNAL_SCHEMA=14
+# Where the `omnigraph` CLI in this image comes from: `release` (the tarball
+# above, like omnigraph-server) or `patched` (the cli-patched stage below).
+#
+# WHY A PATCHED CLI. Since 0.14 an inline --target is local-only, so the stock
+# CLI cannot address the S3 cluster root at all, and with the server stopped
+# there is then no way to converge the catalog on boot, run optimize/cleanup,
+# or force-unlock a retained lock (upstream #1163, #1082). The cli-patched
+# stage builds the CLI from OMNIGRAPH_CLI_PATCH_BASE_COMMIT plus
+# docker/patches/omnigraph-cli-inline-s3-root.patch, a backport of upstream
+# PR #1189, which admits an inline s3:// root for cluster
+# plan/apply/status/force-unlock/upgrade-ledger and for
+# optimize/cleanup/repair/rebuild-full-text-indexes with --graph. Only this
+# image's CLI is patched: omnigraph-server here, the witan image and
+# `witan setup` all keep the stock release digests.
+#
+# `just check-omnigraph-pins` holds the selector to the release pin: it must
+# be `patched` exactly when OMNIGRAPH_RELEASE_TAG equals
+# OMNIGRAPH_CLI_PATCH_BASE_TAG, so the patched CLI ships with the 0.14 bump
+# and never beside a server from a different release (strict single-version
+# storage, as above). Drop the patch, these three ARGs and the cli-patched
+# stage once a release or an immutable edge build carries the change, or once
+# served maintenance (upstream RFC #1186 / #1177) replaces the direct CLI.
+ARG OMNIGRAPH_CLI_SOURCE=release
+ARG OMNIGRAPH_CLI_PATCH_BASE_TAG=v0.14.0
+# The tag's commit, fetched by id so a moved tag cannot change what is built.
+ARG OMNIGRAPH_CLI_PATCH_BASE_COMMIT=60bfd19db780fdff3a5178f959c1204143420114
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS fetch
@@ -105,16 +134,57 @@ RUN set -eux; \
     done; \
     /out/omnigraph --version
 
+# ── CLI, stock: the release tarball's binary ──────────────────────────────────
+FROM fetch AS cli-release
+
+# ── CLI, patched: the release source plus the inline-S3-root backport ─────────
+# Built only when OMNIGRAPH_CLI_SOURCE=patched (BuildKit skips a stage nothing
+# selects). The compiler is the one the source's rust-toolchain.toml pins
+# (rustup honours it over the image's default, and fetches the clippy and
+# rustfmt components it lists), so bumping this image's tag changes the glibc
+# and build tools but not rustc. Keep the image on that toolchain anyway, or
+# rustup downloads a second one on every cold build. Trixie matches the
+# runtime stage's glibc. RUSTFLAGS is set
+# empty for the reason upstream's release workflow gives: it replaces the
+# workspace's test-only `--cfg tokio_unstable`. The build is left unstamped
+# (no OMNIGRAPH_RELEASE_CHANNEL), so it never claims to be the stable build.
+FROM rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c AS cli-patched
+ARG OMNIGRAPH_CLI_PATCH_BASE_TAG
+ARG OMNIGRAPH_CLI_PATCH_BASE_COMMIT
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git protobuf-compiler libprotobuf-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init -q . \
+    && git fetch -q --depth 1 https://github.com/ModernRelay/omnigraph.git "${OMNIGRAPH_CLI_PATCH_BASE_COMMIT}" \
+    && git checkout -q FETCH_HEAD
+COPY docker/patches/omnigraph-cli-inline-s3-root.patch /tmp/
+RUN git apply /tmp/omnigraph-cli-inline-s3-root.patch
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    RUSTFLAGS= cargo build --release --locked -p omnigraph-cli \
+    && install -D -m 0755 target/release/omnigraph /out/omnigraph
+# The source must be the release the selector is pinned against, or the CLI
+# and the server would read different storage formats.
+RUN set -eux; \
+    reported="$(/out/omnigraph --version)"; \
+    [ "v${reported##* }" = "${OMNIGRAPH_CLI_PATCH_BASE_TAG}" ] \
+        || { echo "patched CLI reports '${reported}', expected ${OMNIGRAPH_CLI_PATCH_BASE_TAG}" >&2; exit 1; }
+
+FROM cli-${OMNIGRAPH_CLI_SOURCE} AS cli
+
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA
+ARG OMNIGRAPH_CLI_SOURCE
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \
       org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
       org.opencontainers.image.version="${OMNIGRAPH_VERSION}" \
-      edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}"
+      edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}" \
+      edu.mit.ol.omnigraph.cli-source="${OMNIGRAPH_CLI_SOURCE}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.
 # python3: the entrypoint (omnigraph_server_entrypoint.py) is Python and uses
@@ -131,7 +201,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --create-home omnigraph
 
-COPY --from=fetch /out/omnigraph /usr/local/bin/omnigraph
+COPY --from=cli /out/omnigraph /usr/local/bin/omnigraph
 COPY --from=fetch /out/omnigraph-server /usr/local/bin/omnigraph-server
 COPY docker/omnigraph_server_entrypoint.py /usr/local/bin/omnigraph-server-entrypoint.py
 # The maintenance window and the pre-deploy plan gate, which the `omnigraph`
