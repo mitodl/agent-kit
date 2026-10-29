@@ -2,10 +2,9 @@ name: omnigraph patched CLI
 
 # The omnigraph-server image can build its CLI from the release source plus
 # docker/patches/omnigraph-cli-inline-s3-root.patch (see OMNIGRAPH_CLI_SOURCE
-# in the Dockerfile). Concourse builds the image with the Dockerfile's
-# defaults, so until the 0.14 pin bump selects that stage nothing else builds
-# it. This builds the image with it selected and qualifies its CLI against a
-# copy of a cluster root on S3.
+# in the Dockerfile). Since the 0.14 pin bump the Dockerfile's defaults select
+# that stage, so Concourse builds it too. This builds the image with it
+# selected and qualifies its CLI against a copy of a cluster root on S3.
 #
 # The S3 here is RustFS in a container, not AWS: CI holds no AWS credentials,
 # so qualification against a copy of a real deployed root is left to QA.

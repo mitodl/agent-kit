@@ -145,6 +145,12 @@ RECOVERY_REQUIRED = "recovery_required"
 #: write: nothing in such a response says whether the write was applied.
 CONTRACT_VIOLATION = "contract_violation"
 
+#: The omnigraph 0.14 CLI exited 2: the command's effects are partial or
+#: unknown, so a write may have landed. CLI only for now; the HTTP side's
+#: ``500 outcome_unknown`` still classifies by status. Never retried, and a
+#: write raises ``WriteIndeterminate``, as for :data:`CONTRACT_VIOLATION`.
+OUTCOME_UNKNOWN = "outcome_unknown"
+
 #: The conditional-write precondition header (upstream #470). Sent raw and
 #: exactly once, and ONLY to the dedicated routes below — the ordinary
 #: ``/mutate`` rejects it outright rather than ignoring an unknown header,
@@ -164,9 +170,11 @@ HTTP_API_CONTRACT_HEADER = "Omnigraph-Http-Api"
 #: The contract this client speaks. Upstream keeps it separate from the
 #: package version (``omnigraph-api-types``: "independent of the package
 #: version and graph-storage stamp"), so it is its own constant and not
-#: derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12`` and 0.13.0
-#: requires ``0.13``. A 0.11 server ignores the header.
-HTTP_API_CONTRACT = "0.13"
+#: derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12``, 0.13.0
+#: ``0.13`` and 0.14.0 requires ``0.14``. A 0.11 server ignores the header.
+#: A 0.13 server and a 0.14 client refuse each other in both directions, so
+#: there is no mixed window: the data tier moves first.
+HTTP_API_CONTRACT = "0.14"
 
 #: The storage format of the servers that stamp :data:`HTTP_API_CONTRACT_HEADER`
 #: on responses (observed on 0.13.0, format 14). A 0.11 server (format 9)

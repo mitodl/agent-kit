@@ -1415,9 +1415,9 @@ def test_an_error_object_with_a_status_renders_as_the_http_path_does():
     assert og._cli_failure(body, "").message == "nope (HTTP 400, bad_request)"
 
 
-def test_stderr_wins_when_the_binary_wrote_both():
+def test_an_error_object_wins_over_stderr():
     failure = og._cli_failure('{"error": "from stdout"}', "from stderr\n")
-    assert failure == ("from stderr\n", "from stderr\n")
+    assert failure == ("from stdout", '{"error": "from stdout"}')
 
 
 @pytest.mark.parametrize(
@@ -1531,7 +1531,8 @@ def test_an_unstamped_response_to_a_cli_write_is_indeterminate(monkeypatch):
 
 def test_exit_75_is_the_admission_cap_whatever_the_text_says():
     """The 0.13 CLI exits 75 only for a 429 the server refused before doing
-    anything, so the exit code identifies it without matching prose."""
+    anything, so the exit code identifies it without matching prose. On 0.14
+    anything else that is not a 503 keeps that budget too."""
     assert og._classify_cli_error("anything at all", 75) == _http.ADMISSION_CAP
     assert og._classify_cli_error("anything at all", 1) == _http.FATAL
 
@@ -2813,3 +2814,137 @@ def test_full_text_rebuild_is_not_confused_with_a_repair():
     that is not damaged. Upstream is explicit that ordinary reads stay
     available and only the full-text index is refused."""
     assert og._classify_cli_error(_FTS_REBUILD_STDERR) != _http.NEEDS_REPAIR
+
+
+# ── omnigraph 0.14: the target line on stderr, and the new exits ──
+#
+# Verbatim from the 0.14.0 binary (2026-10-29), in witan's argument shapes:
+# `--operator-config <generated> --target …`, reads with `--format json`.
+# Paths are shortened.
+_014_READ_SERVER_DOWN_STDOUT = """{
+  "error": "server discovery connection failed (DNS, TCP, proxy, or TLS); could not establish omnigraph-http-api: 0.14; this data request was not sent",
+  "code": "api_contract_mismatch",
+  "disposition": {
+    "effects": "none",
+    "action": "fix"
+  },
+  "request_dispatched": false
+}
+"""
+_014_READ_SERVER_DOWN_STDERR = (
+    "target witan (explicit): server http://127.0.0.1:1/; graph=council; "
+    "config=/tmp/witan-omnigraph-x/op.yaml\n"
+)
+_014_WRITE_SERVER_DOWN_STDERR = (
+    "target witan (explicit): server http://127.0.0.1:1/; graph=council; "
+    "config=/tmp/witan-omnigraph-x/op.yaml\n"
+    "target write scope: branch=main\n"
+    "server discovery connection failed (DNS, TCP, proxy, or TLS); could not "
+    "establish omnigraph-http-api: 0.14; this data request was not sent\n"
+    'disposition: {"effects":"none","action":"fix"}\n'
+)
+_014_WRITE_PRECONDITION_STDERR = (
+    "target /s/g.omni (inline): direct graph /s/g.omni; requested=/s/g.omni; "
+    "provider=Local\n"
+    "target write scope: branch=main\n"
+    "precondition failed on branch 'main': expected head "
+    "'01M4E9AVZWQCRFW6THFQCDCJJ5' but current is "
+    "hb1.01M648SD8TEQRBXBQ7BCYBMC80.1.01M648SD8TEQRBXBQ7BCYBMC80\n"
+    'disposition: {"effects":"none","action":"refresh"}\n'
+)
+
+
+def test_the_error_object_wins_over_0_14s_target_line():
+    """0.14 prints the resolved target on stderr for every call, so stderr is
+    never empty. Classifying it would see only that line."""
+    failure = og._cli_failure(
+        _014_READ_SERVER_DOWN_STDOUT, _014_READ_SERVER_DOWN_STDERR
+    )
+    assert failure.classify == _014_READ_SERVER_DOWN_STDOUT
+    assert "this data request was not sent" in failure.message
+    assert og._classify_cli_error(failure.classify, 1) == _http.UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    ("stderr", "returncode", "expected"),
+    [
+        (_014_WRITE_SERVER_DOWN_STDERR, 1, _http.UNAVAILABLE),
+        (_014_WRITE_PRECONDITION_STDERR, 4, _http.PRECONDITION_FAILED),
+    ],
+)
+def test_0_14_write_failures_classify(stderr, returncode, expected):
+    failure = og._cli_failure("", stderr)
+    assert og._classify_cli_error(failure.classify, returncode) == expected
+
+
+def test_exit_64_is_never_retried_whatever_the_text_says():
+    """0.14's usage exit. Verbatim for the `--quiet` 0.14 removed."""
+    text = (
+        "error: unexpected argument '--quiet' found\n\n"
+        "  tip: a similar argument exists: '--query'\n"
+    )
+    assert og._classify_cli_error(text, 64) == _http.FATAL
+    assert og._classify_cli_error("stale view; tcp connect error", 64) == _http.FATAL
+
+
+def test_exit_2_is_an_unknown_outcome_even_beside_a_retryable_marker():
+    """A write may have landed. A marker that would otherwise retry it (a
+    dropped connection, a stale view) must not."""
+    assert og._classify_cli_error("tcp connect error", 2) == _http.OUTCOME_UNKNOWN
+    assert og._classify_cli_error("stale view", 2) == _http.OUTCOME_UNKNOWN
+    # The CLI's own contract check stays first: it says the same thing.
+    assert (
+        og._classify_cli_error(_013_CLI_UNSTAMPED_RESPONSE_STDERR, 2)
+        == _http.CONTRACT_VIOLATION
+    )
+
+
+def test_an_exit_2_write_is_indeterminate_and_not_retried(monkeypatch):
+    client = _client(monkeypatch)
+    calls = _stub_run(
+        monkeypatch,
+        returncode=2,
+        stderr=(
+            "write failed after publishing\n"
+            'disposition: {"effects":"unknown","action":"reconcile"}\n'
+        ),
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="exited 2"):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] == 1
+
+
+def test_an_exit_2_read_fails_without_a_retry(monkeypatch):
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=2, stderr="stale view\n")
+
+    with pytest.raises(RuntimeError, match="exit 2") as raised:
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert not isinstance(raised.value, og.WriteIndeterminate)
+    assert calls["n"] == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A write's rendering: the status on its own line.
+        (
+            "server is draining\nHTTP 503\nRetry-After: 1\n"
+            'disposition: {"effects":"none","action":"retry"}\n'
+        ),
+        # A read's error object.
+        '{"error": "x", "code": "service_unavailable", "http_status": 503}',
+        '{"error": "x", "code": "graph_unavailable"}',
+    ],
+)
+def test_exit_75_from_a_503_gets_the_restart_budget(text):
+    """0.14 exits 75 for any refusal with `effects: none, action: retry`. A
+    503 is the server going away or not serving yet, which outlasts the
+    admission cap's short budget."""
+    assert og._classify_cli_error(text, 75) == _http.UNAVAILABLE
+
+
+def test_exit_75_from_a_blocked_graph_is_still_fatal():
+    """The one 503 that needs an operator, whatever the exit says."""
+    assert og._classify_cli_error(_013_READ_BLOCKED_GRAPH_STDOUT, 75) == _http.FATAL

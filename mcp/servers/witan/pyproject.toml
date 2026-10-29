@@ -249,7 +249,13 @@ dependencies = [
   # `server.py`/`remote/proxy.py` call `store_cli_args(..., binary=...)`, both
   # added in witan-core 0.48.0 in the same change (omnigraph 0.14 `--target`
   # addressing). On 0.46 the import fails.
-  "witan-core[cli,remote,observability,sentry]>=0.48,<1",
+  #
+  # ★ >=0.50 IS A COMPATIBILITY FLOOR: 0.50.0 pins omnigraph 0.14 (storage
+  # format 16) and sends `Omnigraph-Http-Api: 0.14`. A 0.14 server refuses
+  # a 0.13 request with `400 api_contract_mismatch`, and the reverse, so
+  # 0.49 imports and runs, then fails on the first request to a deployed
+  # graph once the data tier is on 0.14.
+  "witan-core[cli,remote,observability,sentry]>=0.50,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

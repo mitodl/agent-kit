@@ -33,15 +33,15 @@
 # The CLI is the one exception to "both binaries come from the release
 # tarball": see OMNIGRAPH_CLI_SOURCE below.
 
-ARG OMNIGRAPH_VERSION=0.13.0
+ARG OMNIGRAPH_VERSION=0.14.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.13.0
-ARG OMNIGRAPH_SHA256_X86_64=0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
-ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
+ARG OMNIGRAPH_RELEASE_TAG=v0.14.0
+ARG OMNIGRAPH_SHA256_X86_64=02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9
+ARG OMNIGRAPH_SHA256_ARM64=f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff
 # The on-disk storage format the pinned binary reads, mirrored from witan_core's
 # declaration (packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image below as
@@ -62,7 +62,7 @@ ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d
 # runtime stage's re-declaration of it, and the LABEL line that emits it — an
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=14
+ARG OMNIGRAPH_INTERNAL_SCHEMA=16
 # Where the `omnigraph` CLI in this image comes from: `release` (the tarball
 # above, like omnigraph-server) or `patched` (the cli-patched stage below).
 #
@@ -85,7 +85,7 @@ ARG OMNIGRAPH_INTERNAL_SCHEMA=14
 # storage, as above). Drop the patch, these three ARGs and the cli-patched
 # stage once a release or an immutable edge build carries the change, or once
 # served maintenance (upstream RFC #1186 / #1177) replaces the direct CLI.
-ARG OMNIGRAPH_CLI_SOURCE=release
+ARG OMNIGRAPH_CLI_SOURCE=patched
 ARG OMNIGRAPH_CLI_PATCH_BASE_TAG=v0.14.0
 # The tag's commit, fetched by id so a moved tag cannot change what is built.
 ARG OMNIGRAPH_CLI_PATCH_BASE_COMMIT=60bfd19db780fdff3a5178f959c1204143420114

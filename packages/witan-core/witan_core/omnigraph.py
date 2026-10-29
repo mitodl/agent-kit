@@ -212,10 +212,10 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # cut-off can only end as a torn-down connection. Quoting the server's number
 # in the error is worth more than obeying it into a wall.
 #
-# `too_many_requests` is the 429's wire code. A 0.13 read reports its failure
-# as the JSON error object, code included, so the code covers whatever the
-# server words the cap as (upstream has at least two more spellings than the
-# pair here). A write does not print the code and exits 75 instead; see
+# `too_many_requests` is the 429's wire code. A 0.13 or 0.14 read reports its
+# failure as the JSON error object, code included, so the code covers whatever
+# the server words the cap as (upstream has at least two more spellings than
+# the pair here). A write does not print the code and exits 75 instead; see
 # `_EXIT_RETRY`.
 _ADMISSION_CAP_MARKERS = (
     "in-flight count cap",
@@ -376,6 +376,10 @@ _REMOTE_WRITE_QUEUE_WAIT = 10.0
 #   server discovery connection failed (DNS, TCP, proxy, or TLS); could not
 #   establish omnigraph-http-api: 0.13; this data request was not sent
 #
+# 0.14.0 prints the same sentence with its own contract, `0.14` (measured on
+# the binary for a refused connection, read and write), so the markers below
+# match both.
+#
 # "this data request was not sent" is the property the old markers were
 # standing in for, stated outright, so it is safe for a write too. The
 # timed-out spelling is from upstream's `graph_http.rs` and was not provoked
@@ -388,7 +392,7 @@ _REMOTE_WRITE_QUEUE_WAIT = 10.0
 # out of wording that was not provoked here.
 #
 # The old markers stay: a marker list is matched against whatever binary is
-# installed, and that is 0.11 until the pin moves.
+# installed, which is not always the pinned one.
 _UNAVAILABLE_MARKERS = (
     "tcp connect error",
     "dns error",
@@ -396,11 +400,11 @@ _UNAVAILABLE_MARKERS = (
     "server discovery timed out",
 )
 
-# The 0.13 CLI makes the same check on a data response that
-# `_http.contract_violation` makes for the pooled transport, and reports a
-# failure of it as (upstream `graph_http.rs`, not provoked here):
+# The 0.13 and 0.14 CLIs make the same check on a data response that
+# `_http.contract_violation` makes for the pooled transport, and report a
+# failure of it as (upstream `graph_http.rs` at both tags, not provoked here):
 #
-#   server response did not carry exactly one omnigraph-http-api: 0.13 header;
+#   server response did not carry exactly one omnigraph-http-api: 0.14 header;
 #   this request's effects are unknown; do not retry automatically
 #
 # Classified the same way, so a write over the CLI raises WriteIndeterminate
@@ -408,9 +412,10 @@ _UNAVAILABLE_MARKERS = (
 # sent" instead and do not match.
 _CLI_CONTRACT_VIOLATION = "this request's effects are unknown"
 
-# What a 0.13 server answers, with 503 `graph_unavailable`, for a graph it
-# knows but is not serving YET (upstream `handlers.rs`). Both clear on their
-# own, so they get the same wait as an unreachable server, which is what
+# What a 0.13 or 0.14 server answers, with 503 `graph_unavailable`, for a
+# graph it knows but is not serving YET (upstream `handlers.rs`, unchanged at
+# v0.14.0). Both clear on their own, so they get the same wait as an
+# unreachable server, which is what
 # `classify_status` already gives them over HTTP by status. The third 503 with
 # that code, a graph that failed to open, does not clear until an operator
 # acts; see `_http.is_graph_blocked`.
@@ -421,9 +426,27 @@ _GRAPH_NOT_YET_SERVING = (
 
 # The 0.13 CLI exits with this (EX_TEMPFAIL) for exactly one condition: a
 # single effectful request the server refused with 429 `too_many_requests`
-# before doing anything (upstream `command_outcome.rs`). That is the admission
-# cap, identified without reading prose.
+# before doing anything (upstream `command_outcome.rs`). 0.14 exits 75 for any
+# failure whose disposition is `effects: none, action: retry`
+# (`command_outcome.rs` `exit_for` at v0.14.0): the 429, and also a 503
+# `service_unavailable`/`graph_unavailable` and a request timeout, cancellation
+# or deadline the server refused before doing anything. Nothing ran in any of
+# them, so each is safe to repeat. A 503 gets the restart-length budget below;
+# everything else keeps the admission cap's short one.
 _EXIT_RETRY = 75
+# 0.14's other two new data-command exits (`lib.rs` at v0.14.0). 2 is a
+# failure whose effects are partial or unknown: a write may have landed, so it
+# is never retried. Before 0.14, 2 was also clap's usage exit; a pre-0.14 CLI
+# that refuses its arguments therefore reads as an indeterminate write too,
+# which overstates the risk but never retries. 64 (EX_USAGE) is 0.14's usage
+# refusal: witan built a command line the binary does not accept, which no
+# retry fixes.
+_EXIT_OUTCOME_UNKNOWN = 2
+_EXIT_USAGE = 64
+# How a 0.14 write prints the status beside its message ("HTTP 503" on its own
+# line), and how a read's error object carries it.
+_HTTP_503 = re.compile(r'^http 503$|"http_status":\s*503\b', re.MULTILINE)
+_SERVICE_UNAVAILABLE_CODES = ("service_unavailable", "graph_unavailable")
 _UNAVAILABLE_MAX_WAIT = 150.0
 _UNAVAILABLE_BASE_DELAY = 0.5
 _UNAVAILABLE_MAX_DELAY = 10.0
@@ -792,9 +815,12 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     On 0.11 every failure is on stderr. On 0.13 a read made with
     ``--format json`` against a server reports its failure as a JSON object on
     STDOUT and leaves stderr empty (measured on 0.13.0: an unknown graph, a
-    blocked graph and an unreachable server all do). Classifying stderr alone
-    would see nothing, call every one of those FATAL, and raise an error with
-    no message in it.
+    blocked graph and an unreachable server all do). 0.14 does the same for
+    every read, local ones included, but prints the resolved target on stderr
+    first (measured on 0.14.0: "target <store> (inline): direct graph …"), so
+    stderr is never empty there. The error object therefore wins whenever
+    there is one; classifying stderr would see only the target line and call
+    every read failure FATAL, recovery barriers and conflicts included.
 
     Stdout is used ONLY when it is such an error object. Anything else there
     is the command's own output (rows a read printed before it was killed,
@@ -805,8 +831,6 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     :func:`witan_core.omnigraph_http.error_message` renders the same body off
     the wire, so one condition reads the same on either transport.
     """
-    if stderr.strip():
-        return _CliFailure(stderr, stderr)
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError:
@@ -824,14 +848,21 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
 def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     """Map an omnigraph CLI failure's text and exit code onto the shared kinds.
 
-    ``stderr`` is :func:`_cli_failure`'s ``classify`` text, which on 0.13 can
-    be the JSON error object the binary printed on stdout.
+    ``stderr`` is :func:`_cli_failure`'s ``classify`` text, which on 0.13 and
+    0.14 can be the JSON error object the binary printed on stdout.
     """
     lowered = stderr.lower()
     # First, because nothing else in a response the CLI itself distrusts
     # should be believed either. See _CLI_CONTRACT_VIOLATION.
     if _CLI_CONTRACT_VIOLATION in lowered:
         return _http.CONTRACT_VIOLATION
+    if returncode == _EXIT_USAGE:
+        return _http.FATAL
+    # Ahead of every retryable reading: the CLI has said a write may have
+    # landed, and a marker in the same text (a dropped connection reads as
+    # "tcp connect error") must not turn that into a retry.
+    if returncode == _EXIT_OUTCOME_UNKNOWN:
+        return _http.OUTCOME_UNKNOWN
     if any(m in lowered for m in _UNAVAILABLE_MARKERS):
         return _http.UNAVAILABLE
     # Ahead of the retryable 503 wordings below: all three are the same status
@@ -839,6 +870,11 @@ def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     if _http.is_graph_blocked(lowered):
         return _http.FATAL
     if any(m in lowered for m in _GRAPH_NOT_YET_SERVING):
+        return _http.UNAVAILABLE
+    if returncode == _EXIT_RETRY and (
+        _HTTP_503.search(lowered)
+        or any(code in lowered for code in _SERVICE_UNAVAILABLE_CODES)
+    ):
         return _http.UNAVAILABLE
     if returncode == _EXIT_RETRY or any(m in lowered for m in _ADMISSION_CAP_MARKERS):
         return _http.ADMISSION_CAP
@@ -3365,6 +3401,17 @@ class OmnigraphClient:
                     f"INDETERMINATE: the "
                     f"write may or may not have been applied. Re-read before "
                     f"retrying:\n{err.strip()}"
+                ) from None
+            if kind == _http.OUTCOME_UNKNOWN and is_write:
+                # The CLI exited 2: it could not tell whether the write took
+                # effect. Anything else falls through to the RuntimeError
+                # below, unretried.
+                raise WriteIndeterminate(
+                    f"omnigraph {label} exited {result.returncode}, which "
+                    f"omnigraph uses for partial or unknown effects. ITS "
+                    f"OUTCOME IS INDETERMINATE: the write may or may not "
+                    f"have been applied. Re-read before retrying:\n"
+                    f"{err.strip()}"
                 ) from None
             if kind == _http.RECOVERY_REQUIRED:
                 # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one

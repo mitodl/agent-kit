@@ -677,7 +677,7 @@ def test_every_request_carries_the_contract_header(_fake_http):
     transport.graphs("t")
 
     sent = [r["headers"] for r in _fake_http.created[0].requests]
-    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.13"] * 3
+    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.14"] * 3
 
 
 def test_an_unstamped_response_is_accepted_from_a_0_11_server(_fake_http, monkeypatch):
@@ -689,7 +689,7 @@ def test_an_unstamped_response_is_accepted_from_a_0_11_server(_fake_http, monkey
     assert outcome.kind == ogh.OK
 
 
-@pytest.mark.parametrize("values", ["0.12", ["0.13", "0.13"], "0.13, 0.13"])
+@pytest.mark.parametrize("values", ["0.13", ["0.14", "0.14"], "0.14, 0.14"])
 def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, values):
     """Present but wrong, which no pin gates: the body is not decoded."""
     _fake_http.script = [
@@ -711,13 +711,13 @@ def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, 
 def test_a_refusal_on_another_contract_is_not_classified_by_its_status(
     _fake_http, idempotent
 ):
-    """A 503 stamped 0.14 is not our server asking us to wait."""
+    """A 503 stamped 0.15 is not our server asking us to wait."""
     _fake_http.script = [
         FakeResponse(
             503,
             "loading",
             stamped=False,
-            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.14"},
+            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.15"},
         )
     ]
     transport = ogh.PooledTransport("http://host:8080")
