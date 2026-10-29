@@ -128,7 +128,7 @@ priority = 10
 
 [[repos]]
 repo = "https://github.com/igorshubovych/markdownlint-cli"
-rev = "v0.49.1"
+rev = "v0.50.0"
 hooks = [{ id = "markdownlint", priority = 10, exclude = "^docs/reference/" }]
 
 # ── Python: ruff (priority 20 format → 30 lint) ───────────────────────────────
