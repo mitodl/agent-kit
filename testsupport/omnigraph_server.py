@@ -48,9 +48,10 @@ def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
     :param workdir: an empty directory for the cluster and the server log.
     :param schema: the ``.pg`` schema the graph is applied with.
     :param graph_id: the id the graph is served under.
-    :returns: the server's base URL, once ``/healthz`` answers. The graph may
-        still be loading then (503 ``graph_unavailable``); a client rides that
-        out with its own retry policy.
+    :returns: the server's base URL, once ``/readyz`` answers 200. ``/healthz``
+        answers while the graph is still loading, and a graph-scoped request in
+        that window gets 503 ``graph_unavailable``, which a test's own raw
+        request does not retry.
     :rtype: str
     """
     cluster = workdir / "cluster"
@@ -97,11 +98,13 @@ def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
             deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
             while True:
                 try:
-                    urllib.request.urlopen(f"{url}/healthz", timeout=1).close()
+                    urllib.request.urlopen(f"{url}/readyz", timeout=1).close()
                     break
                 except OSError:
                     assert proc.poll() is None, log_path.read_text()
-                    assert time.monotonic() < deadline, "omnigraph-server never came up"
+                    assert time.monotonic() < deadline, (
+                        "omnigraph-server never became ready"
+                    )
                     time.sleep(0.1)
             yield url
         finally:
