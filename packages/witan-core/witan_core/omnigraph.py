@@ -3118,9 +3118,7 @@ class OmnigraphClient:
                     transport.commits(self.graph_id, token, branch=branch)
                 )
 
-            result = self._with_retry_policy(
-                attempt, "commit list", env=self._subprocess_env(), is_write=False
-            )
+            result = self._with_retry_policy(attempt, "commit list", is_write=False)
         else:
             result = self._run("commit", "list", "--branch", branch, "--json")
         try:
