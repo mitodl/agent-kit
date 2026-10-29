@@ -33,10 +33,10 @@ way. That covers every deployed graph (the 0.13 cutover rebuilt them onto
 format 14 on 2026-10-14) and any local store `witan migrate storage` has
 converted.
 
-A witan still pinned to omnigraph 0.11 reports this as `StoreQuarantined` and
-names the sidecar's operation id. A current witan never gets that far, because
-its omnigraph cannot open a format 8 or 9 store at all. You meet the sidecar instead
-when converting the store:
+witan releases pinned to omnigraph 0.11 reported this as `StoreQuarantined` and
+named the sidecar's operation id. A current witan never gets that far, because
+its omnigraph cannot open a format 8 or 9 store at all, so it no longer has
+that refusal. You meet the sidecar instead when converting the store:
 
 - `witan migrate storage` fails with "No available omnigraph binary can read
   this store", and the attempt it quotes carries the sidecar error above; or

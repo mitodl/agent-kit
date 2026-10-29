@@ -846,13 +846,6 @@ def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     # beats retryable when a message could be read as either.
     if any(m in lowered for m in _PRECONDITION_FAILED):
         return _http.PRECONDITION_FAILED
-    # Ahead of _RECOVERY_REQUIRED and _NEEDS_REPAIR both: this names a sidecar
-    # that no amount of waiting resolves and that blocks `omnigraph repair`
-    # itself, so either of those readings would retry into the same wall or
-    # send the operator to a repair that cannot open the store. See
-    # `_http.STORE_QUARANTINED`.
-    if _http.is_store_quarantined(lowered):
-        return _http.STORE_QUARANTINED
     if any(m in lowered for m in _RECOVERY_REQUIRED):
         return _http.RECOVERY_REQUIRED
     if any(m in lowered for m in _FULL_TEXT_REBUILD_REQUIRED):
@@ -1700,13 +1693,15 @@ def _recovery_backoff(attempt: int) -> float:
 # same manifest version and left an OCC recovery sidecar whose delta did not
 # match the commit it named. The graph then refused every read, every write and
 # `omnigraph repair` until an operator quarantined the sidecar by hand and
-# force-repaired four drifted table heads (see StoreQuarantined).
+# force-repaired four drifted table heads. That was omnigraph 0.11; 0.12
+# removed recovery sidecars (RFC 0067), so the quarantine itself cannot recur,
+# but the race the lock prevents still can.
 #
 # ★ WHAT THIS DOES NOT FIX, SAID PLAINLY: separate processes. Two `witan serve`
 # replicas, or a CLI run alongside a server, still write to an s3:// root with
-# no coordination between them and can reproduce #364 exactly. A shared s3 root
-# wants a served single-writer target (http(s)://) or upstream coordination;
-# this closes the one racer pair we control, not the class.
+# no coordination between them and still race the same manifest version. A
+# shared s3 root wants a served single-writer target (http(s)://) or upstream
+# coordination; this closes the one racer pair we control, not the class.
 _UNLOCKABLE_SCHEMES = _SERVER_SCHEMES
 _IN_PROCESS_LOCK_SCHEMES = ("s3://",)
 
@@ -1933,64 +1928,6 @@ class AdmissionCapExceeded(RuntimeError, Refusal):
     # routes ANY 429 here, including an ingress page that never reached
     # omnigraph, so `err` is not even bounded to omnigraph's own vocabulary.
     log_safe_message = False
-
-
-#: Where an operator hit by :class:`StoreQuarantined` finds the procedure. An
-#: absolute URL rather than the repo-relative path, because this message is
-#: raised by an installed CLI or MCP client that has no checkout to resolve a
-#: relative path against. The page is published by the ``witan-context`` site
-#: (``zensical.toml``'s ``site_url``), which serves directory-style URLs.
-RUNBOOK_URL = "https://witan-context.readthedocs.io/guides/store-quarantine-runbook/"
-
-
-class StoreQuarantined(RuntimeError, Refusal):
-    """The store will not open: an active OCC recovery sidecar records a manifest
-    delta that does not match the original commit it names.
-
-    Every read, every write and ``omnigraph repair`` itself are refused with
-    this same error until an operator resolves the sidecar, so there is nothing
-    the client can do about it and nothing waiting will fix. Raised on the first
-    attempt, for reads as well as writes.
-
-    ★ IT IS A REFUSAL, NOT AN INCIDENT PER CALL. Once a graph is in this state
-    every subsequent tool call hits it, and routing each one to Sentry with a
-    stack trace buries the single operational fact — one graph is down — under
-    hundreds of identical issues. The condition needs one operator, not an
-    alert per caller.
-
-    ★ AND IT CARRIES THE OPERATION ID. The remedy needs the sidecar's name to
-    quarantine the right file, and the raw error is the only place it appears;
-    reading it back out of a truncated log was the slowest step of the
-    2026-09-18 recovery. :func:`sidecar_operation_id` parses it out so the
-    message can state it and :attr:`operation_id` can carry it.
-
-    See :data:`RUNBOOK_URL` for the recovery procedure.
-    """
-
-    # NOT opted in: the raise site appends `\n{err.strip()}` like the two
-    # above. The sidecar operation id that an operator actually needs is parsed
-    # out and kept on `operation_id`, so it survives this as a structured value
-    # even though the prose does not reach the log.
-    log_safe_message = False
-
-    def __init__(self, message: str, operation_id: str | None = None) -> None:
-        super().__init__(message)
-        self.operation_id = operation_id
-
-
-_SIDECAR_ID_RE = re.compile(r"occ recovery sidecar '([^']+)'", re.IGNORECASE)
-
-
-def sidecar_operation_id(msg: str) -> str | None:
-    """The OCC recovery sidecar's operation id from a quarantine error, if named.
-
-    Lenient like the other response parsers here: a message that does not quote
-    an id is still a quarantine, just one whose sidecar the operator has to find
-    by listing ``__recovery/``. Failing to parse a detail must never turn a
-    legible refusal back into an opaque one.
-    """
-    match = _SIDECAR_ID_RE.search(msg)
-    return match.group(1) if match else None
 
 
 def _is_storage_version_mismatch(msg: str) -> bool:
@@ -2909,7 +2846,7 @@ class OmnigraphClient:
             raise ConditionFailed(exc) from exc
         except RuntimeError as exc:
             # Exactly RuntimeError: every subclass (unavailable, contention,
-            # indeterminate, queue full, quarantined) is a condition of the
+            # indeterminate, queue full) is a condition of the
             # graph, not of one caller's statements, and replaying cannot help.
             last = attempts[-1] if attempts else None
             if type(exc) is not RuntimeError or last is None:
@@ -3417,21 +3354,6 @@ class OmnigraphClient:
                     f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
                     f"admission cap exceeded):\n{err.strip()}"
                 )
-            if kind == _http.STORE_QUARANTINED:
-                # TERMINAL FOR READS TOO, and on the first attempt. The
-                # sidecar stays active until an operator moves it, so the
-                # retry budget only spends the caller's deadline before
-                # reporting the same thing.
-                operation_id = sidecar_operation_id(err)
-                named = f" (sidecar operation {operation_id})" if operation_id else ""
-                raise StoreQuarantined(
-                    f"omnigraph {label} refused: the store is quarantined by "
-                    f"an unresolved OCC recovery sidecar{named}. Reads, "
-                    f"writes and `omnigraph repair` are all blocked until an "
-                    f"operator resolves it — see {RUNBOOK_URL}. Retrying "
-                    f"will not clear it:\n{err.strip()}",
-                    operation_id,
-                ) from None
             if kind == _http.CONTRACT_VIOLATION and is_write:
                 # The response did not carry exactly the stamp of the
                 # omnigraph-server we speak to (none, another contract's, or
