@@ -661,6 +661,19 @@ def cluster_layout(config_dir: Path) -> tuple[str, list[str]]:
     )
 
 
+def inline_target(config_dir: Path, root: str) -> str:
+    """`root` as a 0.14 inline `--target`.
+
+    0.14 resolves a relative local `storage` against the config directory
+    (`bind_direct_source_root`), while a relative `--target` is read as a
+    registered target name or against the working directory, so the two would
+    disagree and the plan refuses the mismatch.
+    """
+    if "://" in root or Path(root).is_absolute():
+        return root
+    return str((config_dir / root).absolute())
+
+
 # Diagnostics `cluster plan` attaches when the lock exists but cannot be read.
 # The lock then reads as unlocked, or as locked without an id.
 LOCK_READ_DIAGNOSTICS = frozenset(
@@ -685,7 +698,7 @@ class Cluster:
         self._targets = cli_speaks_targets()
         if self._targets:
             root, _ = cluster_layout(config_dir)
-            self._target = ["--target", root]
+            self._target = ["--target", inline_target(config_dir, root)]
             self._source = ["--config", self._config_dir, *self._target]
         else:
             self._source = ["--config", self._config_dir]

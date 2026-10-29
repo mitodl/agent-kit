@@ -743,6 +743,25 @@ def test_the_root_without_storage_is_the_absolute_config_directory(
     )
 
 
+@pytest.mark.parametrize("storage", ["data", "./data"])
+def test_a_relative_storage_targets_the_config_directory(
+    monkeypatch, tmp_path, storage
+):
+    """0.14 resolves a relative `storage` against the config directory, so the
+    `--target` must too, from whatever directory the process runs in."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert entrypoint.inline_target(tmp_path / "cluster", storage) == str(
+        tmp_path / "cluster" / storage
+    )
+
+
+@pytest.mark.parametrize("root", ["s3://bucket/root", "file:///srv/root", "/srv/root"])
+def test_a_uri_or_absolute_storage_is_the_target_unchanged(root):
+    assert entrypoint.inline_target(Path("cluster"), root) == root
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "state_found"),
     [
