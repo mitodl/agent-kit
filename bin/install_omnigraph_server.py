@@ -2,8 +2,8 @@
 """Install ``omnigraph-server`` from the pinned, checksummed omnigraph release.
 
 ``install_omnigraph`` extracts only the CLI, because that is all ``witan
-setup`` needs. The served group-commit tests
-(``mcp/servers/witan/tests/test_group_commit_served.py``) start a real
+setup`` needs. The served tests (``testsupport/omnigraph_server.py``, used by
+witan's group-commit tests and witan-code's branch-view tests) start a real
 ``omnigraph-server`` from the same tarball, and without it they skip, so CI
 never ran the default write path against a real server.
 """

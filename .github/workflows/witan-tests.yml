@@ -28,6 +28,8 @@ on:
       - "docker/omnigraph_*.py"
       - "justfile"
       - "bin/**"
+      # The served-server helper and the hermetic guard every suite loads.
+      - "testsupport/**"
   pull_request:
     paths:
       - "mcp/servers/witan/**"
@@ -49,6 +51,8 @@ on:
       - "docker/omnigraph_*.py"
       - "justfile"
       - "bin/**"
+      # The served-server helper and the hermetic guard every suite loads.
+      - "testsupport/**"
 
 permissions:
   contents: read
@@ -258,5 +262,14 @@ jobs:
         # …) are silently skipped without it — see tests/conftest.py.
         run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
+      - name: Install omnigraph-server binary
+        # For tests/test_branches_served.py, which runs a branch view's reads,
+        # writes and commit list against a real server.
+        run: uv run python ../../../bin/install_omnigraph_server.py
+
       - name: Run tests
+        # WITAN_REQUIRE_OMNIGRAPH turns the served tests' "no omnigraph-server,
+        # skip" into a failure, as in test-witan.
+        env:
+          WITAN_REQUIRE_OMNIGRAPH: "1"
         run: uv run pytest -v

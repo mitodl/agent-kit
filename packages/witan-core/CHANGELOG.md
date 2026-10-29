@@ -8,6 +8,43 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.49.0] - 2026-10-28
+
+### Added
+
+- `OmnigraphClient.commit_list(branch)`: the commits reachable from a
+  branch's head. A deployed server is asked with
+  `GET /graphs/<id>/commits?branch=…` (`PooledTransport.commits`), a local
+  store with `omnigraph commit list`. Output that is not a commit array
+  raises.
+
+### Changed
+
+- A client that injects `--branch` into `query` and `mutate` (witan-code's
+  branch views) now uses the pooled HTTP transport against a deployed server
+  and sends the branch as the request body's `branch`, which the 0.13.0 and
+  0.14.0 servers both read. Previously those calls shelled out, which the
+  0.14 CLI refuses for a plain-http server. An injected arg with no body
+  field still keeps the client on the CLI. A missing branch is a 404
+  `not_found` and fails on the first attempt.
+- Group-commit lanes are keyed on the injected args too, so writes to two
+  branches are never committed together.
+
+### Fixed
+
+- Manifest/Lance HEAD drift (`NEEDS_REPAIR`) is now terminal on the first
+  attempt, with omnigraph's own message attached and a pointer to
+  `omnigraph repair --json` for the diagnosis. The client used to shell out to
+  `omnigraph repair --confirm --force` and retry, but neither 0.13 nor 0.14
+  accepts those flags (their `repair` only diagnoses), so the call failed
+  argument parsing, was discarded, and the retry met the same drift until the
+  attempt budget ran out.
+
+### Removed
+
+- `OmnigraphClient._repair`, and the `env` keyword of `_with_retry_policy`
+  and `_retry_loop`, which only `_repair` used.
+
 ## [0.48.0] - 2026-10-28
 
 ### Added

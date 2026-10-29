@@ -10,14 +10,13 @@ read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here.
 TWO TRANSPORTS, ONE POLICY
 
 Calls reach omnigraph either by running the ``omnigraph`` CLI as a subprocess or,
-for ``query``/``mutate`` against a deployed server, over a pooled HTTP connection
-(:mod:`witan_core.omnigraph_http`) — the subprocess is 77-81% of every remote
-read on a compacted store. The HTTP path is NOT a general replacement: omnigraph
-0.8.1 serves only ``query``, ``mutate`` and ``graphs`` over HTTP, so ``load``,
-``branch``, ``commit``, ``optimize``, ``cleanup`` and ``schema apply``
-all still shell out, as does any client that injects extra CLI args
-(witan-code's ``--branch`` views). ``_http_transport`` is the single place that
-decides.
+for ``query``/``mutate``/``load``/``export``/``commit list`` against a deployed
+server, over a pooled HTTP connection (:mod:`witan_core.omnigraph_http`) — the
+subprocess is 77-81% of every remote read on a compacted store. The HTTP path
+is NOT a general replacement: ``optimize``, ``cleanup`` and ``schema apply``
+still shell out, as does a client that injects an extra CLI arg with no HTTP
+equivalent (witan-code's ``--branch`` has one: the body's ``branch``).
+``_http_transport`` is the single place that decides.
 
 What must not fork is the POLICY. Both transports produce an ``_AttemptResult``
 carrying one of the classification kinds, and ``_with_retry_policy`` runs the
@@ -759,6 +758,23 @@ def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
 #: the ``/load/ndjson`` query parameter each one is. witan-code's branched
 #: clients inject ``--branch <view> --from main``.
 _LOAD_FLAG_PARAMS = {"--branch": "branch", "--from": "from_branch"}
+
+#: The same for ``query`` and ``mutate``: the flag a subclass may inject and the
+#: request-body field it is. witan-code's branched clients inject
+#: ``--branch <view>``. The 0.13.0 and 0.14.0 servers both read ``branch`` on
+#: ``/query`` and ``/mutate`` and answer a missing one with a 404 ``not_found``
+#: rather than ``main``'s rows.
+_STATEMENT_FLAG_FIELDS = {"--branch": "branch"}
+
+
+def _flag_fields(args: list[str], fields: dict[str, str]) -> dict[str, str] | None:
+    """``args`` (``--flag value`` pairs) as keywords named by ``fields``, or
+    ``None`` when one of the flags has no entry there."""
+    if any(flag not in fields for flag in args[::2]):
+        return None
+    return {
+        fields[flag]: value for flag, value in zip(args[::2], args[1::2], strict=True)
+    }
 
 
 class _CliFailure(NamedTuple):
@@ -2544,9 +2560,9 @@ class OmnigraphClient:
 
         - **No params key on the wire.** Not an empty one — none. See
           :meth:`~witan_core.omnigraph_http.PooledTransport.query`.
-        - **No ``_extra_args``.** A statement takes no ``--branch``, so the
-          subclass args are neither injected nor lost, which is also what lets
-          a branched client use HTTP here (``carries_extra_args=False``).
+        - **No ``_extra_args``.** A statement takes no ``--branch``, and the
+          server refuses one with a ``branch`` field, so the subclass args are
+          neither injected nor sent (``carries_extra_args=False``).
         - **``cli_args`` reach the CLI path only.** They are the flags with no
           body equivalent — ``--format json`` to get a parseable read,
           ``--yes`` for a destructive write against a non-local scope — and the
@@ -2585,6 +2601,7 @@ class OmnigraphClient:
                 None,
                 label or verb,
                 surface_conflict=surface_conflict,
+                carries_extra_args=False,
             )
         cmd = [
             self._binary,
@@ -2606,12 +2623,18 @@ class OmnigraphClient:
         flag, before the caller's args). Empty by default; subclasses override
         (e.g. witan-code injects ``--branch``).
 
-        Returning anything non-empty also opts the client OUT of the pooled HTTP
-        transport, because these args have no expressed HTTP equivalent and
-        dropping them would silently retarget the call — see
+        Over the pooled HTTP transport each arg is sent as the request field
+        it maps to (:data:`_STATEMENT_FLAG_FIELDS`, :data:`_LOAD_FLAG_PARAMS`).
+        Returning one with no mapping opts the client OUT of that transport,
+        because dropping it would silently retarget the call — see
         ``_http_transport``.
         """
         return []
+
+    def _statement_fields(self, verb: str) -> dict[str, str] | None:
+        """``_extra_args(verb)`` as request-body fields for ``/query`` or
+        ``/mutate``, or ``None`` when one of them has no body field."""
+        return _flag_fields(self._extra_args(verb), _STATEMENT_FLAG_FIELDS)
 
     # ── Pooled HTTP transport (reads/writes against a deployed server) ──
 
@@ -2625,23 +2648,22 @@ class OmnigraphClient:
         1. The store is a deployed omnigraph-server (``http(s)://``). A local
            path or an ``s3://`` root has no server to talk to.
         2. The escape hatch (:data:`HTTP_TRANSPORT_ENV_VAR`) is not switched off.
-        3. **This client injects no extra CLI args for the verb.** The only
-           subclass that does is witan-code, which adds ``--branch`` for its
-           per-user/per-branch code-graph views. omnigraph 0.8.1's HTTP API
-           documents no branch selector on the request body — the response
-           carries a ``target: {branch, snapshot}``, which hints one may exist,
-           but hinted is not verified. Routing a branched call over HTTP without
-           it would silently execute against ``main``: a WIP reindex landing in
-           the shared graph, which is the exact failure branch views exist to
-           prevent. So branched clients stay on the CLI until the request-side
-           selector is confirmed, and the check is written against
-           ``_extra_args`` rather than against ``branch`` so any FUTURE subclass
-           arg is caught by the same guard instead of quietly being dropped.
+        3. **Every extra CLI arg this client injects into ``query`` and
+           ``mutate`` has a request-body field to travel in**
+           (:meth:`_statement_fields`). The only subclass that injects any is
+           witan-code, whose ``--branch`` for its per-user/per-branch
+           code-graph views is the body's ``branch``, which :meth:`_http_execute`
+           sends. Routing a branched call over HTTP WITHOUT it would silently
+           execute against ``main``: a WIP reindex landing in the shared
+           graph, which is the exact failure branch views exist to prevent. So
+           the check is written against ``_extra_args`` rather than against
+           ``branch``, and a FUTURE subclass arg with no field keeps the client
+           on the CLI instead of quietly being dropped.
 
         ``carries_extra_args=False`` switches condition 3 off. The condition
         exists because an injected arg would be DROPPED on the HTTP body; a
         call that injects none, or carries its own on the wire, has nothing to
-        drop. Three callers pass it:
+        drop. Four callers pass it:
 
         - :meth:`statement`. omnigraph 0.11's branch statements take "no name,
           params, --branch or --snapshot" (the CLI's own help), so a branched
@@ -2653,6 +2675,8 @@ class OmnigraphClient:
         - :meth:`load_batch`, which DOES have a branch to target and carries
           it as the route's query parameters (see :meth:`_load_target`), and
           refuses any injected flag it cannot carry.
+        - :meth:`commit_list`, whose branch is its own argument and which
+          sends it as the route's ``branch`` query parameter.
 
         Do not reuse this for anything else that has a branch to target
         without carrying it the same way.
@@ -2668,7 +2692,8 @@ class OmnigraphClient:
         if os.environ.get(HTTP_TRANSPORT_ENV_VAR, "").strip().lower() in _FALSEY:
             return None
         if carries_extra_args and (
-            self._extra_args("query") or self._extra_args("mutate")
+            self._statement_fields("query") is None
+            or self._statement_fields("mutate") is None
         ):
             return None
         return shared_transport(self.server_url)
@@ -2709,6 +2734,7 @@ class OmnigraphClient:
         if_graph_commit: str | None = None,
         started: float | None = None,
         attempts: list[_AttemptResult] | None = None,
+        carries_extra_args: bool = True,
     ) -> str:
         """Run one query/mutate over HTTP under the shared retry policy.
 
@@ -2716,6 +2742,11 @@ class OmnigraphClient:
         commit whose members queued before it was sent. ``attempts`` collects
         each attempt's result, so a group commit can tell a definite rejection
         from a failure whose effects are unknown.
+
+        The subclass's injected args for ``verb`` go in the body as the fields
+        they map to (``--branch`` as ``branch``), unless
+        ``carries_extra_args=False``: :meth:`statement`'s branch statements
+        are refused with any ``branch`` on them.
 
         A write additionally holds a slot in the process-wide :data:`_WRITE_GATE`
         for the whole call, retries included — a write being retried is still
@@ -2727,10 +2758,15 @@ class OmnigraphClient:
         is_write = verb == "mutate"
 
         token = self._resolve_token()
+        # Empty for an unbranched client, so it calls the transport exactly as
+        # before, for the same reason `if_graph_commit` is kept off the call.
+        fields = self._statement_fields(verb) if carries_extra_args else {}
 
         def attempt() -> _AttemptResult:
             if not is_write:
-                outcome = transport.query(self.graph_id, source, params, token)
+                outcome = transport.query(
+                    self.graph_id, source, params, token, **fields
+                )
             elif if_graph_commit is None:
                 # Deliberately not `mutate(..., None)`: an unconditional write
                 # calls the transport exactly as it always did. Keeping the
@@ -2738,10 +2774,12 @@ class OmnigraphClient:
                 # be additive — nothing that does not ask for one can be
                 # affected by its existence, including the several test doubles
                 # implementing the older signature.
-                outcome = transport.mutate(self.graph_id, source, params, token)
+                outcome = transport.mutate(
+                    self.graph_id, source, params, token, **fields
+                )
             else:
                 outcome = transport.mutate(
-                    self.graph_id, source, params, token, if_graph_commit
+                    self.graph_id, source, params, token, if_graph_commit, **fields
                 )
             result = _attempt_result(outcome)
             if attempts is not None:
@@ -2784,7 +2822,10 @@ class OmnigraphClient:
         The lane key is everything that changes what the request does or who
         it is from. The token is in it because omnigraph authorizes a request
         once and records one actor on its commit, so a commit must never carry
-        two actors' writes. It is hashed so the lane table holds no secret.
+        two actors' writes. It is hashed so the lane table holds no secret. The
+        injected args are in it because the lane's leader sends its own
+        ``branch``: two of witan-code's views sharing a lane would commit one
+        view's writes to the other.
         """
         token = self._resolve_token()
         key = (
@@ -2794,6 +2835,7 @@ class OmnigraphClient:
             hashlib.sha256(token.encode()).hexdigest() if token else None,
             str(self.queries_dir),
             self.connect_retry,
+            tuple(self._extra_args("mutate")),
         )
         gate_key = self._write_gate_key()
         return _GROUP_COMMITTER.submit(
@@ -3036,15 +3078,63 @@ class OmnigraphClient:
         prevent.
         """
         args = self._extra_args("load")
-        target: dict[str, str] = {}
-        for flag, value in zip(args[::2], args[1::2], strict=True):
-            if flag not in _LOAD_FLAG_PARAMS:
-                raise RuntimeError(
-                    f"{type(self).__name__} injects {flag!r} into `load`, which "
-                    "has no /load/ndjson query parameter; refusing to drop it"
-                )
-            target[_LOAD_FLAG_PARAMS[flag]] = value
+        target = _flag_fields(args, _LOAD_FLAG_PARAMS)
+        if target is None:
+            raise RuntimeError(
+                f"{type(self).__name__} injects {args!r} into `load`, which has "
+                "no /load/ndjson query parameter for every flag; refusing to "
+                "drop one"
+            )
         return target
+
+    def commit_list(self, branch: str) -> list[dict]:
+        """The commits reachable from ``branch``'s head, newest first.
+
+        Each is omnigraph's commit object (``graph_commit_id``,
+        ``created_at`` in epoch microseconds, and the branch it landed on as
+        ``graph_branch``, or ``manifest_branch`` from a CLI predating the
+        2026-08-20 rename). A deployed server is asked over the pooled HTTP
+        transport (``GET /graphs/<id>/commits``), because the 0.14 CLI refuses
+        a plain-http server target; a local store runs ``omnigraph commit
+        list``. A branch that does not exist raises, on either transport.
+
+        Output that is not a commit array raises rather than reading as an
+        empty history, which a caller could not tell from a branch with no
+        commits of its own.
+
+        A subclass arg injected into ``commit`` has no field on that route, so
+        one keeps the call on the CLI rather than being dropped.
+        """
+        transport = (
+            None
+            if self._extra_args("commit")
+            else self._http_transport(carries_extra_args=False)
+        )
+        if transport is not None:
+            token = self._resolve_token()
+
+            def attempt() -> _AttemptResult:
+                return _attempt_result(
+                    transport.commits(self.graph_id, token, branch=branch)
+                )
+
+            result = self._with_retry_policy(attempt, "commit list", is_write=False)
+        else:
+            result = self._run("commit", "list", "--branch", branch, "--json")
+        try:
+            parsed = json.loads(result)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"omnigraph commit list returned non-JSON for branch "
+                f"{branch!r}: {result!r}"
+            ) from exc
+        commits = parsed.get("commits") if isinstance(parsed, dict) else parsed
+        if not isinstance(commits, list):
+            raise RuntimeError(  # noqa: TRY004 - bad omnigraph output, not a caller error
+                f"omnigraph commit list returned no commit array for branch "
+                f"{branch!r}: {parsed!r}"
+            )
+        return commits
 
     def _store_args(self) -> list[str]:
         """The CLI flags that address this store with this client's binary;
@@ -3153,10 +3243,9 @@ class OmnigraphClient:
           every batch of a ``store_merge`` bypassed the bound. Two people
           migrating at once is precisely the multi-user burst this exists to
           bound.
-        * witan-code's BRANCHED clients deliberately fall back to the CLI
-          (``_transport`` returns ``None`` when ``_extra_args`` is non-empty,
-          because 0.8.1's HTTP API has no request-side branch selector), so
-          every write from a branch view bypassed it too.
+        * witan-code's BRANCHED clients fell back to the CLI (they sent no
+          ``branch`` over HTTP then), so every write from a branch view
+          bypassed it too.
 
         The deadline is established here for the same reason, and BEFORE the gate
         is entered: the queue wait is the largest single consumer of the budget,

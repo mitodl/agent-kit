@@ -16,10 +16,11 @@ This module is that connection. It is deliberately NOT a second
 includes ``branch``, ``commit``, ``optimize``, ``cleanup``, ``schema apply`` and
 ``repair``. A second client class would have to either drop those or shell out
 for them anyway. So this is a transport for the verbs that have an HTTP
-equivalent, and everything else stays on the CLI. ``load`` and ``export``
-joined that set later (see :meth:`PooledTransport.load_ndjson` and
-:meth:`PooledTransport.export`), because the 0.14 CLI refuses a plain-http
-server target and the deployed data tier is one.
+equivalent, and everything else stays on the CLI. ``load``, ``export`` and
+``commit list`` joined that set later (see :meth:`PooledTransport.load_ndjson`,
+:meth:`PooledTransport.export` and :meth:`PooledTransport.commits`), because
+the 0.14 CLI refuses a plain-http server target and the deployed data tier is
+one.
 
 WHY IT RETURNS AN OUTCOME RATHER THAN RAISING
 
@@ -273,13 +274,20 @@ def parse_retry_after(value: str | None) -> float | None:
     return seconds if seconds >= 0 else None
 
 
-def _statement_payload(source: str, params: dict | None) -> dict:
-    """The JSON body for a query/mutate: ``params`` present only when there is one.
+def _statement_payload(source: str, params: dict | None, branch: str | None) -> dict:
+    """The JSON body for a query/mutate: ``params`` and ``branch`` present only
+    when there is one.
 
     Separate from the two call sites so read and write cannot drift on the one
-    thing 0.11 distinguishes — see :meth:`PooledTransport.query`.
+    thing 0.11 distinguishes — see :meth:`PooledTransport.query`. An absent
+    ``branch`` is ``main`` server-side, and a branch statement refuses the key.
     """
-    return {"query": source} if params is None else {"query": source, "params": params}
+    payload: dict = {"query": source}
+    if params is not None:
+        payload["params"] = params
+    if branch is not None:
+        payload["branch"] = branch
+    return payload
 
 
 #: Both halves are required. "occ recovery sidecar" alone also appears in the
@@ -802,8 +810,14 @@ class PooledTransport:
         source: str,
         params: dict | None,
         token: str | None,
+        *,
+        branch: str | None = None,
     ):
         """``POST /graphs/<id>/query`` — a read. Always safe to repeat.
+
+        ``branch`` reads that branch rather than ``main``. A branch that does
+        not exist is a 404 ``not_found`` on 0.13.0 and 0.14.0 alike, which
+        :func:`classify_status` leaves terminal.
 
         ★ ``params=None`` OMITS THE KEY, WHICH IS NOT THE SAME AS ``{}``.
         omnigraph 0.11's ``branch list`` statement refuses a request carrying
@@ -816,7 +830,7 @@ class PooledTransport:
         """
         return self.post(
             f"/graphs/{graph_id}/query",
-            _statement_payload(source, params),
+            _statement_payload(source, params, branch),
             token,
             idempotent=True,
         )
@@ -828,6 +842,8 @@ class PooledTransport:
         params: dict | None,
         token: str | None,
         if_graph_commit: str | None = None,
+        *,
+        branch: str | None = None,
     ):
         """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly.
 
@@ -838,14 +854,15 @@ class PooledTransport:
         so there is no way to ask for a precondition and not get one.
 
         ``params=None`` omits the key — see :meth:`query` for why a branch
-        statement needs that and nothing else does.
+        statement needs that and nothing else does. ``branch`` writes to that
+        branch, as it reads one for :meth:`query`.
         """
         path = f"/graphs/{graph_id}/mutate"
         if if_graph_commit is not None:
             path += IF_GRAPH_COMMIT_SUFFIX
         return self.post(
             path,
-            _statement_payload(source, params),
+            _statement_payload(source, params, branch),
             token,
             idempotent=False,
             if_graph_commit=if_graph_commit,
@@ -907,6 +924,16 @@ class PooledTransport:
             idempotent=True,
             sink=sink,
         )
+
+    def commits(self, graph_id: str, token: str | None, *, branch: str) -> Outcome:
+        """``GET /graphs/<id>/commits?branch=…`` — the history reachable from
+        ``branch``'s head, newest first, as ``{"commits": [...]}``.
+
+        What ``omnigraph commit list --branch … --json`` prints, on 0.13.0 and
+        0.14.0 alike. Unpaged, so the whole history is one answer. A read.
+        """
+        query = urllib.parse.urlencode({"branch": branch})
+        return self.get(f"/graphs/{graph_id}/commits?{query}", token)
 
     def graphs(self, token: str | None):
         """``GET /graphs`` — the server's graph registry.

@@ -17,8 +17,9 @@ import time
 import urllib.request
 
 import pytest
+from testsupport.omnigraph_server import requires_omnigraph_server
 
-from .conftest import SERVED_GRAPH, SERVED_REPO, requires_omnigraph_server
+from .conftest import SERVED_GRAPH, SERVED_REPO
 
 GRAPH = SERVED_GRAPH
 REPO = SERVED_REPO
