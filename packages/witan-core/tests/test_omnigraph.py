@@ -2877,6 +2877,22 @@ def test_0_14_write_failures_classify(stderr, returncode, expected):
     assert og._classify_cli_error(failure.classify, returncode) == expected
 
 
+def test_0_14s_target_lines_are_not_classified():
+    """They carry the branch, graph and paths, which no marker should match."""
+    stderr = (
+        "target witan (explicit): server https://g/; graph=recovery_required; "
+        "config=/tmp/stale view/op.yaml\n"
+        "target write scope: branch=too_many_requests\n"
+        "query failed: write authority changed during preparation\n"
+    )
+    failure = og._cli_failure("", stderr)
+    assert failure.message == stderr
+    assert failure.classify == (
+        "query failed: write authority changed during preparation\n"
+    )
+    assert og._classify_cli_error(failure.classify, 1) == _http.RETRYABLE
+
+
 def test_exit_64_is_never_retried_whatever_the_text_says():
     """0.14's usage exit. Verbatim for the `--quiet` 0.14 removed."""
     text = (

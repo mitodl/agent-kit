@@ -809,6 +809,16 @@ class _CliFailure(NamedTuple):
     classify: str
 
 
+#: The lines 0.14 prints on stderr before every command (upstream
+#: `scope.rs` `report` and `report_write_scope` at v0.14.0). They name the
+#: graph, branch and paths, which a marker without spaces
+#: (``recovery_required``) could match, so they are not classified.
+_TARGET_REPORT_LINE = re.compile(
+    r"^target (?:write scope: |\S+ \((?:explicit|default|inline)\): ).*\n?",
+    re.MULTILINE,
+)
+
+
 def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     """The text of a failed CLI call, wherever the binary put it.
 
@@ -834,9 +844,9 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError:
-        return _CliFailure(stderr, stderr)
+        return _CliFailure(stderr, _TARGET_REPORT_LINE.sub("", stderr))
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), str):
-        return _CliFailure(stderr, stderr)
+        return _CliFailure(stderr, _TARGET_REPORT_LINE.sub("", stderr))
     status = parsed.get("http_status")
     if isinstance(status, int):
         return _CliFailure(_http.error_message(status, stdout), stdout)
