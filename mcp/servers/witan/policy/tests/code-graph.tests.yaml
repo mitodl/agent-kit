@@ -1,5 +1,5 @@
 # Declarative policy tests for the Layer-2 per-repo code-graph bundle.
-# Run: omnigraph policy test --cluster policy --graph code-example \
+# Run: omnigraph policy test --target "$PWD/policy" --graph code-example \
 #        --tests policy/tests/code-graph.tests.yaml
 version: 1
 cases:

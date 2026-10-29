@@ -27,22 +27,22 @@ ARG NODE_VERSION=24
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
 # version is an outage. Renovate covers all three; `just check-omnigraph-pins`
 # is the CI backstop.
-ARG OMNIGRAPH_VERSION=0.13.0
+ARG OMNIGRAPH_VERSION=0.14.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.13.0
-ARG OMNIGRAPH_SHA256_X86_64=0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
-ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
+ARG OMNIGRAPH_RELEASE_TAG=v0.14.0
+ARG OMNIGRAPH_SHA256_X86_64=02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9
+ARG OMNIGRAPH_SHA256_ARM64=f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff
 # The storage format the pinned binary reads, stamped onto the image as
 # `edu.mit.ol.omnigraph.internal-schema` for ol-infrastructure's preview check.
 # See docker/omnigraph-server.Dockerfile for why the image has to carry it and
 # what `just check-omnigraph-pins` covers; mirrored from
 # packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=14
+ARG OMNIGRAPH_INTERNAL_SCHEMA=16
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0

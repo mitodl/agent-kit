@@ -582,7 +582,12 @@ def test_the_source_export_subprocess_gets_the_source_s_s3_profile(monkeypatch):
     """An `s3://` source is exported HERE, by an omnigraph subprocess, and
     omnigraph resolves no named AWS profile of its own — so the credentials the
     caller resolved for that store have to reach this env or the export fails
-    where the shim used to supply them."""
+    where the shim used to supply them.
+
+    A pre-0.14 CLI only: the stock 0.14 CLI opens no `s3://` store at all, and
+    `store_cli_args` refuses one before anything runs (witan-core's
+    test_omnigraph covers that). The dialect is pinned so the result does not
+    depend on which binary is installed."""
     import subprocess
 
     from witan.config import S3Credentials
@@ -593,6 +598,7 @@ def test_the_source_export_subprocess_gets_the_source_s_s3_profile(monkeypatch):
     monkeypatch.setattr(
         OmnigraphClient, "_find_binary", staticmethod(lambda: "omnigraph")
     )
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
 
     captured = {}
 

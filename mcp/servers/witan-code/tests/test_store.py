@@ -271,9 +271,14 @@ def _plan(cfg, store) -> dict:
 def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
     tmp_path, monkeypatch, callers
 ):
-    """omnigraph 0.13 refuses to drop InterfaceBinding.repo_file in place, so
-    a local bridge created before the drop fails every apply. Recreating it is
-    the recovery, since the bridge is derived from the indexed checkouts.
+    """A local bridge whose schema omnigraph cannot migrate in place fails
+    every apply. Recreating it is the recovery, since the bridge is derived
+    from the indexed checkouts.
+
+    The old store's `file` is optional, and omnigraph refuses that type change
+    in place (OG-MF-106 on 0.14.0). The change that first needed this, the
+    drop of InterfaceBinding.repo_file, was refused by 0.13 but is a supported
+    `drop_property` on 0.14, so it no longer reaches the recreate path.
 
     Several callers at once is the state right after an upgrade, when every
     reindex hook finds the old store. Without the write lock one of them
@@ -286,10 +291,8 @@ def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
     current = cfg.bridge_schema_file.read_text()
     field = "    file: String @index"
     assert field in current
-    old_schema = tmp_path / "bridge-with-repo-file.pg"
-    old_schema.write_text(
-        current.replace(field, f"{field}\n    repo_file: String @index", 1)
-    )
+    old_schema = tmp_path / "bridge-with-optional-file.pg"
+    old_schema.write_text(current.replace(field, "    file: String? @index", 1))
     store = cfg_mod.bridge_store_path(cfg.code_dir)
     store.parent.mkdir(parents=True)
     subprocess.run(

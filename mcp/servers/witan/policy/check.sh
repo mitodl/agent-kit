@@ -35,17 +35,17 @@ rm -rf __cluster graphs
 # is refused by: `policy validate` and `policy test` take no writer admission,
 # and the root is thrown away on the next run.
 echo "==> converging fixture cluster"
-omnigraph cluster apply --config . >/dev/null
+omnigraph cluster apply --config . --target "$PWD" >/dev/null
 
 echo "==> validating per-graph bundles"
 for g in memory code-example bridge; do
-  omnigraph policy validate --cluster . --graph "$g"
+  omnigraph policy validate --target "$PWD" --graph "$g"
 done
 
 echo "==> running declarative policy tests"
-omnigraph policy test --cluster . --graph memory       --tests tests/memory.tests.yaml
-omnigraph policy test --cluster . --graph code-example --tests tests/code-graph.tests.yaml
-omnigraph policy test --cluster . --graph bridge       --tests tests/bridge.tests.yaml
+omnigraph policy test --target "$PWD" --graph memory       --tests tests/memory.tests.yaml
+omnigraph policy test --target "$PWD" --graph code-example --tests tests/code-graph.tests.yaml
+omnigraph policy test --target "$PWD" --graph bridge       --tests tests/bridge.tests.yaml
 
 # Everything above validates the COMMITTED bundles, whose fixture groups are all
 # populated. That is not the shape that deploys: the image entrypoint rewrites
@@ -71,9 +71,9 @@ uv run python render_groups.py \
   --tokens "${rendered}/tokens.json" "${rendered}"/*.policy.yaml
 (
   cd "${rendered}"
-  omnigraph cluster apply --config . >/dev/null
+  omnigraph cluster apply --config . --target "$PWD" >/dev/null
   for g in memory code-example bridge; do
-    omnigraph policy validate --cluster . --graph "$g"
+    omnigraph policy validate --target "$PWD" --graph "$g"
   done
 )
 
