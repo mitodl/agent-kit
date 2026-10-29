@@ -25,7 +25,7 @@ WHY IT RETURNS AN OUTCOME RATHER THAN RAISING
 
 ``OmnigraphClient._execute`` already carries a carefully-tuned policy loop:
 connect-failure retries budgeted against a measured server restart, per-actor
-admission-cap backoff, optimistic-concurrency retry/repair, and
+admission-cap backoff, optimistic-concurrency retry, and
 ``surface_conflict`` for CAS callers. That policy must NOT be duplicated here —
 two copies would drift, and the drift would show up as the two transports
 behaving differently under load, which is close to undebuggable.
@@ -128,9 +128,9 @@ FULL_TEXT_REBUILD_REQUIRED = "full_text_rebuild_required"
 #: :class:`~witan_core.omnigraph.WriteIndeterminate` for a write and lets the
 #: caller re-read, and retries only READS, which cannot duplicate anything.
 #:
-#: ★ NOT :data:`NEEDS_REPAIR`. Running ``omnigraph repair --force`` on a store
-#: that merely had a concurrent writer is a far heavier hammer than the
-#: situation warrants, and the repro showed nothing needed repairing.
+#: ★ NOT :data:`NEEDS_REPAIR`, which is terminal and sends an operator to
+#: ``omnigraph repair`` for a store that merely had a concurrent writer; the
+#: repro showed nothing needed repairing.
 #:
 #: ★ AND NOT SOMETHING ``surface_conflict`` MAY SWALLOW. A CAS caller must lose
 #: a GENUINE race rather than treat a bystander barrier as a lost race — the
@@ -150,10 +150,10 @@ RECOVERY_REQUIRED = "recovery_required"
 #: hiding the one message that says what is wrong.
 #:
 #: ★ AND IT IS NOT :data:`NEEDS_REPAIR`, even though repair is part of the
-#: remedy. ``_repair`` shells out to ``omnigraph repair --confirm --force``,
-#: which cannot open a graph in this state either — observed 2026-09-18 on a
-#: format-9 direct-S3 root (agent-kit#364). Classifying it as repairable turns
-#: one legible failure into a repair that fails the same way.
+#: remedy. ``omnigraph repair`` cannot open a graph in this state either
+#: (observed 2026-09-18 on a format-9 direct-S3 root, agent-kit#364), so
+#: reporting it as drift would point the operator at a command that fails the
+#: same way instead of at the sidecar.
 STORE_QUARANTINED = "store_quarantined"
 
 #: The response did not carry the server's HTTP contract stamp, or carried
@@ -393,7 +393,7 @@ def classify_status(status: int, message: str) -> str:
         # Classifying on the STATUS fixes that permanently: the server can
         # reword the precondition — and it has, twice — without silently
         # turning a losable race back into a hard failure. Message markers stay
-        # first so a 409 that also names a repair condition still repairs.
+        # first so a 409 that also names drift is still reported as drift.
         #
         # SAFE FOR WRITES, which is why it may sit alongside 429/503 rather
         # than only being retried for idempotent calls: the server rejected

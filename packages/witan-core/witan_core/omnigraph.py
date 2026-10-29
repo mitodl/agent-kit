@@ -2,8 +2,8 @@
 
 Both servers drive omnigraph the same way: store addressing in whichever
 dialect the installed CLI speaks (``store_cli_args``: ``--store``/``--server``
-before 0.14, ``--target`` with a generated operator config from 0.14), a per-store advisory write lock for local stores, a retry/repair loop for
-optimistic-concurrency drift, self-backoff for the deployed omnigraph-server's
+before 0.14, ``--target`` with a generated operator config from 0.14), a per-store advisory write lock for local stores, a retry loop for
+optimistic-concurrency conflicts, self-backoff for the deployed omnigraph-server's
 per-actor admission cap and for the window in which it is restarting, and named
 read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here.
 
@@ -14,15 +14,15 @@ for ``query``/``mutate`` against a deployed server, over a pooled HTTP connectio
 (:mod:`witan_core.omnigraph_http`) — the subprocess is 77-81% of every remote
 read on a compacted store. The HTTP path is NOT a general replacement: omnigraph
 0.8.1 serves only ``query``, ``mutate`` and ``graphs`` over HTTP, so ``load``,
-``branch``, ``commit``, ``optimize``, ``cleanup``, ``schema apply`` and
-``repair`` all still shell out, as does any client that injects extra CLI args
+``branch``, ``commit``, ``optimize``, ``cleanup`` and ``schema apply``
+all still shell out, as does any client that injects extra CLI args
 (witan-code's ``--branch`` views). ``_http_transport`` is the single place that
 decides.
 
 What must not fork is the POLICY. Both transports produce an ``_AttemptResult``
 carrying one of the classification kinds, and ``_with_retry_policy`` runs the
 same loop over either — so a restarting server, an admission cap, a
-compare-and-swap conflict or a store needing repair behaves identically however
+compare-and-swap conflict or a drifted store behaves identically however
 the call was made. Only the CLASSIFICATION differs: stderr text for the
 subprocess, HTTP status for the transport.
 
@@ -85,7 +85,7 @@ T = TypeVar("T", int, float)
 # omnigraph local stores use optimistic concurrency (Lance manifest versions) and
 # are NOT safe for concurrent writers. We serialize writes with a per-store
 # advisory lock (prevention) and, as a safety net, retry transient "stale view"
-# conflicts and `omnigraph repair` stores already in the drifted state.
+# conflicts.
 _WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
 # The last two markers are the REMOTE write-authority precondition — a racing
 # writer whose branch head moved between prepare and commit. Over HTTP that
@@ -132,7 +132,13 @@ _RETRYABLE = (
 )
 # Checked BEFORE _RETRYABLE in `_classify_cli_error`, which is what keeps the
 # drift message — "… ahead of published dataset version 7; run `omnigraph
-# repair` …" — classified as repair rather than as a conflict to retry.
+# repair` …" — classified as drift rather than as a conflict to retry.
+#
+# ★ DRIFT IS TERMINAL. Neither the 0.13 nor the 0.14 CLI can reconcile it:
+# `omnigraph repair` there takes no `--confirm`/`--force` and only diagnoses
+# ("Diagnose foreign Lance HEAD movement without adopting it"). The client used
+# to shell out to `repair --confirm --force` and retry, which failed argument
+# parsing every time and so only burned the attempt budget on the same drift.
 _NEEDS_REPAIR = (
     "ahead of manifest",
     "ahead of published dataset version",
@@ -777,7 +783,7 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     Stdout is used ONLY when it is such an error object. Anything else there
     is the command's own output (rows a read printed before it was killed,
     say), and matching that against the marker tables would let the text of a
-    stored memory decide whether a call is retried or sent to repair.
+    stored memory decide whether a call is retried or reported as drift.
 
     The object is rendered the way
     :func:`witan_core.omnigraph_http.error_message` renders the same body off
@@ -826,8 +832,9 @@ def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
         return _http.PRECONDITION_FAILED
     # Ahead of _RECOVERY_REQUIRED and _NEEDS_REPAIR both: this names a sidecar
     # that no amount of waiting resolves and that blocks `omnigraph repair`
-    # itself, so either of those readings would retry or repair into the same
-    # wall. See `_http.STORE_QUARANTINED`.
+    # itself, so either of those readings would retry into the same wall or
+    # send the operator to a repair that cannot open the store. See
+    # `_http.STORE_QUARANTINED`.
     if _http.is_store_quarantined(lowered):
         return _http.STORE_QUARANTINED
     if any(m in lowered for m in _RECOVERY_REQUIRED):
@@ -2744,9 +2751,6 @@ class OmnigraphClient:
         return self._with_retry_policy(
             attempt,
             label,
-            # Only consulted if a repair is needed, which still shells out —
-            # `repair` has no HTTP form, so the CLI env is what it runs with.
-            env=self._subprocess_env(),
             is_write=is_write,
             surface_conflict=surface_conflict,
             started=started,
@@ -2930,7 +2934,7 @@ class OmnigraphClient:
                         f"omnigraph {label} could not write {out}: {exc}"
                     ) from exc
 
-            self._with_retry_policy(http_attempt, label, env=env, is_write=False)
+            self._with_retry_policy(http_attempt, label, is_write=False)
             return
 
         cmd = [self._binary, "export", *self._store_args()]
@@ -2962,7 +2966,7 @@ class OmnigraphClient:
 
         # is_write=False: an export takes no write lock, and its retries are
         # unconditionally safe because repeating a read changes nothing.
-        self._with_retry_policy(attempt, label, env=env, is_write=False)
+        self._with_retry_policy(attempt, label, is_write=False)
 
     def load_batch(self, records: list[dict], mode: str = "merge") -> str:
         """Bulk-load one batch of node/edge records in one ``omnigraph load``.
@@ -3006,9 +3010,7 @@ class OmnigraphClient:
                     )
                 )
 
-            return self._with_retry_policy(
-                attempt, "load", env=self._subprocess_env(), is_write=True
-            )
+            return self._with_retry_policy(attempt, "load", is_write=True)
         fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="omnigraph-load-")
         try:
             # Explicit UTF-8, not the platform default: witan rows carry prose
@@ -3083,7 +3085,7 @@ class OmnigraphClient:
         surface_conflict: bool = False,
     ) -> str:
         """Run an omnigraph CLI command under the write lock (for writes) with the
-        retry/repair loop for optimistic-concurrency conflicts."""
+        retry loop for optimistic-concurrency conflicts."""
         env = self._subprocess_env()
 
         def attempt() -> _AttemptResult:
@@ -3105,7 +3107,6 @@ class OmnigraphClient:
         return self._with_retry_policy(
             attempt,
             label,
-            env=env,
             is_write=is_write,
             surface_conflict=surface_conflict,
         )
@@ -3130,7 +3131,6 @@ class OmnigraphClient:
         attempt_once: Callable[[], _AttemptResult],
         label: str,
         *,
-        env: dict,
         is_write: bool,
         surface_conflict: bool = False,
         started: float | None = None,
@@ -3189,7 +3189,6 @@ class OmnigraphClient:
             return self._retry_loop(
                 attempt_once,
                 label,
-                env=env,
                 is_write=is_write,
                 surface_conflict=surface_conflict,
                 deadline=deadline,
@@ -3200,7 +3199,6 @@ class OmnigraphClient:
         attempt_once: Callable[[], _AttemptResult],
         label: str,
         *,
-        env: dict,
         is_write: bool,
         surface_conflict: bool,
         deadline: float | None,
@@ -3424,23 +3422,32 @@ class OmnigraphClient:
                     f"version. Retrying will not clear it, and ordinary "
                     f"(non-search) reads are unaffected:\n{err.strip()}"
                 )
+            if kind == _http.NEEDS_REPAIR:
+                # TERMINAL, on the first attempt: see _NEEDS_REPAIR. The
+                # store's own message names the dataset and both versions,
+                # so it is passed through whole.
+                raise RuntimeError(
+                    f"omnigraph {label} was refused because a dataset's Lance "
+                    f"HEAD has moved ahead of the version the graph manifest "
+                    f"publishes. Retrying will not clear it, and this client "
+                    f"cannot reconcile it: an operator has to run "
+                    f"`omnigraph repair --json` against the store to see "
+                    f"which datasets drifted and whether the movement is "
+                    f"maintenance or a foreign write:\n{err.strip()}"
+                )
             if surface_conflict and kind == _http.RETRYABLE:
                 # A compare-and-swap caller wants to lose the race, not
                 # re-apply its write over the winner. Surface immediately.
                 raise OmnigraphConflict(err.strip()) from None
             attempt += 1
-            if attempt < _MAX_ATTEMPTS:
-                if kind == _http.NEEDS_REPAIR:
-                    self._repair(env)
+            if attempt < _MAX_ATTEMPTS and kind == _http.RETRYABLE:
+                delay = _conflict_backoff(attempt)
+                # A retry that starts after the caller's cut-off can only end
+                # as a torn-down connection, the indeterminate write the
+                # admission-cap branch above refuses to risk too.
+                if deadline is None or time.monotonic() + delay < deadline:
+                    time.sleep(delay)
                     continue
-                if kind == _http.RETRYABLE:
-                    delay = _conflict_backoff(attempt)
-                    # A retry that starts after the caller's cut-off can only
-                    # end as a torn-down connection, the indeterminate write
-                    # the admission-cap branch above refuses to risk too.
-                    if deadline is None or time.monotonic() + delay < deadline:
-                        time.sleep(delay)
-                        continue
             # `exit N` only makes sense for a subprocess; an HTTP attempt
             # carries no returncode and says so by omitting it, rather than
             # inventing one that would read as a CLI exit status.
@@ -3471,23 +3478,6 @@ class OmnigraphClient:
         """
         with store_write_lock(self.graph_uri):
             yield
-
-    def _repair(self, env: dict) -> None:
-        """Reconcile manifest/HEAD drift so the retried write can proceed."""
-        subprocess.run(
-            [
-                self._binary,
-                "repair",
-                *self._store_args(),
-                "--confirm",
-                "--force",
-                *write_quiet_args(self._binary),
-            ],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
 
     @classmethod
     def _find_binary(cls) -> str:

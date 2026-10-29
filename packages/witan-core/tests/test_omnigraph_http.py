@@ -279,7 +279,7 @@ def test_a_quarantined_store_is_classified_on_every_status_it_can_arrive_with(
 
 
 def test_a_quarantined_store_is_not_sent_to_repair():
-    """`_repair` cannot open a graph held shut by an active sidecar, so a
+    """`omnigraph repair` cannot open a graph held shut by an active sidecar, so a
     quarantine message that also names `omnigraph repair` must not be read as
     repairable."""
     message = _SIDECAR_MESSAGE + "; run `omnigraph repair` to inspect"
@@ -296,9 +296,7 @@ def test_the_self_clearing_recovery_barrier_keeps_its_own_classification():
 
 
 def test_repair_wins_over_retryable_when_both_words_appear():
-    """`_execute` repairs before it sleeps, so the classifier must agree.
-
-    A message naming both conditions has to resolve to the repair, or the client
+    """A message naming both conditions has to resolve to drift, or the client
     retries a store that cannot succeed until it is reconciled.
     """
     message = "stale view: head is ahead of manifest, run omnigraph repair"
@@ -309,8 +307,8 @@ def test_repair_still_wins_over_a_conflict_status():
     """The message markers must stay ahead of the 409 rule, not behind it.
 
     A store that needs reconciling cannot be fixed by trying again, however the
-    status is labelled — so a 409 that names a repair condition must still
-    repair. Ordering is the only thing enforcing that, hence a test on it.
+    status is labelled — so a 409 that names drift must still be reported as
+    drift. Ordering is the only thing enforcing that, hence a test on it.
     """
     message = "head is ahead of manifest, run omnigraph repair"
     assert ogh.classify_status(409, message) == ogh.NEEDS_REPAIR
@@ -1160,6 +1158,22 @@ def test_a_409_over_http_surfaces_as_a_conflict_to_a_cas_caller(
 
     # ONE attempt. A retry would re-apply the claim over whoever won the race,
     # which is the entire reason `surface_conflict` exists.
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_head_drift_over_http_is_terminal(monkeypatch, tmp_path, _fake_http):
+    """The HTTP join for drift: a 409 naming it is not the retryable 409.
+    One scripted response, so a second attempt would exhaust the script."""
+    _fake_http.script = [
+        err(409, "head is ahead of manifest, run omnigraph repair", code="conflict")
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(RuntimeError, match="Retrying will not clear it"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
     assert len(_fake_http.created[0].requests) == 1
 
 
