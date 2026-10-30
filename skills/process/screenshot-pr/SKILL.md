@@ -77,7 +77,7 @@ Form selectors default to Keycloak's; for another IdP pass `--username-selector`
 
 Put the plan to the user in one message and wait: base URL, one line per shot (`<name> <path> [selector]`), any clicks needed first, viewports, and an output directory (`screenshots/<branch-or-pr-slug>/` is a fine default). Re-show it after each revision.
 
-Keep every image in **one flat directory** with descriptive names; the next step is a drag-and-drop into a GitHub comment.
+Keep every image in **one flat directory** with descriptive names; each file is later passed to `gh pr create --attach` or `gh pr edit --attach`, and the filename becomes the alt text for any image the PR body doesn't reference.
 
 | Viewport | Width × height |
 |---|---|
@@ -109,4 +109,4 @@ Open each PNG before reporting. The assertions cover what you thought to check; 
 
 Give the absolute directory path and each file with its size, and say plainly which shots failed and why, which viewports you skipped, and any state no available fixture could produce (and what fixture would).
 
-Attaching the images is the user's step — GitHub has no upload API — so hand over the directory.
+Then offer to attach them. For a PR not yet opened, `create-ol-pull-request` references them in the body and uploads them with `gh pr create --attach`. For an open PR, follow that skill's "Adding images to an existing PR"; it edits a published PR, so it needs the user's approval first. On gh older than 2.99, hand over the directory for a drag-and-drop.
