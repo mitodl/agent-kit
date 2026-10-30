@@ -54,7 +54,7 @@ USERS = {
     "student": ("student@ol.test", "localdev123"),
 }
 
-# One flat directory, ready to drag into a GitHub comment.
+# One flat directory, ready to pass to `gh pr create/edit --attach`.
 OUT = HERE / "shots"
 
 # The region under review: both the crop and the scope of every presence
@@ -408,9 +408,10 @@ def publish(selected, staged, full_run):
     """Move staged PNGs into OUT, replacing what they supersede.
 
     Called only once the app has answered, so a stack that's down leaves the
-    old set alone. After that a failed shot must leave no image: the exit code
-    goes unread when the directory is dragged into a comment. A full run
-    clears every PNG, so renamed shots leave nothing behind.
+    old set alone. After that a failed shot must leave no image: files in the
+    directory get attached to the PR by whoever picks it up, and the exit code
+    rarely travels with it. A full run clears every PNG, so renamed shots
+    leave nothing behind.
     """
     for shot in selected:
         (OUT / f"{shot.name}.png").unlink(missing_ok=True)
