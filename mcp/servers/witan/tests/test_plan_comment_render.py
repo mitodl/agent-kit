@@ -19,9 +19,7 @@ JQ_PROGRAM = (
     / "witan/skills/plan-technical-approach/scripts/plan-comment.jq"
 )
 
-requires_jq = pytest.mark.skipif(
-    shutil.which("jq") is None, reason="jq not on PATH"
-)
+requires_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not on PATH")
 
 
 def render(payload: dict) -> str:
@@ -112,9 +110,7 @@ def test_a_failed_lookup_is_distinct_from_a_disabled_one():
 
 @requires_jq
 def test_blocked_chunks_name_their_blocker_in_the_row_and_the_header():
-    body = render(
-        payload([chunk(status="blocked", blocked_by=["tk-decide-d6"])])
-    )
+    body = render(payload([chunk(status="blocked", blocked_by=["tk-decide-d6"])]))
     assert "**Blocked on:** tk-decide-d6" in body
     assert "blocked on tk-decide-d6" in body
 
