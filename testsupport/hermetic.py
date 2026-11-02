@@ -97,6 +97,10 @@ _CLEARED = (
     "WITAN_AUTHOR",
     "WITAN_CONTEXT_TTL",
     "WITAN_CONTEXT_DEADLINE",
+    # Read into the module-level `rank_cfg` at import, so a developer's tuning
+    # decides what a claim surfaces, and a bad value fails the import.
+    "WITAN_RANK_SURFACE_MIN_CONTENT",
+    "WITAN_RANK_SURFACE_MIN_TITLE",
     "WITAN_OPTIMIZE_INTERVAL",
     "WITAN_CLEANUP_INTERVAL",
     "WITAN_CODE_OPTIMIZE_INTERVAL",

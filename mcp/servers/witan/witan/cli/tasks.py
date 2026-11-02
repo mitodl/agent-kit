@@ -33,6 +33,7 @@ from .run_helpers import (
     _launch_agent,
     _merge_prompts,
     _pick_items,
+    _prompt_memories,
     _run_prompt,
     _run_task_slug,
 )
@@ -723,6 +724,7 @@ def task_run(
 
     if mode == "c":
         claimable = list(selected)
+        claims: dict[str, dict] = {}
         if claim and not dry_run:
             claimable = []
             for t in selected:
@@ -733,6 +735,7 @@ def task_run(
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
                     claimable.append(t)
+                    claims[t["slug"]] = res
                 else:
                     reason = res.get("held_by") or res.get("reason") or "unavailable"
                     console.print(
@@ -744,7 +747,15 @@ def task_run(
             console.print("[red]No tasks could be claimed.[/red]")
             raise SystemExit(1)
         merged = _merge_prompts(
-            [_run_prompt(t, claimed=claim) for t in claimable], "task"
+            [
+                _run_prompt(
+                    t,
+                    claimed=claim,
+                    memories=_prompt_memories(s, t["slug"], claims.get(t["slug"])),
+                )
+                for t in claimable
+            ],
+            "task",
         )
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
     else:
