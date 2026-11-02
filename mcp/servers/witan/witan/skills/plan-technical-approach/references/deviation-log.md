@@ -89,11 +89,12 @@ that value decays as divergence grows, to the point where repairing costs more
 than replanning and yields a worse plan. Past a few shape changes you no longer
 have the plan you are repairing.
 
-**2. Close-out.** Before `workflow_project_complete`, read the whole file. Any
-ADR that took **two or more** addenda from this work, or whose `## Decision`
-these entries have made false, gets a superseding ADR via
-[`write-adr`](../../write-adr/SKILL.md), taking its *why* from here. See
-[the accumulation trigger](../../write-adr/references/revision-protocol.md#when-to-supersede-instead).
+**2. Close-out.** Before `workflow_project_complete`, read the whole file.
+Every ADR these entries touched gets **one** superseding record via
+[`write-adr`](../../write-adr/SKILL.md), covering everything that moved and
+taking its *why* from here. This is the only moment an ADR changes: accepted
+records are immutable, and nothing is written to one mid-work. See
+[when a superseding record gets written](../../write-adr/references/revision-protocol.md#when-a-superseding-record-gets-written).
 
 ## Then delete it
 

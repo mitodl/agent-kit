@@ -26,7 +26,7 @@ produces zero, one, or several, and zero is a normal outcome.
 |------|---------|
 | [`references/adr-template.md`](references/adr-template.md) | The template and a full worked example |
 | [`references/repo-flavors.md`](references/repo-flavors.md) | Detecting which convention a repo uses, and its extra obligations |
-| [`references/revision-protocol.md`](references/revision-protocol.md) | Addendum vs supersede, and the status lifecycle |
+| [`references/revision-protocol.md`](references/revision-protocol.md) | Supersession — the only way an accepted ADR changes — and the status lifecycle |
 | `scripts/next-adr-number.sh` | Next number from the filesystem, plus a consistency check |
 | `scripts/adr-index.sh` | Derive the index table; verify it against README |
 
@@ -260,8 +260,8 @@ contradiction that has already shipped twice in ol-infrastructure.
 **In the witan flavor there is no Review History table and no
 `**Last Updated:**`** — see
 [`references/repo-flavors.md`](references/repo-flavors.md). Carry the same
-information on the `- Status:` line instead, which is where that flavor already
-records amendments:
+information on the `- Status:` line instead, which is where that flavor
+already carries status history:
 
 ```markdown
 - Status: Proposed (created by AI agent, pending human approval)
@@ -299,6 +299,8 @@ are listed in [`references/repo-flavors.md`](references/repo-flavors.md).
 A decision that changed and an ADR that does not say so is worse than no ADR:
 it is confidently wrong and it is believed. When implementation diverges from a
 recorded decision, [`implement-plan`](../implement-plan/SKILL.md) stops, gets
-confirmation, and appends a dated addendum — it does not quietly rewrite the
-decision. The protocol, including when to supersede instead, is in
+confirmation, and records the deviation — it never edits the ADR. **An accepted
+ADR is immutable**; the decision changing is what a *superseding* record is
+for, written once two deviations have hit the same ADR or the project
+completes. The protocol is in
 [`references/revision-protocol.md`](references/revision-protocol.md).

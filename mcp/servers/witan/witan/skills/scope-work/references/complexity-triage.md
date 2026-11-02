@@ -13,7 +13,7 @@ ones:
 |---|---|---|
 | Plan comment | The work | Chunks, phases, status, the tradeoff ledger |
 | **Spec** | The work | Several interlocking decisions, open questions, a sequence across PRs, sessions or repos. Changes in flight; becomes history when done |
-| **ADR** | As long as the code | **One** decision, scoped with `applies_to`, amended rather than rewritten, read by someone two years later asking why |
+| **ADR** | As long as the code | **One** decision, scoped with `applies_to`, immutable once accepted — a changed decision is superseded, never edited — read by someone two years later asking why |
 | RFC | Until it is decided | A question that needs input from outside the team before anyone can choose |
 
 A spec is not a long ADR and an ADR is not a small spec. Decisions inside a
@@ -95,7 +95,7 @@ way.
 Each decision in it that will outlive the project is extracted into its own
 [ADR](../../write-adr/SKILL.md) **once it settles**, and linked from the spec.
 Not up front: a decision still moving is a spec section, and an ADR written
-over it would be amended before the work shipped.
+over it would be superseded before the work shipped.
 
 This is the tier the team already works in — there are 11 specs in
 ol-infrastructure's `docs/plans/`, 8 across ol-data-platform's `docs/specs/`

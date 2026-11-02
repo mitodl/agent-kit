@@ -307,7 +307,7 @@ status, PR links, and a link to the spec. The design does not live in both.
 
 **Extract each decision into its own ADR as it settles, not up front.** A
 decision still moving is a spec section; an ADR written over it would be
-amended before the work shipped. `write-spec` owns that handoff too.
+superseded before the work shipped. `write-spec` owns that handoff too.
 
 Write the comment body to the draft path with your file-writing tool — never a
 heredoc, which drops and splices lines mid-sentence. The path is derived from

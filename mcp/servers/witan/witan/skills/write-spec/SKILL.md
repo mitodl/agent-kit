@@ -30,13 +30,13 @@ you are writing:
 |---|---|---|
 | Records | One body of work | One decision |
 | Lives | Until the work ships, then as history | As long as the code it governs |
-| Changes | Continuously, while in flight | By dated addendum, rarely |
+| Changes | Continuously, while in flight | Never — a changed decision is a new, superseding record |
 | Answers | "What are we building, in what order, and what is still open?" | "Why is it like this?" |
 | Read by | The person building it, now | Someone two years from now |
 
 Work on the spec route produces **both**: the spec first, then an ADR per
 decision that settles. Writing the ADRs up front gets it backwards — a decision
-still moving is a spec section, and an ADR over it would be amended before the
+still moving is a spec section, and an ADR over it would be superseded before the
 work shipped.
 
 | File | Purpose |
@@ -247,7 +247,7 @@ spec exists and is under review**.
 the difference from an ADR. A decision that moves gets its section rewritten
 and its state updated, in the same pull request as the code that moved it, the
 way [`implement-plan`](../implement-plan/SKILL.md) records any other deviation.
-There is no addendum protocol here; append-only is an ADR rule and applying it
+There is no addendum protocol here; immutability is an ADR rule and applying it
 to a spec produces a document that reads as a changelog.
 
 **As each decision settles**, extract it into an ADR via

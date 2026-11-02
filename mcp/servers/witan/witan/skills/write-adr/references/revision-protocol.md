@@ -99,79 +99,69 @@ is worth one line of output: *these claim to be undecided and are in
 production*. One line, at a moment someone is already reading output, beats
 another scheduled review nobody runs.
 
-## Revisions: addendum by default
+## Revisions: an accepted ADR is never edited
 
-**Append a dated addendum. Do not rewrite the decision.**
+**There is one revision mechanism, and it is supersession.** An ADR that has
+been accepted is immutable. When the decision it records changes — at all, by
+any amount — write a new record that supersedes it. Do not append an addendum,
+do not add an amendment, do not rewrite `## Decision`, and do not "clarify" it.
 
-```markdown
-## Addendum (2026-10-28) — the digest is assembled by Celery beat, not cron
+This is the policy `docs/context/08-architecture-decisions.md` in
+ol-infrastructure already states: *"Don't edit the original ADR — ADRs are
+immutable once accepted"* and *"Create a new ADR that supersedes the old one."*
 
-The decision stands; the mechanism named in `## Decision` does not. This
-service has no cron infrastructure, and adding it for one job was a larger
-change than the feature. <What changed, and the fact that was not known when
-the decision was made.>
-```
+The reason is what a reader has to do. An amended record can only be understood
+by replaying its history: read `## Decision`, then each dated edit, and
+reconstruct what is currently true from the sequence. Every reader pays that
+cost, every time, forever — and the ones who skip to `## Decision` and stop
+reading get an answer that is wrong. A superseding record states current truth
+once, in one place, and the old one says where to go.
 
-Then add an `Amended` row to the Review History and bump `**Last Updated:**`.
-In the witan flavor, extend the `- Status:` line instead —
-`Accepted, amended 2026-09-22 (...)`.
+### Existing records still carry addenda — read them
 
-Append; never edit or delete an existing addendum. A change later reversed gets
-a second addendum saying so.
+This forbids **writing** them. It does not erase the ones already in the two
+repos, and they are not rare: ol-infrastructure ADR-0009 carries three
+`## Addendum` sections plus a `## Resolution`, and witan ADRs 0001, 0003, 0004
+and 0011 carry eight `## Amendment` sections between them. Several are
+`Accepted`.
 
-### This contradicts the written policy, deliberately
+So when reading an ADR, read it **whole** — `## Decision`, `## Consequences`,
+and every `## Addendum` or `## Amendment` on it. On those records the original
+wording is routinely the stale half, and taking the decision from the top of
+the file is how you implement against something that was revised two years ago.
 
-`docs/context/08-architecture-decisions.md` in ol-infrastructure says *"Don't
-edit the original ADR — ADRs are immutable once accepted"* and *"Create a new
-ADR that supersedes the old one."* The skill follows **observed practice**
-instead, and should say so in the pull request so a reviewer who has read that
-guide is not surprised:
+Do not retrofit them. Converting a historical addendum into a supersession
+rewrites a record of what people knew and when, which is the one thing the
+immutability rule is protecting. They stay as they are; new changes go the new
+way.
 
-- **Twelve in-place revisions across the two repos**, counted: ol-infrastructure
-  ADR-0009 carries three `## Addendum` sections plus a `## Resolution`, and
-  witan ADRs 0001, 0003, 0004 and 0011 carry eight `## Amendment` sections
-  between them. Several of those ADRs are `Accepted`.
-- **No ol-infrastructure ADR has ever been superseded.** The string
-  "Superseded" appears there only in `template.md` and `README.md`, in no
-  actual ADR — the status exists on paper and has never been used.
+## When a superseding record gets written
 
-The one real supersession in either repo is *partial and cross-repo*: witan
-ADR-0004 carries `- Supersedes: ADR-0009 (ol-infrastructure) D3's
-per-team-token assumption`. It replaces one assumption inside another repo's
-ADR rather than the whole decision, and it did not flip that ADR's status —
-which is itself worth noting, since the documented protocol says supersession
-is bidirectional.
+**At project close-out. Only there.** One trigger, no mid-flight exceptions.
 
-A policy with one partial, cross-repo instance and a practice with twelve is
-not a close call. The
-upstream ADR convention explicitly permits this: *"In theory, immutability is
-ideal. In practice, mutability has worked better for our teams… with a date
-stamp, and a note that the info arrived after the decision."*
+Every ADR the project's deviations touched gets one superseding record,
+covering everything that moved — written once the work is done and the decision
+has stopped moving.
 
-## When to supersede instead
-
-Supersede when the **decision itself is reversed** — the chosen mechanism is
-abandoned for a different one. Not when a detail moves.
-
-The distinction: if `## Decision` would still be broadly true with an addendum
-attached, amend. If it would be false, supersede.
-
-**And: two or more addenda from one body of work is itself a trigger.** That
-test above is applied one deviation at a time, and nothing in it asks what the
-addenda add up to. Each can leave `## Decision` broadly true while the record
-as a whole becomes readable only by reconstructing current truth from four
-stacked edits — which is the problem supersession exists to solve. A reader
-arriving at an ADR should not have to replay its history to find out what it
-currently says.
-
-So at close-out, [`implement-plan`](../../implement-plan/SKILL.md) reads
+Nothing is written to any ADR while the work runs. A deviation goes in
 [the deviation log](../../plan-technical-approach/references/deviation-log.md)
-and counts. Two or more against one ADR, or entries that have made its
-`## Decision` false, and the superseding record gets written — taking its *why*
-from those entries, which is the one thing the addenda themselves do not
-supply in a form a reader comes back for.
+and stays there until the end.
 
-**Cite the log's commit, because the log is deleted in the same pull request.**
+**Why not sooner.** Superseding per deviation, or at a two-deviation threshold,
+chains records: supersede on Tuesday, and Thursday's deviation supersedes the
+Tuesday one. A decision that moved four times yields four ADRs, three of them
+already dead on arrival, and a reader has to walk the chain to find the live
+one — the stacked-edits problem again, with numbers attached. Waiting until the
+decision has settled means **one record per decision per project**, stating
+what it finally became rather than what it was becoming.
+
+**The cost, which is real.** Between a deviation and close-out, the ADR is
+stale and anyone reading it gets the superseded answer. This is accepted
+deliberately: for that window, the deviation log is where current truth lives,
+and `implement-plan` reads the log alongside the governing ADRs for exactly
+that reason. The window closes when the work does, and it never spans projects.
+
+**Cite the deviation log's commit**, because that log is deleted at close-out.
 It is consumed, not archived:
 
 ```markdown
@@ -183,10 +173,6 @@ it the superseding record asserts that a decision changed and leaves no way
 back to the entries that say how — and an unanchored reference to a deleted
 file is worse than none, because it reads as though it still resolves.
 
-Nothing above changes: addenda stay the default **in flight**, for the reasons
-and against the evidence recorded earlier in this file. This only says when
-enough of them have accumulated that the honest record is a new one.
-
 Superseding is bidirectional and leaves both files in place:
 
 1. Write the new ADR with its own number. Its `## Related Decisions` says
@@ -195,6 +181,17 @@ Superseding is bidirectional and leaves both files in place:
    `**Superseded By:**` line.
 3. Explain in the new ADR *why the decision changed* — not just what the new
    one is. That is the part a reader comes back for.
+
+**Step 2 is the one permitted write to an accepted record, and it is not an
+exception to the rule.** The status line is a pointer, not part of the
+decision: it says *this is no longer current, go here*. Nothing in
+`## Context`, `## Decision`, `## Options Considered` or `## Consequences` may
+change. Without that pointer a superseded ADR stays silently authoritative to
+anyone who finds it first, which is worse than either option this protocol
+chooses between — the record is wrong AND nothing says so.
+
+The same goes for the status flip from `Proposed` to `Accepted` above: an
+accepted record is immutable, and acceptance is the event that makes it one.
 
 Never delete a superseded ADR, and never renumber to close the gap. Numbers are
 permanent.

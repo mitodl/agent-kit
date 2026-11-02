@@ -100,9 +100,13 @@ Differences that matter when writing one:
 - Extra fields: `- Tracking:` carrying witan slugs, `- Supersedes:`,
   `- Related:` with inline explanations of each link.
 - **No Review History table and no `**Last Updated:**`.**
-- Revisions are `## Amendment (YYYY-MM-DD): <what>` or
-  `## Addendum (YYYY-MM-DD) — <what>` headings appended after `## Consequences`,
-  and the `- Status:` line is extended to mention the amendment.
+- **Historical** revisions are `## Amendment (YYYY-MM-DD): <what>` or
+  `## Addendum (YYYY-MM-DD) — <what>` headings after `## Consequences`, with
+  the `- Status:` line extended to mention them. Read these — on a record that
+  has them the original `## Decision` is often the stale half. **Do not write
+  new ones and do not convert the existing ones:** an accepted ADR is immutable
+  and a changed decision is superseded, but rewriting history to match the
+  current rule destroys the record of what people knew and when.
 - Universal body headings are the Nygard three: `## Context` (often with a
   `### Forces` subsection), `## Decision`, `## Consequences`. Occasional:
   `## Alternatives considered`, `## Rollout`, `## Implementation`.

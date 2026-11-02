@@ -51,7 +51,11 @@ happens once code is being written is a **loop**, not a line — the plan moves,
 and past a point it gets rewritten rather than patched again:
 
 ```text
-  implement-plan, per chunk:  build -> validate -> PR -> re-render the comment
+  implement-plan, per chunk:  read the ADRs AND the deviation log
+  |                           -> build -> validate -> PR -> re-render
+  |
+  |   (an ADR this work already deviated from still reads the old way
+  |    until close-out, so the log is what binds in the meantime)
   |
   +-- plan met reality and lost?
   |       |
@@ -68,13 +72,12 @@ and past a point it gets rewritten rather than patched again:
   |                           +-- no  --> carry on repairing
   |
   +-- last chunk merged: close-out
+          |             the ONLY point at which any ADR changes
           |
-          +-- 2+ addenda on one ADR, or its Decision now false?
-          |         |
-          |         +-- yes --> write-adr: a superseding record, citing
-          |         |           the log's commit sha
-          |         |
-          |         +-- no  --> nothing to supersede
+          +-- for each ADR the log's entries touched:
+          |     write-adr: ONE superseding record covering everything
+          |     that moved, citing the log's commit sha
+          |       (accepted ADRs are immutable -- never amended, never edited)
           |
           +-- git rm the deviation log, in that same pull request
               (consumed, not archived; git keeps it, the sha anchors it)

@@ -189,10 +189,11 @@ Until the first PR merges those links 404, which is expected — ADRs land with
 the first implementation PR. Say so in the comment if the work will sit
 unmerged for a while.
 
-A decision that changes during implementation is recorded as a dated addendum
-on its ADR, and the change itself as one entry in
-[the deviation log](deviation-log.md). Neither is noted here: the comment shows
-the state that resulted, and the records carry why it moved.
+A decision that changes during implementation goes in
+[the deviation log](deviation-log.md), and the ADR is **superseded at
+close-out** — accepted records are immutable and nothing is written to one
+mid-work. Neither is noted here: the comment shows the state that resulted, and
+the records carry why it moved.
 
 Work with no ADRs — the fast path, or work whose choices were all obvious —
 simply omits this line.

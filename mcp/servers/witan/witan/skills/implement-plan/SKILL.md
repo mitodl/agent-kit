@@ -134,16 +134,40 @@ declaring the second, so take it at its word for now.
 and any record that supersedes it.** A decision you contradict without noticing
 is the failure this whole convention exists to prevent.
 
-Decision-plus-consequences is not enough, and this workflow is the reason: the
-[revision protocol](../write-adr/references/revision-protocol.md) appends a
-dated addendum rather than rewriting `## Decision`, precisely so the original
-wording survives. So the original wording is routinely the *stale* half — an
-addendum can change what implementation must do while `## Decision` still reads
-the way it did when it was written. Take the current state from the whole file:
+Decision-plus-consequences is not enough, because many existing records were
+written under the old protocol, which appended a dated addendum rather than
+rewriting `## Decision`. On those the original wording is routinely the *stale*
+half — an addendum can change what implementation must do while `## Decision`
+still reads the way it did when it was written. ol-infrastructure ADR-0009 and
+witan ADRs 0001, 0003, 0004 and 0011 all carry them.
+
+New revisions no longer work that way: an accepted ADR is immutable and a
+changed decision gets a superseding record instead. But that forbids *writing*
+addenda, not reading the ones already there. Take the current state from the
+whole file:
 
 - `Superseded by ADR-NNNN` → that record governs, not this one. Follow it.
 - `Deprecated` → still in force for existing code, not for new.
 - `Proposed` → not yet agreed. Build to it, and say it is unaccepted.
+
+**Then read the deviation log, and read it as part of the ADRs.** This is not
+optional and it is not background: superseding records are written **only at
+close-out**, so for the whole life of the project an ADR this work has already
+deviated from still reads the way it did before. The log is where current truth
+lives in that window.
+
+So a governing ADR named in the log has been **overruled in that respect** by
+an approved deviation, and the entry — not the ADR — is what binds. Chunk 3
+building to ADR-0014 as written, three weeks after chunk 1 deviated from it, is
+the exact failure this ordering prevents, and it is likelier than contradicting
+an ADR outright because the record looks authoritative and current.
+
+```bash
+cat <spec-dir>/<slug>-deviations.md    # named in the spec's header block
+```
+
+No log, or no entry naming an ADR you are governed by, and the ADR stands as
+written.
 
 **Claim the chunk you are starting, not all of them.** Claiming the whole stack
 up front hides from everyone else that only one of them is live.
@@ -269,14 +293,22 @@ is a request to ratify.
 six fields, 800 characters hard — **written when the engineer approves, before
 the deviating code exists.** That is what makes it a record of what was agreed
 rather than a note about what was done, and it is the only artifact the
-approval leaves. It is also where the superseding ADR at close-out gets its
-*why*.
+approval leaves. It is also where a superseding ADR gets its *why*.
+
+**Write nothing to the ADR itself — not now, not at the second deviation.** An
+accepted ADR is immutable, and its superseding record is written **only at
+close-out** (Step 6), once the decision has stopped moving. Superseding mid-work
+chains records: Tuesday's supersession is itself superseded on Thursday, and a
+decision that moved four times leaves four ADRs with one live.
+
+Until then the log entry **is** the record, which is why Step 1 reads the log
+as part of the ADRs.
 
 Then, depending on what changed:
 
 | What changed | Where it goes |
 |---|---|
-| A **decision** an ADR records | A dated `## Addendum` on that ADR — see [the revision protocol](../write-adr/references/revision-protocol.md) |
+| A **decision** an ADR records | Nothing on the ADR — it is immutable. The log entry is the record until close-out, which **supersedes** it — see [the revision protocol](../write-adr/references/revision-protocol.md#when-a-superseding-record-gets-written) |
 | A **decision a spec records**, where one exists | Rewrite that `Dn.` section and update its state, in the same PR. Specs change in flight; they get no addendum protocol — see [`write-spec`](../write-spec/SKILL.md) |
 | Delivery: a chunk split, reordered, added, dropped | Change the **chunk tasks** — the graph is the delivery shape — then re-render (Step 3) |
 | Something that should have been an ADR and was not | Write one now via [`write-adr`](../write-adr/SKILL.md) |
@@ -518,18 +550,20 @@ the tool and say so.
 
 **When the last chunk merges:**
 
-1. **Read the deviation log end to end** and decide what the accumulated
-   deviations did to the decisions. Any ADR that took **two or more** addenda
-   during this work, or whose `## Decision` these entries have made false, gets
-   a **superseding ADR** via [`write-adr`](../write-adr/SKILL.md), taking its
-   *why* from the log — see
-   [the accumulation trigger](../write-adr/references/revision-protocol.md#when-to-supersede-instead).
+1. **Read the deviation log end to end.** This is the only moment an ADR
+   changes: **every ADR the log's entries touched gets one superseding record**
+   via [`write-adr`](../write-adr/SKILL.md), covering everything that moved and
+   taking its *why* from those entries. One deviation is enough — there is no
+   threshold, because there is no later trigger to wait for. See
+   [when a superseding record gets written](../write-adr/references/revision-protocol.md#when-a-superseding-record-gets-written).
 
-   This is the judgement an addendum-at-a-time cannot make. Each addendum can
-   leave `## Decision` broadly true while the record as a whole becomes
-   readable only by reconstructing current truth from stacked edits, which is
-   what supersession exists to prevent. It rides in the same bookkeeping pull
-   request as steps 3-5 above.
+   One record per decision, not one per deviation. A decision the work hit four
+   times gets a single ADR stating what it finally became.
+
+   An accepted ADR is never edited, so there is no smaller option to reach for:
+   either the record matches the code when the work ends, or it is left
+   confidently wrong — and from here nothing else will fix it. These ride in
+   the same bookkeeping pull request as steps 3-5 above.
 2. **Then delete the log, in that same pull request.** It is consumed, not
    archived — one diff shows the record appearing and the log going, so a
    reviewer can see nothing was dropped quietly.
