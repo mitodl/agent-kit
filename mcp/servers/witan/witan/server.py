@@ -3850,15 +3850,15 @@ def _surfaced_for_claim(task: dict) -> list[dict]:
     A failed lookup returns nothing rather than raising: an error here would tell
     the caller that a claim it won had failed.
 
-    Logs every first claim, including the ones with nothing to show, because the
-    share of claims that carried a memory is the number that says whether this
-    works, and it needs the denominator.
+    Logs every first claim, including the ones with nothing to show and the ones
+    whose lookup failed, because the share of claims that carried a memory is the
+    number that says whether this works, and it needs the denominator.
     """
     try:
         memories = _task_memories(task)
     except Exception:
         logger.warning("witan.memory.surface_failed", task=task["slug"], exc_info=True)
-        return []
+        memories = []
     logger.info(
         "witan.memory.surfaced",
         surface="task_claim",

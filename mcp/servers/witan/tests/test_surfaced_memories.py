@@ -199,6 +199,32 @@ def test_every_first_claim_is_logged_including_empty_ones(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_a_failed_lookup_still_counts_as_a_claim_with_nothing(server, monkeypatch):
+    """Otherwise a degraded graph would drop out of the denominator and the share
+    of claims carrying a memory would look better than it was."""
+
+    def broken(_task):
+        raise RuntimeError("omnigraph down")
+
+    events = []
+
+    class Recorder:
+        def info(self, event, **fields):
+            events.append((event, fields))
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_fields: None
+
+    monkeypatch.setattr(server._module, "_task_memories", broken)
+    monkeypatch.setattr(server._module, "logger", Recorder())
+    task = _task(server)
+
+    server.task_claim(task["slug"])
+
+    assert [f["count"] for e, f in events if e == "witan.memory.surfaced"] == [0]
+
+
+@requires_omnigraph
 def test_recall_by_task_finds_what_the_title_matches(server, no_floor):
     match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
     task = _task(server)
