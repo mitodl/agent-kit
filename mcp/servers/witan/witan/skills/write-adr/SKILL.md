@@ -78,22 +78,38 @@ reader needs the one that applies to them, not a digest.
 
 ---
 
-## Step 2 — Find the directory and detect the flavor
+## Step 2 — Resolve the directory and detect the flavor
 
-Full procedure in [`references/repo-flavors.md`](references/repo-flavors.md).
-In short: enumerate candidate directories, discard generated mirrors, and
-fingerprint the convention from the **newest** files, because the oldest ones
-often follow a template their authors have since abandoned.
+**The location is fixed, the flavor is not.** `docs/adr/`, under the nearest
+ancestor of the code that already has a `docs/` — the repository root unless a
+separately-released package owns its own, which is why witan's live at
+`mcp/servers/witan/docs/adr`:
+
+```bash
+d=$(dirname "<a file this decision governs>")
+while [ "$d" != "." ] && [ "$d" != "/" ]; do
+  [ -d "$d/docs" ] && { echo "$d"; break; }
+  d=$(dirname "$d")
+done
+```
+
+Create `docs/adr/` if it is absent; flat, numbered files, no per-work-item
+subdirectory. Seed it in the same change with `template.md` and a `README.md`
+carrying the index table, so the first ADR arrives as an established
+convention rather than a stray file.
+
+**Do not write into decisions kept somewhere else.** Where records already sit
+outside `docs/adr/` — a `docs/decisions/`, or one stranded in a design folder —
+read them and cross-reference them, but add new ones to `docs/adr/`:
 
 ```bash
 git ls-files | grep -iE '(^|/)(adr|adrs|decisions?)/' | sed 's|/[^/]*$||' | sort -u
 ```
 
-**No ADR directory anywhere:** create the standard one — `docs/adr/` in a repo
-that keeps documentation under `docs/`, otherwise `adr/` at the root. Flat,
-numbered files in one directory; no per-work-item subdirectory. Seed it in the
-same change with `template.md` and a `README.md` carrying the index table, so
-the first ADR arrives as an established convention rather than a stray file.
+Then **detect the flavor**: discard generated mirrors, and fingerprint the
+convention from the **newest** files, because the oldest ones often follow a
+template their authors have since abandoned. Full procedure in
+[`references/repo-flavors.md`](references/repo-flavors.md).
 
 **Follow the flavor you find.** Imposing one repo's format on another is how a
 directory ends up with two conventions and no convention.

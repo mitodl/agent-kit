@@ -1,18 +1,40 @@
-# Detecting a repository's ADR flavor
+# Where an ADR goes, and which flavor it is written in
 
-[`write-adr`](../SKILL.md) follows the convention a repository already uses
-rather than imposing one. Two live flavors exist in mitodl today and they
-differ in their metadata lines, so writing the wrong one produces a file that
-looks subtly foreign in its own directory.
+**The location is fixed: `docs/adr/`.** The *flavor* — how the record is
+shaped — is not, and this file is mostly about that. Two live flavors exist in
+mitodl today and they differ in their metadata lines, so writing the wrong one
+produces a file that looks subtly foreign in its own directory.
 
-## Step 1 — Enumerate candidate directories
+## Step 1 — Resolve which `docs/`
+
+`docs/adr/`, under the nearest ancestor of the code that already has a `docs/`
+directory — the repository root unless a separately-released package owns its
+own. This repo is the case that matters: witan publishes to PyPI on its own
+cadence and keeps its ADRs at `mcp/servers/witan/docs/adr`, where a rule
+saying "repository root" would have scattered them.
+
+```bash
+d=$(dirname "<a file this decision governs>")
+while [ "$d" != "." ] && [ "$d" != "/" ]; do
+  [ -d "$d/docs" ] && { echo "$d"; break; }
+  d=$(dirname "$d")
+done
+```
+
+The same resolution [`write-spec`](../../write-spec/references/repo-locations.md#step-1--resolve-the-root-which-is-not-always-the-repository)
+uses, so a spec and the ADRs extracted from it land as siblings.
+
+**Do not write into another directory because one already exists.** A repo
+with its decisions somewhere else — `docs/decisions/`, or an ADR stranded in a
+design folder, as `ol-data-platform/docs/design/adr_embedding_compute_strategy.md`
+is — gets a `docs/adr/` for new records, and the old ones stay put. Read them;
+never add to them.
+
+To find those, so you can read and cross-reference them:
 
 ```bash
 git ls-files | grep -iE '(^|/)(adr|adrs|decisions?)/' | sed 's|/[^/]*$||' | sort -u
 ```
-
-Returns `docs/adr` in ol-infrastructure. Returns **two** in agent-kit:
-`mcp/servers/witan/docs/adr` and `docs/explanation/decisions`.
 
 ## Step 2 — Discard generated mirrors
 
@@ -111,11 +133,11 @@ Differences that matter when writing one:
   `### Forces` subsection), `## Decision`, `## Consequences`. Occasional:
   `## Alternatives considered`, `## Rollout`, `## Implementation`.
 
-## No ADR directory anywhere
+## No `docs/adr/` yet
 
-Create the standard one. `docs/adr/` in a repo that keeps documentation under
-`docs/`; plain `adr/` at the root otherwise. Flat, numbered files in one
-directory — no per-work-item subdirectory.
+Create it, at the root resolved in Step 1. Flat, numbered files in one
+directory — no per-work-item subdirectory. Do not ask: the convention is the
+answer to that question.
 
 Seed it in the same change with `template.md` and a `README.md` carrying the
 index table (generate it with `scripts/adr-index.sh --print`), so the first ADR

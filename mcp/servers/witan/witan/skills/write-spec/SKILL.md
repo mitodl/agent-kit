@@ -7,7 +7,7 @@ description: >
   spec tier — interlocking decisions, open questions blocking the design, a
   sequence across PRs or repos — or when asked to "write a spec", "write the
   design doc", "write this up as a plan", or "turn the discovery into a spec".
-  Detects the repo's existing spec directory rather than imposing one, pins
+  Writes it to the repo's `docs/specs/`, creating that directory if absent, pins
   source references to a commit, numbers the decisions so they can be argued
   with individually, links each phase to its witan task, and extracts settled
   decisions into ADRs as they stop moving. Planning only: it writes no code.
@@ -87,20 +87,28 @@ Never add an option the step does not list just to get a free-text box.
 Full procedure in
 [`references/repo-locations.md`](references/repo-locations.md). In short:
 
+**`docs/specs/`.** The only question is which `docs/` — take the nearest
+ancestor of the code that already has one, which is the repository root unless
+a separately-released package owns its own:
+
 ```bash
-git ls-files \
-  | grep -iE '(^|/)docs/(plans|specs|design)/|(^|/)docs/internals/design/' \
-  | sed 's|/[^/]*$||' | sort -u
+d=$(dirname "<a file this work touches>")
+while [ "$d" != "." ] && [ "$d" != "/" ]; do
+  [ -d "$d/docs" ] && { echo "$d"; break; }
+  d=$(dirname "$d")
+done
 ```
 
-`docs/plans/`, `docs/specs/`, `docs/design/` and `docs/internals/design/` are
-all in use across the org's repos. **Follow the one you find**, and read two or
-three of its newest files before writing — the conventions below vary by
-directory, and the directory wins over anything here.
+Create `docs/specs/` if it is absent — do not go looking for somewhere else to
+put the file, and do not write into `docs/plans/`, `docs/design/` or
+`docs/rfcs/` however many documents they already hold. Those are legacy: read
+them, never add to them. Seed a new directory with a `README.md` that names the
+legacy one, or the repo ends up with two live-looking directories and nothing
+saying which is current.
 
-Nothing matches → ask where it should go rather than creating a fifth
-convention. If the answer is "there is none", `docs/design/` in a repo that
-keeps documentation under `docs/`, otherwise `docs/design/` at the root.
+**Read before writing anyway** — two or three of the newest documents
+available, for register and depth. The *location* is fixed; the house style is
+still the repo's.
 
 ---
 
@@ -257,7 +265,9 @@ sequence all stop mattering once the work ships. The test is `write-adr`'s own:
 would someone two years from now, reading the code, ask why? Link the ADR from
 the D-section it came from, and leave that section in place.
 
-**When the work ships**, the spec becomes history. Some repos move it — this
-one keeps shipped specs in `docs/internals/design/`. Do not delete it: the ADRs
-extracted from it carry the decisions, but only the spec carries the sequence
-and the things that were considered and dropped.
+**When the work ships**, the spec becomes history but stays where it is. Do
+not delete it and do not move it: the ADRs extracted from it carry the
+decisions, but only the spec carries the sequence and the things that were
+considered and dropped. Its `<slug>-deviations.md` sibling is the one file that
+does go, deleted at close-out by
+[`complete-project`](../complete-project/SKILL.md).

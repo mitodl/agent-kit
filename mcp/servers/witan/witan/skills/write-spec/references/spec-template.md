@@ -2,12 +2,15 @@
 
 The shape [`write-spec`](../SKILL.md) writes. Derived by reading the 43
 documents in `ol-infrastructure/docs/plans/` (29) and
-`agent-kit/docs/internals/design/` (14) — not invented. Where the directory you
-are writing into disagrees with this file, **the directory wins**; read two or
-three of its newest files first.
+`agent-kit/docs/internals/design/` (14) — not invented.
+`ol-data-platform/docs/specs/` and `docs/design/` hold 8 more, uncounted below.
 
-`ol-data-platform/docs/specs/` and `docs/design/` hold 8 more, per the review
-that prompted this skill; they are not counted below.
+**Those are legacy directories**; new specs go to `docs/specs/`. They are
+cited because they are the only evidence of how this team actually writes
+specs, and the counts below say which elements are convention and which are
+this file's preference. Where a *newer* document in `docs/specs/` disagrees
+with this file, that document wins — read two or three of them first. Where
+nothing is there yet, this file is the convention.
 
 ## What is actually consistent
 

@@ -23,11 +23,9 @@ first.
 
 Resolve `<spec-dir>` with
 [`write-spec`'s repo-locations](../../write-spec/references/repo-locations.md)
-— the same lookup the spec itself used. `docs/plans/` is a flat directory whose
-documents are distinguished by suffix (`-spec.md`, `-analysis.md`,
-`-spike-results.md`), so `-deviations.md` follows a convention that is already
-there. **Do not invent a directory per piece of work**: that is exactly the
-imposition `write-spec`'s detect-don't-impose rule exists to prevent.
+— the same `docs/specs/` the spec itself went to. It is a sibling file, not a
+directory per piece of work: the directory is flat and distinguishes documents
+by suffix, so a `<slug>/` would be the only one of its kind.
 
 ## Which work gets one
 
@@ -117,7 +115,7 @@ with no sha rots.
 Three reasons it goes rather than stays:
 
 - **It poisons the convention detection.** `write-spec` learns a repo's house
-  style by reading the **newest** documents in the spec directory. A deviation
+  style by reading the **newest** documents in `docs/specs/`. A deviation
   log is written during implementation, so it is *by construction* newer than
   the spec it describes and sorts above it every time. Leave a few lying about
   and the next spec is modelled on deviation logs.

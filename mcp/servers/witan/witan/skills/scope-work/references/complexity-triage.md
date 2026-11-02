@@ -86,8 +86,9 @@ The work is one *body* of work rather than one decision. Any of:
 
 **Route:** [`plan-technical-approach`](../../plan-technical-approach/SKILL.md),
 full path, then [`write-spec`](../../write-spec/SKILL.md) writes the spec into
-the repo's existing location — `docs/plans/`, `docs/specs/`, `docs/design/` or
-`docs/internals/design/`, whichever that repo already uses. It is a reviewed
+`docs/specs/`, created if absent — resolved against the nearest `docs/` above
+the code, which is the repository root unless a separately-released package
+owns its own. It is a reviewed
 file in a pull request, not an issue comment: at the size these reach, a comment
 kept consistent by hand with a digest is rebuilding a versioned file the hard
 way.
@@ -97,10 +98,12 @@ Each decision in it that will outlive the project is extracted into its own
 Not up front: a decision still moving is a spec section, and an ADR written
 over it would be superseded before the work shipped.
 
-This is the tier the team already works in — there are 11 specs in
-ol-infrastructure's `docs/plans/`, 8 across ol-data-platform's `docs/specs/`
-and `docs/design/`, and 14 in agent-kit's `docs/internals/design/`. They share a
-shape: problem, numbered decisions, measured facts, phases, sequence, open
+This is the tier the team already works in — 33 specs across the org, though
+scattered: 11 in ol-infrastructure's `docs/plans/`, 8 across
+ol-data-platform's `docs/specs/` and `docs/design/`, 14 in agent-kit's
+`docs/internals/design/`. Those are legacy locations and new specs go to
+`docs/specs/`; they are cited because they share a shape worth copying —
+problem, numbered decisions, measured facts, phases, sequence, open
 questions.
 
 ## Tier 4 — Unknowable
@@ -188,6 +191,18 @@ Four things the task must carry:
 4. **The artifact** that ends it — a measurement, a working throwaway script, a
    paragraph with evidence. Spike code is evidence, not a deliverable; it is
    not the start of the implementation.
+
+**Where the artifact goes: `task_comment` on the spike task.** Not a file. A
+spike answers one question for one piece of work, and a document in
+`docs/specs/` would outlive its usefulness by years — which is how the legacy
+directories filled up with `*-spike-results.md` nobody reads. The comment sits
+on the task that asked the question, where the next person to open it will see
+it.
+
+Anything that outlives this work goes to `memory_store` as well — a measured
+limit, a behaviour the docs got wrong, a technique that worked. That is the
+half worth keeping, and it is searchable across projects rather than buried in
+one task.
 
 **After the spike, re-enter [`scope-work`](../SKILL.md) at Step 3**, not at the
 tier you assumed before. The findings change the grounding the triage rests on,

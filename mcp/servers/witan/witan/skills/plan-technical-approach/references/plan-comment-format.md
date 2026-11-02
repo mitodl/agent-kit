@@ -205,7 +205,7 @@ Nothing below was typed except the `--note`. The command:
 ```bash
 bash "$PTA/upsert-plan-comment.sh" --repo mitodl/mit-learn --issue 4120 \
   --render --epic tk-retry-consolidation-epic \
-  --spec https://github.com/mitodl/mit-learn/blob/main/docs/plans/retry-consolidation-spec.md \
+  --spec https://github.com/mitodl/mit-learn/blob/main/docs/specs/retry-consolidation-spec.md \
   --decisions "[ADR-0014 — retry policy belongs to the shared client wrapper](https://github.com/mitodl/mit-learn/blob/main/docs/adr/0014-retry-policy-in-client-wrapper.md)" \
   --note "Chunk 3 waits on chunk 2 reaching production, not merging: the old copy is the rollback target."
 ```
@@ -213,7 +213,7 @@ bash "$PTA/upsert-plan-comment.sh" --repo mitodl/mit-learn --issue 4120 \
 and what it posts:
 
 ```markdown
-**Plan:** https://github.com/mitodl/mit-learn/blob/main/docs/plans/retry-consolidation-spec.md · **Decisions:** [ADR-0014 — retry policy belongs to the shared client wrapper](https://github.com/mitodl/mit-learn/blob/main/docs/adr/0014-retry-policy-in-client-wrapper.md)
+**Plan:** https://github.com/mitodl/mit-learn/blob/main/docs/specs/retry-consolidation-spec.md · **Decisions:** [ADR-0014 — retry policy belongs to the shared client wrapper](https://github.com/mitodl/mit-learn/blob/main/docs/adr/0014-retry-policy-in-client-wrapper.md)
 
 | # | Chunk | PR | State |
 |---|-------|----|-------|
