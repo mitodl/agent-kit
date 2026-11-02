@@ -203,8 +203,19 @@ name it in the spec's header block next to `Project:`. It records how the plan
 moves once implementation starts — what was assumed, what contradicted it, and
 what was agreed instead — and it is what a superseding ADR is written from at
 close-out. A log nobody can find is a log nobody reads, which is why it is
-named in the spec rather than left to be discovered. Format and the two
-triggers that read it:
+named in the spec rather than left to be discovered.
+
+**It is transient**, and the spec should say so where it names it, because a
+reader finding a dangling link otherwise assumes something was lost:
+
+```markdown
+Deviations: `csp-headers-deviations.md` (deleted at close-out; see the superseding ADR for the anchor)
+```
+
+`implement-plan` deletes it in the same pull request as the record it fed, and
+that record cites the log's commit — so the link stops resolving on purpose,
+and the content is one `git show` away. Format, the two triggers that read it,
+and the deletion rule:
 [the deviation log](../plan-technical-approach/references/deviation-log.md).
 
 ---

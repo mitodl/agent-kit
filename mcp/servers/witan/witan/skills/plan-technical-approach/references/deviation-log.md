@@ -95,8 +95,50 @@ these entries have made false, gets a superseding ADR via
 [`write-adr`](../../write-adr/SKILL.md), taking its *why* from here. See
 [the accumulation trigger](../../write-adr/references/revision-protocol.md#when-to-supersede-instead).
 
-Then the file is done. It stays in git as the shipped spec's sibling and is not
-maintained further.
+## Then delete it
+
+**This file is consumed, not archived.** Once close-out has read it, `git rm`
+it — in the **same pull request** as the superseding ADR, so one diff shows the
+record appearing and the log being consumed together and a reviewer can see
+that nothing was dropped quietly.
+
+The record that outlives it cites where it came from, which is what makes the
+deletion recoverable rather than lossy:
+
+```markdown
+Derived from the deviation log at `a3f91c2`.
+```
+
+Get the sha with `git rev-parse --short HEAD` **before** removing the file.
+Same convention as a spec's commit anchor, and the same reason: a reference
+with no sha rots.
+
+Three reasons it goes rather than stays:
+
+- **It poisons the convention detection.** `write-spec` learns a repo's house
+  style by reading the **newest** documents in the spec directory. A deviation
+  log is written during implementation, so it is *by construction* newer than
+  the spec it describes and sorts above it every time. Leave a few lying about
+  and the next spec is modelled on deviation logs.
+- **Nothing reads it after close-out.** Both of its triggers have fired by
+  then. A file in a working tree that no process and no person opens again is
+  the definition of the noise this whole change set exists to remove.
+- **Git still has it.** Deleting moves it out of the working tree and into
+  history, which is the right place for a record of how something *used to* be
+  planned. `git show <sha>:<path>` brings it back.
+
+**Delete it whether or not anything superseded.** Most work will produce a log
+that changed no decision badly enough to need a new record — that is the common
+case, and it is exactly the case that would otherwise accumulate forever.
+
+**Only at project completion, never per chunk.** The replan threshold reads
+this mid-work; removing it early takes away the one trigger that fires while
+the plan can still be fixed.
+
+What this does not carry forward: an entry that changed only the delivery shape
+touches no decision, so no ADR takes it. That is accepted. The merged pull
+requests already record what shipped and in what order, and six months on
+nobody asks why chunk 1 was stacked rather than opened independently.
 
 ## What does not go here
 

@@ -171,6 +171,18 @@ and counts. Two or more against one ADR, or entries that have made its
 from those entries, which is the one thing the addenda themselves do not
 supply in a form a reader comes back for.
 
+**Cite the log's commit, because the log is deleted in the same pull request.**
+It is consumed, not archived:
+
+```markdown
+Derived from the deviation log at `a3f91c2`.
+```
+
+Get the sha with `git rev-parse --short HEAD` *before* the `git rm`. Without
+it the superseding record asserts that a decision changed and leaves no way
+back to the entries that say how — and an unanchored reference to a deleted
+file is worse than none, because it reads as though it still resolves.
+
 Nothing above changes: addenda stay the default **in flight**, for the reasons
 and against the evidence recorded earlier in this file. This only says when
 enough of them have accumulated that the honest record is a new one.

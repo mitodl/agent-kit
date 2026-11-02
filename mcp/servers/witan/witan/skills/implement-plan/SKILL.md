@@ -530,12 +530,28 @@ the tool and say so.
    readable only by reconstructing current truth from stacked edits, which is
    what supersession exists to prevent. It rides in the same bookkeeping pull
    request as steps 3-5 above.
+2. **Then delete the log, in that same pull request.** It is consumed, not
+   archived — one diff shows the record appearing and the log going, so a
+   reviewer can see nothing was dropped quietly.
 
-   Then the log is done: it stays in git beside the shipped spec and is not
-   maintained further.
-2. Final regeneration of the comment.
-3. `task_close` on the epic, or on the single task.
-4. `workflow_session_end(session_slug=..., summary=..., files_changed=[...])`.
+   ```bash
+   git rev-parse --short HEAD        # cite this in the ADR, BEFORE removing
+   git rm <spec-dir>/<slug>-deviations.md
+   ```
+
+   The superseding ADR carries `Derived from the deviation log at <sha>`, which
+   is what makes this recoverable rather than lossy: `git show <sha>:<path>`.
+
+   **Delete it whether or not anything superseded** — work whose deviations
+   changed no decision badly enough to need a new record is the common case,
+   and the case that would otherwise accumulate a file per project forever.
+   Leaving them also poisons `write-spec`'s convention detection, which reads
+   the *newest* documents in the spec directory: a deviation log is written
+   after its spec, so it always sorts above it. Full reasoning in
+   [the deviation log](../plan-technical-approach/references/deviation-log.md#then-delete-it).
+3. Final regeneration of the comment.
+4. `task_close` on the epic, or on the single task.
+5. `workflow_session_end(session_slug=..., summary=..., files_changed=[...])`.
 
 **Do not call `workflow_project_complete`** unless this was the whole project —
 it writes the immutable corpus trace and belongs at the end of the work.

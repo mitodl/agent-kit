@@ -44,7 +44,14 @@ of a candidate file — a mirrored file nearly always announces itself.
 ```bash
 # Newest by COMMIT time, not mtime: mtime reflects when the file was last
 # checked out, which says nothing about authorship order.
+#
+# Skip deviation logs. One is written DURING implementation, so it is always
+# newer than the spec it describes and sorts above it -- sampling the newest
+# files would preferentially read logs and model the next spec on them. They
+# are deleted at close-out, but one belonging to work still in flight is
+# exactly what this glob would otherwise catch.
 for f in <dir>/*.md; do
+  case "$f" in *-deviations.md) continue ;; esac
   printf '%s\t%s\n' "$(git log -1 --format=%cI -- "$f")" "$f"
 done | sort -r | head -3
 ```
@@ -64,14 +71,20 @@ directory, distinguished only by filename and opening section:
 | `*-spec.md` | A plan for work to be done |
 | `*-analysis.md`, `*-evaluation.md` | Findings, no plan attached |
 | `*-spike-results.md`, `*-spike.md` | A spike's answer |
-| `*-deviations.md` | How a spec's plan moved during implementation |
+| `*-deviations.md` | How a spec's plan moved — **transient**, deleted at close-out |
 | plain (`remove-nginx-sidecar.md`) | Either — read the opener |
 
-`-deviations.md` is the one suffix this skill adds, and it is deliberately a
-sibling file rather than a per-work directory: the directory is flat and
-distinguishes documents by suffix, so a `<slug>/` would be the only one of its
-kind. Same rule as everything else here — follow what the directory does. The
-format is
+`-deviations.md` is the one suffix this skill adds, and it is the only
+**transient** document in the directory: it is consumed at close-out and
+`git rm`-ed in the same pull request as the record it fed, so a long-lived
+directory never accumulates them. A log you find in a spec directory therefore
+belongs to work still in flight — do not model a spec on it, and do not delete
+someone else's.
+
+It is a sibling file rather than a per-work directory because the directory is
+flat and distinguishes documents by suffix, so a `<slug>/` would be the only
+one of its kind. Same rule as everything else here: follow what the directory
+does. Format and lifecycle in
 [the deviation log](../../plan-technical-approach/references/deviation-log.md).
 
 Numbered sections are common but not universal. Openers vary widely: `1. Goal`,
