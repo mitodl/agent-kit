@@ -8,6 +8,72 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.46.0] - 2026-11-02
+
+### Added
+
+- `task_create`, `task_get`, `workflow_project_create` and
+  `workflow_project_get` return `ui_url`, the link that opens the task or
+  project in the web UI, when the deployment serves one
+  (`WITAN_OIDC_RESOURCE_URL`, `WITAN_UI_OIDC_CLIENT_ID` and a built bundle). A
+  local server returns none. The `witan-task` skill tells agents to hand over
+  that link instead of building one.
+
+- A first `task_claim` returns `memories`: up to three the task links to
+  (`Addresses` or a shared `symbol_refs` entry) or its title closely matches,
+  each with its author and an excerpt. `witan task run` puts that list in the
+  prompt, labelled as teammates' notes, so a session reads what the team has
+  learned without anyone deciding to look. A title match needs a hit in both the
+  memory's title and its content, above raw BM25 floors
+  (`WITAN_RANK_SURFACE_MIN_CONTENT`, `WITAN_RANK_SURFACE_MIN_TITLE`), because a
+  task title as a plain search returns mostly noise.
+- Every first claim logs `witan.memory.surfaced` with how many memories it
+  carried, including none.
+
+### Changed
+
+- Every omnigraph command witan builds itself (`schema apply`, `upgrade`,
+  `snapshot`, `export`, `load` in `witan migrate storage`, and the export in
+  `witan migrate merge`) addresses its store with `store_cli_args`, so it
+  takes `--target` on omnigraph 0.14 and `--store` before it. 0.14 removed
+  the positional store URI from `schema apply` and `upgrade`. `init` passes
+  the generated operator config on 0.14 (`init_cli_args`).
+- `witan migrate merge` decides whether a store is the configured one by its
+  resolved server and graph (`store_address`) rather than by comparing CLI
+  flags, which now depend on the binary.
+- `config/operator-config.example.yaml` is the omnigraph 0.14 format (a
+  `direct` target and `defaults.target`, with a commented server target). It
+  documents running the CLI by hand; witan passes its own generated operator
+  config on 0.14 and does not read this file.
+- Raised the `witan-core` floor to `>=0.48` for `store_address` and
+  `store_cli_args(..., binary=)`.
+
+- The remote merge (`witan migrate merge` against a deployment) exports its
+  source store through `OmnigraphClient.export_to` instead of its own
+  `omnigraph export` subprocess. A source on a deployed omnigraph-server now
+  goes over the pooled HTTP transport, which the 0.14 CLI's refusal of
+  plain-http server targets would otherwise have broken, and every source rides
+  the shared retry policy.
+
+- `recall` and `memory_search` cap the total `content` in a result, so a default
+  call fits in a tool response. The best-ranked memories stay whole. Past the
+  budget a memory's `content` is cut to an excerpt and it gains
+  `content_truncated` and `content_chars`; `memory_get` returns the full text.
+
+- `recall(task=...)` also seeds from the task's title with the same match. It
+  previously found nothing for a task with no links or `symbol_refs`. Memories
+  linked by `Addresses` or `symbol_refs` now score above those matches on
+  relevance, though recency, corroboration and confidence still count.
+
+### Fixed
+
+- `recall` no longer makes an omnigraph read per memory, which is what made it
+  take minutes on a deployed graph. It read every expansion relation once per
+  seed and every candidate once by slug, so a query that reached about 900
+  memories to return 5 made 1,128 reads. Expansion and scoring now read `$slugs`
+  lists, 200 slugs to a read, and `content` is read only for the memories being
+  returned. Which memories rank where is unchanged.
+
 ## [0.45.0] - 2026-10-27
 
 ### Added
