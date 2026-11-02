@@ -48,6 +48,9 @@ additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
 (default off); ``recall`` works with BM25 only and needs no embedding provider.
 
 Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
+Past a total content budget a memory's ``content`` is cut, marked by
+``content_truncated`` and ``content_chars``; ``memory_get`` returns the full
+text.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -190,7 +193,9 @@ Plain BM25 text search over memories (no graph expansion — for that use
 ``recall``).
 
 Returns the top-20 memories ranked by BM25 relevance. Superseded memories are
-hidden unless ``include_superseded=True``.
+hidden unless ``include_superseded=True``. Past a total content budget a
+memory's ``content`` is cut, marked by ``content_truncated`` and
+``content_chars``; ``memory_get`` returns the full text.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
