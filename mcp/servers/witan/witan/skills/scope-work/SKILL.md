@@ -28,9 +28,12 @@ how much process does it deserve?" — then hands off.
   |
   +-- trivial     ------+
   |                     |
-  +-- decision(s) ------+--> plan-technical-approach --> implement-plan --> shipped
-  |                     |         |
-  +-- needs a spec -----+         +--> write-spec
+  +-- decision(s) ------+--> plan-technical-approach --> implement-plan
+  |                     |         |                              |
+  +-- needs a spec -----+         |                              v
+  |                               |                      complete-project --> shipped
+  |                               |
+  |                               +--> write-spec
   |                               |    multi-PR, multi-session or multi-repo
   |                               |    work; a reviewed file in the repo,
   |                               |    plus an empty deviation log beside it
