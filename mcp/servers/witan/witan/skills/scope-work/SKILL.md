@@ -32,7 +32,8 @@ how much process does it deserve?" — then hands off.
   |                     |         |
   +-- needs a spec -----+         +--> write-spec
   |                               |    multi-PR, multi-session or multi-repo
-  |                               |    work; a reviewed file in the repo
+  |                               |    work; a reviewed file in the repo,
+  |                               |    plus an empty deviation log beside it
   |                               |         |
   |                               |         +--> write-adr (per settled decision)
   |                               |
@@ -45,8 +46,51 @@ how much process does it deserve?" — then hands off.
   +-- not ours to decide alone --> create-ol-rfc-discussion --> write-adr
 ```
 
+That chart ends at `implement-plan` because this skill's job ends there. What
+happens once code is being written is a **loop**, not a line — the plan moves,
+and past a point it gets rewritten rather than patched again:
+
+```text
+  implement-plan, per chunk:  build -> validate -> PR -> re-render the comment
+  |
+  +-- plan met reality and lost?
+  |       |
+  |       +-- approve FIRST, then one entry in the deviation log, in the
+  |           pull request that makes the change
+  |             (spec route created the log up front; ADR route creates it here)
+  |                 |
+  |                 +-- 3rd shape-changing entry, a decision reopened,
+  |                     or the mechanism itself in question?
+  |                           |
+  |                           +-- yes --> back to plan-technical-approach,
+  |                           |           which rewrites the plan FROM the log
+  |                           |
+  |                           +-- no  --> carry on repairing
+  |
+  +-- last chunk merged: close-out
+          |
+          +-- 2+ addenda on one ADR, or its Decision now false?
+          |         |
+          |         +-- yes --> write-adr: a superseding record, citing
+          |         |           the log's commit sha
+          |         |
+          |         +-- no  --> nothing to supersede
+          |
+          +-- git rm the deviation log, in that same pull request
+              (consumed, not archived; git keeps it, the sha anchors it)
+```
+
+Neither chart is this skill's to execute — they are here because this is where
+someone meets the workflow first, and because the routing decision below is
+easier to make knowing what each route costs downstream. The loop belongs to
+[`implement-plan`](../implement-plan/SKILL.md); the log's format and lifecycle
+to
+[the deviation log](../plan-technical-approach/references/deviation-log.md).
+
 A **trivial** change still goes through `plan-technical-approach`, but on its
-fast path: one obvious approach, no alternatives, no scoring, and no ADR.
+fast path: one obvious approach, no alternatives, no scoring, and no ADR. It
+has no deviation log: a change that reverts cleanly in tens of lines does not
+deviate, and if it does, the triage was wrong.
 
 **Planning always comes before the record.** An ADR's `## Options Considered`
 is the output of scoring alternatives, so `write-adr` is entered from
