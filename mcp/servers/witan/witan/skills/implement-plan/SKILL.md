@@ -10,7 +10,8 @@ description: >
   changed files, validates at every phase boundary, re-measures each chunk
   against the size budget before opening its pull request, and stops to get
   confirmation before deviating — then records the deviation where it belongs.
-  Does not choose the approach: that is plan-technical-approach's job.
+  Does not choose the approach: that is plan-technical-approach's job, and
+  does not close the work out: that is complete-project's.
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -531,65 +532,38 @@ the tool and say so.
    `Proposed`, and say so rather than leaving it to be discovered.
 
 5. **Deliver steps 3 and 4 as a follow-up pull request.** Close-out runs
-   *after* the merge, so every edit it makes — a status flipped to `Accepted`,
-   a note dropped, a corrected glob, a regenerated index or docs mirror — is a
-   change to a tracked file on the default branch with nothing carrying it
-   there. Editing the working tree, or pushing to the merged chunk's branch,
-   does not update the merged record: the ADR stays `Proposed` on `main` while
-   the task and the session close around it.
+   *after* the merge, so every edit it makes is to a tracked file already on
+   the default branch, with nothing carrying it there. Editing the working
+   tree does not update it, and neither does pushing to the merged chunk's
+   branch — that branch is spent.
 
-   So open one small PR per close-out, titled for what it does
-   (`docs(adr): accept ADR-0014 after #412`), carrying the acceptance edits and
-   any superseding ADR the deviation log called for. It needs no plan comment and no chunk task — it is bookkeeping the
-   merge triggered, not new work. Where the repo has further obligations (this
-   one regenerates the docs mirror and a nav entry), they ride along in it.
+   One small PR per close-out, titled for what it does
+   (`docs(adr): accept ADR-0014 after #412`). What rides in it, the repo's own
+   regeneration obligations, and why it does not regress forever are in
+   [the bookkeeping pull request](../complete-project/references/bookkeeping-pr.md).
 
    Same rule in reverse: do **not** hold a chunk's PR open waiting for its own
    acceptance. The approval that accepts the ADR is the approval that merges
    the PR, so the edit can only ever come afterwards.
 
-**When the last chunk merges:**
+**When the last chunk merges, hand off to
+[`complete-project`](../complete-project/SKILL.md)** rather than continuing
+here. That is a different job in a different mode — it edits the default
+branch, carries no feature work, and routinely runs days later in a session
+that never built anything.
 
-1. **Read the deviation log end to end.** This is the only moment an ADR
-   changes: **every ADR the log's entries touched gets one superseding record**
-   via [`write-adr`](../write-adr/SKILL.md), covering everything that moved and
-   taking its *why* from those entries. One deviation is enough — there is no
-   threshold, because there is no later trigger to wait for. See
-   [when a superseding record gets written](../write-adr/references/revision-protocol.md#when-a-superseding-record-gets-written).
+Give it four things, so it does not re-derive them:
 
-   One record per decision, not one per deviation. A decision the work hit four
-   times gets a single ADR stating what it finally became.
+- the **epic slug**, or the single task's;
+- the **spec directory**, and the deviation log path inside it;
+- the **ADRs this work wrote**, and which chunk's PR carried each;
+- whether this epic **is** the project, or one slice of a longer one.
 
-   An accepted ADR is never edited, so there is no smaller option to reach for:
-   either the record matches the code when the work ends, or it is left
-   confidently wrong — and from here nothing else will fix it. These ride in
-   the same bookkeeping pull request as steps 3-5 above.
-2. **Then delete the log, in that same pull request.** It is consumed, not
-   archived — one diff shows the record appearing and the log going, so a
-   reviewer can see nothing was dropped quietly.
+It owns what is left: superseding the ADRs the deviation log touched, deleting
+the log, accepting what is still `Proposed`, the bookkeeping pull request,
+closing the epic and the session, and sealing the corpus trace. It also covers
+work that ends without shipping, which this skill has no path for.
 
-   ```bash
-   git rev-parse --short HEAD        # cite this in the ADR, BEFORE removing
-   git rm <spec-dir>/<slug>-deviations.md
-   ```
-
-   The superseding ADR carries `Derived from the deviation log at <sha>`, which
-   is what makes this recoverable rather than lossy: `git show <sha>:<path>`.
-
-   **Delete it whether or not anything superseded** — work whose deviations
-   changed no decision badly enough to need a new record is the common case,
-   and the case that would otherwise accumulate a file per project forever.
-   Leaving them also poisons `write-spec`'s convention detection, which reads
-   the *newest* documents in the spec directory: a deviation log is written
-   after its spec, so it always sorts above it. Full reasoning in
-   [the deviation log](../plan-technical-approach/references/deviation-log.md#then-delete-it).
-3. Final regeneration of the comment.
-4. `task_close` on the epic, or on the single task.
-5. `workflow_session_end(session_slug=..., summary=..., files_changed=[...])`.
-
-**Do not call `workflow_project_complete`** unless this was the whole project —
-it writes the immutable corpus trace and belongs at the end of the work.
-
-Before finishing, report any ADR that has been `Proposed` for more than 90 days
-while the paths it governs have shipped code. One line is enough: these claim
-to be undecided and are in production.
+**Do not call `workflow_project_complete` here.** It seals an immutable corpus
+trace, and whether this work *is* the whole project is the first question
+`complete-project` asks.

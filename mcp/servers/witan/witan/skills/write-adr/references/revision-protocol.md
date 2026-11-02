@@ -137,7 +137,8 @@ way.
 
 ## When a superseding record gets written
 
-**At project close-out. Only there.** One trigger, no mid-flight exceptions.
+**At project close-out. Only there.** One trigger, no mid-flight exceptions —
+run by [`complete-project`](../../complete-project/SKILL.md).
 
 Every ADR the project's deviations touched gets one superseding record,
 covering everything that moved — written once the work is done and the decision

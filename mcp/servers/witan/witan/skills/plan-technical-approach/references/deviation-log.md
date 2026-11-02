@@ -87,7 +87,9 @@ that value decays as divergence grows, to the point where repairing costs more
 than replanning and yields a worse plan. Past a few shape changes you no longer
 have the plan you are repairing.
 
-**2. Close-out.** Before `workflow_project_complete`, read the whole file.
+**2. Close-out**, run by
+[`complete-project`](../../complete-project/SKILL.md). Before
+`workflow_project_complete`, it reads the whole file.
 Every ADR these entries touched gets **one** superseding record via
 [`write-adr`](../../write-adr/SKILL.md), covering everything that moved and
 taking its *why* from here. This is the only moment an ADR changes: accepted

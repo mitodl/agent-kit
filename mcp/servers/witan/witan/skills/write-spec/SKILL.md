@@ -220,8 +220,8 @@ reader finding a dangling link otherwise assumes something was lost:
 Deviations: `csp-headers-deviations.md` (deleted at close-out; see the superseding ADR for the anchor)
 ```
 
-`implement-plan` deletes it in the same pull request as the record it fed, and
-that record cites the log's commit — so the link stops resolving on purpose,
+[`complete-project`](../complete-project/SKILL.md) deletes it in the same pull
+request as the record it fed, and that record cites the log's commit — so the link stops resolving on purpose,
 and the content is one `git show` away. Format, the two triggers that read it,
 and the deletion rule:
 [the deviation log](../plan-technical-approach/references/deviation-log.md).

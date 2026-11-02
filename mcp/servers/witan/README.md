@@ -29,6 +29,7 @@ expose the graph directly.
 | [`write-spec`](./witan/skills/write-spec/SKILL.md) | Write the design document for work spanning several PRs, sessions or repos, in the location and shape that repo already uses |
 | [`write-adr`](./witan/skills/write-adr/SKILL.md) | Record one decision as an ADR in the repo's existing convention, scoped with `applies_to` to the files it governs |
 | [`implement-plan`](./witan/skills/implement-plan/SKILL.md) | Execute the approved plan chunk by chunk, honouring the governing ADRs, confirming and recording any deviation |
+| [`complete-project`](./witan/skills/complete-project/SKILL.md) | Close the work out: supersede the ADRs its deviations changed, consume the deviation log, close the graph and seal the corpus trace |
 | [`witan-task`](./witan/skills/witan-task/SKILL.md) | Triage, claim, create and close tasks; checkpoints and resume |
 | [`witan-workflow`](./witan/skills/witan-workflow/SKILL.md) | Link a session to a project at the start of a run |
 | [`witan-project-tracker`](./witan/skills/witan-project-tracker/SKILL.md) | Project lifecycle across sessions: phases, parallel sessions, corpus traces |

@@ -71,7 +71,7 @@ and past a point it gets rewritten rather than patched again:
   |                           |
   |                           +-- no  --> carry on repairing
   |
-  +-- last chunk merged: close-out
+  +-- last chunk merged --> complete-project
           |             the ONLY point at which any ADR changes
           |
           +-- for each ADR the log's entries touched:
@@ -86,8 +86,9 @@ and past a point it gets rewritten rather than patched again:
 Neither chart is this skill's to execute — they are here because this is where
 someone meets the workflow first, and because the routing decision below is
 easier to make knowing what each route costs downstream. The loop belongs to
-[`implement-plan`](../implement-plan/SKILL.md); the log's format and lifecycle
-to
+[`implement-plan`](../implement-plan/SKILL.md) and the ending to
+[`complete-project`](../complete-project/SKILL.md), which also covers work that
+stops without shipping; the log's format and lifecycle are in
 [the deviation log](../plan-technical-approach/references/deviation-log.md).
 
 A **trivial** change still goes through `plan-technical-approach`, but on its
