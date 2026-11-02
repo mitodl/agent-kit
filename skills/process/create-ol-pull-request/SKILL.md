@@ -52,7 +52,7 @@ inferring the body and asking them to correct it:
 | **Title** | Ask the user; offer one derived from the branch name / commits as a default they can overwrite |
 | **Linked tickets** | Ask for issue numbers (Closes #, Fixes #, or N/A) |
 | **Description** | Ask what the PR does; summarise from commits only if the user says "summarise"; summary should be short and high level; put detailed technical explanation of the PR in the `<details>` block |
-| **Screenshots** | Ask only when the diff touches UI code; images get attached after the PR is created |
+| **Screenshots** | Ask only when the diff touches UI code. Check `gh --version`: on 2.99 or later, get the image files (a `screenshot-pr` run in this session already gives them) and draft alt text for each for the user to correct; they upload with the PR in Step 5. On an older gh, leave images out of the body and tell the user to drag them in after the PR is created |
 | **Testing notes** | Ask how the changes were tested and how a reviewer can validate |
 | **Additional context** | Ask for reviewer notes, caveats, or checklist items |
 | **Draft?** | Ask if this should be a draft PR (default: no; suggest yes if the user calls it a work in progress) |
@@ -95,6 +95,7 @@ confirm before creating the PR.
 
 ### Screenshots (if appropriate):
 <!-- delete this whole section, checkboxes included, unless the PR touches UI code -->
+<!-- tick the widths shown; below the checkboxes, put each image as ![<alt>](<path>), using the same path passed to --attach in Step 5 -->
 - [ ] Desktop screenshots
 - [ ] Mobile width screenshots
 
@@ -345,13 +346,49 @@ gh pr create \
   --base <base-branch> \
   --title "<title>" \
   --body-file "$PR_BODY" \
+  [--attach '<path>' ...] \
   [--draft]
 ```
 
 Keep the write and the `gh pr create` in one shell invocation so `$PR_BODY` is
 still set, or capture the path and reuse it literally.
 
+Pass one `--attach '<path>'` per image the body references (up to 50).
+`gh` resolves each path from the directory it runs in, uploads the file,
+and points the body's reference at the uploaded URL, keeping the alt text
+written there. `#<alt text>` after a path only applies to a file the body
+doesn't reference, which `gh` appends to the end of the body.
+
+`gh` uploads in order and stops at the first failure. If nothing uploaded,
+it prints "no pull request was created" and nothing was published: fix the
+file (or drop it from the body for a drag-and-drop) and run `gh pr create`
+again. If some uploaded, it creates the PR, prints its URL, and exits
+non-zero; every reference after the failure, not only the one the error
+names, stays a local path. Read the URL from the output, then re-attach
+each file whose reference is still a local path in the live body, using
+the round trip below. Skip adding references, since they are already
+there.
+
 Confirm the PR URL returned by `gh pr create` and share it with the user.
+
+### Adding images to an existing PR
+
+To place images in the Screenshots section, fetch the live body so edits
+made on GitHub since creation survive, write it to a `mktemp` file as
+above, add `![<alt>](<path>)` references there (restoring the Screenshots
+heading if it was deleted), and pass it back:
+
+```bash
+PR_BODY="$(mktemp -t pr-body.XXXXXXXX)"
+gh pr view <n> --json body --jq .body > "$PR_BODY"
+# add the image references to "$PR_BODY", then:
+gh pr edit <n> --body-file "$PR_BODY" --attach '<path>' ...
+```
+
+Without `--body-file`, `gh pr edit <n> --attach '<path>#<alt text>'`
+appends each image to the end of the current body instead. Either way this
+edits a published PR: show the user the exact body or command first and
+wait for approval.
 
 ---
 
@@ -391,8 +428,8 @@ of its main pieces, not more prose.
 
 ## Self-contained PRs
 
-A reviewer has only GitHub, not the author's machine, so the body must not
-point at local files, on-device content, or relative paths. Instead:
+A reviewer has only GitHub, not the author's machine, so the published body
+must not point at local files, on-device content, or relative paths. Instead:
 
 - Link issues, code, docs, and designs by public URL: full issue URLs
   (`https://github.com/mitodl/ol-django/issues/123`), GitHub blob URLs with
@@ -400,5 +437,6 @@ point at local files, on-device content, or relative paths. Instead:
   library docs, Figma.
 - Inline what has no URL: the relevant snippet, config, error message, log
   output, or test data.
-- Attach screenshots to the PR after it's created rather than referencing
-  local image files.
+- Reference a local image only when the same path is passed to `--attach`,
+  which replaces it with the uploaded URL. Any other local path reaches the
+  reviewer as a broken image.
