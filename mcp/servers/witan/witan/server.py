@@ -3817,8 +3817,7 @@ def _task_memories(task: dict) -> list[dict]:
             "read.gq", "addressed_memories", {"task_slug": task["slug"]}
         )
     ]
-    for ref in task.get("symbol_refs") or []:
-        linked += [m["slug"] for m in _context_for_symbol(ref)["memories"]]
+    linked += _memories_citing_symbols(task.get("symbol_refs") or [])
     linked = list(dict.fromkeys(linked))
     by_slug = {
         row["slug"]: row for row in _read_by_slugs("get_memories_by_slugs", linked)
@@ -8279,7 +8278,7 @@ async def task_claim(
     # relevant memories arrive here without anyone deciding to look. A renewal
     # is the same holder carrying on, which already had them.
     if not (held and current_holder == holder):
-        result["memories"] = await _offload(_surfaced_for_claim, task)
+        result["memories"] = await _offload(_surfaced_for_claim, claimed)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the
@@ -8713,14 +8712,45 @@ def symbol_context(symbol_id: str) -> dict:
     return _context_for_symbol(symbol_id)
 
 
-def _context_for_symbol(symbol_id: str) -> dict:
-    repo = symbol_id.split("#", 1)[0] if "#" in symbol_id else repo_module.detect()
+def _symbol_repo(symbol_id: str) -> str | None:
+    """The repo a ``repo#path::Name`` id names, else the detected one."""
+    return symbol_id.split("#", 1)[0] if "#" in symbol_id else repo_module.detect()
 
+
+def _memory_ref_rows(repo: str | None) -> list[dict]:
+    """Memory rows carrying ``symbol_refs``, for one repo when there is one."""
     if repo:
-        mem_rows = client.read("read.gq", "memories_by_repo", {"repo": repo})
+        return client.read("read.gq", "memories_by_repo", {"repo": repo})
+    return client.read("read.gq", "memories_with_refs", {})
+
+
+def _memories_citing_symbols(symbol_ids: Sequence[str]) -> list[str]:
+    """Slugs of the memories citing any of ``symbol_ids``.
+
+    One read per repo, however many symbols a task names in it. Each read is
+    repo-wide, so reading per symbol fetches the same rows again.
+
+    :param symbol_ids: Code-graph symbol ids.
+    :returns: Each matching memory's slug, once per repo.
+    :rtype: list[str]
+    """
+    by_repo: dict[str | None, set[str]] = {}
+    for symbol_id in symbol_ids:
+        by_repo.setdefault(_symbol_repo(symbol_id), set()).add(symbol_id)
+    return [
+        row["slug"]
+        for repo, wanted in by_repo.items()
+        for row in _memory_ref_rows(repo)
+        if wanted & set(row.get("symbol_refs") or [])
+    ]
+
+
+def _context_for_symbol(symbol_id: str) -> dict:
+    repo = _symbol_repo(symbol_id)
+    mem_rows = _memory_ref_rows(repo)
+    if repo:
         task_rows = client.read("read.gq", "tasks_by_repo_refs", {"repo": repo})
     else:
-        mem_rows = client.read("read.gq", "memories_with_refs", {})
         task_rows = client.read("read.gq", "tasks_with_refs", {})
 
     memories = [m for m in mem_rows if symbol_id in (m.get("symbol_refs") or [])]
@@ -9097,10 +9127,10 @@ def recall(
             seed_relevance[m["slug"]] = _CONTENT_BAND[1]
             add_seed(m["slug"], "task")
         task_rows = client.read("read.gq", "get_task", {"slug": task})
-        for sym in (task_rows[0].get("symbol_refs") if task_rows else None) or []:
-            for m in _context_for_symbol(sym)["memories"]:
-                seed_relevance[m["slug"]] = _CONTENT_BAND[1]
-                add_seed(m["slug"], "task")
+        refs = (task_rows[0].get("symbol_refs") if task_rows else None) or []
+        for slug in _memories_citing_symbols(refs):
+            seed_relevance[slug] = _CONTENT_BAND[1]
+            add_seed(slug, "task")
         if task_rows:
             matches = _title_matches(task_rows[0]["title"])
             for m in _with_relevance(matches, _TITLE_BAND):

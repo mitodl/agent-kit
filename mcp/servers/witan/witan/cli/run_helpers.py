@@ -128,9 +128,10 @@ def _memory_lines(memories: list[dict]) -> list[str]:
         ),
     ]
     for m in memories:
-        title = " ".join(m["title"].split())
-        excerpt = " ".join(m["excerpt"].split())
-        lines += [f"  {m['slug']} ({m['author']}): {title}", f"    {excerpt}"]
+        author, title, excerpt = (
+            " ".join(m[field].split()) for field in ("author", "title", "excerpt")
+        )
+        lines += [f"  {m['slug']} ({author}): {title}", f"    {excerpt}"]
     return lines
 
 
