@@ -108,6 +108,11 @@ class RankConfig(BaseModel):
     before edges carried confidence. Only edges written since then are stamped —
     an unstamped edge scores as ``asserted``, so this knob's effect grows as the
     graph is rewritten rather than landing all at once."""
+    surface_min_content_score: float = Field(default=15.0, ge=0.0)
+    """Raw BM25 score a memory's ``content`` must reach against a task's title for
+    the memory to be shown unasked. See ``server._title_matches``."""
+    surface_min_title_score: float = Field(default=10.0, ge=0.0)
+    """The same floor for the memory's ``title``."""
 
 
 _RANK_FIELDS = {
@@ -121,6 +126,8 @@ _RANK_FIELDS = {
     "penalty_contradicted": "WITAN_RANK_PEN_CONTRADICTED",
     "w_hop": "WITAN_RANK_W_HOP",
     "w_inferred_edge": "WITAN_RANK_W_INFERRED_EDGE",
+    "surface_min_content_score": "WITAN_RANK_SURFACE_MIN_CONTENT",
+    "surface_min_title_score": "WITAN_RANK_SURFACE_MIN_TITLE",
 }
 
 
@@ -639,6 +646,8 @@ def default_config_toml() -> str:
 # penalty_contradicted = {rank.penalty_contradicted}
 # w_hop = {rank.w_hop}
 # w_inferred_edge = {rank.w_inferred_edge}
+# surface_min_content_score = {rank.surface_min_content_score}
+# surface_min_title_score = {rank.surface_min_title_score}
 
 # ── [scan] — write-path secret/PII scanning (ADR 0001) ──────────────────────
 # Enabled by default (opt-out) — set enabled = false below to turn it off.

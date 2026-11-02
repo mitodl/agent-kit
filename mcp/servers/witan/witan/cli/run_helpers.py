@@ -13,6 +13,11 @@ from ._common import (
     esc,
 )
 
+# Matches what `task_claim` hands over, for the sessions that never make that
+# call themselves: `witan task run` claims before it launches them.
+_PROMPT_MEMORY_LIMIT = 3
+_PROMPT_EXCERPT_CHARS = 280
+
 
 def _parse_number_selection(raw: str, count: int) -> list[int]:
     """Parse "1 3 5", "1-3", "2,4", or "all" into 0-based indices."""
@@ -78,7 +83,32 @@ def _launch_agent(
         raise SystemExit(1) from None
 
 
-def _run_prompt(t: dict, *, claimed: bool) -> str:
+def _prompt_memories(s, slug: str) -> list[dict]:
+    """Memories for a task's prompt, or none when they cannot be read.
+
+    A failed read must not stop the agent launching. It is the task the agent
+    came for, and ``task_claim`` or ``recall`` can still find these later.
+    """
+    try:
+        result = _fn(s.recall)(task=slug, hops=0, limit=_PROMPT_MEMORY_LIMIT)
+    except Exception as exc:  # noqa: BLE001 — never block the launch
+        console.print(f"[yellow]Skipping memories: {esc(str(exc))}[/yellow]")
+        return []
+    return result["memories"]
+
+
+def _memory_lines(memories: list[dict]) -> list[str]:
+    """The prompt section for ``memories``, or nothing when there are none."""
+    if not memories:
+        return []
+    lines = ["", "Team memories that match this task (memory_get has the full text):"]
+    for m in memories:
+        excerpt = " ".join(m["content"].split())[:_PROMPT_EXCERPT_CHARS]
+        lines += [f"  {m['slug']}: {m['title']}", f"    {excerpt}"]
+    return lines
+
+
+def _run_prompt(t: dict, *, claimed: bool, memories: list[dict] | None = None) -> str:
     lines = [
         "Work on this task from the witan task graph and see it through to completion.",
         "",
@@ -121,6 +151,7 @@ def _run_prompt(t: dict, *, claimed: bool) -> str:
         "",
         "Description:",
         t.get("description") or "(none)",
+        *_memory_lines(memories or []),
         "",
         held,
         (
@@ -160,7 +191,7 @@ def _run_task_slug(
             f"[yellow]Warning: open blockers: {', '.join(open_blockers)}[/yellow]"
         )
 
-    prompt = _run_prompt(t, claimed=claim)
+    prompt = _run_prompt(t, claimed=claim, memories=_prompt_memories(s, slug))
     if dry_run:
         console.print(prompt, markup=False, emoji=False, highlight=False)
         return

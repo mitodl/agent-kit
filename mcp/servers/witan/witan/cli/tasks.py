@@ -33,6 +33,7 @@ from .run_helpers import (
     _launch_agent,
     _merge_prompts,
     _pick_items,
+    _prompt_memories,
     _run_prompt,
     _run_task_slug,
 )
@@ -744,7 +745,11 @@ def task_run(
             console.print("[red]No tasks could be claimed.[/red]")
             raise SystemExit(1)
         merged = _merge_prompts(
-            [_run_prompt(t, claimed=claim) for t in claimable], "task"
+            [
+                _run_prompt(t, claimed=claim, memories=_prompt_memories(s, t["slug"]))
+                for t in claimable
+            ],
+            "task",
         )
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
     else:

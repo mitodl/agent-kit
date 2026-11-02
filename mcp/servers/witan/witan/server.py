@@ -3748,6 +3748,119 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     return rows
 
 
+# Memories handed over unasked when a task starts. Short because each costs the
+# agent context it did not ask to spend.
+_SURFACED_MEMORY_LIMIT = 3
+
+
+def _title_matches(text: str) -> list[dict]:
+    """Memories ``text`` matches closely enough to show unasked, best first.
+
+    A task title used as a plain BM25 query mostly returns noise: every run is
+    an OR over ordinary words, so any long memory scores on some of them, and
+    the composite re-rank then prefers whatever is most linked. On four real
+    task titles against production, `memory_search`'s top results were almost all
+    unrelated, and one memory about writing GitHub issues came up for two of the
+    tasks.
+
+    Two things separate the real hits, measured on 12 task titles against a
+    sample of 378 production memories. A memory must appear in BOTH runs, because
+    a title is its author's summary, so a title match says the memory is about
+    those words rather than mentioning them. And it must clear a RAW score floor
+    (:class:`~witan.config.RankConfig`): relevance from :func:`_with_relevance` is
+    relative to the run's best, so it cannot say that the best was weak. That
+    left 9 memories across 5 of the titles, 6 of them useful on reading, and
+    nothing for the other 7. Nothing is the right answer for a task the team has
+    learned nothing about, and it is why the composite score plays no part here.
+    A weak match costs more than its characters: a block that is usually
+    irrelevant gets read as boilerplate
+    (`les-an-inject-context-block-loses-to-whatever-bash-c-b54ccd`).
+
+    Every repo is searched, not the task's. What was learned about a service is
+    filed under whichever repo the work happened in: scoping the same sample to
+    the task's repo took the tasks with a match from 5 of 12 down to 2, losing
+    the real hits on Granian, ToolHive and the omnigraph pin.
+
+    :param text: The text to match, e.g. a task's title.
+    :returns: Rows as ``search_memories`` returns them, best content score first.
+    :rtype: list[dict]
+    """
+    params = {"query": text, "repo": None, "kind": None}
+    title_scores = {
+        row["slug"]: row[_SCORE_COLUMN]
+        for row in client.read("read.gq", "search_memories_title", params)
+    }
+    return [
+        row
+        for row in client.read("read.gq", "search_memories", params)
+        if row["slug"] in title_scores
+        and (row[_SCORE_COLUMN] or 0.0) >= rank_cfg.surface_min_content_score
+        and (title_scores[row["slug"]] or 0.0) >= rank_cfg.surface_min_title_score
+    ]
+
+
+def _task_memories(task: dict) -> list[dict]:
+    """Memories for whoever starts ``task``, as excerpts, the most certain first.
+
+    The memories the task ``Addresses`` come first, because someone chose them;
+    then the ones its title matches (:func:`_title_matches`).
+
+    :param task: The task row.
+    :returns: Up to :data:`_SURFACED_MEMORY_LIMIT` of ``slug``, ``kind``,
+        ``title`` and ``excerpt``.
+    :rtype: list[dict]
+    """
+    linked = [
+        row["slug"]
+        for row in client.read(
+            "read.gq", "addressed_memories", {"task_slug": task["slug"]}
+        )
+    ]
+    rows = {row["slug"]: row for row in _read_by_slugs("get_memories_by_slugs", linked)}
+    for row in _title_matches(task["title"]):
+        rows.setdefault(row["slug"], row)
+    if not rows:
+        return []
+    superseded = {
+        row["slug"] for row in client.read("read.gq", "all_superseded_slugs", {})
+    }
+    return [
+        {
+            "slug": row["slug"],
+            "kind": row["kind"],
+            "title": row["title"],
+            "excerpt": row["content"][:_RESULT_EXCERPT_CHARS],
+        }
+        for row in rows.values()
+        if row["slug"] not in superseded
+    ][:_SURFACED_MEMORY_LIMIT]
+
+
+def _surfaced_for_claim(task: dict) -> list[dict]:
+    """``_task_memories`` for a claim, which has already committed by now.
+
+    A failed lookup returns nothing rather than raising: an error here would tell
+    the caller that a claim it won had failed.
+
+    Logs every first claim, including the ones with nothing to show, because the
+    share of claims that carried a memory is the number that says whether this
+    works, and it needs the denominator.
+    """
+    try:
+        memories = _task_memories(task)
+    except Exception:
+        logger.warning("witan.memory.surface_failed", task=task["slug"], exc_info=True)
+        return []
+    logger.info(
+        "witan.memory.surfaced",
+        surface="task_claim",
+        task=task["slug"],
+        count=len(memories),
+        slugs=[m["slug"] for m in memories],
+    )
+    return memories
+
+
 # The edge index is a handful of global queries; cache it briefly so a burst of
 # searches doesn't re-scan the graph each time. Keyed by store URI (test stores
 # differ) and dropped on any local edge write, so it's never stale within a
@@ -8148,6 +8261,13 @@ async def task_claim(
         "qualified": _is_qualified(holder),
         "stole": bool(held and current_holder != holder),
     }
+    # The moment an agent starts a task is the one call every agent makes, so
+    # relevant memories arrive here without anyone deciding to look. A renewal
+    # is the same holder carrying on, which already had them.
+    if not (held and current_holder == holder):
+        memories = await _offload(_surfaced_for_claim, task)
+        if memories:
+            result["memories"] = memories
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the
@@ -8848,8 +8968,9 @@ def recall(
     Graph-aware contextual recall — the composition of every other memory tool.
 
     Seeds from any combination of ``query`` (BM25), ``symbol_id``
-    (``symbol_context``), ``task`` (memories it Addresses + memories sharing
-    its symbol_refs), and ``topic`` (memories tagged to it). Expands ``hops``
+    (``symbol_context``), ``task`` (memories it Addresses, those sharing its
+    symbol_refs, and those its title closely matches), and ``topic`` (memories
+    tagged to it). Expands ``hops``
     (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
     provenance siblings; prunes superseded memories (unless
     ``include_superseded``); flags Contradicts pairs; and re-ranks with the
@@ -8896,9 +9017,11 @@ def recall(
         and tasks whose ``symbol_refs`` include it. Use this before editing a
         symbol: "what do we already know about this function?"
     task:
-        A ``tk-`` slug to seed from — the memories it ``Addresses`` plus those
-        sharing its ``symbol_refs``. The one-call way to load context for a task
-        you are about to start.
+        A ``tk-`` slug to seed from — the memories it ``Addresses``, those
+        sharing its ``symbol_refs``, and those its title closely matches. A first
+        ``task_claim`` already returns the best of these, so this is the one-call
+        way to load context for a task you are resuming or looking at without
+        claiming.
     topic:
         A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,
         ``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join
@@ -8953,11 +9076,20 @@ def recall(
         for m in _context_for_symbol(symbol_id)["memories"]:
             add_seed(m["slug"], "symbol")
     if task:
+        # A link someone chose sits at the top of the content band and a title
+        # match in the band below it, so a match cannot outrank a chosen link.
         for m in client.read("read.gq", "addressed_memories", {"task_slug": task}):
+            seed_relevance[m["slug"]] = _CONTENT_BAND[1]
             add_seed(m["slug"], "task")
         task_rows = client.read("read.gq", "get_task", {"slug": task})
         for sym in (task_rows[0].get("symbol_refs") if task_rows else None) or []:
             for m in _context_for_symbol(sym)["memories"]:
+                seed_relevance[m["slug"]] = _CONTENT_BAND[1]
+                add_seed(m["slug"], "task")
+        if task_rows:
+            matches = _title_matches(task_rows[0]["title"])
+            for m in _with_relevance(matches, _TITLE_BAND):
+                seed_relevance.setdefault(m["slug"], m[_RELEVANCE_KEY])
                 add_seed(m["slug"], "task")
     if topic:
         topic_slug = _lookup_topic_slug(topic)

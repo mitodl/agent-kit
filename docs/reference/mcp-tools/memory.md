@@ -13,8 +13,9 @@ Recording durable knowledge in the shared graph, and reading it back. `recall` i
 Graph-aware contextual recall — the composition of every other memory tool.
 
 Seeds from any combination of ``query`` (BM25), ``symbol_id``
-(``symbol_context``), ``task`` (memories it Addresses + memories sharing
-its symbol_refs), and ``topic`` (memories tagged to it). Expands ``hops``
+(``symbol_context``), ``task`` (memories it Addresses, those sharing its
+symbol_refs, and those its title closely matches), and ``topic`` (memories
+tagged to it). Expands ``hops``
 (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
 provenance siblings; prunes superseded memories (unless
 ``include_superseded``); flags Contradicts pairs; and re-ranks with the
@@ -56,7 +57,7 @@ text.
 | --- | --- | --- | --- |
 | `query` | str? | `null` | Free-text BM25 query, matched against ``content`` and ``title``. |
 | `symbol_id` | str? | `null` | A code-graph symbol id (``repo#path::Name``) to seed from — the memories<br>and tasks whose ``symbol_refs`` include it. Use this before editing a<br>symbol: "what do we already know about this function?" |
-| `task` | str? | `null` | A ``tk-`` slug to seed from — the memories it ``Addresses`` plus those<br>sharing its ``symbol_refs``. The one-call way to load context for a task<br>you are about to start. |
+| `task` | str? | `null` | A ``tk-`` slug to seed from — the memories it ``Addresses``, those<br>sharing its ``symbol_refs``, and those its title closely matches. A first<br>``task_claim`` already returns the best of these, so this is the one-call<br>way to load context for a task you are resuming or looking at without<br>claiming. |
 | `topic` | str? | `null` | A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,<br>``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join<br>surface, so this seed in particular can pull in other repositories. |
 | `repo` | str? | `null` | Repo scoping — see instructions. Applies to the ``query`` seed and to<br>which contradiction pairs are reported (see above); symbol, task, and<br>topic seeds resolve wherever they live, and expansion crosses repos. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Restrict the ``query`` seed to one memory kind: ``pattern``,<br>``project_fact``, ``lesson``, or ``agent_context``. |

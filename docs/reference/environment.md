@@ -167,6 +167,8 @@ weight to `0` to reproduce the raw BM25 order.
 | `WITAN_RANK_HALFLIFE_DAYS` | `90.0` | Half-life of the recency decay, in days. Must be greater than zero. |
 | `WITAN_RANK_PEN_CONTRADICTED` | `0.25` | Score penalty for a memory another contradicts. Deliberately mild — a contradiction is surfaced for review, never hidden. |
 | `WITAN_RANK_PEN_SUPERSEDED` | `1.0` | Score penalty applied to a memory something else supersedes. At the default it is effectively removed from results. |
+| `WITAN_RANK_SURFACE_MIN_CONTENT` | `15.0` | Raw BM25 score a memory's content must reach against a task's title for `task_claim` and `recall(task=...)` to show it unasked. Raise it if claims carry irrelevant memories; lower it if they carry none. |
+| `WITAN_RANK_SURFACE_MIN_TITLE` | `10.0` | The same floor for the memory's title. A memory has to clear both. |
 | `WITAN_RANK_W_BM25` | `1.0` | Weight of the BM25 text-relevance term. |
 | `WITAN_RANK_W_CONF` | `0.2` | Weight of the author-set confidence score. |
 | `WITAN_RANK_W_CORROB` | `0.2` | Weight of corroboration — how much other memories back this one up. |
