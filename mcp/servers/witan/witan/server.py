@@ -3802,12 +3802,13 @@ def _title_matches(text: str) -> list[dict]:
 def _task_memories(task: dict) -> list[dict]:
     """Memories for whoever starts ``task``, as excerpts, the most certain first.
 
-    The memories the task ``Addresses`` come first, because someone chose them;
-    then the ones its title matches (:func:`_title_matches`).
+    Memories someone tied to the task come first, whether by ``Addresses`` or a
+    shared ``symbol_refs`` entry; then the ones its title matches
+    (:func:`_title_matches`).
 
     :param task: The task row.
     :returns: Up to :data:`_SURFACED_MEMORY_LIMIT` of ``slug``, ``kind``,
-        ``title`` and ``excerpt``.
+        ``title``, ``author`` and ``excerpt``.
     :rtype: list[dict]
     """
     linked = [
@@ -3816,7 +3817,13 @@ def _task_memories(task: dict) -> list[dict]:
             "read.gq", "addressed_memories", {"task_slug": task["slug"]}
         )
     ]
-    rows = {row["slug"]: row for row in _read_by_slugs("get_memories_by_slugs", linked)}
+    for ref in task.get("symbol_refs") or []:
+        linked += [m["slug"] for m in _context_for_symbol(ref)["memories"]]
+    linked = list(dict.fromkeys(linked))
+    by_slug = {
+        row["slug"]: row for row in _read_by_slugs("get_memories_by_slugs", linked)
+    }
+    rows = {slug: by_slug[slug] for slug in linked if slug in by_slug}
     for row in _title_matches(task["title"]):
         rows.setdefault(row["slug"], row)
     if not rows:
@@ -3829,6 +3836,7 @@ def _task_memories(task: dict) -> list[dict]:
             "slug": row["slug"],
             "kind": row["kind"],
             "title": row["title"],
+            "author": row["author"],
             "excerpt": row["content"][:_RESULT_EXCERPT_CHARS],
         }
         for row in rows.values()
@@ -8054,6 +8062,12 @@ async def task_claim(
     """
     Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
 
+    A successful claim that is not a renewal also returns ``memories``: up to
+    three that the task links to or its title closely matches, each with an
+    excerpt. Read them before the first edit; ``memory_get`` has the full text.
+    The list is often empty, because a weak match is left out, which does not
+    mean nothing exists: ``recall(query=...)`` searches more widely.
+
     The coordination primitive for parallel/multi-user agents — call it before
     starting a ready task so others see it is taken. Returns ``{"claimed": true,
     …}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
@@ -8265,9 +8279,7 @@ async def task_claim(
     # relevant memories arrive here without anyone deciding to look. A renewal
     # is the same holder carrying on, which already had them.
     if not (held and current_holder == holder):
-        memories = await _offload(_surfaced_for_claim, task)
-        if memories:
-            result["memories"] = memories
+        result["memories"] = await _offload(_surfaced_for_claim, task)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the
@@ -9052,10 +9064,11 @@ def recall(
     now = datetime.now(UTC)
 
     # ── Seed ──────────────────────────────────────────────────────
-    # slug → the query seed's relevance (`_with_relevance`). Was the seed's
-    # POSITION until omnigraph 0.11 learned to project the score; see `_rerank`
-    # for why that mattered. Plain assignment, not setdefault: `_search_rows`
-    # already dedupes by slug, so a slug reaches here once.
+    # slug → the seed's relevance (`_with_relevance`). Was the seed's POSITION
+    # until omnigraph 0.11 learned to project the score; see `_rerank` for why
+    # that mattered. Plain assignment for the query seed: `_search_rows` already
+    # dedupes by slug, so a slug reaches it once. The task seed comes later and
+    # can meet a slug again, so it says what happens then.
     seed_relevance: dict[str, float] = {}
     seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
     # slug → cheapest distance from a seed. FRACTIONAL, not the hop count: an
@@ -9076,8 +9089,10 @@ def recall(
         for m in _context_for_symbol(symbol_id)["memories"]:
             add_seed(m["slug"], "symbol")
     if task:
-        # A link someone chose sits at the top of the content band and a title
-        # match in the band below it, so a match cannot outrank a chosen link.
+        # A link someone chose gets the top of the content band and a title
+        # match the band below it. That leads rather than guarantees: recency,
+        # corroboration and confidence still count, so a well-corroborated match
+        # can pass a link. `_task_memories` is the strict ordering.
         for m in client.read("read.gq", "addressed_memories", {"task_slug": task}):
             seed_relevance[m["slug"]] = _CONTENT_BAND[1]
             add_seed(m["slug"], "task")
@@ -9114,10 +9129,9 @@ def recall(
         }
 
     def norm_bm25(slug: str) -> float:
-        """0.0 for a candidate the query never matched — a symbol, task or topic
-        seed, or a neighbour pulled in by expansion. Those are ranked by the
-        rest of the composite score and their distance penalty, exactly as
-        before."""
+        """0.0 for a candidate no seed gave a relevance — a ``symbol_id`` or
+        topic seed, or a neighbour pulled in by expansion. Those are ranked by
+        the rest of the composite score and their distance penalty."""
         return seed_relevance.get(slug, 0.0)
 
     # Scored from the score columns alone: expansion can reach most of the graph
