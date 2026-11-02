@@ -1,11 +1,11 @@
 ### Fixed
 
-- `recall` no longer takes minutes on a deployed graph. It read every expansion
-  relation once per seed and every candidate once by slug, so a query that
-  reached about 900 memories to return 5 made 1,128 omnigraph reads. Expansion and
-  scoring now read `$slugs` lists in one round trip per relation, and `content`
-  is read only for the memories being returned. Results and ranking are
-  unchanged, except as noted under Changed.
+- `recall` no longer makes an omnigraph read per memory, which is what made it
+  take minutes on a deployed graph. It read every expansion relation once per
+  seed and every candidate once by slug, so a query that reached about 900
+  memories to return 5 made 1,128 reads. Expansion and scoring now read `$slugs`
+  lists, 200 slugs to a read, and `content` is read only for the memories being
+  returned. Which memories rank where is unchanged.
 
 ### Changed
 

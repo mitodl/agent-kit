@@ -150,7 +150,8 @@ def test_recall_keeps_a_neighbour_per_source_in_one_read(server):
 def test_recall_reads_do_not_grow_with_seeds_or_candidates(server, monkeypatch):
     """The round trip was the cost: every seed read 6 relations and every
     candidate read itself, so 34 seeds reaching about 900 memories took 1,128
-    reads and over three minutes. Now the same reads run whatever the fan-out."""
+    reads and over three minutes. Reads now grow by chunk of slugs, not by
+    memory."""
     tag = ["everywhere"]
     for i in range(3):
         server.memory_store(
@@ -184,10 +185,17 @@ def test_recall_reads_do_not_grow_with_seeds_or_candidates(server, monkeypatch):
 def test_recall_breaks_a_score_tie_by_seed_position(server, monkeypatch):
     """Rows come back in no particular order, so ranking must not depend on it:
     the seed order is the tie-break, as it was when candidates were read one at a
-    time."""
+    time. A local store happens to answer in seed order, hence the reversal."""
     for i in range(4):
         server.memory_store(kind="pattern", title=f"t{i}", content="snorkel widget")
     monkeypatch.setattr(server._module, "_score", lambda **_: 0.0)
+    real_read = server.client.read
+
+    def reversing_read(file, query, params=None):
+        rows = real_read(file, query, params)
+        return rows[::-1] if query == "memory_score_columns" else rows
+
+    monkeypatch.setattr(server.client, "read", reversing_read)
 
     seeded = server.recall(query="snorkel", hops=0)
 

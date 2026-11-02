@@ -390,21 +390,6 @@ query contradicts_current_pairs() {
     order { $w.created_at desc }
 }
 
-// Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
-query applies_to_sources($slug: String) {
-    match {
-        $other: Memory
-        $m: Memory { slug: $slug }
-        $other $w:appliesto $m
-    }
-    return {
-        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
-        $w.confidence as edge_confidence, $w.role as edge_role,
-        $w.author as edge_author, $w.created_at as edge_created_at
-    }
-    order { $w.created_at desc }
-}
-
 // Sessions that produced $slug (for provenance-sibling expansion in recall).
 query producing_sessions($slug: String) {
     match {
