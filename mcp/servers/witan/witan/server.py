@@ -3663,6 +3663,49 @@ def _without_scoring_keys(row: dict) -> dict:
     return {k: v for k, v in row.items() if k not in (_SCORE_COLUMN, _RELEVANCE_KEY)}
 
 
+# Content characters a `recall` or `memory_search` result carries before its
+# memories are cut to excerpts. Twenty memories average about 3,400 characters
+# each, and results of 65,787 and 68,767 characters both came back from Claude
+# Code as a file pointer rather than as content. Where the limit sits below that
+# is unmeasured, so this leaves a wide margin for the excerpts, each memory's
+# other fields and JSON escaping.
+_RESULT_CONTENT_BUDGET_CHARS = 24_000
+# What a memory past the budget still shows, so it can be judged worth reading.
+_RESULT_EXCERPT_CHARS = 280
+
+
+def _fit_contents(rows: list[dict]) -> list[dict]:
+    """Cut ranked memory ``rows`` to fit one tool response, best-ranked first.
+
+    Rows are kept whole while the budget lasts. A row that does not fit keeps
+    what is left of the budget or an excerpt, whichever is longer, and gains
+    ``content_truncated`` and ``content_chars`` saying so; ``memory_get`` returns
+    the full text. No row is dropped: the budget bounds content, not results.
+
+    :param rows: Memory rows, best-ranked first.
+    :returns: The same rows in the same order, cut where needed.
+    :rtype: list[dict]
+    """
+    remaining = _RESULT_CONTENT_BUDGET_CHARS
+    fitted: list[dict] = []
+    for row in rows:
+        content = row["content"]
+        keep = max(remaining, _RESULT_EXCERPT_CHARS)
+        if len(content) <= keep:
+            fitted.append(row)
+        else:
+            fitted.append(
+                {
+                    **row,
+                    "content": content[:keep],
+                    "content_truncated": True,
+                    "content_chars": len(content),
+                }
+            )
+        remaining = max(0, remaining - len(content))
+    return fitted
+
+
 def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     """BM25 candidate rows in score-desc order (the seed step for §3.5 / §8).
 
@@ -3866,7 +3909,9 @@ def memory_search(
     ``recall``).
 
     Returns the top-20 memories ranked by BM25 relevance. Superseded memories are
-    hidden unless ``include_superseded=True``.
+    hidden unless ``include_superseded=True``. Past a total content budget a
+    memory's ``content`` is cut, marked by ``content_truncated`` and
+    ``content_chars``; ``memory_get`` returns the full text.
 
     Parameters
     ----------
@@ -3896,12 +3941,14 @@ def memory_search(
     if not include_superseded:
         rows = [r for r in rows if r["slug"] not in edge_index["superseded"]]
     # Cap here, after pruning — see _SEARCH_LIMIT.
-    return _rerank(
-        rows,
-        now=datetime.now(UTC),
-        rank_cfg=rank_cfg,
-        edge_index=edge_index,
-    )[:_SEARCH_LIMIT]
+    return _fit_contents(
+        _rerank(
+            rows,
+            now=datetime.now(UTC),
+            rank_cfg=rank_cfg,
+            edge_index=edge_index,
+        )[:_SEARCH_LIMIT]
+    )
 
 
 # The literal `limit` on the capped `list_*memories*` queries in read.gq, which
@@ -8691,28 +8738,30 @@ def memory_symbols(slug: str) -> dict:
 
 
 #: The expansion queries, and which edge-confidence columns each row carries.
-#: ``topic_siblings`` reports the SIBLING's Tagged edge only — see read.gq for
-#: why binding the seed's as well was quadratic in parallel edges rather than
+#: ``expand_topic_siblings`` reports the SIBLING's Tagged edge only — see read.gq
+#: for why binding the seed's as well was quadratic in parallel edges rather than
 #: merely thorough (a store rebuilt with keyed edges has none).
-#: ``provenance_siblings`` traverses ``SessionProduced``, which carries no
+#: ``expand_provenance_siblings`` traverses ``SessionProduced``, which carries no
 #: properties, so its rows report none and score as the default.
 _EXPANSION_QUERIES: dict[str, tuple[str, ...]] = {
-    "applies_to_targets": ("edge_confidence",),
-    "applies_to_sources": ("edge_confidence",),
-    "related_out": ("edge_confidence",),
-    "related_in": ("edge_confidence",),
-    "topic_siblings": ("edge_confidence",),
-    "provenance_siblings": (),
+    "expand_applies_to_targets": ("edge_confidence",),
+    "expand_applies_to_sources": ("edge_confidence",),
+    "expand_related_out": ("edge_confidence",),
+    "expand_related_in": ("edge_confidence",),
+    "expand_topic_siblings": ("edge_confidence",),
+    "expand_provenance_siblings": (),
 }
 
 
-def _expand_neighbors(slug: str) -> dict[str, bool]:
-    """One-hop memory neighbours of ``slug`` → whether the hop was ASSERTED.
+def _expand_neighbors(slugs: Sequence[str]) -> dict[str, dict[str, bool]]:
+    """Each of ``slugs`` → its one-hop memory neighbours → was the hop ASSERTED.
 
     Covers AppliesTo/RelatedTo, topic siblings (Tagged), and provenance
-    siblings (same producing session). Each relation is a single conjunctive
-    query — topic_siblings and provenance_siblings join memory→topic/session→
-    memory in one roundtrip rather than fanning out per topic/session.
+    siblings (same producing session). A memory with no neighbours is absent.
+
+    One read per relation per chunk of ``slugs``, however many memories that
+    is. ``recall``'s latency is dominated by round trips to omnigraph rather
+    than by rows, so a read per frontier memory is what made it take minutes.
 
     BEST PATH WINS. A neighbour reachable by both an asserted and an inferred
     route is asserted: the inferred route is extra evidence for a link we
@@ -8721,15 +8770,18 @@ def _expand_neighbors(slug: str) -> dict[str, bool]:
     topics, both directions of a symmetric link), and this is the rule that
     collapses them.
     """
-    out: dict[str, bool] = {}
+    out: dict[str, dict[str, bool]] = {}
     for query, confidence_columns in _EXPANSION_QUERIES.items():
-        for row in client.read("read.gq", query, {"slug": slug}):
+        for row in _read_by_slugs(query, slugs):
+            source, neighbor = row["source_slug"], row["neighbor_slug"]
+            if source == neighbor:
+                continue
             asserted = all(
                 (row.get(column) or _EDGE_CONFIDENCE_DEFAULT) == "asserted"
                 for column in confidence_columns
             )
-            out[row["slug"]] = out.get(row["slug"], False) or asserted
-    out.pop(slug, None)
+            neighbors = out.setdefault(source, {})
+            neighbors[neighbor] = neighbors.get(neighbor, False) or asserted
     return out
 
 
@@ -8764,9 +8816,9 @@ def _expand_from_seeds(candidates: dict[str, float], hops: int) -> None:
     frontier = set(candidates)
     for _ in range(hops):
         nxt: set[str] = set()
-        for slug in frontier:
+        for slug, neighbors in _expand_neighbors(sorted(frontier)).items():
             parent_cost = candidates[slug]
-            for neighbor, asserted in _expand_neighbors(slug).items():
+            for neighbor, asserted in neighbors.items():
                 cost = (
                     parent_cost + 1.0 + (0.0 if asserted else rank_cfg.w_inferred_edge)
                 )
@@ -8831,6 +8883,9 @@ def recall(
     (default off); ``recall`` works with BM25 only and needs no embedding provider.
 
     Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
+    Past a total content budget a memory's ``content`` is cut, marked by
+    ``content_truncated`` and ``content_chars``; ``memory_get`` returns the full
+    text.
 
     Parameters
     ----------
@@ -8933,23 +8988,36 @@ def recall(
         before."""
         return seed_relevance.get(slug, 0.0)
 
-    scored: list[tuple[float, dict]] = []
+    # Scored from the score columns alone: expansion can reach most of the graph
+    # to return twenty memories, so `content` is read for the winners only.
+    # Walked in `candidates` order, not row order: the sort is stable, so seed
+    # position is what breaks a tie.
+    score_rows = {
+        row["slug"]: row
+        for row in _read_by_slugs("memory_score_columns", list(candidates))
+    }
+    scored: list[tuple[float, str]] = []
     for slug, hop in candidates.items():
-        node = memory_get(slug)
-        if node is None:
+        row = score_rows.get(slug)
+        if row is None:
             continue
         base = _score(
             norm_bm25=norm_bm25(slug),
-            age_days=_age_days(node.get("updated_at") or node.get("created_at"), now),
+            age_days=_age_days(row.get("updated_at") or row.get("created_at"), now),
             corroboration=edge_index["corroboration"].get(slug, 0),
-            confidence=node.get("confidence"),
+            confidence=row.get("confidence"),
             is_superseded=slug in edge_index["superseded"],
             is_contradicted=slug in edge_index["contradicted"],
             rank_cfg=rank_cfg,
         )
-        scored.append((base - rank_cfg.w_hop * hop, node))
+        scored.append((base - rank_cfg.w_hop * hop, slug))
     scored.sort(key=lambda t: -t[0])
-    returned = [node for _, node in scored][:limit]
+    ranked = [slug for _, slug in scored][:limit]
+    nodes = {
+        row["slug"]: row for row in _read_by_slugs("get_memories_by_slugs", ranked)
+    }
+    # A memory deleted between the two reads has no row.
+    returned = _fit_contents([nodes[slug] for slug in ranked if slug in nodes])
 
     # ── Contradictions among the RETURNED memories ────────────────
     # Only over the limited result set, so every pair references a memory the

@@ -71,7 +71,10 @@ recall(topic="uv")  # seed from a topic
 ```
 
 Seed with any combination of `query`, `symbol_id`, `task`, and `topic`; widen
-with `hops=2`. Reach for a narrower read only for a specific need:
+with `hops=2`. The best-ranked memories come back whole. Past a total content
+budget the rest come back as excerpts with `content_truncated: true`, so call
+`memory_get` on any you want to read in full. `memory_search` does the same.
+Reach for a narrower read only for a specific need:
 
 | Want | Call |
 |------|------|

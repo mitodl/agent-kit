@@ -304,10 +304,12 @@ def test_topic_siblings_does_not_multiply_by_repeated_links(server):
                 },
             )
 
-    rows = server.client.read("read.gq", "topic_siblings", {"slug": a["slug"]})
+    rows = server.client.read(
+        "read.gq", "expand_topic_siblings", {"slugs": [a["slug"]]}
+    )
     # One edge per side: a and b each appear once as the sibling.
     assert len(rows) == 2
-    assert server._expand_neighbors(a["slug"]) == {b["slug"]: False}
+    assert server._expand_neighbors([a["slug"]]) == {a["slug"]: {b["slug"]: False}}
 
 
 # ── Confidence-weighted recall ────────────────────────────────────
@@ -368,7 +370,9 @@ def test_zero_weight_restores_uniform_hops(server, monkeypatch):
     monkeypatch.setattr(
         server._module, "rank_cfg", RankConfig(w_inferred_edge=0.0), raising=True
     )
-    assert server._expand_neighbors(seed["slug"]) == {inferred["slug"]: False}
+    assert server._expand_neighbors([seed["slug"]]) == {
+        seed["slug"]: {inferred["slug"]: False}
+    }
 
 
 @requires_omnigraph
@@ -403,10 +407,10 @@ def test_best_route_wins_when_a_neighbour_is_reachable_both_ways(server):
         kind="pattern", title="both", content="unrelated words", tags=["shared"]
     )
     # The shared tag alone is an inferred route...
-    assert server._expand_neighbors(seed["slug"])[both["slug"]] is False
+    assert server._expand_neighbors([seed["slug"]])[seed["slug"]][both["slug"]] is False
     # ...and naming the link is enough to make the pair asserted.
     server.memory_link(seed["slug"], both["slug"], "related_to")
-    assert server._expand_neighbors(seed["slug"])[both["slug"]] is True
+    assert server._expand_neighbors([seed["slug"]])[seed["slug"]][both["slug"]] is True
 
 
 @requires_omnigraph
@@ -428,7 +432,7 @@ def test_unstamped_edges_score_as_asserted(server):
             "created_at": None,
         },
     )
-    assert server._expand_neighbors(a["slug"]) == {b["slug"]: True}
+    assert server._expand_neighbors([a["slug"]]) == {a["slug"]: {b["slug"]: True}}
     assert _only(server.memory_neighbors(a["slug"]), "related_to")["edge"] == {
         "confidence": None,
         "role": None,
