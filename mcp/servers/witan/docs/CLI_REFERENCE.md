@@ -244,6 +244,7 @@ List tasks for the current repo (or filtered).
 | `--repo` | str \| None | detected repo | Scope to a specific repo URI |
 | `--status` | str \| None | — | Filter: `open`, `in_progress`, `blocked`, `closed` |
 | `--project` | str \| None | — | Scope to a `wp-` WorkflowProject slug |
+| `--parent` | str \| None | — | Direct children of a `tk-` task/epic. Keeps closed rows; refuses `--ready` and a query |
 | `--assignee` | str \| None | — | Filter by owner |
 | `--ready` | bool | `False` | Show only ready-to-work tasks (open, all blockers closed) |
 | `--all-repos` | bool | `False` | Span every repo in the graph |
@@ -251,7 +252,15 @@ List tasks for the current repo (or filtered).
 
 ```bash
 witan tasks --ready --project wp-migrate-auth-oauth2
+witan tasks --all-repos --parent tk-csp-headers-epic --output-format json
 ```
+
+`--parent` differs from the other filters in two ways, both because it names
+one epic rather than describing a working view. It **keeps closed tasks** — a
+merged chunk is closed, and an epic's children are wanted whole — and it
+**exits 2** rather than being ignored when combined with `--ready` or a
+positional query, neither of which the server filters by parent. Pair it with
+`--all-repos` when the children may not all sit in the detected repo.
 
 A positional `QUERY` searches titles and descriptions instead of listing, with
 the same flags (this is the CLI form of `task_search`; there is no

@@ -64,7 +64,15 @@ directory, distinguished only by filename and opening section:
 | `*-spec.md` | A plan for work to be done |
 | `*-analysis.md`, `*-evaluation.md` | Findings, no plan attached |
 | `*-spike-results.md`, `*-spike.md` | A spike's answer |
+| `*-deviations.md` | How a spec's plan moved during implementation |
 | plain (`remove-nginx-sidecar.md`) | Either — read the opener |
+
+`-deviations.md` is the one suffix this skill adds, and it is deliberately a
+sibling file rather than a per-work directory: the directory is flat and
+distinguishes documents by suffix, so a `<slug>/` would be the only one of its
+kind. Same rule as everything else here — follow what the directory does. The
+format is
+[the deviation log](../../plan-technical-approach/references/deviation-log.md).
 
 Numbered sections are common but not universal. Openers vary widely: `1. Goal`,
 `1. Problem`, `TL;DR`, `Short answer`, and in one case `The decision that

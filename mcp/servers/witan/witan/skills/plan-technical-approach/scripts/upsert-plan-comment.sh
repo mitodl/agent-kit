@@ -21,6 +21,24 @@
 #                          a different repo from the code.
 #   --issue <N|url>        Issue number, or a full issue URL (which supplies
 #                          the repo too).
+#   --render               Build the body from the work graph instead of
+#                          reading one. Mutually exclusive with --body-file.
+#                          This is the normal mode for anything with chunk
+#                          tasks; --body-file is the fast path, where a
+#                          trivial change has no epic and a four-line comment.
+#   --epic <tk-slug>       Required with --render. The epic whose child tasks
+#                          are the chunks.
+#   --spec <url>           Optional. Link to the spec, design doc or RFC.
+#   --decisions <md>       Optional. Pre-formatted markdown links to the ADRs.
+#   --note <text>          Optional, <=280 characters. The ONE authored line in
+#                          a rendered comment -- judgment the graph cannot
+#                          imply, e.g. "the bottleneck is review, not work".
+#                          Anything longer is reasoning and belongs in the spec.
+#   --tasks-json <file|->  With --render, read the chunk rows from here instead
+#                          of calling witan; `-` reads stdin. For tests, and
+#                          for a caller that already has them. Expects what
+#                          `witan --output-format json tasks` emits: an object
+#                          with a `rows` array.
 #   --body-file <file|->   Plan body. `-` reads stdin. Defaults to this issue's
 #                          draft path under ~/.cache/ol-plan/.
 #                          Prefer the file over any inline form: a body passed
@@ -31,6 +49,10 @@
 #                          digest. Guards against clobbering another session's
 #                          edit; GitHub's PATCH ignores If-Match, so the check
 #                          has to travel in the body.
+#                          NOT accepted with --render: it exists to protect
+#                          hand-written prose from a second session, and a
+#                          rendered body has none -- it is reproducible from
+#                          the graph, so regenerate-and-overwrite is safe.
 #   --on-duplicate <mode>  fail (default) | oldest | newest. With oldest/newest
 #                          the chosen comment is edited and the losers are
 #                          minimized as OUTDATED.
@@ -45,7 +67,9 @@
 #                          learns where to write the body.
 #
 # Output: the comment URL on stdout; diagnostics on stderr.
-# Requires: gh (GitHub CLI, authenticated), jq, sha256sum (or shasum)
+# Requires: gh (GitHub CLI, authenticated), jq, sha256sum (or shasum).
+#           --render additionally needs `witan` on PATH, unless --tasks-json
+#           supplies the rows.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,8 +77,11 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/paths.sh"
 
 usage() {
-  echo "Usage: $0 --repo <owner/repo> --issue <N|url> [--body-file <file|->]" >&2
-  echo "          [--expect-sha <sha256>] [--on-duplicate fail|oldest|newest]" >&2
+  echo "Usage: $0 --repo <owner/repo> --issue <N|url>" >&2
+  echo "          --render --epic <tk-slug> [--spec <url>] [--decisions <md>]" >&2
+  echo "                   [--note <text>] [--tasks-json <file>]" >&2
+  echo "        | --body-file <file|-> [--expect-sha <sha256>]" >&2
+  echo "          [--on-duplicate fail|oldest|newest]" >&2
   echo "          [--require-existing] [--dry-run] [--print-draft-path]" >&2
   echo "Prefer --body-file over any inline body: a shell argument has its" >&2
   echo "backticks and \$ expanded before this script sees it." >&2
@@ -65,6 +92,12 @@ repo=""
 issue=""
 body_file=""
 expect_sha=""
+render=false
+epic=""
+spec=""
+decisions=""
+note=""
+tasks_json=""
 on_duplicate="fail"
 require_existing=false
 dry_run=false
@@ -74,6 +107,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)             repo="${2:?--repo needs <owner/repo>}"; shift 2 ;;
     --issue)            issue="${2:?--issue needs a number or URL}"; shift 2 ;;
+    --render)           render=true; shift ;;
+    --epic)             epic="${2:?--epic needs a tk- slug}"; shift 2 ;;
+    --spec)             spec="${2:?--spec needs a URL}"; shift 2 ;;
+    --decisions)        decisions="${2:?--decisions needs markdown}"; shift 2 ;;
+    --note)             note="${2:?--note needs text}"; shift 2 ;;
+    --tasks-json)       tasks_json="${2:?--tasks-json needs a path}"; shift 2 ;;
     --body-file)        body_file="${2:?--body-file needs a path (use - for stdin)}"; shift 2 ;;
     --expect-sha)       expect_sha="${2:?--expect-sha needs a digest}"; shift 2 ;;
     --on-duplicate)     on_duplicate="${2:?--on-duplicate needs fail|oldest|newest}"; shift 2 ;;
@@ -97,6 +136,27 @@ case "$on_duplicate" in
   fail|oldest|newest) ;;
   *) echo "Error: --on-duplicate must be fail, oldest or newest, got: ${on_duplicate}" >&2; exit 1 ;;
 esac
+
+if [[ "$render" == true ]]; then
+  [[ -z "$body_file" ]] || { echo "Error: --render and --body-file are mutually exclusive." >&2; exit 1; }
+  [[ -n "$epic" ]] || { echo "Error: --render needs --epic <tk-slug>." >&2; exit 1; }
+  # --expect-sha guards hand-written prose. A rendered body has none, and
+  # accepting the flag here would imply a protection that is not operating.
+  [[ -z "$expect_sha" ]] || { echo "Error: --expect-sha does not apply to --render; a rendered body is reproducible from the graph." >&2; exit 1; }
+  # Measured in CHARACTERS, for the same reason the body ceiling below is:
+  # this house style is full of em dashes, and `${#note}` counts bytes.
+  note_len="$(LC_ALL=C.UTF-8 printf '%s' "$note" | LC_ALL=C.UTF-8 wc -m | tr -d ' ')"
+  if (( note_len > 280 )); then
+    echo "Error: --note is ${note_len} characters; the ceiling is 280." >&2
+    echo "It is the one authored line in a rendered comment. Longer than that" >&2
+    echo "is reasoning, which belongs in the spec or an ADR, not here." >&2
+    exit 1
+  fi
+else
+  for flag_name in epic spec decisions note tasks_json; do
+    [[ -z "${!flag_name}" ]] || { echo "Error: --${flag_name//_/-} needs --render." >&2; exit 1; }
+  done
+fi
 
 # ---- resolve the body -------------------------------------------------------
 
@@ -122,7 +182,68 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 raw="$work/raw"; payload="$work/payload"; all="$work/all"
 
-if [[ "$body_file" == "-" ]]; then
+if [[ "$render" == true ]]; then
+  rows_file="$work/tasks.json"
+  if [[ -n "$tasks_json" ]]; then
+    # Copy it in rather than reading the caller's path twice. The count and the
+    # render are two reads, and a pipe or process substitution serves only the
+    # first -- which surfaced as `jq: Cannot iterate over null` from the second
+    # rather than as anything a caller could act on.
+    if [[ "$tasks_json" == "-" ]]; then
+      cat > "$rows_file"
+    elif [[ -r "$tasks_json" ]]; then
+      cat "$tasks_json" > "$rows_file"
+    else
+      echo "Error: cannot read --tasks-json: ${tasks_json}" >&2
+      exit 1
+    fi
+  else
+    # `--all-repos` because --parent is already a precise scope and the chunk
+    # tasks may sit in the product repo while this comment goes on a tracker
+    # issue in another. `--live-pr` is what fills the PR column; it costs one
+    # gh call per linked chunk.
+    if ! witan --output-format json tasks \
+         --all-repos --parent "$epic" --live-pr > "$rows_file" 2>"$work/witan.err"; then
+      echo "Error: could not read the chunk tasks for ${epic}." >&2
+      sed 's/^/  /' "$work/witan.err" >&2 || true
+      echo "Hint: in remote mode this needs WITAN_REMOTE_URL and a current login (witan whoami)." >&2
+      exit 7
+    fi
+  fi
+
+  # Refuse rather than render an empty table. A plan comment whose chunk table
+  # is empty reads as "this work has no chunks", and posting it would overwrite
+  # a correct previous render with that claim.
+  if ! chunk_count="$(jq -e '.rows | length' < "$rows_file" 2>/dev/null)"; then
+    echo "Error: the chunk rows are not the expected {\"rows\": [...]} shape." >&2
+    echo "Hint: that is what \`witan --output-format json tasks\` emits." >&2
+    exit 7
+  fi
+  if [[ "$chunk_count" == "0" ]]; then
+    echo "Error: ${epic} has no child tasks, so there is nothing to render." >&2
+    echo "Hint: plan-technical-approach creates one child task per chunk." >&2
+    exit 7
+  fi
+
+  # WITAN_LIVE_PR=0 suppresses the lookup, in which case rows carry no
+  # `live_pr` key at all. The renderer has to be told which of the two it is:
+  # "nobody asked" and "we asked and failed" read differently, and a blank
+  # cell would read as "no PR opened yet" -- the one misreading that makes
+  # someone redo work already in review.
+  live_pr_enabled=true
+  [[ "${WITAN_LIVE_PR:-1}" != "0" ]] || live_pr_enabled=false
+
+  jq -n \
+    --slurpfile tasks "$rows_file" \
+    --arg spec "$spec" \
+    --arg decisions "$decisions" \
+    --arg note "$note" \
+    --argjson live_pr "$live_pr_enabled" \
+    --arg generated_on "$(date -u +%Y-%m-%d)" \
+    '{spec: $spec, decisions: $decisions, note: $note, live_pr: $live_pr,
+      generated_on: $generated_on, chunks: $tasks[0].rows}' \
+    | jq -r -f "${script_dir}/plan-comment.jq" > "$raw"
+elif [[ "$body_file" == "-" ]]; then
   cat > "$raw"
 elif [[ -r "$body_file" ]]; then
   cat "$body_file" > "$raw"
@@ -132,7 +253,14 @@ else
   exit 1
 fi
 
-[[ -s "$raw" ]] || { echo "Error: plan body is empty: ${body_file}" >&2; exit 1; }
+if [[ ! -s "$raw" ]]; then
+  if [[ "$render" == true ]]; then
+    echo "Error: the renderer produced an empty body for ${epic}." >&2
+  else
+    echo "Error: plan body is empty: ${body_file}" >&2
+  fi
+  exit 1
+fi
 
 # Strip any markers the caller included so re-running on an already-marked body
 # cannot double them, then rebuild: marker, body, digest.
@@ -162,7 +290,8 @@ bytes="$(wc -c < "$payload" | tr -d ' ')"
 if (( size > 65536 )); then
   echo "Error: plan body is ${size} characters (${bytes} bytes); GitHub's limit" >&2
   echo "is 65536 characters." >&2
-  echo "Trim the Revisions log to the most recent entries plus an elided count." >&2
+  echo "A rendered body cannot reach this; a hand-written one that does is" >&2
+  echo "carrying reasoning that belongs in the spec or an ADR." >&2
   exit 6
 fi
 
@@ -317,7 +446,7 @@ if [[ -n "$target" ]]; then
   # Recovery left the issue exactly as wedged as it found it.
   #
   # Minimizing stays because it is what collapses the comment in the UI, and
-  # neither step deletes: the superseded comment's Revisions log is often the
+  # neither step deletes: a superseded comment's body is sometimes the
   # only record of what it said, so it is kept readable, just no longer found.
   loser_count="$(jq 'length' <<<"$losers")"
   for (( i = 0; i < loser_count; i++ )); do

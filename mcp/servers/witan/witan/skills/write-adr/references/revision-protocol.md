@@ -156,6 +156,25 @@ abandoned for a different one. Not when a detail moves.
 The distinction: if `## Decision` would still be broadly true with an addendum
 attached, amend. If it would be false, supersede.
 
+**And: two or more addenda from one body of work is itself a trigger.** That
+test above is applied one deviation at a time, and nothing in it asks what the
+addenda add up to. Each can leave `## Decision` broadly true while the record
+as a whole becomes readable only by reconstructing current truth from four
+stacked edits — which is the problem supersession exists to solve. A reader
+arriving at an ADR should not have to replay its history to find out what it
+currently says.
+
+So at close-out, [`implement-plan`](../../implement-plan/SKILL.md) reads
+[the deviation log](../../plan-technical-approach/references/deviation-log.md)
+and counts. Two or more against one ADR, or entries that have made its
+`## Decision` false, and the superseding record gets written — taking its *why*
+from those entries, which is the one thing the addenda themselves do not
+supply in a form a reader comes back for.
+
+Nothing above changes: addenda stay the default **in flight**, for the reasons
+and against the evidence recorded earlier in this file. This only says when
+enough of them have accumulated that the honest record is a new one.
+
 Superseding is bidirectional and leaves both files in place:
 
 1. Write the new ADR with its own number. Its `## Related Decisions` says

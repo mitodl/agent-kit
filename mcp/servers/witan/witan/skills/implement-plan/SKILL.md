@@ -113,10 +113,11 @@ not a default** — it may only be reached once the unscoped ones have been read
 because an inherited decision binds just as hard as a scoped one.
 
 Before a chunk's first edit, run the same match against that chunk's
-**Touches** entry in the plan's chunk table — the paths it is expected to
-change. An ADR found after the code is written is a rewrite; found before, it
-is a constraint. If the chunk table has no `Touches` column (a plan written
-before this was recorded), derive the paths from the approach and say you did,
+**`Touches`** line — the paths it is expected to change, recorded on the chunk
+task's description by `plan-technical-approach`. An ADR found after the code is
+written is a rewrite; found before, it is a constraint. If the task carries no
+`Touches` (a plan made before this was recorded, or one whose chunk table is in
+an old-style comment), derive the paths from the approach and say you did,
 rather than skipping the check.
 
 **Warn on a glob that matches nothing in the repo at all** —
@@ -189,30 +190,27 @@ plan is not silently absorbed; the default disposition is a follow-up
 
 ---
 
-## Step 3 — Keep the plan comment current
+## Step 3 — Regenerate the plan comment
 
-The comment is the work record: chunks, status, PR links, revisions. Update it
-at **every phase boundary** and **every chunk boundary** (a PR opened, a PR
-merged — record the URL against its chunk), and when the work is blocked. Not
-per commit: a record that churns is one nobody reads.
+The comment is **rendered from the work graph, not written**. Regenerate it at
+every phase boundary and every chunk boundary (a PR opened, a PR merged), and
+when the work is blocked. Not per commit: a record that churns is one nobody
+reads.
 
-**Which record wins.** Chunk progress lives in three places, so say once which
-is authoritative and keep it that way:
+There is nothing to keep in sync, because nothing in it is maintained
+separately:
 
 | For | Authority |
 |-----|-----------|
 | Whether a chunk is done | The chunk's **witan task** state |
-| Whether its PR is open, queued, merged, needs rebase | **`gh stack view --json`** |
-| The narrative — why, in what order, what was traded away | The **plan comment** |
+| Whether its PR is open, approved, merged, failing checks | The chunk task's **`external_uri`**, resolved live |
+| What is blocking | The **`blocks` links** in the graph |
+| The narrative — why, what was traded away | The **spec and the ADRs** |
+| How the plan moved | [The deviation log](../plan-technical-approach/references/deviation-log.md) |
 
-The comment is **derived from** the first two, not maintained in parallel with
-them. It exists so a reader without witan can follow the work; the moment it is
-treated as a second status record, it is a third thing to keep in sync and the
-first to go stale. If it disagrees with task state or `gh stack`, the comment
-is wrong — fix the comment.
-
-Pass `--require-existing` on every update after the first, so a transient read
-failure cannot open a second comment:
+So the way to fix a wrong comment is to fix the graph and re-render. Editing
+the comment to disagree with the graph just moves the error somewhere nobody
+will look again.
 
 The scripts live in the sibling skill `plan-technical-approach`, which installs
 beside this one. Resolve its directory as
@@ -226,16 +224,29 @@ skill lives.
 ```bash
 PTA="$SKILLS/plan-technical-approach/scripts"
 
-# Not just the first update: read before overwriting a comment this session
-# did not write, or the Revisions log and merged PR URLs are replaced wholesale.
-bash "$PTA/fetch-plan-comment.sh" --repo <owner/repo> --issue <N>
-
 bash "$PTA/upsert-plan-comment.sh" \
-  --repo <owner/repo> --issue <N> --require-existing --expect-sha <sha>
+  --repo <owner/repo> --issue <N> --require-existing \
+  --render --epic <tk-epic-slug> --spec <spec URL> \
+  --decisions "<ADR markdown links>" --note "<judgment, or omit>"
 ```
 
-Floor: no more than one phase may land without an update, so close-out is never
-the first movement since approval.
+`--require-existing` on every update after the first, so a transient read
+failure cannot open a second comment. No `fetch-plan-comment.sh` read-back and
+no `--expect-sha`: those guard hand-written prose against another session, and
+a rendered body is rebuilt from the graph every time.
+
+**Two refusals to expect, both deliberate.** The script exits non-zero rather
+than posting when the epic has no child tasks, and when the witan read fails —
+a comment whose chunk table is empty reads as *this work has no chunks*, and
+posting it would overwrite a correct one with that claim.
+
+`--note` is the one authored line, capped at 280 characters. Use it for
+judgment the graph cannot imply — *"the bottleneck is review, not work"* — and
+omit it when there is none. Anything longer is reasoning: it belongs in the
+spec.
+
+Floor: no more than one phase may land without a regeneration, so close-out is
+never the first movement since approval.
 
 ---
 
@@ -253,17 +264,25 @@ decide the original stands. **Do not write the deviating code first and ask
 afterwards** — an approval sought after the work exists is not an approval, it
 is a request to ratify.
 
-Where it gets recorded depends on what changed:
+**Every deviation gets one entry in
+[the deviation log](../plan-technical-approach/references/deviation-log.md)** —
+six fields, 800 characters hard — **written when the engineer approves, before
+the deviating code exists.** That is what makes it a record of what was agreed
+rather than a note about what was done, and it is the only artifact the
+approval leaves. It is also where the superseding ADR at close-out gets its
+*why*.
+
+Then, depending on what changed:
 
 | What changed | Where it goes |
 |---|---|
 | A **decision** an ADR records | A dated `## Addendum` on that ADR — see [the revision protocol](../write-adr/references/revision-protocol.md) |
 | A **decision a spec records**, where one exists | Rewrite that `Dn.` section and update its state, in the same PR. Specs change in flight; they get no addendum protocol — see [`write-spec`](../write-spec/SKILL.md) |
-| Delivery: a chunk split, reordered, added, dropped | The plan comment's **Revisions** log |
+| Delivery: a chunk split, reordered, added, dropped | Change the **chunk tasks** — the graph is the delivery shape — then re-render (Step 3) |
 | Something that should have been an ADR and was not | Write one now via [`write-adr`](../write-adr/SKILL.md) |
 
-Land the record change in the **same pull request** as the deviation, so the
-reviewer sees the change and its justification together.
+Land the log entry and the record change in the **same pull request** as the
+deviation, so the reviewer sees the change and its justification together.
 
 **What counts:** a different mechanism, a moved chunk boundary, a new tradeoff
 accepted, an acceptance criterion that turns out to be unbuildable as written.
@@ -271,10 +290,34 @@ accepted, an acceptance criterion that turns out to be unbuildable as written.
 how a function is factored. If it would not have changed the approval, it is
 not a deviation.
 
-**If the whole approach is wrong**, this is not a deviation. Stop and go back
-to [`plan-technical-approach`](../plan-technical-approach/SKILL.md) with the
-new evidence. A mechanism swap is a new decision, not an adjustment to an old
-one.
+### When to replan instead of repairing again
+
+Repairing a plan one deviation at a time is right while the divergence is
+small. Past a point it is not: you are patching a plan you no longer have, and
+the patches cost more than rewriting while producing something worse. Repair
+buys **stability** — it preserves the commitments already attached to the plan,
+the open PRs and the claimed tasks — and that value decays as divergence grows.
+
+So stop repairing and go back to
+[`plan-technical-approach`](../plan-technical-approach/SKILL.md) — which
+rewrites the plan, reading the deviation log to do it — when **any** of:
+
+- the deviation log reaches a **third** entry that changes the chunk graph's
+  shape (a chunk split, added, reordered or dropped), **or**
+- a decision the plan rests on is reopened, or turns out to be false, **or**
+- the mechanism named as the approach is itself what is in question.
+
+The third is the clearest: **a mechanism swap is a new decision, not an
+adjustment to an old one.** But the first two get missed, because each
+individual change looks small. Count the entries rather than judging the feel
+of it — that is what the log is for, and it is why it is read mid-work rather
+than only at the end.
+
+Three is where it was calibrated. Reconstructing
+[mitodl/hq#14080](https://github.com/mitodl/hq/issues/14080)'s history as
+deviation entries gives six, of which three changed the chunk graph's shape;
+the third landed five days in, with three further repairs after it and the
+plan by then describing a different delivery from the one that was approved.
 
 ---
 
@@ -306,6 +349,17 @@ two things:
   independent review takes goals only from sources the authoring session did
   not write, and the plan comment is exactly that session's output. Acceptance
   criteria live in the issue body for this reason.
+
+**As soon as the PR exists, link it to the chunk task:**
+
+```text
+task_update(slug="<this chunk's task>", external_uri="<the PR URL>")
+```
+
+This is not bookkeeping — it is what makes the PR column render. The comment
+resolves each chunk's live state (open, approved, changes requested, checks
+failing, merged) from this field, so a chunk whose PR is unlinked shows as
+*not started* while it sits in review.
 
 The first chunk's PR also carries any ADRs written for this work — that is how
 they land, reviewed alongside the code they describe.
@@ -400,13 +454,13 @@ the tool and say so.
 
 **Per chunk, as it merges:**
 
-1. Update the comment: tick the chunk, record its PR URL.
-2. `task_close(slug="<chunk task>", resolution="<what shipped>")` — this also
-   makes anything it blocked eligible in `task_ready`.
-3. If the chunk carried an accepted workaround, comment its PR URL on the
+1. `task_close(slug="<chunk task>", resolution="<what shipped>")` — this also
+   makes anything it blocked eligible in `task_ready`. Then re-render (Step 3);
+   the row follows from the task and its PR, so there is nothing to tick.
+2. If the chunk carried an accepted workaround, comment its PR URL on the
    follow-up issue — that diff is what whoever fixes it has to undo. Leave that
    issue **open**; it tracks work that has not happened.
-4. **Re-check any forward-looking `applies_to` glob — but only once the chunk
+3. **Re-check any forward-looking `applies_to` glob — but only once the chunk
    that creates the path has landed.** An ADR written for this work may have
    named a path that did not exist yet, flagged with an
    `<!-- applies_to: ... is created by this work -->` note:
@@ -425,13 +479,13 @@ the tool and say so.
 
    **Still empty is not yet a verdict.** All the ADRs land with the first
    chunk, while the paths they govern may be created by the third, so an empty
-   match after chunk 1 proves nothing. Resolve it against the plan's chunk
-   table: if a **later** chunk's `Touches` covers the path, the note is still
+   match after chunk 1 proves nothing. Resolve it against the chunk tasks: if a
+   **later** chunk's `Touches` covers the path, the note is still
    accurate — leave it and re-check when that chunk merges. Only when the
    chunk that was supposed to create the path has merged and the glob is
    *still* empty is it genuinely wrong, and then it needs the follow-up PR
    below, because by now this chunk's PR has merged.
-5. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore.
+4. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore.
    Query each reviewer's latest verdict with bots excluded — the exact command
    and the three ways the obvious version gets it wrong are in
    [the revision protocol](../write-adr/references/revision-protocol.md).
@@ -444,7 +498,7 @@ the tool and say so.
    (`Accepted 2026-10-14 by @handle`). No approving review → it stays
    `Proposed`, and say so rather than leaving it to be discovered.
 
-6. **Deliver steps 4 and 5 as a follow-up pull request.** Close-out runs
+5. **Deliver steps 3 and 4 as a follow-up pull request.** Close-out runs
    *after* the merge, so every edit it makes — a status flipped to `Accepted`,
    a note dropped, a corrected glob, a regenerated index or docs mirror — is a
    change to a tracked file on the default branch with nothing carrying it
@@ -453,8 +507,8 @@ the tool and say so.
    the task and the session close around it.
 
    So open one small PR per close-out, titled for what it does
-   (`docs(adr): accept ADR-0014 after #412`), carrying only the acceptance
-   edits. It needs no plan comment and no chunk task — it is bookkeeping the
+   (`docs(adr): accept ADR-0014 after #412`), carrying the acceptance edits and
+   any superseding ADR the deviation log called for. It needs no plan comment and no chunk task — it is bookkeeping the
    merge triggered, not new work. Where the repo has further obligations (this
    one regenerates the docs mirror and a nav entry), they ride along in it.
 
@@ -464,9 +518,24 @@ the tool and say so.
 
 **When the last chunk merges:**
 
-1. Final comment update: outcome and every PR link.
-2. `task_close` on the epic, or on the single task.
-3. `workflow_session_end(session_slug=..., summary=..., files_changed=[...])`.
+1. **Read the deviation log end to end** and decide what the accumulated
+   deviations did to the decisions. Any ADR that took **two or more** addenda
+   during this work, or whose `## Decision` these entries have made false, gets
+   a **superseding ADR** via [`write-adr`](../write-adr/SKILL.md), taking its
+   *why* from the log — see
+   [the accumulation trigger](../write-adr/references/revision-protocol.md#when-to-supersede-instead).
+
+   This is the judgement an addendum-at-a-time cannot make. Each addendum can
+   leave `## Decision` broadly true while the record as a whole becomes
+   readable only by reconstructing current truth from stacked edits, which is
+   what supersession exists to prevent. It rides in the same bookkeeping pull
+   request as steps 3-5 above.
+
+   Then the log is done: it stays in git beside the shipped spec and is not
+   maintained further.
+2. Final regeneration of the comment.
+3. `task_close` on the epic, or on the single task.
+4. `workflow_session_end(session_slug=..., summary=..., files_changed=[...])`.
 
 **Do not call `workflow_project_complete`** unless this was the whole project —
 it writes the immutable corpus trace and belongs at the end of the work.

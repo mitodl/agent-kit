@@ -188,9 +188,24 @@ Also carry, each in its own section:
 - **Non-goals / out of scope** — the things a reader will otherwise assume are
   coming. This section prevents more scope creep than any other.
 - **Open questions** — with who can answer each. An open question with no owner
-  is a wish.
+  is a wish. **How it reaches that owner is bounded**: one comment batching
+  every currently-open question, and no follow-up comment when each is
+  answered — the `Dn.` section changes state and the rendered plan comment's
+  blocker line clears, which is the announcement. See
+  [what gets a new comment](../plan-technical-approach/references/plan-comment-format.md#what-gets-a-new-comment).
+  One question per comment, plus a comment reporting each answer, is how a
+  single issue picks up four agent-authored comments nobody asked for.
 - **Risks** and what is done about them, where the work can fail in a way the
   sequencing cannot absorb.
+
+**Create the deviation log beside the spec**, empty but for its header, and
+name it in the spec's header block next to `Project:`. It records how the plan
+moves once implementation starts — what was assumed, what contradicted it, and
+what was agreed instead — and it is what a superseding ADR is written from at
+close-out. A log nobody can find is a log nobody reads, which is why it is
+named in the spec rather than left to be discovered. Format and the two
+triggers that read it:
+[the deviation log](../plan-technical-approach/references/deviation-log.md).
 
 ---
 

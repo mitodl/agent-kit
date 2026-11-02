@@ -6,7 +6,7 @@ import cyclopts
 from rich.prompt import Prompt
 
 from .. import config as cfg_module
-from .. import live_pr
+from .. import live_pr as live_pr_mod
 from ._common import (
     _PRIORITY_STYLE,
     _STATUS_STYLE,
@@ -90,8 +90,10 @@ def tasks(
     repo: str | None = None,
     status: str | None = None,
     project: str | None = None,
+    parent: str | None = None,
     assignee: str | None = None,
     ready: bool = False,
+    live_pr: bool = False,
     all_repos: bool = False,
     limit: int = 50,
 ) -> None:
@@ -114,15 +116,40 @@ def tasks(
         non-closed statuses.
     project:
         Scope to a WorkflowProject (``wp-`` slug).
+    parent:
+        List the direct children of a parent task or epic (``tk-`` slug).
+        A precise scope in its own right, so pair it with ``--all-repos``
+        when the children may not all sit in the repo this checkout detects.
+        Cannot be combined with a search query or ``--ready``: the server
+        filters neither by parent. Unlike a bare listing, this one keeps
+        closed tasks -- a merged chunk is closed, and an epic's children are
+        wanted whole.
     assignee:
         Filter by owner.
     ready:
         Show only ready-to-work tasks (open, all blockers closed).
+    live_pr:
+        Resolve each row's linked PR or issue and report its live state, and
+        carry ``external_uri``, ``created_at`` and the raw ``live_pr`` record
+        in structured output. Off by default because it costs one ``gh`` call
+        per linked row, and a bare listing should not start making network
+        calls. ``WITAN_LIVE_PR=0`` suppresses the lookup itself.
     all_repos:
         Span every repo in the graph.
     limit:
         Max rows.
     """
+    # Refuse rather than ignore. Neither `task_ready` nor the search path takes
+    # a parent, so accepting the flag there would quietly list something other
+    # than what was asked for -- the same class of lie as the `--limit` bug the
+    # comment further down records.
+    if parent is not None and (query is not None or ready):
+        print_error(
+            "--parent cannot be combined with a search query or --ready.",
+            stderr=True,
+        )
+        raise SystemExit(2)
+
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
     detected_repo = (
@@ -160,17 +187,33 @@ def tasks(
             repo=repo_arg,
             status=status,
             project_slug=project,
+            parent=parent,
             assignee=assignee,
             limit=min(limit, _MAX_TASK_LIMIT),
         )
         # A bare `witan tasks` is a live-work view: drop closed tasks unless the
         # user explicitly asks for a status (including `--status closed`).
-        if status is None:
+        #
+        # `--parent` is not that view. It names one epic and asks for its
+        # children, and a MERGED chunk is a closed task -- eliding those would
+        # report a finished epic as empty.
+        if status is None and parent is None:
             rows = [r for r in rows if r.get("status") != "closed"]
     rows = rows[:limit]
 
+    # One lookup per linked row, AFTER the slice so `--limit` bounds the cost
+    # as well as the output. `annotate` never raises: a failed or disabled
+    # lookup lands as `{"error": ...}` on the row, which consumers render as
+    # unavailable rather than as "no PR".
+    if live_pr:
+        rows = [
+            live_pr_mod.annotate(r, live_pr_mod.LINKED_FIELDS["task_get"]) for r in rows
+        ]
+
     if query is not None:
         empty = f"[dim]No tasks match '{esc(query)}'.[/dim]"
+    elif parent is not None:
+        empty = f"[dim]No children of {esc(parent)}.[/dim]"
     elif detected_repo and not all_repos:
         empty = (
             f"[dim]No tasks scoped to {_short_repo(detected_repo)}.[/dim] "
@@ -189,6 +232,8 @@ def tasks(
     base_title = "Ready tasks" if ready else "Tasks"
     if query is not None:
         base_title += f" matching '{query}'"
+    if parent is not None:
+        base_title += f" under {parent}"
     rows_data = [
         {
             "priority": r.get("priority", ""),
@@ -199,6 +244,18 @@ def tasks(
             "repo": _short_repo(r.get("repo")) or "",
             "assignee": r.get("assignee") or "",
             "blocked_by": ", ".join(r.get("blocked_by") or []),
+            # Structured consumers -- the plan-comment renderer -- need the raw
+            # link, the creation order and the raw state, not the one-line
+            # human rendering the table shows.
+            **(
+                {
+                    "external_uri": r.get("external_uri") or "",
+                    "created_at": r.get("created_at") or "",
+                    "live_pr": r.get("live_pr"),
+                }
+                if live_pr
+                else {}
+            ),
         }
         for r in rows
     ]
@@ -212,6 +269,21 @@ def tasks(
         "assignee",
         "blocked_by",
     ]
+    if live_pr:
+        # `external_uri`, `created_at` and the raw record ride in the ROWS for
+        # structured output; only this short state lands in the rich table,
+        # which `columns` alone governs.
+        columns.append("pr")
+        fetched = live_pr_mod.enabled()
+        for row in rows_data:
+            state = row.get("live_pr") or {}
+            row["pr"] = (
+                ""
+                if not row.get("external_uri")
+                else (
+                    state.get("state") or ("unavailable" if fetched else "not fetched")
+                )
+            )
     # Search rows don't carry blocked_by, and a blank value would read as "no
     # blockers". The status column still flags a blocked task. Drop the key
     # from the rows too: structured output dumps rows, not columns.
@@ -241,7 +313,7 @@ def _task_show(slug: str) -> None:
     if not t:
         print_error(f"No task {slug!r}.", stderr=True)
         raise SystemExit(1)
-    t = live_pr.annotate(t, live_pr.LINKED_FIELDS["task_get"])
+    t = live_pr_mod.annotate(t, live_pr_mod.LINKED_FIELDS["task_get"])
 
     fmt = get_output_format()
     if fmt != "txt":

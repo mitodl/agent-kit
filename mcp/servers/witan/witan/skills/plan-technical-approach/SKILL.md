@@ -344,9 +344,29 @@ is then the same on every run on a given machine, so a permission-allowlist
 entry approved once keeps matching — the same reason `scripts/paths.sh` derives
 the draft path itself instead of taking it as an argument.
 
+**Work with chunk tasks is rendered, not written.** Create the chunk tasks
+first (below), then:
+
 ```bash
 PTA="$SKILLS/plan-technical-approach/scripts"
 
+bash "$PTA/upsert-plan-comment.sh" \
+  --repo <owner/repo> --issue <N> --render --epic <tk-epic-slug> \
+  --spec <spec URL> --decisions "<ADR markdown links>" \
+  --note "<=280 chars of judgment the graph cannot imply>" --dry-run
+```
+
+The chunk table, every PR's state and the blocker line come from the graph.
+Do not pass them, and do not write a body carrying the approach paragraph, the
+phase checklist, the tradeoff ledger or the rejected alternatives — those are
+the spec's and the ADR's, and a second copy on the issue is the one that goes
+stale. `--note` is the only free text and the script refuses past 280
+characters.
+
+**Fast path only** — a trivial change has no epic to render from, so it gets a
+short written body:
+
+```bash
 bash "$PTA/upsert-plan-comment.sh" \
   --repo <owner/repo> --issue <N> --print-draft-path
 # -> ~/.cache/ol-plan/<owner>-<repo>-<N>.md
@@ -366,8 +386,11 @@ Check what it reports, then re-run without `--dry-run`. The script computes the
 draft path itself, prepends the marker and appends a digest; do not pass paths
 it can derive, and do not hand-write the marker.
 
-**Updating a comment you did not just write?** Read it first, and pass the
-digest back:
+**Updating a hand-written comment you did not just write?** Read it first, and
+pass the digest back. This applies to `--body-file` only: `--expect-sha`
+guards hand-written prose from a second session, a rendered body has none, and
+the script refuses the two together rather than implying a protection that is
+not operating.
 
 ```bash
 bash "$PTA/fetch-plan-comment.sh" \
@@ -382,11 +405,12 @@ changes it. `--expect-sha` is still not a lock: GitHub's PATCH ignores
 `If-Match`, so it catches an edit made *before* your read and nothing landing
 after it.
 
-Without `--expect-sha` an upsert is a full-body overwrite, so a session working
-from a stale or empty draft cache replaces the Revisions log, the merged chunk
-PR URLs and the tradeoff ledger wholesale — and the comment's own edit history
-is the only other copy. `--require-existing` prevents duplicates, not
-clobbering. Format per
+Without `--expect-sha` a `--body-file` upsert is a full-body overwrite, so a
+session working from a stale or empty draft cache replaces that body wholesale
+— and the comment's own edit history is the only other copy. A `--render`
+upsert has no such failure: it rebuilds from the graph every time.
+`--require-existing` prevents duplicates, not clobbering, and is worth passing
+either way. Format per
 [`references/plan-comment-format.md`](references/plan-comment-format.md).
 
 **More than one chunk?** Mirror the delivery shape in the graph: an epic with
@@ -400,11 +424,23 @@ chunking:
 ```text
 task_update(slug="<the task scope-work claimed>", type="epic")
 task_create(title="<chunk 1>", parent="<that slug>", type="feature",
-            project_slug="<project>")
+            project_slug="<project>",
+            description="Axis: <split axis>\nTouches: <path globs>\nEst: ~N lines")
 task_create(title="<chunk 2>", parent="<that slug>", type="feature",
-            project_slug="<project>")
+            project_slug="<project>",
+            description="Axis: <split axis>\nTouches: <path globs>\nEst: ~N lines")
 task_link(from_slug="<chunk-1 slug>", to_slug="<chunk-2 slug>", kind="blocks")
 ```
+
+**The chunk's title is what the rendered comment shows**, so write it as the
+one-line description of what ships, not as a bare "chunk 2".
+
+**`Axis`, `Touches` and `Est` live on the task, not in the comment.** They are
+per-chunk planning output, and the chunk is a task: `implement-plan` reads
+`Touches` from there to match it against each ADR's `applies_to` **before** the
+chunk's first edit, which is what turns a governing decision into a constraint
+rather than something discovered after the code is written. Estimates are fine
+— the point is to know which decisions apply, not to predict the diff.
 
 Two things that bit here before:
 
