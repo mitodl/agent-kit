@@ -47,10 +47,32 @@ entry that does not fit is carrying reasoning, and reasoning belongs in the
 - **Assumed:** one CSP policy for the whole site, enforced in one chunk.
 - **Found:** Learn ships its own embed feature, so `frame-ancestors` has to be `*` on the embed routes and `'self'` everywhere else.
 - **Changed to:** two policies from chunk 3; chunk 4 splits so a regression stays attributable to one policy.
-- **Touches:** D7, D8 (spec) · ADR-0014
+- **Touches:** chunks · D7, D8 (spec) · ADR-0014
 - **Approved by:** @rhysyngsun
 - **PR:** https://github.com/mitodl/mit-learn/pull/4183
 ```
+
+**`Touches:` recognises the token `chunks`.** Write it when the entry changed
+the **delivery shape** — a chunk split, added, reordered or dropped — alongside
+whatever `Dn.` sections and ADRs it moved. That is what makes the replan
+threshold below countable instead of a judgment call, and it is why there is no
+seventh field: the one that already enumerates *what moved* just gained
+"the delivery" as one of the things it can name.
+
+## Checking it
+
+```bash
+bash "$PTA/check-deviation-log.sh" <spec-dir>/<slug>-deviations.md [--since <ref>]
+```
+
+Every rule on this page, asserted: the six fields and their order, the cap, the
+dates, newest-first, and — with `--since` — that the file really is
+append-only, which is the one rule only a diff can see and the one an agent is
+likeliest to break by tidying an entry.
+
+It exits **3** when the replan threshold is reached, which is a distinct status
+precisely so the caller can act on it rather than reading past it.
+`--list-adrs` prints the records close-out has to supersede from.
 
 **There is deliberately no "what we learned" field.** A lesson that outlives
 this work — *"this RFC has now been wrong twice about browser behaviour, both
@@ -75,11 +97,12 @@ Other rules, each closing a way this file turns back into a changelog:
 A log consumed only "once the work is complete" is a log that rots, because
 work often has no clean end. This one has a trigger that fires mid-flight.
 
-**1. The replan threshold.** `implement-plan` counts the entries that change
-the chunk graph's shape — a chunk split, added, reordered or dropped. At the
+**1. The replan threshold.** `check-deviation-log.sh` counts the entries whose
+`Touches:` names `chunks` — a chunk split, added, reordered or dropped. At the
 **third**, repair stops and the work goes back to
 [`plan-technical-approach`](../SKILL.md), which rewrites the plan from these
-entries rather than patching it again.
+entries rather than patching it again. The script exits 3 to say so; it is a
+count, not a feeling, which is the entire reason it is a script.
 
 The threshold is not arbitrary. Repair buys *stability* — it preserves the
 commitments already attached to the plan, the open PRs and claimed tasks — and

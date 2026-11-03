@@ -32,6 +32,7 @@ approved and recorded, which is what
 | [`references/plan-comment-format.md`](references/plan-comment-format.md) | The issue comment, which is the work record, and its marker contract |
 | `scripts/fetch-plan-comment.sh` | Read-only: find the plan comment on an issue |
 | `scripts/upsert-plan-comment.sh` | Create or update it in place |
+| `scripts/check-deviation-log.sh` | Validate a deviation log; count the entries that moved the chunk graph |
 
 ## Prerequisites
 

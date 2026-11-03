@@ -32,6 +32,7 @@ still needs this.
 | File | Purpose |
 |------|---------|
 | [`references/bookkeeping-pr.md`](references/bookkeeping-pr.md) | Why post-merge edits need their own pull request, and what rides in it |
+| `$SKILLS/plan-technical-approach/scripts/check-deviation-log.sh` | `--list-adrs`: the records these deviations touched |
 | `$SKILLS/write-adr/scripts/adr-scope.sh` | `--sweep`: forward-looking `applies_to` notes, re-checked now the work is over |
 
 ## Prerequisites
@@ -103,6 +104,15 @@ until the user has answered, and Step 1's answer decides whether a
 **Read the deviation log end to end**, at
 `docs/specs/<slug>-deviations.md` — named in the spec's header block. No log
 means no deviations, which is a normal outcome and not a reason to go looking.
+
+Get the ADR list from the script rather than by eye — that is the one thing
+missed here that nothing downstream catches, because a record nobody superseded
+simply stays confidently wrong on `main`:
+
+```bash
+PTA="$SKILLS/plan-technical-approach/scripts"
+bash "$PTA/check-deviation-log.sh" docs/specs/<slug>-deviations.md --list-adrs
+```
 
 For **every ADR the entries touched**, write **one** superseding record via
 [`write-adr`](../write-adr/SKILL.md), covering everything that moved:

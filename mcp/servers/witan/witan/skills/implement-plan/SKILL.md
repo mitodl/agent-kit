@@ -291,8 +291,9 @@ is a request to ratify.
 
 **Every deviation gets one entry in
 [the deviation log](../plan-technical-approach/references/deviation-log.md)** —
-six fields, 800 characters hard — **written when the engineer approves, before
-the deviating code exists.** That is what makes it a record of what was agreed
+six fields, 800 characters hard, and `Touches:` naming `chunks` when the entry
+moved the delivery shape — **written when the engineer approves, before the
+deviating code exists.** That is what makes it a record of what was agreed
 rather than a note about what was done, and it is the only artifact the
 approval leaves. It is also where a superseding ADR gets its *why*.
 
@@ -342,9 +343,24 @@ rewrites the plan, reading the deviation log to do it — when **any** of:
 
 The third is the clearest: **a mechanism swap is a new decision, not an
 adjustment to an old one.** But the first two get missed, because each
-individual change looks small. Count the entries rather than judging the feel
-of it — that is what the log is for, and it is why it is read mid-work rather
-than only at the end.
+individual change looks small. So do not judge the feel of it — count, with the
+script, after every entry you write:
+
+```bash
+bash "$PTA/check-deviation-log.sh" <spec-dir>/<slug>-deviations.md \
+  --since "$(git merge-base origin/main HEAD)"
+```
+
+**Exit 3 is the threshold**, and it is a distinct status so it cannot be read
+past: stop repairing and go back to
+[`plan-technical-approach`](../plan-technical-approach/SKILL.md). Exit 1 means
+the log itself is malformed — a missing field, an entry over the 800-character
+cap, or lines removed from a file that is append-only.
+
+The count comes from entries whose `Touches:` names `chunks`, so write that
+token when an entry moves the delivery shape. An entry that does not name it
+does not count toward the threshold, and a plan can drift three chunk changes
+deep while the log says nothing.
 
 Three is where it was calibrated. Reconstructing
 [mitodl/hq#14080](https://github.com/mitodl/hq/issues/14080)'s history as

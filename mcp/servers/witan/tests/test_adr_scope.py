@@ -22,9 +22,7 @@ requires_git = pytest.mark.skipif(
 
 
 def sh(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        args, cwd=cwd, capture_output=True, text=True, check=False
-    )
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False)
 
 
 def scope(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -51,8 +49,12 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / "src/api/views.py").write_text("def v(): pass\n")
     (tmp_path / "src/web/app.js").write_text("const a = 1;\n")
 
-    adr(tmp_path, "0001-api.md", '---\napplies_to:\n  - "src/api/**"\n---\n\n# 1. API\n')
-    adr(tmp_path, "0002-web.md", '---\napplies_to:\n  - "src/web/**"\n---\n\n# 2. Web\n')
+    adr(
+        tmp_path, "0001-api.md", '---\napplies_to:\n  - "src/api/**"\n---\n\n# 1. API\n'
+    )
+    adr(
+        tmp_path, "0002-web.md", '---\napplies_to:\n  - "src/web/**"\n---\n\n# 2. Web\n'
+    )
     adr(tmp_path, "0003-inherited.md", "# 3. Inherited\n\nNo frontmatter at all.\n")
     adr(
         tmp_path,
@@ -60,7 +62,11 @@ def repo(tmp_path: Path) -> Path:
         '---\napplies_to:\n  - "src/notify/**"\n---\n'
         "<!-- applies_to: src/notify/** is created by this work -->\n\n# 4. Notify\n",
     )
-    adr(tmp_path, "0005-nope.md", '---\napplies_to:\n  - "src/nope/**"\n---\n\n# 5. Nope\n')
+    adr(
+        tmp_path,
+        "0005-nope.md",
+        '---\napplies_to:\n  - "src/nope/**"\n---\n\n# 5. Nope\n',
+    )
     commit(tmp_path, "base")
     return tmp_path
 
