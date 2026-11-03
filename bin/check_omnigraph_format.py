@@ -80,8 +80,10 @@ def check(binary: str = "omnigraph") -> None:
                 f"place, but _OMNIGRAPH_MIN_INTERNAL_SCHEMA is "
                 f"{_OMNIGRAPH_MIN_INTERNAL_SCHEMA}. Both images label that number "
                 "for ol-infrastructure's preview, which accepts any served root "
-                "from it up. Set it to "
-                f"{oldest} once every deployed root is at format {oldest} or newer.",
+                f"from it up, so set it to {oldest} in this change. If that's "
+                f"higher than before, the binary refuses roots older than "
+                f"format {oldest}: confirm every deployed root is at {oldest} or "
+                "newer before merging.",
                 file=sys.stderr,
             )
             raise SystemExit(1)

@@ -681,6 +681,14 @@ def reported_internal_schema_range(
     match = _INTERNAL_SCHEMA_LINE.search(result.stdout + result.stderr)
     if match is not None:
         written = int(match.group(1))
+        line = match.string[match.start() :].splitlines()[0]
+        if match.group(2) is None and "serves" in line:
+            # A range in a shape this doesn't parse must not read as "serves
+            # only its own format": the min label would then claim too little.
+            raise RuntimeError(
+                f"`{binary} version` printed a served range this can't parse: "
+                f"{line.strip()!r}"
+            )
         return int(match.group(2) or written), written
     raise RuntimeError(
         f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"

@@ -189,6 +189,11 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp_min_schema" >&2
         exit 1
     fi
+    if (( installer_min_schema > installer_schema )); then
+        echo "_OMNIGRAPH_MIN_INTERNAL_SCHEMA ($installer_min_schema) is above" >&2
+        echo "_OMNIGRAPH_INTERNAL_SCHEMA ($installer_schema): the labelled range would be empty." >&2
+        exit 1
+    fi
     if [[ "$installer_schema" != "$server_schema" || "$installer_schema" != "$mcp_schema" ]]; then
         echo "omnigraph internal-schema declarations have drifted — the images" >&2
         echo "would advertise a storage format this repo does not declare:" >&2
