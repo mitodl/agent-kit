@@ -171,8 +171,9 @@ before deciding a stale-looking thread is moot.
 Bot review-state fields (`APPROVED`/`COMMENTED`/`CHANGES_REQUESTED` in
 `reviews[]`) tell you formality, not substance — most bots (Copilot, Gemini)
 leave everything in `COMMENTED` state with the real content in the thread
-comments, same as noted in
-[`github-pr-triage`](../github-pr-triage/SKILL.md#phase-3--classify).
+comments, which is why
+[`github-pr-triage`](../github-pr-triage/SKILL.md#how-the-signals-are-read)
+reads unresolved threads rather than review states.
 
 **A human reviewer's comment gets more deliberate handling than a bot's,
 even when the fix looks equally obvious.** A bot flags a pattern; a human

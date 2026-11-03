@@ -127,3 +127,112 @@ def test_recall_expands_topic_sibling(server):
 def test_recall_empty_is_clean(server):
     out = server.recall(query="zzzznomatchquux")
     assert out == {"memories": [], "contradictions": [], "seeds": {}}
+
+
+@requires_omnigraph
+def test_recall_keeps_a_neighbour_per_source_in_one_read(server):
+    """One read covers every source, and a row says which source it came from,
+    because a neighbour's cost builds on its own parent's."""
+    a = server.memory_store(kind="pattern", title="a", content="alpha")
+    b = server.memory_store(kind="pattern", title="b", content="beta")
+    c = server.memory_store(kind="pattern", title="c", content="gamma")
+    d = server.memory_store(kind="pattern", title="d", content="delta")
+    server.memory_link(a["slug"], c["slug"], "related_to")
+    server.memory_link(b["slug"], d["slug"], "related_to", confidence="inferred")
+
+    assert server._expand_neighbors([a["slug"], b["slug"]]) == {
+        a["slug"]: {c["slug"]: True},
+        b["slug"]: {d["slug"]: False},
+    }
+
+
+@requires_omnigraph
+def test_recall_reads_do_not_grow_with_seeds_or_candidates(server, monkeypatch):
+    """The round trip was the cost: every seed read 6 relations and every
+    candidate read itself, so 34 seeds reaching about 900 memories took 1,128
+    reads and over three minutes. Reads now grow by chunk of slugs, not by
+    memory."""
+    tag = ["everywhere"]
+    for i in range(3):
+        server.memory_store(
+            kind="pattern", title=f"s{i}", content=f"zorble seed {i}", tags=tag
+        )
+    for i in range(9):
+        server.memory_store(
+            kind="pattern", title=f"n{i}", content=f"unrelated {i}", tags=tag
+        )
+
+    reads: list[str] = []
+    real_read = server.client.read
+
+    def counting_read(file, query, params=None):
+        reads.append(query)
+        return real_read(file, query, params)
+
+    monkeypatch.setattr(server.client, "read", counting_read)
+    server._invalidate_edge_index()
+
+    out = server.recall(query="zorble", hops=1, limit=5)
+
+    assert len(out["memories"]) == 5
+    assert reads.count("memory_score_columns") == 1
+    assert reads.count("get_memories_by_slugs") == 1
+    assert "get_memory" not in reads
+    assert sum(q.startswith("expand_") for q in reads) == 6
+
+
+@requires_omnigraph
+def test_recall_breaks_a_score_tie_by_seed_position(server, monkeypatch):
+    """Rows come back in no particular order, so ranking must not depend on it:
+    the seed order is the tie-break, as it was when candidates were read one at a
+    time. A local store happens to answer in seed order, hence the reversal."""
+    for i in range(4):
+        server.memory_store(kind="pattern", title=f"t{i}", content="snorkel widget")
+    monkeypatch.setattr(server._module, "_score", lambda **_: 0.0)
+    real_read = server.client.read
+
+    def reversing_read(file, query, params=None):
+        rows = real_read(file, query, params)
+        return rows[::-1] if query == "memory_score_columns" else rows
+
+    monkeypatch.setattr(server.client, "read", reversing_read)
+
+    seeded = server.recall(query="snorkel", hops=0)
+
+    assert [m["slug"] for m in seeded["memories"]] == seeded["seeds"]["query"]
+
+
+@requires_omnigraph
+def test_recall_cuts_content_to_the_budget_best_ranked_first(server, monkeypatch):
+    monkeypatch.setattr(server._module, "_RESULT_CONTENT_BUDGET_CHARS", 300)
+    monkeypatch.setattr(server._module, "_RESULT_EXCERPT_CHARS", 50)
+    bodies = [f"plumbus {i} " + "x" * 200 for i in range(3)]
+    for i, body in enumerate(bodies):
+        server.memory_store(kind="pattern", title=f"m{i}", content=body)
+
+    first, second, third = server.recall(query="plumbus", hops=0)["memories"]
+
+    # Whole while the budget lasts, then what is left of it, then an excerpt.
+    assert "content_truncated" not in first
+    assert second["content_truncated"] is True
+    assert len(second["content"]) == 300 - len(first["content"])
+    assert second["content_chars"] == len(bodies[1])
+    assert third["content_truncated"] is True
+    assert len(third["content"]) == 50
+    # The full text is one memory_get away.
+    assert server.memory_get(third["slug"])["content"] in bodies
+
+
+@requires_omnigraph
+def test_memory_search_shares_the_content_budget(server, monkeypatch):
+    monkeypatch.setattr(server._module, "_RESULT_CONTENT_BUDGET_CHARS", 100)
+    monkeypatch.setattr(server._module, "_RESULT_EXCERPT_CHARS", 50)
+    for i in range(2):
+        server.memory_store(
+            kind="pattern", title=f"m{i}", content=f"grommet {i} " + "y" * 200
+        )
+
+    hits = server.memory_search("grommet")
+
+    assert all(h["content_truncated"] for h in hits)
+    assert [len(h["content"]) for h in hits] == [100, 50]

@@ -164,6 +164,32 @@ query get_memory($slug: String) {
     }
 }
 
+// Every field of each memory in `$slugs`, as `get_memory` returns one. A slug
+// with no memory has no row, and rows come back in no particular order.
+query get_memories_by_slugs($slugs: [String]) {
+    match {
+        $m: Memory
+        $m.slug in $slugs
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.symbol_refs,
+        $m.confidence, $m.created_at, $m.updated_at
+    }
+}
+
+// The columns `recall` scores a candidate on, and nothing else. Expansion
+// routinely reaches hundreds of memories to return twenty, so candidates are
+// scored from this and only the winners' `content` is read.
+query memory_score_columns($slugs: [String]) {
+    match {
+        $m: Memory
+        $m.slug in $slugs
+    }
+    return { $m.slug, $m.confidence, $m.created_at, $m.updated_at }
+}
+
 // ── Inter-memory edge traversal ───────────────────────────────────
 // Both endpoints are bound as typed Memory nodes (the engine requires the far
 // side of a traversal to be a bound node, see code_read.gq). Directional edges
@@ -364,21 +390,6 @@ query contradicts_current_pairs() {
     order { $w.created_at desc }
 }
 
-// Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
-query applies_to_sources($slug: String) {
-    match {
-        $other: Memory
-        $m: Memory { slug: $slug }
-        $other $w:appliesto $m
-    }
-    return {
-        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
-        $w.confidence as edge_confidence, $w.role as edge_role,
-        $w.author as edge_author, $w.created_at as edge_created_at
-    }
-    order { $w.created_at desc }
-}
-
 // Sessions that produced $slug (for provenance-sibling expansion in recall).
 query producing_sessions($slug: String) {
     match {
@@ -399,9 +410,68 @@ query addressed_memories($task_slug: String) {
     return { $m.slug, $m.kind, $m.title, $m.repo, $m.created_at }
 }
 
-// Recall expansion: all memories sharing any Topic with $slug, in one query
-// (memory → topic → memory) instead of a per-topic fan-out. Includes $slug; the
-// server discards self.
+// ── Recall expansion ──────────────────────────────────────────────
+// One hop out from every memory in `$slugs`, in one read per relation. Each row
+// names the memory it was reached from (`source_slug`) because a hop's cost
+// builds on its parent's. Both ends are aliased because both are Memory. Taking
+// a list is the point: recall used to read each relation once per frontier
+// memory, which made expansion alone 6 round trips per seed.
+
+query expand_applies_to_targets($slugs: [String]) {
+    match {
+        $m: Memory
+        $other: Memory
+        $m $w:appliesto $other
+        $m.slug in $slugs
+    }
+    return {
+        $m.slug as source_slug, $other.slug as neighbor_slug,
+        $w.confidence as edge_confidence
+    }
+}
+
+query expand_applies_to_sources($slugs: [String]) {
+    match {
+        $other: Memory
+        $m: Memory
+        $other $w:appliesto $m
+        $m.slug in $slugs
+    }
+    return {
+        $m.slug as source_slug, $other.slug as neighbor_slug,
+        $w.confidence as edge_confidence
+    }
+}
+
+query expand_related_out($slugs: [String]) {
+    match {
+        $m: Memory
+        $other: Memory
+        $m $w:relatedto $other
+        $m.slug in $slugs
+    }
+    return {
+        $m.slug as source_slug, $other.slug as neighbor_slug,
+        $w.confidence as edge_confidence
+    }
+}
+
+query expand_related_in($slugs: [String]) {
+    match {
+        $m: Memory
+        $other: Memory
+        $other $w:relatedto $m
+        $m.slug in $slugs
+    }
+    return {
+        $m.slug as source_slug, $other.slug as neighbor_slug,
+        $w.confidence as edge_confidence
+    }
+}
+
+// All memories sharing any Topic with a memory in `$slugs` (memory → topic →
+// memory) instead of a per-topic fan-out. Includes the source; the server
+// discards self.
 //
 // ★ ONLY THE SIBLING'S EDGE IS BOUND, AND THE SEED'S DELIBERATELY IS NOT.
 // Binding both looks more thorough — a shared-topic hop is arguably only as
@@ -410,7 +480,7 @@ query addressed_memories($task_slug: String) {
 // yield the cross product. Measured on a store with four parallel Tagged
 // edges per side (what four `memory_update` calls used to leave behind):
 // 32 rows both-bound, 8 rows sibling-only, 2 rows fully unbound. recall runs
-// this per frontier memory, so that is not a cost worth a nuance.
+// this over its whole frontier, so that is not a cost worth a nuance.
 //
 // The seed side stays unbound, which keeps its set semantics and collapses its
 // parallel edges to one binding. What survives is the more useful half anyway:
@@ -418,31 +488,33 @@ query addressed_memories($task_slug: String) {
 // topic, which is what decides whether to trust the sibling. The seed's own
 // attachment says something about the seed, which recall already has better
 // evidence for.
-query topic_siblings($slug: String) {
+query expand_topic_siblings($slugs: [String]) {
     match {
-        $m: Memory { slug: $slug }
+        $m: Memory
         $tp: Topic
         $m tagged $tp
         $other: Memory
         $other $wo:tagged $tp
+        $m.slug in $slugs
     }
     return {
-        $other.slug,
+        $m.slug as source_slug, $other.slug as neighbor_slug,
         $wo.confidence as edge_confidence
     }
 }
 
-// Recall expansion: all memories produced by any session that produced $slug, in
-// one query (memory → session → memory). Includes $slug; the server discards self.
-query provenance_siblings($slug: String) {
+// All memories produced by any session that produced a memory in `$slugs`
+// (memory → session → memory). Includes the source; the server discards self.
+query expand_provenance_siblings($slugs: [String]) {
     match {
-        $m: Memory { slug: $slug }
+        $m: Memory
         $s: WorkflowSession
         $s sessionproduced $m
         $other: Memory
         $s sessionproduced $other
+        $m.slug in $slugs
     }
-    return { $other.slug }
+    return { $m.slug as source_slug, $other.slug as neighbor_slug }
 }
 
 // Every memory that is the TARGET of a Supersedes edge, i.e. the superseded
