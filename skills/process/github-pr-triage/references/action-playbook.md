@@ -1,6 +1,6 @@
 # Action Playbook
 
-Command-level detail for Phase 5 of the main skill. Every action here is
+Command-level detail for acting on the main skill's report. Every action here is
 visible to others (comments, review requests) or hard to reverse (merges) —
 get explicit confirmation on the specific PR(s) before running any of these,
 even if the user approved "act on the ready ones" in general terms up front.
@@ -8,14 +8,15 @@ Show the list, then act.
 
 ---
 
-## `needs_first_pass_review` — kick off a first pass
+## No human reviewer yet — kick off a first pass
 
-`scripts/request-review.sh` is the single entry point for this bucket. It
+`scripts/request-review.sh` is the entry point for a bot first pass. It
 re-checks the PR itself before doing anything (via `pr-detail.sh`) and refuses
 to act on a draft, or on a PR that already has a submitted review or a pending
-requested reviewer — so it's safe to run over an entire
-`needs_first_pass_review` batch without re-pinging PRs that moved on between
-classification and action:
+requested reviewer — so it's safe to run over the whole "No human reviewer
+yet" group without re-pinging PRs that moved on between the report and the
+action. PRs whose status reads `bot review only` already had their first pass
+and need a human reviewer the user names:
 
 ```bash
 ./skills/process/github-pr-triage/scripts/request-review.sh mitodl/agent-kit 90            # both bots (default)
@@ -76,7 +77,7 @@ that's a social action with more weight than a bot request.
 
 ---
 
-## `approved_ready_to_merge` — merge
+## Ready to merge — merge
 
 ```bash
 ./skills/process/github-pr-triage/scripts/merge-pr.sh mitodl/ol-infrastructure 4902 squash
@@ -93,8 +94,7 @@ Merge method defaults to `squash` if omitted. Before calling it:
    `gh repo view <repo> --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`
    if unsure, or just ask).
 3. Re-verify `mergeable`/checks are still green right before merging if any
-   time has passed since classification — CI can go red between the report and
-   the act phase.
+   time has passed since the report — CI can go red in between.
 
 `merge-pr.sh` always passes `--delete-branch`. If the user wants the branch
 kept (e.g. it's used elsewhere), merge manually with `gh pr merge` instead of
@@ -102,18 +102,14 @@ the script.
 
 ---
 
-## `changes_requested` / `has_review_comments` (not `feedback_likely_addressed`)
+## Needs you — open threads, changes requested
 
-This is the bucket that needs real judgment, not just a script call:
+This is the group that needs real judgment, not just a script call:
 
-1. Pull the full thread for context, not just the summary already in the
-   classified JSON:
-
-   ```bash
-   gh pr view <number> -R <repo> --json latestReviews,comments,reviews \
-     --jq '.latestReviews[] | {author: .author.login, state, body}'
-   ```
-
+1. Pull the open review threads and review bodies. The report only counts
+   them. The [`address-pr-feedback`](../../address-pr-feedback/SKILL.md)
+   skill fetches, fixes, replies to, and resolves them for one PR; use it
+   rather than re-implementing the GraphQL thread query here.
 2. Read what's actually being asked. Bot reviews (Copilot, Gemini, etc.) often
    bundle several findings in one comment body — treat each as a separate
    item, not a single ask.
@@ -162,15 +158,23 @@ mixing their uncommitted work into a fix. Remove each worktree
 is available, don't fan out subagents for a single PR or a single repo —
 that's just sequential work wearing a parallel costume.
 
-**Don't auto-trust `feedback_likely_addressed: true`** as a reason to skip a
-PR entirely in the report — still list it, just flag it as lower priority to
-re-read. It's a timestamp heuristic (newest comment postdates newest review),
-not a content match; it can't tell whether the response actually resolved the
-concern, and it's blind to fixes pushed without an accompanying comment.
+Threads the report counts as outdated point at code that has changed since.
+They are often already fixed by a push, but confirm that against the diff
+before replying and resolving; outdated only means the lines moved.
 
 ---
 
-## `awaiting_review` — usually nothing to do
+## Needs you — CI failing or merge conflict
+
+A merge conflict needs a rebase or merge from base. That is code work, done
+like the feedback fixes above (worktree, resolve, push). Show the user the
+resolution rather than resolving silently. For failing CI, read the specific
+failing check (`gh pr checks <number> -R <repo>`) before guessing at a fix;
+CI failures are too varied for a generic step.
+
+---
+
+## Waiting on others — usually nothing to do
 
 By default, report only. If the user wants to nudge stale ones, ask for (or
 infer) a staleness threshold, then post a short, non-pushy comment — don't
@@ -179,37 +183,14 @@ unnecessarily) unless they specifically ask for that.
 
 ---
 
-## `approved_blocked` — triage by `blocked_reason`
-
-| `blocked_reason` | What to do |
-|---|---|
-| `unknown_pending_recompute` | Re-run `scripts/pr-detail.sh <repo> <number>` after a few seconds; GitHub just hasn't finished computing mergeability. Often resolves to `approved_ready_to_merge` on the next check with no other action needed. |
-| `merge_conflict` | Needs a rebase/merge from base — this is code work, handle like the feedback bucket above (local checkout, resolve, push). Flag to the user rather than silently resolving conflicts in a way they haven't seen. |
-| `checks_failing` | Look at the specific failing check via `statusCheckRollup[].detailsUrl` before guessing at a fix — CI failures are too varied to have a generic playbook step. |
+An approved PR shows up here while CI is running or GitHub hasn't computed
+mergeability yet. Re-run the report (or `scripts/pr-detail.sh <repo>
+<number>`) a little later; it usually moves to "Ready to merge" with no
+other action.
 
 ---
 
-## `draft` — report only
+## Drafts — report only
 
 Never request reviews or merge a draft. If a draft looks stale and the user
 wants it flagged, that's a report annotation, not an action.
-
----
-
-## Common patterns
-
-**Bot-authored PRs (Renovate, Dependabot) don't usually appear here.**
-`fetch-prs.sh` defaults to `--author @me`; a bot's own PRs only show up if you
-explicitly pass `--author renovate[bot]` or similar. If the user wants those
-triaged, that's closer to the `dependency-updates` skill's job than this one —
-point them there instead of reinventing it.
-
-**Very large orgs / high PR counts.** `gh search prs` is capped at 200 in
-`fetch-prs.sh` and GitHub's search API caps at 1000 results per query
-regardless. If the count returned equals the limit, say so — the report may be
-truncated, not exhaustive.
-
-**A PR the user doesn't own but is listed as a reviewer on** is a different
-query entirely (`--review-requested @me` instead of `--author @me`) — this
-skill doesn't cover that mode; say so if asked rather than quietly mixing the
-two result sets.

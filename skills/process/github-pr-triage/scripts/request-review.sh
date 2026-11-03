@@ -3,8 +3,8 @@
 #
 # Refuses to run on drafts, or on PRs that already have review activity
 # (a submitted review or a pending requested reviewer), unless --force -
-# this is meant to be safe to call on a whole "needs_first_pass_review"
-# batch from classify-prs.sh without re-pinging PRs that have moved on.
+# this is meant to be safe to call on the whole "No human reviewer yet"
+# group from pr_status.py without re-pinging PRs that have moved on.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

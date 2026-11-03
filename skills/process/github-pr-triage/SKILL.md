@@ -1,13 +1,17 @@
 ---
 name: github-pr-triage
 description: >
-  Enumerate your open GitHub pull requests across an org (or a single repo) and
-  categorize each by the action it actually needs: needs a first-pass bot review
-  (Copilot/Claude/Gemini), awaiting a requested reviewer, has review feedback to
-  address, formally has changes requested, or is approved and ready to merge.
-  Use this skill when asked for a PR status report, to triage an open-PR backlog,
-  to find PRs ready to merge, to see which PRs are stuck waiting on the author,
-  or to process pull requests across a GitHub organization such as mitodl.
+  Report the status of your open GitHub pull requests everywhere on GitHub
+  (mitodl and upstream open source projects alike), or in chosen orgs or
+  repos, in a single command: which are approved and ready to merge, which have
+  review feedback you haven't addressed (unresolved review threads awaiting
+  your reply, changes requested, failing CI, merge conflicts), which are
+  waiting on a reviewer, which have no reviewer at all, and which are drafts.
+  Use this skill when asked "what PRs do I have open", "which of my PRs are
+  approved", "what feedback haven't I addressed", for a PR status report, to
+  triage an open-PR backlog, to check on PRs sent to upstream projects, to
+  find PRs ready to merge, or to act on that backlog (request first-pass bot
+  reviews, merge approved PRs).
 license: BSD-3-Clause
 metadata:
   category: process
@@ -15,193 +19,113 @@ metadata:
 
 # GitHub PR Triage
 
-Turns a sprawling list of open PRs into a report grouped by required action, and
-optionally executes that action. The core pattern is
-**enumerate → enrich → classify → report → (optionally) act**, using
-`gh search prs` / `gh pr view` for data and deterministic `jq` rules for the
-classification — no code archaeology needed, unlike issue triage.
-
-Three deterministic scripts do the mechanical work, so most of this skill is
-about reading their output correctly and knowing when to escalate to judgment:
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/fetch-prs.sh` | Enumerate open PRs by author across an org |
-| `scripts/enrich-prs.sh` | Fetch review/check/mergeability detail per PR, in parallel |
-| `scripts/classify-prs.sh` | Bucket the enriched PRs by required action |
-
-Action scripts (used only after explicit per-PR confirmation — see Phase 5):
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/request-review.sh` | Request a first-pass review from Copilot and/or Claude; refuses drafts and PRs that already have review activity |
-| `scripts/merge-pr.sh` | Merge an approved, green PR and delete its branch |
-
----
-
-## Scope: figure out mode before running anything
-
-Two independent choices govern the whole run — resolve both up front, asking
-the user if either is ambiguous:
-
-1. **Report or act?** A pure status report never mutates anything. Acting means
-   requesting reviews, posting comments, pushing fixes, or merging — all of
-   which are visible to others and some of which are hard to reverse. Default
-   to **report-only** unless the user clearly asked to take action ("merge the
-   ready ones", "kick off reviews", "clear my backlog").
-2. **Which org/repo, which author?** Default author is `@me` (the current `gh`
-   user) — this skill is built around "my open PRs", matching how the four
-   buckets below are framed (things *you*, the author, are waiting on or need
-   to act on). If the user wants PRs where they're a *reviewer* instead, that's
-   a different query (`gh search prs --review-requested @me`) — say so rather
-   than silently reinterpreting the request.
-
----
-
-## Phase 1 — Enumerate
+One command answers "what PRs do I have open, and what does each one need":
 
 ```bash
-./skills/process/github-pr-triage/scripts/fetch-prs.sh mitodl /tmp/prs_fetched.json
-# or a non-default author:
-./skills/process/github-pr-triage/scripts/fetch-prs.sh mitodl /tmp/prs_fetched.json --author someone-else
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py                    # every repo on GitHub
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py mitodl             # one org
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py openedx apache/apisix  # several orgs/repos
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py --author someone-else
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py --json             # per-PR records
 ```
 
-This is one `gh search prs --owner <org> --author <user> --state open` call, so
-it works across every repo in the org in one shot — no per-repo iteration
-needed. It captures `number, title, url, repository, isDraft, createdAt,
-updatedAt, author`, but **not** review state — GitHub's search JSON doesn't
-expose `reviewDecision`, so that requires a per-PR detail call (Phase 2).
+With no scope it covers everything the author has open, including PRs to
+upstream projects, which is the right default for "what PRs do I have open".
+Narrow to an org or repo only when the user does. Each scope is searched
+separately and the results merged, so orgs and repos can be mixed.
 
----
+It prints a markdown report grouped by whose move it is, one row per PR with
+a status line, and a one-line count at the end. Show that report to the user
+as-is; don't re-derive it or re-bucket it. About 15 seconds for 100 PRs.
 
-## Phase 2 — Enrich
+Default to report-only. Act (request reviews, merge, fix feedback) only when
+the user asked for it, and follow [Acting on the report](#acting-on-the-report).
 
-```bash
-./skills/process/github-pr-triage/scripts/enrich-prs.sh /tmp/prs_fetched.json /tmp/prs_enriched.json
-```
+## Groups
 
-Runs `gh pr view` per PR (8-way parallel) to pull `reviewDecision,
-latestReviews, reviewRequests, statusCheckRollup, mergeable, mergeStateStatus,
-comments`. For a normal backlog (tens of PRs) this takes a few seconds. If a
-single PR's detail fetch fails (deleted branch, permissions), it's silently
-dropped rather than aborting the whole run — check the count in the output
-message against the fetch count if that matters.
+Each PR lands in exactly one group, checked in this order:
 
----
+| Group | Rule |
+|-------|------|
+| Drafts | Not marked ready for review |
+| Needs you | Any unresolved review thread whose last comment isn't from the PR author; a human's review comment not yet answered by a push, comment, or thread reply; a change-requester with no push after their review and no re-request; more than 100 review threads (only the first 100 are checked); CI failing; merge conflict |
+| Ready to merge | Approved, CI green (or no CI), mergeable, nothing above, and the viewer has write access to the repo |
+| Waiting on others | Approved but CI still running, mergeability not computed yet, or the repo is upstream and a maintainer has to merge; a review request pending; or a human has reviewed and the author has answered |
+| No human reviewer yet | No human review and no pending request. Bot-only reviews show as `bot review only (...)` |
 
-## Phase 3 — Classify
+The status line carries the detail behind the group, e.g. `approved by Ardiea;
+7 open threads awaiting the author (github-advanced-security 3, sentry 4); CI
+failing; merge conflict`. An approved PR with unaddressed threads shows up in
+"Needs you" with the approval in its status, so nothing is hidden by the
+grouping.
 
-```bash
-./skills/process/github-pr-triage/scripts/classify-prs.sh /tmp/prs_enriched.json > /tmp/prs_classified.json
-```
+## How the signals are read
 
-Buckets, in the order the report should present them (most actionable first):
+"Feedback not addressed" comes from GitHub's own review-thread state, not a
+timestamp guess. A thread that is unresolved and whose last comment is from
+someone other than the PR author is waiting on the author. The status names
+who opened each such thread, so bot threads (Copilot, Sentry, CodeQL) are
+told apart from a colleague's at a glance. Threads marked outdated (the code
+they point at has since changed) are counted separately: often already fixed
+by a push and only needing a reply or a resolve.
 
-| Bucket | Meaning | Typical action |
-|--------|---------|-----------------|
-| `approved_ready_to_merge` | `APPROVED`, mergeable, checks green | Merge |
-| `approved_blocked` | `APPROVED` but conflicting / checks red / mergeability not yet computed | Resolve conflict, fix CI, or just re-check later |
-| `changes_requested` | Formal `CHANGES_REQUESTED` review | Address feedback, push, re-request review |
-| `has_review_comments` | A review left in `COMMENTED` state (this is how Copilot, Gemini, and most review bots report findings — they rarely use formal approve/request-changes) but no formal decision | Read the comments, decide if they're addressed |
-| `awaiting_review` | A reviewer (human or bot) is requested; nothing submitted yet | Nothing to do — wait, or nudge if stale |
-| `needs_first_pass_review` | No reviews, no reviewer requested at all | Kick off a first-pass review |
-| `draft` | Not marked ready for review | Report separately; skip review/merge actions |
+Feedback left in a review body rather than an inline thread has no resolved
+state, so it falls back to activity: a human's non-empty `COMMENTED` review
+left on the current head commit, with no PR comment or thread reply from the
+author after it, is reported as `review comment from <who> newer than the
+author's last push or reply`. Bot review bodies are left out because they
+summarize findings that also arrive as threads. Read the review itself before
+treating it as answered.
 
-**`reviewDecision` alone under-counts feedback.** GitHub only sets it for
-formal `APPROVED` / `CHANGES_REQUESTED` reviews. Bot reviewers overwhelmingly
-leave `COMMENTED`-state reviews with the substance in the review body — those
-show up with `reviewDecision: ""` and land in `has_review_comments`. In
-practice this is usually the *largest* bucket. Don't skip it just because
-`reviewDecision` looks empty.
+"Pushed since a review" means the PR's head commit is no longer the one the
+review was left on, not a comparison of commit dates: a commit made before a
+review and pushed after it keeps its earlier date.
 
-**`mergeable` can be `"UNKNOWN"`.** GitHub computes mergeability lazily in the
-background; a PR that was just pushed to, or hasn't been polled recently, can
-show `UNKNOWN` even with no real conflict. `classify-prs.sh` surfaces this as
-`blocked_reason: "unknown_pending_recompute"` — re-run `scripts/pr-detail.sh`
-on that PR (or just `gh pr view`) after a few seconds before assuming it's
-actually blocked.
+Approval is read from each reviewer's latest approve/request-changes review,
+not only `reviewDecision`. On repos without required reviews (e.g. mit-learn)
+`reviewDecision` stays empty even after an approval. Where it is
+`REVIEW_REQUIRED` despite an approval and nobody has requested changes, the
+status says `more approval required` and the PR is not counted as approved.
+Each change request is handed back to its reviewer on its own, by a push
+after that reviewer's review or a re-request of that reviewer. The PR stays in
+"Needs you" only while some change-requester has neither.
 
-**`feedback_likely_addressed` is a heuristic, not a verdict.** For
-`has_review_comments` and `changes_requested`, the classifier compares the
-newest review's timestamp against the newest PR comment's timestamp — if a
-comment landed after the review, someone probably already responded. It has
-no visibility into new commits pushed without a comment, and it can't tell
-whether the response actually resolved the concern. Use it to *prioritize*
-which PRs to read first, never to skip reading them.
+`mergeability not computed yet` means GitHub hasn't evaluated the PR since its
+last push or base change. It is not a conflict; it usually resolves the next
+time anything views the PR.
 
----
+Merge rights come from the viewer's permission on the repo. On an upstream
+project where that is below write (e.g. TRIAGE on openedx-platform, READ on
+apache/apisix), an approved, green PR reads `a maintainer has to merge` and
+stays in "Waiting on others".
 
-## Phase 4 — Report
+## Limits
 
-Present the classification as grouped markdown tables, ordered per the bucket
-table above (most actionable first), each PR as one row:
+- `--author` defaults to `@me`. PRs where the user is a requested _reviewer_
+  are a different query (`gh search prs --review-requested @me`); say so
+  rather than mixing the two.
+- Each scope's search returns at most 200 PRs, and the script warns on stderr
+  when one hits that limit, because the report is then truncated. Archived
+  repos are left out, since nothing on their PRs can be acted on.
+- Bot-authored PRs (Renovate, Dependabot) only appear with an explicit
+  `--author`. For those, the `renovate-security-triage` and
+  `dependency-updates` skills fit better.
 
-```markdown
-### ✅ Approved & ready to merge (3)
-| PR | Title | Repo |
-|----|-------|------|
-| [#4902](https://github.com/mitodl/ol-infrastructure/pull/4902) | Add Pulumi program for ol-analytics-api K8s deployment | ol-infrastructure |
+## Acting on the report
 
-### 🚧 Approved but blocked (3)
-| PR | Reason |
-|----|--------|
-| [#4693](...) | unknown_pending_recompute — re-check mergeability |
+Every action is visible to others or hard to reverse, so confirm the specific
+PRs first. [references/action-playbook.md](references/action-playbook.md) has
+the commands and edge cases. In short:
 
-### 🔴 Changes requested (4)
-...
-
-### 💬 Has review comments — verify addressed (32, ~2 likely already addressed)
-...
-
-### ⏳ Awaiting review (N)
-...
-
-### 🆕 Needs first-pass review (1)
-...
-
-### 📝 Draft (2)
-...
-```
-
-Keep rows terse — title, repo, one-line status. Put counts in the section
-headers so the user can see backlog shape at a glance. End with a one-line
-bottom line: "N ready to merge, M need your response, K just need a first
-pass."
-
-If this is report-only, stop here.
-
----
-
-## Phase 5 — Act (only when the user asked for it)
-
-Confirm before mutating anything **per PR or per clearly-scoped batch** — see
-[references/action-playbook.md](references/action-playbook.md) for the exact
-commands, confirmation phrasing, and edge cases for each bucket. Summary:
-
-- **`needs_first_pass_review`** — request a bot review with
-  `scripts/request-review.sh <repo> <number> [copilot|claude|all]` (default
-  `all`; it self-guards against drafts and PRs that already have review
-  activity), and/or do an in-session first pass yourself. The portable path,
-  which works on any platform including stock Pi, is this repo's
-  [`code-review`](../code-review/SKILL.md) skill run against the PR number
-  from a local checkout of that repo (it resolves the diff with
-  `gh pr diff <number>`), or a direct `gh pr diff <number> -R <repo>` read
-  when no checkout is at hand. Claude Code's built-in `/review <pr-url>` is a
-  Claude-specific alternative, used only where that command exists. Either
-  way the result is a report; posting it on the PR is a separate, confirmed
-  step.
-- **`approved_ready_to_merge`** — confirm per PR, then
-  `scripts/merge-pr.sh <repo> <number> [merge|squash|rebase]`. Never batch-merge
-  without the user seeing the specific list first.
-- **`changes_requested` / `has_review_comments` (not likely addressed)** —
-  read the actual review bodies and comments, check out the branch locally if
-  code changes are needed, fix, push, then comment summarizing what changed
-  (see the playbook for the multi-repo parallel-fix pattern).
-- **`awaiting_review`** — no action by default; offer to post a polite nudge
-  comment only for PRs stale beyond a threshold the user specifies.
-- **`approved_blocked`** — surface the reason; only `unknown_pending_recompute`
-  is safely auto-resolved by re-checking. Conflicts and failing checks need
-  case-specific investigation.
-- **`draft`** — report only, never act.
-
-See the playbook for command-level detail on each of these.
+- Needs you: read the open threads and fix, reply, or resolve. The
+  [`address-pr-feedback`](../address-pr-feedback/SKILL.md) skill does this for
+  one PR at a time. CI failures and conflicts need case-by-case work.
+- Ready to merge: `scripts/merge-pr.sh <repo> <number> [merge|squash|rebase]`,
+  after the user has seen the list.
+- No human reviewer yet: `scripts/request-review.sh <repo> <number>
+  [copilot|claude|all]` for a bot first pass, or an in-session review with
+  the [`code-review`](../code-review/SKILL.md) skill. Never request a human
+  reviewer the user didn't name.
+- Waiting on others: nothing by default. Offer a nudge only past a staleness
+  threshold the user gives.
+- Drafts: report only.

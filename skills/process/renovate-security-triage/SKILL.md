@@ -341,6 +341,4 @@ The pipeline is deterministic about *severity* and deliberately silent about
   `CVE-2026-54259`…`54263`). Those PRs fall back to a package-wide query and are
   tagged `needs_range_check`.
 - **`compgen` is missing from some bash builds** (nixpkgs bash 5.3 in
-  non-interactive mode). These scripts use `nullglob` instead; the sibling
-  `github-pr-triage/scripts/enrich-prs.sh` still uses `compgen -G` and silently
-  returns `[]` on such systems.
+  non-interactive mode). These scripts use `nullglob` instead.
