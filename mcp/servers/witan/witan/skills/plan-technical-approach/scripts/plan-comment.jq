@@ -35,6 +35,18 @@ def blockers_of:
     then (split(", ") | map(select(. != "")))
     else . end;
 
+# `live_pr` arrives in three shapes, for the same reason `blocked_by` arrives in
+# two. The server omits the key when no lookup ran; `witan tasks` projects rows
+# through `render_table`, which normalises a missing value to "" because TOML
+# has no null. Only an OBJECT is a lookup result -- a missing key, a null and an
+# empty string all mean the same thing, which is that nobody asked.
+#
+# Testing `!= null` and then indexing is what made the first end-to-end render
+# die with "Cannot index string with error", on the commonest input there is:
+# chunk tasks that exist but have no PR yet.
+def live_record:
+  (.live_pr // null) | if type == "object" then . else null end;
+
 # How many checks are failing, pending, passing -- absent on a PR with no CI.
 def check_summary:
   (.checks // {}) as $c
@@ -53,8 +65,9 @@ def review_summary:
 # state for an unstarted chunk, not a missing value.
 def pr_cell:
   . as $x
+  | ($x | live_record) as $pr
   | if ($x.external_uri // "") | test("/pull/[0-9]+$") then
-      ($x.live_pr.ref // ("#" + ($x.external_uri | capture("/(?<n>[0-9]+)$").n)))
+      ($pr.ref // ("#" + ($x.external_uri | capture("/(?<n>[0-9]+)$").n)))
       | "[\(.)](\($x.external_uri))"
     else "—" end;
 
@@ -65,7 +78,7 @@ def pr_cell:
 # reads as "nothing opened yet" -- the one misreading that would have someone
 # re-do work that is already in review. Say unavailable instead.
 def state_cell($live_enabled):
-  (.live_pr // null) as $pr
+  live_record as $pr
   | (.status // "") as $st
   | if $pr != null and ($pr.error | not) then
       ([ $pr.state
@@ -83,11 +96,16 @@ def state_cell($live_enabled):
     elif $st == "in_progress" then "in progress"
     else "not started" end;
 
+# A chunk title is a task title, written by whoever planned the work, and a
+# pipe in it would end the cell early and shift every column after it. Escape
+# it rather than trusting the author to avoid one.
+def cell: gsub("\\|"; "\\|");
+
 # Takes a to_entries pair so the row number and the chunk travel together;
 # piping `.value` first would put `.key` out of reach.
 def row($i; $live_enabled):
   .value
-  | "| \($i) | \(.title) | \(pr_cell) | \(state_cell($live_enabled)) |";
+  | "| \($i) | \(.title // "" | cell) | \(pr_cell) | \(state_cell($live_enabled)) |";
 
 # The header's blocked-on line comes from the graph, not from parsing the spec
 # for `(open)` markers: a blocker a reader cares about is one that is actually
@@ -96,9 +114,11 @@ def blockers:
   [ ordered[] | select((.status // "") == "blocked") | blockers_of[] ]
   | unique;
 
-. as $in
-| (if has("live_pr") and .live_pr != null then .live_pr else true end)
-    as $live_enabled
+# Only a real boolean answers "was the lookup enabled". Absent, null, or
+# anything else means the caller did not say, and the safe default is "it ran"
+# -- which renders an unresolved PR as `unavailable` rather than claiming it was
+# never fetched.
+(.live_pr | if type == "boolean" then . else true end) as $live_enabled
 | [ ([ (if (.spec // "") != "" then "**Plan:** \(.spec)" else null end)
      , (if (.decisions // "") != "" then "**Decisions:** \(.decisions)" else null end)
      ] | map(select(. != null))

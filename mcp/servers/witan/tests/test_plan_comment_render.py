@@ -8,6 +8,7 @@ formatting, not in the fetch.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,14 +36,22 @@ def render(payload: dict) -> str:
 
 
 def chunk(**over):
+    """One chunk row in the shape `witan tasks` actually emits.
+
+    Not the server's shape. Rows reach the renderer through `render_table`,
+    which normalises every `None` to `""` because TOML has no null -- so an
+    unlinked chunk arrives with `external_uri: ""` and `live_pr: ""`, not
+    nulls. Defaulting to the server shape here is exactly why the renderer
+    shipped unable to read its own input.
+    """
     base = {
         "slug": "tk-c1",
         "title": "Static headers",
         "status": "open",
         "created_at": "2026-10-23T01:00:00Z",
-        "external_uri": None,
-        "blocked_by": [],
-        "live_pr": None,
+        "external_uri": "",
+        "blocked_by": "",
+        "live_pr": "",
     }
     return {**base, **over}
 
@@ -80,7 +89,8 @@ def test_a_disabled_lookup_is_not_reported_as_no_pr():
     reads as "nothing opened yet", and someone redoes work already in review.
 
     `live_pr: false` is the `WITAN_LIVE_PR=0` case, where `annotate` returns
-    the row untouched -- so the key is absent, not an error.
+    the row untouched -- so the row's own `live_pr` is absent (or "" once
+    `render_table` has been over it), not an error.
     """
     body = render(
         payload(
@@ -132,6 +142,39 @@ def test_blocked_by_is_accepted_in_both_shapes():
 
 
 @requires_jq
+def test_live_pr_is_accepted_in_all_three_shapes():
+    """The server omits `live_pr`; `render_table` turns a missing one into "".
+
+    All three mean the same thing -- nobody asked -- so all three must render
+    the same. Testing `!= null` and then indexing is what made the first
+    end-to-end render die with `Cannot index string with "error"`, on the
+    commonest input there is: chunk tasks with no PR yet.
+    """
+    for uri in ("", "https://github.com/o/r/pull/41"):
+        absent = render(
+            payload(
+                [{k: v for k, v in chunk(external_uri=uri).items() if k != "live_pr"}]
+            )
+        )
+        as_null = render(payload([chunk(external_uri=uri, live_pr=None)]))
+        as_empty = render(payload([chunk(external_uri=uri, live_pr="")]))
+        assert absent == as_null == as_empty, f"shapes diverge for external_uri={uri!r}"
+
+
+@requires_jq
+def test_a_pipe_in_a_chunk_title_does_not_break_the_table():
+    """Titles are authored by whoever planned the work. An unescaped `|` ends
+    the cell early and shifts every column after it, so the PR a reader is
+    looking for appears under State."""
+    body = render(payload([chunk(title="Expand | migrate | contract")]))
+    row = next(r for r in body.splitlines() if r.startswith("| 1 |"))
+    assert r"Expand \| migrate \| contract" in row
+    # Count the pipes that still DELIMIT -- an escaped one does not. Four
+    # columns means five delimiters; an unescaped title would give seven.
+    assert len(re.findall(r"(?<!\\)\|", row)) == 5, f"escaping failed: {row}"
+
+
+@requires_jq
 def test_chunks_are_numbered_in_creation_order_not_input_order():
     """`plan-technical-approach` creates the chunk tasks in plan order, so
     `created_at` carries the numbering. The server orders by priority and
@@ -162,6 +205,70 @@ def test_optional_sections_leave_no_blank_lines_behind():
     assert "\n\n\n" not in body
     assert "**Note:**" not in body
     assert "**Plan:**" not in body
+
+
+@requires_jq
+def test_the_cli_projection_is_what_the_renderer_reads(capsys):
+    """The seam, asserted rather than assumed.
+
+    Every other test here hands the renderer a hand-built fixture, so a fixture
+    that drifts from what `witan tasks` emits tests nothing. This one drives the
+    real projection -- `render_table` in json mode, which is what
+    `--output-format json` reaches -- and feeds its actual stdout to the
+    renderer. Nothing asserted this before, which is why the renderer could not
+    read its own input while eight tests passed.
+    """
+    from witan.cli._common import render_table
+    from witan.cli.output import set_output_format
+
+    columns = [
+        "priority",
+        "status",
+        "type",
+        "slug",
+        "title",
+        "repo",
+        "assignee",
+        "blocked_by",
+        "external_uri",
+        "created_at",
+        "live_pr",
+        "pr",
+    ]
+    rows = [
+        # An unlinked chunk: `annotate` never ran, so the server-side value is
+        # None for both. This is the row that crashed the renderer.
+        {
+            "priority": "p2",
+            "status": "open",
+            "type": "feature",
+            "slug": "tk-c1",
+            "title": "Static headers",
+            "repo": "mitodl/mit-learn",
+            "assignee": None,
+            "blocked_by": "",
+            "external_uri": None,
+            "created_at": "2026-10-23T01:00:00Z",
+            "live_pr": None,
+            "pr": "",
+        },
+    ]
+
+    set_output_format("json")
+    try:
+        render_table(title="Tasks", columns=columns, rows=rows, empty="none")
+        dumped = json.loads(capsys.readouterr().out)
+    finally:
+        set_output_format("txt")
+
+    # Pin the normalisation itself: if render_table ever stops doing this, the
+    # renderer's tolerance is still correct but this test should say why.
+    assert dumped["rows"][0]["live_pr"] == "", "render_table no longer normalises None"
+
+    body = render(
+        {"live_pr": True, "generated_on": "2026-11-03", "chunks": dumped["rows"]}
+    )
+    assert "| 1 | Static headers | — | not started |" in body
 
 
 @requires_jq
