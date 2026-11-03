@@ -955,6 +955,41 @@ def gen_mirror() -> None:
     _mirror_adrs(mapping)
 
 
+#: A YAML mapping key, which is what tells an opening `---` apart from a
+#: thematic break. Deliberately strict: a key, then a colon, then end-of-line
+#: or whitespace. `--- then prose` is a horizontal rule, not frontmatter.
+_YAML_KEY = re.compile(r"[A-Za-z_][\w.-]*:(\s|$)")
+
+
+def _strip_frontmatter(body: str) -> str:
+    """Drop a leading YAML frontmatter block, if that is really what it is.
+
+    ADRs carry machine metadata (`applies_to` globs, read by the
+    write-adr/implement-plan skills) that is for agents working in the repo,
+    not for site readers -- and the banner is PREPENDED, so leaving it would
+    render the block as a horizontal rule, raw `applies_to:` text, and another
+    rule partway down the page.
+
+    Checking only for a closing `\\n---\\n` is not enough, which the comment
+    this replaces claimed it was. A document that merely OPENS with a thematic
+    break and happens to contain another `---` later -- the ol-infrastructure
+    flavor closes with one, before its Review History table -- would have its
+    head partitioned away, emitting a page that starts mid-document with
+    `docs-check` still green because the output matches the generator.
+
+    So require the opened block to look like YAML before believing it is.
+    """
+    if not body.startswith("---\n"):
+        return body
+    head, sep, rest = body.partition("\n---\n")
+    if not sep:
+        return body
+    first = next((ln for ln in head[4:].splitlines() if ln.strip()), "")
+    if not _YAML_KEY.match(first.strip()):
+        return body
+    return rest.lstrip("\n")
+
+
 def _mirror_adrs(mapping: dict[str, str]) -> None:
     """Mirror the ADRs, and refuse to publish a duplicated decision number.
 
@@ -971,19 +1006,7 @@ def _mirror_adrs(mapping: dict[str, str]) -> None:
         source_rel = str(path.relative_to(REPO_ROOT))
         dest_rel = f"explanation/decisions/{path.name}"
         body = rewrite_links(path.read_text(), source_rel, dest_rel, mapping)
-        # Strip YAML frontmatter. ADRs carry machine metadata (`applies_to`
-        # globs, read by the write-adr/implement-plan skills) that is for
-        # agents working in the repo, not for site readers -- and the banner is
-        # PREPENDED, so leaving it would render the block as a horizontal rule,
-        # raw `applies_to:` text, and another rule partway down the page.
-        # Guard on the CLOSING delimiter too. str.partition returns
-        # (whole, "", "") when the separator is absent, so assigning the third
-        # element to a document that merely opens with a thematic break would
-        # blank it -- emitting a page containing nothing but the banner, with
-        # docs-check still green because the output matches the generator.
-        if body.startswith("---\n") and "\n---\n" in body:
-            _, _, body = body.partition("\n---\n")
-            body = body.lstrip("\n")
+        body = _strip_frontmatter(body)
         emit(DOCS / dest_rel, MIRROR_BANNER.format(source=source_rel) + body)
 
     if dupes := {n: f for n, f in by_number.items() if len(f) > 1}:
