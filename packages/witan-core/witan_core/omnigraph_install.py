@@ -127,6 +127,15 @@ _OMNIGRAPH_RELEASE_TAG = "v0.14.0"
 #: graph in both directions, so there is no gradual path and no downgrade.
 _OMNIGRAPH_INTERNAL_SCHEMA = 16
 
+#: The oldest format ``_OMNIGRAPH_VERSION`` still opens in place, the low end
+#: of the same line's "serves vN to vM" range (N == M before 0.14, and 0.11
+#: prints no range at all). Both images carry it as
+#: ``edu.mit.ol.omnigraph.min-internal-schema``, so ol-infrastructure's preview
+#: can accept a 0.14 image against a root that still holds format 14 instead of
+#: demanding a rebuild the upgrade doesn't need. A declaration like the one
+#: above, and ``bin/check_omnigraph_format.py`` checks both.
+_OMNIGRAPH_MIN_INTERNAL_SCHEMA = 14
+
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
@@ -622,7 +631,9 @@ def default_install_path() -> Path:
     return Path.home() / ".local" / "bin" / "omnigraph"
 
 
-_INTERNAL_SCHEMA_LINE = re.compile(r"^\s*internal-schema\s+(\d+)\b", re.MULTILINE)
+_INTERNAL_SCHEMA_LINE = re.compile(
+    r"^\s*internal-schema\s+(\d+)\b(?:\s*\(serves v(\d+) to v\d+\))?", re.MULTILINE
+)
 
 
 def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
@@ -636,6 +647,20 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     asking in order to compare against a declared value, and a comparison
     against "unknown" that quietly passes is the failure mode this whole
     mechanism exists to prevent.
+    """
+    return reported_internal_schema_range(binary)[1]
+
+
+def reported_internal_schema_range(
+    binary: str | Path = "omnigraph",
+) -> tuple[int, int]:
+    """The oldest format ``binary`` opens in place and the format it writes.
+
+    :param binary: The omnigraph binary to run.
+    :returns: ``(oldest served, written)``. A binary that prints no
+        "serves" range (0.11 and older) serves only the format it writes.
+    :rtype: tuple[int, int]
+    :raises RuntimeError: as :func:`reported_internal_schema`.
     """
     try:
         result = subprocess.run(
@@ -655,7 +680,8 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     # `internal-schema 14 (serves v14 to v14)`.
     match = _INTERNAL_SCHEMA_LINE.search(result.stdout + result.stderr)
     if match is not None:
-        return int(match.group(1))
+        written = int(match.group(1))
+        return int(match.group(2) or written), written
     raise RuntimeError(
         f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"
         "The storage-format checks depend on it; upstream may have renamed or "

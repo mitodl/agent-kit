@@ -63,6 +63,12 @@ ARG OMNIGRAPH_SHA256_ARM64=f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
 ARG OMNIGRAPH_INTERNAL_SCHEMA=16
+# The oldest format the binary opens in place (0.14 serves 14 to 16), mirrored
+# from _OMNIGRAPH_MIN_INTERNAL_SCHEMA and stamped as
+# `edu.mit.ol.omnigraph.min-internal-schema`. ol-infrastructure's preview
+# accepts this image against any served root from this number up to the one
+# above, so an in-place upgrade isn't refused as if it needed a rebuild.
+ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=14
 # Where the `omnigraph` CLI in this image comes from: `release` (the tarball
 # above, like omnigraph-server) or `patched` (the cli-patched stage below).
 #
@@ -178,12 +184,14 @@ FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA
+ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA
 ARG OMNIGRAPH_CLI_SOURCE
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \
       org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
       org.opencontainers.image.version="${OMNIGRAPH_VERSION}" \
       edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}" \
+      edu.mit.ol.omnigraph.min-internal-schema="${OMNIGRAPH_MIN_INTERNAL_SCHEMA}" \
       edu.mit.ol.omnigraph.cli-source="${OMNIGRAPH_CLI_SOURCE}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.

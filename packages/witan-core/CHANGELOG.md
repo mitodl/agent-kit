@@ -33,6 +33,14 @@ a MINOR bump may include breaking changes).
   fork published before its rows were refused with a 409 that says
   `partial`, which the 409 rule would otherwise have replayed.
 
+### Added
+
+- `_OMNIGRAPH_MIN_INTERNAL_SCHEMA` (14) declares the oldest format the pinned
+  binary opens in place, and `reported_internal_schema_range()` reads it from
+  `omnigraph version`'s "serves vN to vM". Both images label it
+  `edu.mit.ol.omnigraph.min-internal-schema`, so ol-infrastructure's preview
+  can accept a 0.14 image against a root that still holds format 14.
+
 ### Removed
 
 - `StoreQuarantined`, `RUNBOOK_URL`, `sidecar_operation_id`, and the
