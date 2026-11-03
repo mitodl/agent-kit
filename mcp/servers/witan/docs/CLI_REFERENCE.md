@@ -247,6 +247,7 @@ List tasks for the current repo (or filtered).
 | `--parent` | str \| None | — | Direct children of a `tk-` task/epic. Keeps closed rows; refuses `--ready` and a query |
 | `--assignee` | str \| None | — | Filter by owner |
 | `--ready` | bool | `False` | Show only ready-to-work tasks (open, all blockers closed) |
+| `--live-pr` | bool | `False` | Resolve each linked PR/issue and report its live state; carries `external_uri`, `created_at` and the raw `live_pr` record in structured output |
 | `--all-repos` | bool | `False` | Span every repo in the graph |
 | `--limit` | int | `50` | Max rows |
 
@@ -261,6 +262,14 @@ merged chunk is closed, and an epic's children are wanted whole — and it
 **exits 2** rather than being ignored when combined with `--ready` or a
 positional query, neither of which the server filters by parent. Pair it with
 `--all-repos` when the children may not all sit in the detected repo.
+
+`--live-pr` is off by default because it costs one `gh` call per linked row,
+and a bare listing should not start making network calls. It is what fills the
+`pr` column, and in structured output it also carries `external_uri`,
+`created_at` and the raw `live_pr` record — which is what the plan-comment
+renderer reads. `WITAN_LIVE_PR=0` suppresses the lookup itself, leaving rows
+whose `live_pr` is empty rather than an error; consumers must render that as
+*not fetched*, never as *no PR*.
 
 A positional `QUERY` searches titles and descriptions instead of listing, with
 the same flags (this is the CLI form of `task_search`; there is no

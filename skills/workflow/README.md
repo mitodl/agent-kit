@@ -20,10 +20,11 @@ not by `agent-kit apply`:
 | `write-spec` | Write the design document for work spanning several PRs, sessions or repos, in the location and shape that repo already uses |
 | `write-adr` | Record a significant decision as an ADR in the repo's existing convention, scoped to the files it governs |
 | `implement-plan` | Execute the approved plan chunk by chunk, honouring the ADRs that govern the changed files, confirming and recording any deviation |
+| `complete-project` | Close the work out: supersede the ADRs its deviations changed, consume the deviation log, close the graph and seal the corpus trace |
 | `witan-task`, `witan-workflow`, `witan-project-tracker`, `witan-memory` | The task, project, session and memory graph these four drive |
 
 Those moved out of this directory deliberately. They stop outright
 when the `task_*` and `workflow_*` tools are missing, and `agent-kit apply`
 does not install witan — so shipping them in the `universal` profile handed a
-`universal`-only consumer four skills that refuse to run. Everyone who
+`universal`-only consumer skills that refuse to run. Everyone who
 installed witan for memories already has the tools they need.

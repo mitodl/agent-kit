@@ -86,7 +86,7 @@ downstream advance it with `workflow_project_advance` as they go:
 | `scope-work` | `discovery` |
 | `plan-technical-approach`, `write-spec`, `write-adr` | `spec` |
 | `implement-plan`, building chunks | `implementation` |
-| `implement-plan`, close-out | `delivery` |
+| `complete-project`, close-out | `delivery` |
 
 `spec` has a concrete meaning on the spec route: **the spec document exists and
 is under review.** On the other routes it is the interval between an approach
@@ -106,5 +106,7 @@ separately, with `github_pr` set later via
 Documented where they happen, not here:
 [`plan-technical-approach`](../../plan-technical-approach/SKILL.md) promotes
 this task to an epic and adds a child task per chunk when a plan is recorded,
-and [`implement-plan`](../../implement-plan/SKILL.md) closes them as each chunk
-merges and ends the session.
+[`implement-plan`](../../implement-plan/SKILL.md) closes each chunk task as its
+pull request merges, and
+[`complete-project`](../../complete-project/SKILL.md) closes the epic, ends the
+session and — only when the project is genuinely over — seals the trace.

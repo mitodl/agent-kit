@@ -93,11 +93,12 @@ regeneration the repo requires. It gets no plan comment and no task: it is
 bookkeeping the merge triggered, not new work.
 [`implement-plan`](../../implement-plan/SKILL.md) opens it at close-out.
 
-**Staleness, with teeth.** When `implement-plan` runs, any ADR that has been
-`Proposed` for more than 90 days while the paths it governs have shipped code
-is worth one line of output: *these claim to be undecided and are in
-production*. One line, at a moment someone is already reading output, beats
-another scheduled review nobody runs.
+**Staleness, with teeth.** At close-out, any ADR that has been `Proposed` for
+more than 90 days while the paths it governs have shipped code is worth one
+line of output: *these claim to be undecided and are in production*. One line,
+at a moment someone is already reading output, beats another scheduled review
+nobody runs. [`complete-project`](../../complete-project/SKILL.md) Step 6
+reports it.
 
 ## Revisions: an accepted ADR is never edited
 
