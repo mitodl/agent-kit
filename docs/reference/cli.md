@@ -1007,8 +1007,20 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 * `--status STR`: Filter by open | in_progress | blocked | closed. Omitted: all
     non-closed statuses.
 * `--project STR`: Scope to a WorkflowProject (``wp-`` slug).
+* `--parent STR`: List the direct children of a parent task or epic (``tk-`` slug).
+    A precise scope in its own right, so pair it with ``--all-repos``
+    when the children may not all sit in the repo this checkout detects.
+    Cannot be combined with a search query or ``--ready``: the server
+    filters neither by parent. Unlike a bare listing, this one keeps
+    closed tasks -- a merged chunk is closed, and an epic's children are
+    wanted whole.
 * `--assignee STR`: Filter by owner.
 * `--ready, --no-ready`: Show only ready-to-work tasks (open, all blockers closed). *[default: False]*
+* `--live-pr, --no-live-pr`: Resolve each row's linked PR or issue and report its live state, and
+    carry ``external_uri``, ``created_at`` and the raw ``live_pr`` record
+    in structured output. Off by default because it costs one ``gh`` call
+    per linked row, and a bare listing should not start making network
+    calls. ``WITAN_LIVE_PR=0`` suppresses the lookup itself. *[default: False]*
 * `--all-repos, --no-all-repos`: Span every repo in the graph. *[default: False]*
 * `--limit INT`: Max rows. *[default: 50]*
 
