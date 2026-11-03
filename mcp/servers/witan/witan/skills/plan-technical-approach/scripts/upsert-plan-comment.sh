@@ -145,7 +145,10 @@ if [[ "$render" == true ]]; then
   [[ -z "$expect_sha" ]] || { echo "Error: --expect-sha does not apply to --render; a rendered body is reproducible from the graph." >&2; exit 1; }
   # Measured in CHARACTERS, for the same reason the body ceiling below is:
   # this house style is full of em dashes, and `${#note}` counts bytes.
-  note_len="$(LC_ALL=C.UTF-8 printf '%s' "$note" | LC_ALL=C.UTF-8 wc -m | tr -d ' ')"
+  # `$plan_utf8_locale` is resolved in paths.sh by measuring, not by assuming
+  # a locale name exists on this machine.
+  note_len="$(LC_ALL="$plan_utf8_locale" printf '%s' "$note" \
+              | LC_ALL="$plan_utf8_locale" wc -m | tr -d ' ')"
   if (( note_len > 280 )); then
     echo "Error: --note is ${note_len} characters; the ceiling is 280." >&2
     echo "It is the one authored line in a rendered comment. Longer than that" >&2
@@ -283,10 +286,17 @@ new_sha="$(plan_digest < "$raw")"
 # GitHub rejects an issue comment body over 65536 CHARACTERS. Measure
 # characters, not bytes: this house style is full of em dashes and arrows, and
 # `wc -c` would reject a compliant ~63.8k-character body as if it were over.
-# The locale is pinned because `wc -m` counts bytes under LC_ALL=C, which would
-# silently reintroduce exactly that bug on a machine without a UTF-8 locale.
-size="$(LC_ALL=C.UTF-8 wc -m < "$payload" | tr -d ' ')"
+#
+# `$plan_utf8_locale` is resolved in paths.sh by MEASURING an em dash, not by
+# naming a locale and hoping. Where nothing on the machine counts characters,
+# this is a byte count and says so rather than reporting it as a character one.
+size="$(LC_ALL="$plan_utf8_locale" wc -m < "$payload" | tr -d ' ')"
 bytes="$(wc -c < "$payload" | tr -d ' ')"
+if [[ "$plan_utf8_ok" != true ]]; then
+  echo "Warning: no UTF-8 locale on this machine, so the size below is a BYTE" >&2
+  echo "         count. A body of multi-byte characters may be refused under" >&2
+  echo "         the limit. Install a UTF-8 locale to measure it properly." >&2
+fi
 if (( size > 65536 )); then
   echo "Error: plan body is ${size} characters (${bytes} bytes); GitHub's limit" >&2
   echo "is 65536 characters." >&2

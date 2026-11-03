@@ -170,6 +170,45 @@ def test_an_over_long_note_is_refused_not_truncated(tmp_path):
 
 
 @requires_tools
+def test_the_note_ceiling_counts_characters_not_bytes(tmp_path):
+    """280 em dashes is 280 characters and 840 bytes, and must be accepted.
+
+    This is the whole reason `paths.sh` resolves a UTF-8 locale by measuring
+    one rather than assuming `C.UTF-8` exists: on a machine where it does not,
+    the setting falls back to C, `wc -m` counts bytes, and a compliant note
+    written in this house style gets refused as three times its real length.
+    """
+    r = run(
+        tmp_path,
+        "--render",
+        "--epic",
+        "tk-epic",
+        "--dry-run",
+        "--note",
+        "—" * 280,
+        "--tasks-json",
+        str(tasks_json(tmp_path, [ROW])),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "—" * 280 in r.stdout
+
+    # And one character over is still refused, so the ceiling is a ceiling.
+    over = run(
+        tmp_path,
+        "--render",
+        "--epic",
+        "tk-epic",
+        "--dry-run",
+        "--note",
+        "—" * 281,
+        "--tasks-json",
+        str(tasks_json(tmp_path, [ROW])),
+    )
+    assert over.returncode == 1
+    assert "281 characters" in over.stderr
+
+
+@requires_tools
 def test_require_existing_refuses_to_create_a_second_comment(tmp_path):
     r = run(
         tmp_path,

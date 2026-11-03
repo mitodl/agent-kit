@@ -60,6 +60,43 @@ sha256_of() {
   fi
 }
 
+# A locale under which `wc -m` really counts CHARACTERS, or "C" if there is
+# none. Both ceilings this tooling enforces -- the 280-character note and
+# GitHub's 65536-character comment body -- are counts of characters, and this
+# house style is full of em dashes and arrows.
+#
+# `C.UTF-8` cannot just be assumed: it is a glibc locale. On macOS it does not
+# exist, the setting falls back to C, and `wc -m` silently counts BYTES --
+# reintroducing the exact bug the pinned locale was added to prevent, and
+# rejecting a compliant body as oversized.
+#
+# Tested by measuring rather than by asking `locale`: an em dash is three bytes
+# and one character, so a locale that reports 1 is one that works. That needs
+# no extra binary and tests the thing actually being relied on.
+utf8_locale() {
+  local l
+  for l in "${LC_ALL:-}" "${LC_CTYPE:-}" C.UTF-8 en_US.UTF-8 UTF-8; do
+    [ -n "$l" ] || continue
+    if [ "$(LC_ALL="$l" printf '\xe2\x80\x94' | LC_ALL="$l" wc -m | tr -d ' ')" = "1" ]; then
+      printf '%s' "$l"
+      return 0
+    fi
+  done
+  printf 'C'
+  return 1
+}
+
+# Resolved once per process; every call site uses it rather than pinning a
+# locale of its own. Empty when nothing worked, which callers report rather
+# than passing off a byte count as a character count.
+if plan_utf8_locale="$(utf8_locale)"; then
+  plan_utf8_ok=true
+else
+  plan_utf8_ok=false
+fi
+# shellcheck disable=SC2034  # both are consumed by the sourcing script
+: "$plan_utf8_locale" "$plan_utf8_ok"
+
 # Digest of a plan comment, read from stdin, for --expect-sha.
 #
 # It covers the plan TEXT, not the assembled comment: every marker line is
