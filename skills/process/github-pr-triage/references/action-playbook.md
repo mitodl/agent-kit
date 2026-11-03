@@ -8,13 +8,15 @@ Show the list, then act.
 
 ---
 
-## No reviewer yet — kick off a first pass
+## No human reviewer yet — kick off a first pass
 
-`scripts/request-review.sh` is the single entry point for this group. It
+`scripts/request-review.sh` is the entry point for a bot first pass. It
 re-checks the PR itself before doing anything (via `pr-detail.sh`) and refuses
 to act on a draft, or on a PR that already has a submitted review or a pending
-requested reviewer — so it's safe to run over the whole "No reviewer yet"
-group without re-pinging PRs that moved on between the report and the action:
+requested reviewer — so it's safe to run over the whole "No human reviewer
+yet" group without re-pinging PRs that moved on between the report and the
+action. PRs whose status reads `bot review only` already had their first pass
+and need a human reviewer the user names:
 
 ```bash
 ./skills/process/github-pr-triage/scripts/request-review.sh mitodl/agent-kit 90            # both bots (default)

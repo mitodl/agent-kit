@@ -38,8 +38,11 @@ query($ids: [ID!]!) {
     reviewRequests(first: 20) { nodes { requestedReviewer {
       ... on User { login } ... on Bot { login } ... on Team { name } ... on Mannequin { login }
     } } }
-    latestOpinionatedReviews(first: 20) { nodes { state author { login } } }
-    reviews(last: 1) { nodes { submittedAt } }
+    latestOpinionatedReviews(first: 20) { nodes { state submittedAt author { login } } }
+    reviews(last: 50, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) { nodes {
+      state submittedAt bodyText author { login __typename }
+    } }
+    comments(last: 30) { nodes { createdAt author { login } } }
     reviewThreads(first: 100) { totalCount nodes {
       isResolved isOutdated
       first: comments(first: 1) { nodes { author { login } } }
@@ -55,7 +58,7 @@ GROUP_TITLES: dict[Group, str] = {
     "ready": "Ready to merge",
     "yours": "Needs you",
     "waiting": "Waiting on others",
-    "unreviewed": "No reviewer yet",
+    "unreviewed": "No human reviewer yet",
     "draft": "Drafts",
 }
 
@@ -69,13 +72,17 @@ class PRStatus:
     updated_at: str
     is_draft: bool
     approved: bool
+    more_approval_required: bool
     approved_by: list[str]
     changes_requested_by: list[str]
     pending_reviewers: list[str]
+    human_reviewers: list[str]
+    bot_reviewers: list[str]
+    review_comments_awaiting_author: dict[str, int]
     threads_awaiting_author: dict[str, int]
     threads_awaiting_reviewer: int
     outdated_unresolved: int
-    pushed_since_review: bool
+    pushed_since_changes_requested: bool
     ci: str
     mergeable: str
     group: Group = "waiting"
@@ -138,6 +145,35 @@ def build_status(node: dict) -> PRStatus:
 
     commit = node["commits"]["nodes"][0]["commit"]
     reviews = node["reviews"]["nodes"]
+    others = [r for r in reviews if login(r["author"]) != author]
+    is_bot = {
+        login(r["author"]): r["author"] and r["author"]["__typename"] == "Bot"
+        for r in others
+    }
+    # The author's latest push, comment, or thread reply (thread replies are reviews
+    # authored by the PR author) answers any review-body comment made before it.
+    author_activity = max(
+        [commit["committedDate"]]
+        + [r["submittedAt"] for r in reviews if login(r["author"]) == author]
+        + [
+            c["createdAt"]
+            for c in node["comments"]["nodes"]
+            if login(c["author"]) == author
+        ]
+    )
+    review_comments: dict[str, int] = {}
+    for r in others:
+        name = login(r["author"])
+        if (
+            r["state"] == "COMMENTED"
+            and r["bodyText"].strip()
+            and not is_bot[name]
+            and r["submittedAt"] > author_activity
+        ):
+            review_comments[name] = review_comments.get(name, 0) + 1
+    changes_at = [
+        r["submittedAt"] for r in opinions if r["state"] == "CHANGES_REQUESTED"
+    ]
     rollup = commit["statusCheckRollup"]
     requested = [
         r["requestedReviewer"]
@@ -152,14 +188,20 @@ def build_status(node: dict) -> PRStatus:
         updated_at=node["updatedAt"],
         is_draft=node["isDraft"],
         approved=approved,
+        more_approval_required=decision == "REVIEW_REQUIRED"
+        and bool(approved_by)
+        and not changes_by,
         approved_by=approved_by,
         changes_requested_by=changes_by,
         pending_reviewers=[r.get("login") or r["name"] for r in requested],
+        human_reviewers=sorted(name for name, bot in is_bot.items() if not bot),
+        bot_reviewers=sorted(name for name, bot in is_bot.items() if bot),
+        review_comments_awaiting_author=review_comments,
         threads_awaiting_author=awaiting_author,
         threads_awaiting_reviewer=awaiting_reviewer,
         outdated_unresolved=outdated,
-        pushed_since_review=bool(reviews)
-        and commit["committedDate"] > reviews[0]["submittedAt"],
+        pushed_since_changes_requested=bool(changes_at)
+        and commit["committedDate"] > max(changes_at),
         ci=rollup["state"] if rollup else "NONE",
         mergeable=node["mergeable"],
     )
@@ -178,7 +220,11 @@ def classify(pr: PRStatus) -> Group:
     rerequested = set(pr.changes_requested_by) <= set(pr.pending_reviewers)
     blocked_on_author = (
         pr.threads_awaiting_author
-        or (pr.changes_requested_by and not (pr.pushed_since_review or rerequested))
+        or pr.review_comments_awaiting_author
+        or (
+            pr.changes_requested_by
+            and not (pr.pushed_since_changes_requested or rerequested)
+        )
         or pr.ci in ("FAILURE", "ERROR")
         or pr.mergeable == "CONFLICTING"
     )
@@ -186,12 +232,7 @@ def classify(pr: PRStatus) -> Group:
         return "yours"
     if pr.approved and pr.ci in ("SUCCESS", "NONE") and pr.mergeable == "MERGEABLE":
         return "ready"
-    if (
-        pr.approved
-        or pr.pending_reviewers
-        or pr.changes_requested_by
-        or pr.threads_awaiting_reviewer
-    ):
+    if pr.approved or pr.pending_reviewers or pr.human_reviewers:
         return "waiting"
     return "unreviewed"
 
@@ -200,13 +241,15 @@ def describe(pr: PRStatus) -> str:
     parts: list[str] = []
     if pr.approved:
         parts.append(f"approved by {', '.join(pr.approved_by) or 'required reviewers'}")
-    elif pr.approved_by:
+    elif pr.more_approval_required:
         parts.append(f"approved by {', '.join(pr.approved_by)}, more approval required")
+    elif pr.approved_by:
+        parts.append(f"approved by {', '.join(pr.approved_by)}")
     if pr.changes_requested_by:
         rerequested = set(pr.changes_requested_by) <= set(pr.pending_reviewers)
         suffix = (
             " (pushed since, not re-requested)"
-            if pr.pushed_since_review and not rerequested
+            if pr.pushed_since_changes_requested and not rerequested
             else ""
         )
         parts.append(
@@ -216,6 +259,11 @@ def describe(pr: PRStatus) -> str:
         total = sum(pr.threads_awaiting_author.values())
         who = ", ".join(f"{name} {n}" for name, n in pr.threads_awaiting_author.items())
         parts.append(f"{plural(total, 'open thread')} awaiting the author ({who})")
+    if pr.review_comments_awaiting_author:
+        who = ", ".join(pr.review_comments_awaiting_author)
+        parts.append(
+            f"review comment from {who} newer than the author's last push or reply"
+        )
     if pr.threads_awaiting_reviewer:
         parts.append(
             f"{plural(pr.threads_awaiting_reviewer, 'open thread')} the author replied to last"
@@ -224,6 +272,10 @@ def describe(pr: PRStatus) -> str:
         parts.append(f"{pr.outdated_unresolved} open outdated by later pushes")
     if pr.pending_reviewers:
         parts.append(f"review requested from {', '.join(pr.pending_reviewers)}")
+    if pr.human_reviewers and not (pr.approved_by or pr.changes_requested_by):
+        parts.append(f"reviewed by {', '.join(pr.human_reviewers)}")
+    elif pr.bot_reviewers and not pr.human_reviewers:
+        parts.append(f"bot review only ({', '.join(pr.bot_reviewers)})")
     ci = {
         "FAILURE": "CI failing",
         "ERROR": "CI erroring",
@@ -272,7 +324,7 @@ def render(prs: list[PRStatus]) -> str:
     counts = {g: sum(p.group == g for p in prs) for g in GROUP_TITLES}
     lines.append(
         f"{len(prs)} open: {counts['ready']} ready to merge, {counts['yours']} need you, "
-        f"{counts['waiting']} waiting on others, {counts['unreviewed']} with no reviewer, {counts['draft']} drafts."
+        f"{counts['waiting']} waiting on others, {counts['unreviewed']} with no human reviewer, {counts['draft']} drafts."
     )
     return "\n".join(lines)
 
