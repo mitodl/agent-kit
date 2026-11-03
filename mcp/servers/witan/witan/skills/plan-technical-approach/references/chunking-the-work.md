@@ -174,11 +174,13 @@ into its neighbor.
 
 Say which, because they are worked differently:
 
-- **Stacked** — each PR targets the previous one's branch (`gh pr create --base
-  <previous-branch>`), and they merge in order. Use when chunk N genuinely
-  needs chunk N-1's code. Keep stacks short: every PR in a stack rebases when
-  one below it changes, so a four-deep stack costs more than it saves unless
-  the chunks are large.
+- **Stacked** — each PR targets the previous one's branch, and they merge in
+  order. Use when chunk N genuinely needs chunk N-1's code. Keep stacks short:
+  every PR in a stack rebases when one below it changes, so a four-deep stack
+  costs more than it saves unless the chunks are large. Planning only decides
+  *that* it is a stack; [`implement-plan`](../../implement-plan/SKILL.md) owns
+  how one is built, with the `gh stack` extension rather than hand-maintained
+  base branches.
 - **Independent** — each targets the default branch and they can land in any
   order, or in parallel. Prefer this whenever the chunks do not actually
   depend on each other; it is strictly cheaper.
@@ -189,21 +191,30 @@ cannot infer it from the diff.
 
 ## Recording it
 
-**Where the plan lives**: a Delivery section in the plan comment — see
-[`plan-comment-format.md`](plan-comment-format.md). One chunk table, in one
-place; two drift.
+**The graph is where the delivery shape lives.** The chunk table in the plan
+comment is *rendered* from it — see
+[`plan-comment-format.md`](plan-comment-format.md) — so there is no second copy
+to keep in step, and the per-chunk planning output (`Axis`, `Touches`, `Est`)
+goes on the chunk task rather than into the comment.
 
-**In witan**, when there is more than one chunk, mirror the shape:
+**More than one chunk?** Mirror the shape in witan, exactly as
+[`SKILL.md` Step 6](../SKILL.md#step-6--record-the-approved-plan) sets out:
 
-- `task_create(type="epic", ...)` for the whole piece of work, carrying the
-  issue URL as `external_uri`.
-- One child per chunk: `task_create(..., parent="<epic slug>")`.
+- **Promote the task `scope-work` already claimed** —
+  `task_update(slug="<that task>", type="epic")`. Do **not** call
+  `task_create(type="epic", external_uri=<the same issue>)`: that leaves two
+  tasks pointing at one issue, and the claimed scoping task then stays
+  `in_progress` forever, holding a lease on work that has shipped.
+- One child per chunk, **always with `project_slug`** —
+  `task_create(..., parent="<epic slug>", project_slug="<project>")`. Without
+  it the chunks do not roll up, and the project reads as idle while every chunk
+  is in flight.
 - For a stack, record the order: `task_link(from_slug="<chunk-1>",
   to_slug="<chunk-2>", kind="blocks")`. Closing a blocker automatically makes
-  its dependents eligible in `task_ready`, so the stack order stays visible to
-  anyone looking for work rather than living only in the plan comment.
+  its dependents eligible in `task_ready`, so the stack order is visible to
+  anyone looking for ready work rather than living only in the plan comment.
 
-A single chunk needs no epic — one task is the whole thing.
+A single chunk needs no epic and no promotion — the task stays a task.
 
 ## Worked example — one PR
 

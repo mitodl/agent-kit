@@ -317,6 +317,9 @@ it is confidently wrong and it is believed. When implementation diverges from a
 recorded decision, [`implement-plan`](../implement-plan/SKILL.md) stops, gets
 confirmation, and records the deviation — it never edits the ADR. **An accepted
 ADR is immutable**; the decision changing is what a *superseding* record is
-for, written once two deviations have hit the same ADR or the project
-completes. The protocol is in
-[`references/revision-protocol.md`](references/revision-protocol.md).
+for, written **at project close-out and only there**, by
+[`complete-project`](../complete-project/SKILL.md), once the decision has
+stopped moving. One deviation is enough; there is no threshold to wait for.
+Until then the deviation log is where current truth lives. The protocol, and
+why superseding mid-work chains records, is in
+[`references/revision-protocol.md`](references/revision-protocol.md#when-a-superseding-record-gets-written).
