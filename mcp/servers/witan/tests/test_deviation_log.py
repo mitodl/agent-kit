@@ -26,7 +26,10 @@ requires_bash = pytest.mark.skipif(
 def check(path: Path, *args: str, cwd: Path | None = None):
     return subprocess.run(
         ["bash", str(SCRIPT), str(path), *args],
-        capture_output=True, text=True, check=False, cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=cwd,
     )
 
 
@@ -42,8 +45,12 @@ def entry(
     fields=None,
 ) -> str:
     rows = fields or [
-        ("Assumed", assumed), ("Found", found), ("Changed to", changed),
-        ("Touches", touches), ("Approved by", approved), ("PR", pr),
+        ("Assumed", assumed),
+        ("Found", found),
+        ("Changed to", changed),
+        ("Touches", touches),
+        ("Approved by", approved),
+        ("PR", pr),
     ]
     body = "\n".join(f"- **{k}:** {v}" for k, v in rows)
     return f"### {date} — {summary}\n\n{body}\n"
@@ -106,20 +113,41 @@ def test_the_14080_history_reproduces_the_calibration(tmp_path):
 
 @requires_bash
 def test_a_missing_field_is_named(tmp_path):
-    r = check(log(tmp_path, entry(fields=[
-        ("Assumed", "a"), ("Found", "b"), ("Changed to", "c"),
-        ("Touches", "D1"), ("PR", "http://x"),
-    ])))
+    r = check(
+        log(
+            tmp_path,
+            entry(
+                fields=[
+                    ("Assumed", "a"),
+                    ("Found", "b"),
+                    ("Changed to", "c"),
+                    ("Touches", "D1"),
+                    ("PR", "http://x"),
+                ]
+            ),
+        )
+    )
     assert r.returncode == 1
     assert "missing field: **Approved by:**" in r.stderr
 
 
 @requires_bash
 def test_fields_out_of_order_are_caught(tmp_path):
-    r = check(log(tmp_path, entry(fields=[
-        ("Assumed", "a"), ("Found", "b"), ("Changed to", "c"),
-        ("Approved by", "@x"), ("Touches", "D1"), ("PR", "http://x"),
-    ])))
+    r = check(
+        log(
+            tmp_path,
+            entry(
+                fields=[
+                    ("Assumed", "a"),
+                    ("Found", "b"),
+                    ("Changed to", "c"),
+                    ("Approved by", "@x"),
+                    ("Touches", "D1"),
+                    ("PR", "http://x"),
+                ]
+            ),
+        )
+    )
     assert r.returncode == 1
     assert "fields are out of order" in r.stderr
 
@@ -164,7 +192,8 @@ def test_a_future_date_is_caught(tmp_path):
 def test_a_field_spilling_onto_a_second_line_is_caught(tmp_path):
     p = tmp_path / "x-deviations.md"
     p.write_text(
-        "# x\n\n" + entry().replace(
+        "# x\n\n"
+        + entry().replace(
             "- **Found:**", "- **Found:** first line\n    continued here\n- **Found:**"
         )
     )
@@ -177,11 +206,14 @@ def test_a_field_spilling_onto_a_second_line_is_caught(tmp_path):
 def test_list_adrs_prints_only_the_adrs(tmp_path):
     """This is what complete-project supersedes from -- currently derived by
     eye from a file it is told to read end to end."""
-    r = check(log(
-        tmp_path,
-        entry(date="2026-10-26", touches="chunks · ADR-0014"),
-        entry(date="2026-10-24", touches="D6 · ADR-0009 · ADR-0014"),
-    ), "--list-adrs")
+    r = check(
+        log(
+            tmp_path,
+            entry(date="2026-10-26", touches="chunks · ADR-0014"),
+            entry(date="2026-10-24", touches="D6 · ADR-0009 · ADR-0014"),
+        ),
+        "--list-adrs",
+    )
     assert r.returncode == 0, r.stderr
     assert r.stdout.split() == ["ADR-0009", "ADR-0014"], "sorted and deduped"
 
@@ -199,8 +231,9 @@ def test_a_missing_log_is_an_error_when_asked_for_by_path(tmp_path):
 
 
 def git(cwd: Path, *args: str):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
-                          text=True, check=False)
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False
+    )
 
 
 @pytest.fixture
@@ -220,7 +253,8 @@ requires_git = pytest.mark.skipif(
 @requires_git
 def test_since_accepts_an_appended_entry(repo):
     p = log(repo, entry(date="2026-10-21", touches="D1"))
-    git(repo, "add", "-A"); git(repo, "commit", "-qm", "first entry")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "first entry")
 
     p.write_text(
         "# x — deviation log\n\n"
@@ -228,7 +262,8 @@ def test_since_accepts_an_appended_entry(repo):
         + "\n"
         + entry(date="2026-10-21", touches="D1")
     )
-    git(repo, "add", "-A"); git(repo, "commit", "-qm", "append")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "append")
 
     r = check(p, "--since", "HEAD~1", cwd=repo)
     assert r.returncode == 0, r.stderr
@@ -239,11 +274,16 @@ def test_since_catches_an_edited_entry(repo):
     """Append-only is the rule an agent is likeliest to break by "tidying" an
     entry. A deviation later reversed gets a SECOND entry saying so."""
     p = log(repo, entry(date="2026-10-21", assumed="the original wording"))
-    git(repo, "add", "-A"); git(repo, "commit", "-qm", "first entry")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "first entry")
 
-    p.write_text(textwrap.dedent(p.read_text()).replace(
-        "the original wording", "a tidier wording"))
-    git(repo, "add", "-A"); git(repo, "commit", "-qm", "tidy it")
+    p.write_text(
+        textwrap.dedent(p.read_text()).replace(
+            "the original wording", "a tidier wording"
+        )
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "tidy it")
 
     r = check(p, "--since", "HEAD~1", cwd=repo)
     assert r.returncode == 1
