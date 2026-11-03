@@ -34,7 +34,7 @@ query($ids: [ID!]!) {
   nodes(ids: $ids) { ... on PullRequest {
     number title url isDraft updatedAt reviewDecision mergeable
     author { login }
-    repository { nameWithOwner }
+    repository { nameWithOwner viewerPermission }
     reviewRequests(first: 20) { nodes { requestedReviewer {
       ... on User { login } ... on Bot { login } ... on Team { name } ... on Mannequin { login }
     } } }
@@ -85,6 +85,7 @@ class PRStatus:
     pushed_since_changes_requested: bool
     ci: str
     mergeable: str
+    viewer_can_merge: bool
     group: Group = "waiting"
     notes: list[str] = field(default_factory=list)
 
@@ -95,13 +96,20 @@ def gh(*args: str) -> str:
     ).stdout
 
 
-def search_ids(scope: str, author: str) -> list[str]:
-    target = ["--repo", scope] if "/" in scope else ["--owner", scope]
+def search_ids(scope: str | None, author: str) -> list[str]:
+    """Open PR node IDs by ``author`` in one org, user, or repo; all of GitHub if ``scope`` is None."""
+    target = [] if scope is None else ["--repo" if "/" in scope else "--owner", scope]
     out = gh(
         "search", "prs", *target, "--author", author, "--state", "open",
-        "--json", "id", "--limit", str(SEARCH_LIMIT),
+        "--archived=false", "--json", "id", "--limit", str(SEARCH_LIMIT),
     )  # fmt: skip
-    return [pr["id"] for pr in json.loads(out)]
+    ids = [pr["id"] for pr in json.loads(out)]
+    if len(ids) == SEARCH_LIMIT:
+        print(
+            f"warning: {scope or 'GitHub'} hit the {SEARCH_LIMIT}-PR search limit; report is truncated",
+            file=sys.stderr,
+        )
+    return ids
 
 
 def fetch_details(ids: list[str]) -> list[dict]:
@@ -204,6 +212,8 @@ def build_status(node: dict) -> PRStatus:
         and commit["committedDate"] > max(changes_at),
         ci=rollup["state"] if rollup else "NONE",
         mergeable=node["mergeable"],
+        viewer_can_merge=node["repository"]["viewerPermission"]
+        in ("ADMIN", "MAINTAIN", "WRITE"),
     )
     if node["reviewThreads"]["totalCount"] > len(node["reviewThreads"]["nodes"]):
         status.notes.append(
@@ -231,7 +241,8 @@ def classify(pr: PRStatus) -> Group:
     if blocked_on_author:
         return "yours"
     if pr.approved and pr.ci in ("SUCCESS", "NONE") and pr.mergeable == "MERGEABLE":
-        return "ready"
+        # Upstream projects where the viewer lacks write access merge on a maintainer's schedule.
+        return "ready" if pr.viewer_can_merge else "waiting"
     if pr.approved or pr.pending_reviewers or pr.human_reviewers:
         return "waiting"
     return "unreviewed"
@@ -241,6 +252,8 @@ def describe(pr: PRStatus) -> str:
     parts: list[str] = []
     if pr.approved:
         parts.append(f"approved by {', '.join(pr.approved_by) or 'required reviewers'}")
+        if not pr.viewer_can_merge:
+            parts.append("a maintainer has to merge")
     elif pr.more_approval_required:
         parts.append(f"approved by {', '.join(pr.approved_by)}, more approval required")
     elif pr.approved_by:
@@ -331,20 +344,21 @@ def render(prs: list[PRStatus]) -> str:
 
 @app.default
 def main(
-    scope: str,
-    *,
+    *scopes: str,
     author: str = "@me",
     as_json: Annotated[bool, Parameter(name="--json")] = False,
 ) -> None:
     """Report open PRs grouped by whose move it is.
 
-    :param scope: An org or user (e.g. ``mitodl``) or one repo (``mitodl/agent-kit``).
+    :param scopes: Orgs or users (e.g. ``mitodl``) and repos (``mitodl/agent-kit``)
+        to search. With none, every repo on GitHub.
     :param author: PR author to report on.
     :param as_json: Emit one JSON object per PR instead of the markdown report.
     """
-    ids = search_ids(scope, author)
-    batches = [ids[i : i + BATCH_SIZE] for i in range(0, len(ids), BATCH_SIZE)]
     with ThreadPoolExecutor(MAX_WORKERS) as pool:
+        found = pool.map(lambda s: search_ids(s, author), scopes or (None,))
+        ids = list(dict.fromkeys(i for scope_ids in found for i in scope_ids))
+        batches = [ids[i : i + BATCH_SIZE] for i in range(0, len(ids), BATCH_SIZE)]
         nodes = [node for batch in pool.map(fetch_details, batches) for node in batch]
     prs = [build_status(node) for node in nodes]
     if as_json:

@@ -1,16 +1,17 @@
 ---
 name: github-pr-triage
 description: >
-  Report the status of your open GitHub pull requests across an org (or one
-  repo) in a single command: which are approved and ready to merge, which have
+  Report the status of your open GitHub pull requests everywhere on GitHub
+  (mitodl and upstream open source projects alike), or in chosen orgs or
+  repos, in a single command: which are approved and ready to merge, which have
   review feedback you haven't addressed (unresolved review threads awaiting
   your reply, changes requested, failing CI, merge conflicts), which are
   waiting on a reviewer, which have no reviewer at all, and which are drafts.
   Use this skill when asked "what PRs do I have open", "which of my PRs are
   approved", "what feedback haven't I addressed", for a PR status report, to
-  triage an open-PR backlog, to find PRs ready to merge, or to act on that
-  backlog (request first-pass bot reviews, merge approved PRs) across a GitHub
-  organization such as mitodl.
+  triage an open-PR backlog, to check on PRs sent to upstream projects, to
+  find PRs ready to merge, or to act on that backlog (request first-pass bot
+  reviews, merge approved PRs).
 license: BSD-3-Clause
 metadata:
   category: process
@@ -21,15 +22,21 @@ metadata:
 One command answers "what PRs do I have open, and what does each one need":
 
 ```bash
-uv run --script skills/process/github-pr-triage/scripts/pr_status.py mitodl
-uv run --script skills/process/github-pr-triage/scripts/pr_status.py mitodl/agent-kit   # one repo
-uv run --script skills/process/github-pr-triage/scripts/pr_status.py mitodl --author someone-else
-uv run --script skills/process/github-pr-triage/scripts/pr_status.py mitodl --json      # per-PR records
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py                    # every repo on GitHub
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py mitodl             # one org
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py openedx apache/apisix  # several orgs/repos
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py --author someone-else
+uv run --script skills/process/github-pr-triage/scripts/pr_status.py --json             # per-PR records
 ```
+
+With no scope it covers everything the author has open, including PRs to
+upstream projects, which is the right default for "what PRs do I have open".
+Narrow to an org or repo only when the user does. Each scope is searched
+separately and the results merged, so orgs and repos can be mixed.
 
 It prints a markdown report grouped by whose move it is, one row per PR with
 a status line, and a one-line count at the end. Show that report to the user
-as-is; don't re-derive it or re-bucket it. About 15 seconds for 85 PRs.
+as-is; don't re-derive it or re-bucket it. About 15 seconds for 100 PRs.
 
 Default to report-only. Act (request reviews, merge, fix feedback) only when
 the user asked for it, and follow [Acting on the report](#acting-on-the-report).
@@ -42,8 +49,8 @@ Each PR lands in exactly one group, checked in this order:
 |-------|------|
 | Drafts | Not marked ready for review |
 | Needs you | Any unresolved review thread whose last comment isn't from the PR author; a human's review comment newer than the author's last push, comment, or thread reply; changes requested with no push or re-request since; CI failing; merge conflict |
-| Ready to merge | Approved, CI green (or no CI), mergeable, nothing above |
-| Waiting on others | Approved (CI still running or mergeability not computed yet), a review request pending, or a human has reviewed and the author has answered |
+| Ready to merge | Approved, CI green (or no CI), mergeable, nothing above, and the viewer has write access to the repo |
+| Waiting on others | Approved but CI still running, mergeability not computed yet, or the repo is upstream and a maintainer has to merge; a review request pending; or a human has reviewed and the author has answered |
 | No human reviewer yet | No human review and no pending request. Bot-only reviews show as `bot review only (...)` |
 
 The status line carries the detail behind the group, e.g. `approved by Ardiea;
@@ -82,13 +89,19 @@ reset it.
 last push or base change. It is not a conflict; it usually resolves the next
 time anything views the PR.
 
+Merge rights come from the viewer's permission on the repo. On an upstream
+project where that is below write (e.g. TRIAGE on openedx-platform, READ on
+apache/apisix), an approved, green PR reads `a maintainer has to merge` and
+stays in "Waiting on others".
+
 ## Limits
 
 - `--author` defaults to `@me`. PRs where the user is a requested _reviewer_
   are a different query (`gh search prs --review-requested @me`); say so
   rather than mixing the two.
-- Search returns at most 200 PRs. If the total in the summary line is 200,
-  the report is truncated.
+- Each scope's search returns at most 200 PRs, and the script warns on stderr
+  when one hits that limit, because the report is then truncated. Archived
+  repos are left out, since nothing on their PRs can be acted on.
 - Bot-authored PRs (Renovate, Dependabot) only appear with an explicit
   `--author`. For those, the `renovate-security-triage` and
   `dependency-updates` skills fit better.
