@@ -48,7 +48,7 @@ Each PR lands in exactly one group, checked in this order:
 | Group | Rule |
 |-------|------|
 | Drafts | Not marked ready for review |
-| Needs you | Any unresolved review thread whose last comment isn't from the PR author; a human's review comment newer than the author's last push, comment, or thread reply; changes requested with no push or re-request since; CI failing; merge conflict |
+| Needs you | Any unresolved review thread whose last comment isn't from the PR author; a human's review comment not yet answered by a push, comment, or thread reply; a change-requester with no push after their review and no re-request; more than 100 review threads (only the first 100 are checked); CI failing; merge conflict |
 | Ready to merge | Approved, CI green (or no CI), mergeable, nothing above, and the viewer has write access to the repo |
 | Waiting on others | Approved but CI still running, mergeability not computed yet, or the repo is upstream and a maintainer has to merge; a review request pending; or a human has reviewed and the author has answered |
 | No human reviewer yet | No human review and no pending request. Bot-only reviews show as `bot review only (...)` |
@@ -70,20 +70,25 @@ they point at has since changed) are counted separately: often already fixed
 by a push and only needing a reply or a resolve.
 
 Feedback left in a review body rather than an inline thread has no resolved
-state, so it falls back to timing: a human's non-empty `COMMENTED` review
-submitted after the author's latest push, PR comment, or thread reply is
-reported as `review comment from <who> newer than the author's last push or
-reply`. Bot review bodies are left out because they summarize findings that
-also arrive as threads. Read the review itself before treating it as answered.
+state, so it falls back to activity: a human's non-empty `COMMENTED` review
+left on the current head commit, with no PR comment or thread reply from the
+author after it, is reported as `review comment from <who> newer than the
+author's last push or reply`. Bot review bodies are left out because they
+summarize findings that also arrive as threads. Read the review itself before
+treating it as answered.
+
+"Pushed since a review" means the PR's head commit is no longer the one the
+review was left on, not a comparison of commit dates: a commit made before a
+review and pushed after it keeps its earlier date.
 
 Approval is read from each reviewer's latest approve/request-changes review,
 not only `reviewDecision`. On repos without required reviews (e.g. mit-learn)
 `reviewDecision` stays empty even after an approval. Where it is
 `REVIEW_REQUIRED` despite an approval and nobody has requested changes, the
 status says `more approval required` and the PR is not counted as approved.
-"Pushed since" for a change request compares the head commit against that
-reviewer's change-request review, so the author's own thread replies don't
-reset it.
+Each change request is handed back to its reviewer on its own, by a push
+after that reviewer's review or a re-request of that reviewer. The PR stays in
+"Needs you" only while some change-requester has neither.
 
 `mergeability not computed yet` means GitHub hasn't evaluated the PR since its
 last push or base change. It is not a conflict; it usually resolves the next

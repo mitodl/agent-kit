@@ -38,9 +38,9 @@ query($ids: [ID!]!) {
     reviewRequests(first: 20) { nodes { requestedReviewer {
       ... on User { login } ... on Bot { login } ... on Team { name } ... on Mannequin { login }
     } } }
-    latestOpinionatedReviews(first: 20) { nodes { state submittedAt author { login } } }
+    latestOpinionatedReviews(first: 20) { nodes { state author { login } commit { oid } } }
     reviews(last: 50, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) { nodes {
-      state submittedAt bodyText author { login __typename }
+      state submittedAt bodyText author { login __typename } commit { oid }
     } }
     comments(last: 30) { nodes { createdAt author { login } } }
     reviewThreads(first: 100) { totalCount nodes {
@@ -48,7 +48,7 @@ query($ids: [ID!]!) {
       first: comments(first: 1) { nodes { author { login } } }
       last: comments(last: 1) { nodes { author { login } } }
     } }
-    commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
+    commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
   } }
 }
 """
@@ -82,7 +82,9 @@ class PRStatus:
     threads_awaiting_author: dict[str, int]
     threads_awaiting_reviewer: int
     outdated_unresolved: int
-    pushed_since_changes_requested: bool
+    threads_truncated: bool
+    changes_awaiting_author: list[str]
+    changes_pushed_not_rerequested: list[str]
     ci: str
     mergeable: str
     viewer_can_merge: bool
@@ -127,13 +129,25 @@ def login(actor: dict | None) -> str:
     return actor["login"] if actor else "ghost"
 
 
+def reviewed_oid(review: dict) -> str | None:
+    """The head commit a review was left on; None when GitHub no longer has it."""
+    return review["commit"]["oid"] if review["commit"] else None
+
+
 def build_status(node: dict) -> PRStatus:
     author = login(node["author"])
+    commit = node["commits"]["nodes"][0]["commit"]
+    # A head that moved past the commit a review was left on means the author pushed
+    # after it. Commit timestamps can't tell that: a commit made before a review and
+    # pushed after it keeps its earlier date.
+    head = commit["oid"]
     opinions = node["latestOpinionatedReviews"]["nodes"]
     approved_by = [login(r["author"]) for r in opinions if r["state"] == "APPROVED"]
-    changes_by = [
-        login(r["author"]) for r in opinions if r["state"] == "CHANGES_REQUESTED"
-    ]
+    change_reviews = [r for r in opinions if r["state"] == "CHANGES_REQUESTED"]
+    changes_by = [login(r["author"]) for r in change_reviews]
+    pushed_since = {
+        login(r["author"]) for r in change_reviews if reviewed_oid(r) != head
+    }
     decision = node["reviewDecision"]
     approved = decision == "APPROVED" or (
         decision is None and bool(approved_by) and not changes_by
@@ -151,23 +165,22 @@ def build_status(node: dict) -> PRStatus:
             opener = login(thread["first"]["nodes"][0]["author"])
             awaiting_author[opener] = awaiting_author.get(opener, 0) + 1
 
-    commit = node["commits"]["nodes"][0]["commit"]
     reviews = node["reviews"]["nodes"]
     others = [r for r in reviews if login(r["author"]) != author]
     is_bot = {
-        login(r["author"]): r["author"] and r["author"]["__typename"] == "Bot"
+        login(r["author"]): bool(r["author"]) and r["author"]["__typename"] == "Bot"
         for r in others
     }
-    # The author's latest push, comment, or thread reply (thread replies are reviews
-    # authored by the PR author) answers any review-body comment made before it.
-    author_activity = max(
-        [commit["committedDate"]]
-        + [r["submittedAt"] for r in reviews if login(r["author"]) == author]
+    # A push after the review, or a later comment or thread reply by the author
+    # (thread replies are reviews authored by the PR author), answers a review-body comment.
+    last_author_reply = max(
+        [r["submittedAt"] for r in reviews if login(r["author"]) == author]
         + [
             c["createdAt"]
             for c in node["comments"]["nodes"]
             if login(c["author"]) == author
-        ]
+        ],
+        default="",
     )
     review_comments: dict[str, int] = {}
     for r in others:
@@ -176,18 +189,17 @@ def build_status(node: dict) -> PRStatus:
             r["state"] == "COMMENTED"
             and r["bodyText"].strip()
             and not is_bot[name]
-            and r["submittedAt"] > author_activity
+            and reviewed_oid(r) == head
+            and r["submittedAt"] > last_author_reply
         ):
             review_comments[name] = review_comments.get(name, 0) + 1
-    changes_at = [
-        r["submittedAt"] for r in opinions if r["state"] == "CHANGES_REQUESTED"
-    ]
     rollup = commit["statusCheckRollup"]
     requested = [
         r["requestedReviewer"]
         for r in node["reviewRequests"]["nodes"]
         if r["requestedReviewer"]
     ]
+    pending = [r.get("login") or r["name"] for r in requested]
     status = PRStatus(
         repo=node["repository"]["nameWithOwner"],
         number=node["number"],
@@ -201,23 +213,32 @@ def build_status(node: dict) -> PRStatus:
         and not changes_by,
         approved_by=approved_by,
         changes_requested_by=changes_by,
-        pending_reviewers=[r.get("login") or r["name"] for r in requested],
+        pending_reviewers=pending,
         human_reviewers=sorted(name for name, bot in is_bot.items() if not bot),
         bot_reviewers=sorted(name for name, bot in is_bot.items() if bot),
         review_comments_awaiting_author=review_comments,
         threads_awaiting_author=awaiting_author,
         threads_awaiting_reviewer=awaiting_reviewer,
         outdated_unresolved=outdated,
-        pushed_since_changes_requested=bool(changes_at)
-        and commit["committedDate"] > max(changes_at),
+        threads_truncated=node["reviewThreads"]["totalCount"]
+        > len(node["reviewThreads"]["nodes"]),
+        # Each change request hands the move back to its reviewer on its own: a push
+        # after that reviewer's review, or a re-request of that reviewer.
+        changes_awaiting_author=[
+            n for n in changes_by if n not in pushed_since and n not in pending
+        ],
+        changes_pushed_not_rerequested=[
+            n for n in changes_by if n in pushed_since and n not in pending
+        ],
         ci=rollup["state"] if rollup else "NONE",
         mergeable=node["mergeable"],
         viewer_can_merge=node["repository"]["viewerPermission"]
         in ("ADMIN", "MAINTAIN", "WRITE"),
     )
-    if node["reviewThreads"]["totalCount"] > len(node["reviewThreads"]["nodes"]):
+    if status.threads_truncated:
         status.notes.append(
-            f"only first {len(node['reviewThreads']['nodes'])} threads counted"
+            f"only the first {len(node['reviewThreads']['nodes'])} of "
+            f"{node['reviewThreads']['totalCount']} threads checked; open the PR for the rest"
         )
     status.group = classify(status)
     return status
@@ -226,15 +247,12 @@ def build_status(node: dict) -> PRStatus:
 def classify(pr: PRStatus) -> Group:
     if pr.is_draft:
         return "draft"
-    # A push or a re-request after "changes requested" hands the move back to the reviewer.
-    rerequested = set(pr.changes_requested_by) <= set(pr.pending_reviewers)
     blocked_on_author = (
         pr.threads_awaiting_author
         or pr.review_comments_awaiting_author
-        or (
-            pr.changes_requested_by
-            and not (pr.pushed_since_changes_requested or rerequested)
-        )
+        or pr.changes_awaiting_author
+        # Threads past the first page are unchecked, so the PR can't be called ready.
+        or pr.threads_truncated
         or pr.ci in ("FAILURE", "ERROR")
         or pr.mergeable == "CONFLICTING"
     )
@@ -259,15 +277,10 @@ def describe(pr: PRStatus) -> str:
     elif pr.approved_by:
         parts.append(f"approved by {', '.join(pr.approved_by)}")
     if pr.changes_requested_by:
-        rerequested = set(pr.changes_requested_by) <= set(pr.pending_reviewers)
-        suffix = (
-            " (pushed since, not re-requested)"
-            if pr.pushed_since_changes_requested and not rerequested
-            else ""
-        )
-        parts.append(
-            f"changes requested by {', '.join(pr.changes_requested_by)}{suffix}"
-        )
+        parts.append(f"changes requested by {', '.join(pr.changes_requested_by)}")
+    if pr.changes_pushed_not_rerequested:
+        who = ", ".join(pr.changes_pushed_not_rerequested)
+        parts.append(f"pushed since {who}'s change request, not re-requested")
     if pr.threads_awaiting_author:
         total = sum(pr.threads_awaiting_author.values())
         who = ", ".join(f"{name} {n}" for name, n in pr.threads_awaiting_author.items())
