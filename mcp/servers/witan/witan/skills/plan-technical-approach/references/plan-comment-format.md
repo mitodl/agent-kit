@@ -146,11 +146,17 @@ already in review.
 than posting, because a comment claiming the work has no chunks would overwrite
 a correct one with that claim.
 
-## Template — fast path only
+## Template — written bodies (work with no chunk tasks)
 
-A change scoping classified as **trivial** has no epic, no chunk tasks and no
-ADR, so there is nothing to render. It gets a short written body via
-`--body-file`:
+**The condition is "no epic to render from", not "trivial".** Two kinds of work
+meet it: a change scoping classified as **trivial**, which has no epic, no chunk
+tasks and no ADR; and a **single-chunk** full-path change, where one chunk needs
+no epic and the task stays a task. Both get a short written body via
+`--body-file` — `--render` has nothing to read.
+
+The table below is the trivial shape. A single-chunk full-path change keeps the
+**Tradeoffs** and **Strongest argument against** sections, because on that route
+they are real and the comment may be the only place they live.
 
 ```markdown
 ## Plan
@@ -236,10 +242,11 @@ match it against each ADR's `applies_to` before the chunk's first edit.
 
 ## Worked example — sole candidate
 
-All three examples below are **fast-path bodies**, posted with `--body-file`.
+All three examples below are **written bodies**, posted with `--body-file`.
 Work with chunk tasks is rendered instead; these are the case where there is
 no epic to render from and no ADR holding the reasoning, so the comment is the
-only record and carries it.
+only record and carries it. Only the third is trivial — the other two are
+full-path work that happens to fit one chunk, which is why they carry a ledger.
 
 When planning found no genuine alternative, the comment must not look like the
 output of a comparison. Drop **Not chosen**, keep the rest, and say so in one

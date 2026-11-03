@@ -84,20 +84,16 @@ gh pr list --repo <owner/repo> --search "<epic reference>" --state merged
 
 ## Asking the user
 
-Step 1 asks the user to choose. Ask the same way on every agent:
+Step 1 asks the user to choose. Ask the way
+[`witan-workflow`](../witan-workflow/SKILL.md#asking-the-user) specifies —
+structured question tool where one actually exists, otherwise a numbered
+question in a plain message, and **end your turn and wait** either way. That is
+the contract every skill in this bundle shares, because `witan setup` installs
+all of them into agents that have no such tool.
 
-- **If a structured question tool is actually available to you** (e.g. Claude
-  Code's `AskUserQuestion`, or a question tool a Pi extension registers), use
-  it with the header, question and options given. Where free text is also
-  needed, use whatever free-text entry that tool offers; if it offers none, ask
-  in a plain message.
-- **Otherwise**, ask the same question in a normal message — number the
-  options, say what free-text answer is accepted — and **end your turn and
-  wait** for the reply. Do not guess an answer or pick a default on the user's
-  behalf.
-
-Never add an option the step does not list just to get a free-text box. Nothing
-that changes the graph happens until the user has answered.
+**What is at stake on this skill:** nothing that changes the graph happens
+until the user has answered, and Step 1's answer decides whether a
+`WorkflowTrace` is sealed — which is immutable and cannot be sealed twice.
 
 ---
 

@@ -66,24 +66,20 @@ before the alternatives were scored records a preference, not a decision.
 ## Asking the user
 
 Steps 1 and 5 ask the user to choose or type something, and Step 5's answer is
-the approval the whole skill waits on. Ask the same way on every agent — the
-same contract `witan-task` and `witan-workflow` use, because `witan setup`
-installs all of them into agents that have no such tool:
+the approval the whole skill waits on.
 
-- **If a structured question tool is actually available to you** (e.g. Claude
-  Code's `AskUserQuestion`, or a question tool a Pi extension registers), use
-  it with the question and options given. Where a step also needs free text,
-  use whatever free-text entry that tool offers; if it offers none, ask for the
-  text in a plain message.
-- **Otherwise**, ask the same question in a normal message — number the
-  options, say what free-text answer is accepted — and **end your turn and
-  wait** for the reply. Do not guess an answer or pick a default on the user's
-  behalf.
+Ask the way
+[`witan-workflow`](../witan-workflow/SKILL.md#asking-the-user) specifies —
+structured question tool where one actually exists, otherwise a numbered
+question in a plain message, and **end your turn and wait** either way. That is
+the contract every skill in this bundle shares, because `witan setup` installs
+all of them into agents that have no such tool. It is linked rather than
+restated: it already existed in five copies here, two of which had quietly lost
+a clause.
 
-Never add an option the step does not list just to get a free-text box. Nothing
-is recorded, no issue is opened and no code is written until the user has
-answered: on this skill the cost of improvising is an approach approved by
-nobody.
+**What is at stake on this skill:** nothing is recorded, no issue is opened and
+no code is written until the user has answered. The cost of improvising here is
+an approach approved by nobody.
 
 ---
 
@@ -330,14 +326,23 @@ the answer for the whole session — project scope first, since a project-scoped
 install overrides the global one:
 
 ```bash
+SKILLS=""
 for root in .claude/skills .agents/skills .pi/skills .github/skills \
             .opencode/skill "$HOME/.claude/skills" "$HOME/.agents/skills" \
             "$HOME/.pi/agent/skills" mcp/servers/witan/witan/skills; do
   [ -f "$root/plan-technical-approach/scripts/upsert-plan-comment.sh" ] \
     && SKILLS="$root" && break
 done
-[ -n "${SKILLS:-}" ] || echo "plan-comment scripts not found -- locate the installed skill root before continuing" >&2
+[ -n "$SKILLS" ] || { echo "plan-comment scripts not found -- locate the installed skill root before continuing" >&2; exit 1; }
+echo "SKILLS=$SKILLS"
 ```
+
+**An empty `$SKILLS` is a stop, not a warning.** Every command below starts
+`"$SKILLS/..."`, so an unset one does not fail loudly — it builds
+`/plan-technical-approach/scripts/upsert-plan-comment.sh` and reports a
+"no such file" about a path nobody wrote. If the probe comes back empty, say
+the scripts could not be located and stop; do not run a command with an empty
+prefix, and do not retype the path from this document.
 
 The list is fixed and in a fixed order on purpose. The resolved command string
 is then the same on every run on a given machine, so a permission-allowlist
@@ -363,8 +368,10 @@ the spec's and the ADR's, and a second copy on the issue is the one that goes
 stale. `--note` is the only free text and the script refuses past 280
 characters.
 
-**Fast path only** — a trivial change has no epic to render from, so it gets a
-short written body:
+**No chunk tasks? Write the body instead.** The condition is *no epic to render
+from*, not *trivial*. A trivial change is one case; a **single-chunk** full-path
+change is the other, because one chunk needs no epic and the task stays a task.
+Both get a short written body via `--body-file`:
 
 ```bash
 bash "$PTA/upsert-plan-comment.sh" \

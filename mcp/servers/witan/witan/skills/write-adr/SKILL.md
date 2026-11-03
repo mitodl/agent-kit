@@ -50,6 +50,11 @@ fixed probe in
 Not `~/.claude/skills`: that is right only for a global install on Claude Code,
 and this skill ships inside the witan package as well.
 
+**Empty is a stop, not a warning.** `"$SKILLS/write-adr/scripts/..."` with
+`$SKILLS` unset becomes an absolute path at the filesystem root, and the "no
+such file" it produces names a path nobody wrote. Say the scripts could not be
+located and stop, rather than running a command with an empty prefix.
+
 ---
 
 ## Step 1 — Does this decision deserve an ADR?

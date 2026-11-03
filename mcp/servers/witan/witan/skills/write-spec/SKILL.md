@@ -64,21 +64,15 @@ directory that teaches the next person specs here are ceremonial.
 
 ## Asking the user
 
-Steps 1 and 5 ask the user to choose or confirm something. Ask the same way on
-every agent — the same contract the other skills in this bundle use, because
-`witan setup` installs all of them into agents that have no such tool:
+Steps 1 and 5 ask the user to choose or confirm something. Ask the way
+[`witan-workflow`](../witan-workflow/SKILL.md#asking-the-user) specifies —
+structured question tool where one actually exists, otherwise a numbered
+question in a plain message, and **end your turn and wait** either way. That is
+the contract every skill in this bundle shares, because `witan setup` installs
+all of them into agents that have no such tool.
 
-- **If a structured question tool is actually available to you** (e.g. Claude
-  Code's `AskUserQuestion`, or a question tool a Pi extension registers), use
-  it with the question and options given. Where a step also needs free text,
-  use whatever free-text entry that tool offers; if it offers none, ask for the
-  text in a plain message.
-- **Otherwise**, ask the same question in a normal message — number the
-  options, say what free-text answer is accepted — and **end your turn and
-  wait** for the reply. Do not guess an answer or pick a default on the user's
-  behalf.
-
-Never add an option the step does not list just to get a free-text box.
+**What is at stake on this skill:** a spec that reaches review with D3 silently
+decided is worse than one that asks.
 
 ---
 

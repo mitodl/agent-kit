@@ -246,6 +246,11 @@ Copilot, OpenCode, Codex and every project-scoped install. Never use a path
 relative to the working directory: that is the product repo, where neither
 skill lives.
 
+**If `$SKILLS` comes back empty, stop and say so.** Every command below starts
+`"$SKILLS/..."`, so an empty one quietly becomes an absolute path at the
+filesystem root and fails with a "no such file" about a path nobody wrote.
+Never run one with an empty prefix.
+
 ```bash
 PTA="$SKILLS/plan-technical-approach/scripts"
 

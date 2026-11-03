@@ -7,6 +7,14 @@ It is kept here, out of `SKILL.md`, for two reasons: it is long and read once,
 and it must be handed over *verbatim* — paraphrasing it is how the attribution
 leaks back in.
 
+**The rubric is inlined, not linked, and that is deliberate.** The brief is the
+analyst's entire context, and it runs in the product repo — a path like
+`references/ranking-rubric.md` is relative to wherever this skill installed,
+which the analyst cannot resolve and must not be asked to guess. The six
+criteria below are the same ones
+[`ranking-rubric.md`](ranking-rubric.md) defines at length; that file keeps the
+worked real-vs-look-alike pairs, for the caller to read, not the analyst.
+
 ## What must not be in the brief
 
 The brief is the entire context the analyst gets. Before sending, check that it
@@ -62,11 +70,30 @@ B.
 
 RUBRIC
 Score every candidate on all six criteria as better / neutral / worse relative
-to doing nothing: tech-debt delta, complexity delta, architectural fitness,
-blast radius and risk, effort, reversibility. The definitions and the
-real-vs-look-alike examples are in references/ranking-rubric.md — apply that
-file's evidence bar: a score cites something countable from the baseline above
-or from the code, never a preference.
+to doing nothing. Not a number: a 1-to-5 invites averaging, and averaging hides
+the one criterion that should decide the call.
+
+1. Tech-debt delta — call sites consolidated or duplicated, a workaround
+   removed or added. Evidence is a count.
+2. Complexity delta — a branch removed, an indirection added, a state gained or
+   lost. Line count is not complexity.
+3. Architectural fitness — name another feature in THIS repo that solves the
+   same shape of problem, and say whether this matches it. "More idiomatic"
+   with no comparable named is taste.
+4. Blast radius and risk — a reach measurement: caller counts, cross-repo
+   consumers, whether it is behind a flag. Small diffs in shared code have the
+   largest radius.
+5. Effort — the work itself: files, migrations, tests, coordination. Name the
+   work, not a duration. Score an approach that cannot be delivered in
+   reviewable pieces worse here, and say why.
+6. Reversibility — describe the reversal path. If it was not described, it was
+   not checked.
+
+THE EVIDENCE BAR
+A real score cites something measured or read. A look-alike is a preference, a
+vibe, or a hypothetical nothing in the codebase supports. "Cleaner and more
+maintainable", "low risk, it's a small change" and "easy to undo later" are all
+look-alikes: every approach claims them about itself.
 
 BUDGET
 <N> tool calls. Read the code to verify a claim about it; stop looking for new
