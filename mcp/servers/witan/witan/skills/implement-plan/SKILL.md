@@ -82,53 +82,48 @@ if `origin/main` has moved a long way since, the paths it quotes may have moved
 with it, and the mismatch is the spec being stale rather than the code being
 wrong.
 
-**Then find the ADRs that govern this change.** Zero is normal, not an error:
+**Then find the ADRs that govern this change.** Zero is normal, not an error.
+`adr-scope.sh` ships in the sibling skill `write-adr`; resolve `$SKILLS` as
+[Step 3](#step-3--regenerate-the-plan-comment) describes:
 
 ```bash
-base=$(git merge-base origin/main HEAD)
-git diff --name-only "$base"...HEAD > /tmp/changed_files
+ADR="$SKILLS/write-adr/scripts"
 
-# For each ADR's applies_to entries (`:(glob)` semantics are mandatory --
-# without the prefix, `*` crosses `/` and a narrow-looking glob matches a whole
-# subtree):
-git diff --name-only "$base"...HEAD -- ":(glob)${entry}" | grep -q . \
-  && echo "governs this change: ${adr}"
+# Before a chunk's FIRST EDIT: match the chunk's declared Touches paths.
+bash "$ADR/adr-scope.sh" --dir <adr-dir> --paths "<the chunk's Touches globs>"
+
+# Once there is a diff, and again before opening the PR:
+bash "$ADR/adr-scope.sh" --dir <adr-dir> \
+  --changed "$(git merge-base origin/main HEAD)"
 ```
 
-**`applies_to` is not the whole set.** That match only sees ADRs carrying the
-metadata, which is new — every record written before this convention has none,
-including witan's own. Those are skipped in silence, and the empty-glob warning
-below cannot catch a *missing* entry the way it catches a wrong one. So list
-them explicitly and judge them by hand:
+**Run the `--paths` form before the first edit, not after.** An ADR found after
+the code is written is a rewrite; found before, it is a constraint. The paths
+come from the chunk task's `Touches` line, recorded by
+`plan-technical-approach`. If the task carries none — a plan made before this
+was recorded — derive them from the approach and say you did, rather than
+skipping the check.
 
-```bash
-# Every ADR with no applies_to frontmatter at all.
-for adr in <adr-dir>/[0-9]*.md; do
-  grep -q '^applies_to:' "$adr" || echo "unscoped: $adr"
-done
-```
+The script applies `:(glob)` itself, which is what the inlined version kept
+getting wrong: without the prefix `*` crosses `/`, so `src/*.py` silently
+matches a whole subtree instead of nothing.
 
-Read each unscoped record's decision and the paths it names in prose, and
-decide relevance from those. **Zero ADRs govern this change is a conclusion,
-not a default** — it may only be reached once the unscoped ones have been read,
-because an inherited decision binds just as hard as a scoped one.
+**Read its output in full, not just the `governs this change:` lines.** Two
+other things it reports are the ones that matter most:
 
-Before a chunk's first edit, run the same match against that chunk's
-**`Touches`** line — the paths it is expected to change, recorded on the chunk
-task's description by `plan-technical-approach`. An ADR found after the code is
-written is a rewrite; found before, it is a constraint. If the task carries no
-`Touches` (a plan made before this was recorded, or one whose chunk table is in
-an old-style comment), derive the paths from the approach and say you did,
-rather than skipping the check.
+- **`UNSCOPED`** — `applies_to` is new, and **no witan ADR carries it today**,
+  so "no ADR governs this change" is what a correct run routinely prints while
+  inherited decisions bind just as hard. Read each unscoped record's decision
+  and the paths it names in prose, and judge relevance from those. **Zero ADRs
+  govern this change is a conclusion, not a default.**
+- **`WARN` / `Note:`** — a glob matching nothing. At the *start* of the work
+  you cannot tell a wrong glob from a path this work has not created yet, so an
+  ADR carrying an `<!-- applies_to: ... is created by this work -->` note is
+  reported separately and taken at its word until close-out.
 
-**Warn on a glob that matches nothing in the repo at all** —
-`git ls-files -- ':(glob)<entry>'` empty means the ADR is governing nothing.
-Say which ADR, and do not treat its absence from the match as meaningful.
-
-Two causes, and at the *start* of the work you cannot tell them apart: the
-glob is wrong, or it names a path this work has not created yet. An ADR
-carrying an `<!-- applies_to: ... is created by this work -->` note is
-declaring the second, so take it at its word for now.
+Exit 2 means a glob governs nothing with nothing saying it should. That is
+worth stopping for; it is not a reason to proceed as though no decision
+applied.
 
 **Read every governing ADR in full before editing** — its status, its
 `## Decision`, its `## Consequences`, **every `## Addendum` or `## Amendment`,
@@ -504,25 +499,24 @@ the tool and say so.
    `<!-- applies_to: ... is created by this work -->` note:
 
    ```bash
-   status=0
-   git ls-files -- ":(glob)$entry" | grep -q . || status=$?
-   if [[ "$status" -eq 0 ]]; then
-     echo "now governs real files -- drop the note"
-   else
-     echo "still empty: wrong glob, or a path a LATER chunk creates"
-   fi
+   bash "$ADR/adr-scope.sh" --dir <adr-dir> --sweep
    ```
 
-   Matching → remove the note, the glob is live.
+   A `LIVE:` line → remove the note, the glob is live.
 
-   **Still empty is not yet a verdict.** All the ADRs land with the first
-   chunk, while the paths they govern may be created by the third, so an empty
-   match after chunk 1 proves nothing. Resolve it against the chunk tasks: if a
-   **later** chunk's `Touches` covers the path, the note is still
-   accurate — leave it and re-check when that chunk merges. Only when the
-   chunk that was supposed to create the path has merged and the glob is
-   *still* empty is it genuinely wrong, and then it needs the follow-up PR
-   below, because by now this chunk's PR has merged.
+   **A `WRONG GLOB:` line here is not yet a verdict**, and this is the one
+   place the script cannot decide for you. `--sweep` assumes the work is over;
+   mid-stack it is not. All the ADRs land with the first chunk while the paths
+   they govern may be created by the third, so an empty match after chunk 1
+   proves nothing. Resolve it against the chunk tasks: if a **later** chunk's
+   `Touches` covers the path, the note is still accurate — leave it and
+   re-check when that chunk merges. Only when the chunk that was supposed to
+   create the path has merged and the glob is *still* empty is it genuinely
+   wrong, and then it needs the follow-up PR below, because by now this
+   chunk's PR has merged.
+
+   `complete-project` runs the same sweep once every chunk has landed, which
+   is the point at which its verdict is one.
 4. **Accept the ADRs this PR carried.** Acceptance is an event, not a chore.
    Query each reviewer's latest verdict with bots excluded — the exact command
    and the three ways the obvious version gets it wrong are in

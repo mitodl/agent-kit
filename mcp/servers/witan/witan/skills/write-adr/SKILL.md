@@ -29,6 +29,7 @@ produces zero, one, or several, and zero is a normal outcome.
 | [`references/revision-protocol.md`](references/revision-protocol.md) | Supersession — the only way an accepted ADR changes — and the status lifecycle |
 | `scripts/next-adr-number.sh` | Next number from the filesystem, plus a consistency check |
 | `scripts/adr-index.sh` | Derive the index table; verify it against README |
+| `scripts/adr-scope.sh` | Which ADRs govern a change, which carry no `applies_to`, and which globs match nothing |
 
 ## Entry conditions
 
@@ -165,10 +166,15 @@ Two rules, both load-bearing:
   on form — `git ls-files -- 'mcp/*.py'` returns 211 files because `*` crosses
   `/`, while `:(glob)mcp/*.py` returns 0. Write subtree scope as `dir/**`,
   never `dir/*`.
-- **Check every entry against the working tree before writing:**
+- **Check every entry against the working tree before writing.** One entry at a
+  time while drafting; once the file exists, `adr-scope.sh` checks every entry
+  in the directory at once and is what implementation will run:
 
   ```bash
   git ls-files -- ":(glob)$entry" | grep -q . || echo "matches nothing: $entry"
+
+  # After writing, confirm the new record does not join the WARN list:
+  bash "$SKILLS/write-adr/scripts/adr-scope.sh" --dir <adr-dir> --sweep --quiet
   ```
 
   A glob matching nothing fails silently and in the dangerous direction — the

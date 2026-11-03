@@ -32,6 +32,7 @@ still needs this.
 | File | Purpose |
 |------|---------|
 | [`references/bookkeeping-pr.md`](references/bookkeeping-pr.md) | Why post-merge edits need their own pull request, and what rides in it |
+| `$SKILLS/write-adr/scripts/adr-scope.sh` | `--sweep`: forward-looking `applies_to` notes, re-checked now the work is over |
 
 ## Prerequisites
 
@@ -140,13 +141,17 @@ work that had not landed yet:
 **Forward-looking `applies_to` globs.** An ADR may name a path created by a
 later chunk, flagged with an
 `<!-- applies_to: ... is created by this work -->` note. Every chunk has now
-merged, so an empty match is finally a verdict:
+merged, so an empty match is finally a verdict — which is exactly what
+`--sweep` means, and why it is run here rather than mid-stack:
 
 ```bash
-git ls-files -- ":(glob)$entry" | grep -q . \
-  && echo "live -- drop the note" \
-  || echo "WRONG GLOB -- the work is over and it governs nothing"
+bash "$SKILLS/write-adr/scripts/adr-scope.sh" --dir <adr-dir> --sweep
 ```
+
+`LIVE:` → drop the note, the glob is real. `WRONG GLOB:` (exit 3) → the work
+is over and that ADR governs nothing; fix the glob in the bookkeeping pull
+request below. `UNSCOPED` lists the records that carry no `applies_to` at all,
+which is most of them today and is not something close-out has to fix.
 
 **ADRs still `Proposed`.** Each gets the acceptance pass — the reviewer query
 and the three ways the obvious version gets it wrong are in
