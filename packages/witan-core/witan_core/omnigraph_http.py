@@ -543,6 +543,21 @@ class PooledTransport:
                 self._adopt(stamp)
             return self._contract or HTTP_API_CONTRACT
 
+    def refresh_contract(self) -> str:
+        """Probe again, adopt a changed stamp, and return the contract to send.
+
+        For a request that cannot learn from its own refusal: a large body sent
+        with the wrong contract is cut at send, before any stamped answer, so
+        a transport that cached the old contract would fail every such request
+        after the data tier changed contract. A failed probe keeps what the
+        transport has.
+        """
+        stamp = self._probe_contract()
+        with self._contract_lock:
+            if stamp in SUPPORTED_HTTP_API_CONTRACTS and stamp != self._contract:
+                self._adopt(stamp)
+            return self._contract or HTTP_API_CONTRACT
+
     def _probe_contract(self) -> str | None:
         """``HEAD /healthz``'s contract stamp, or ``None`` if there is no single one."""
         conn = self._new_connection(min(self._timeout, PROBE_TIMEOUT_SECONDS))
@@ -1029,6 +1044,8 @@ class PooledTransport:
             query["branch"] = branch
         if from_branch is not None:
             query["from"] = from_branch
+        # Every load, not only the first: see refresh_contract.
+        self.refresh_contract()
         return self._send(
             "POST",
             f"/graphs/{graph_id}/load/ndjson?{urllib.parse.urlencode(query)}",

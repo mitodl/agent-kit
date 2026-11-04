@@ -965,6 +965,42 @@ def test_the_probe_runs_outside_the_lock_under_its_own_timeout(_fake_http, probi
     assert request_conn.timeout == ogh.DEFAULT_TIMEOUT_SECONDS
 
 
+def test_a_load_re_probes_so_a_changed_data_tier_does_not_cut_it_at_send(
+    _fake_http, probing
+):
+    """A 6 MB load sent with the wrong contract dies at send with a broken
+    pipe on both servers (no stamped refusal to learn from), so a transport
+    that cached 0.13 before the data tier moved to 0.14 must check first."""
+    _fake_http.script = [stamped("0.14"), stamped("0.14", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.13"
+
+    outcome = transport.load_ndjson(
+        "council", '{"type": "Memory"}\n', None, mode="merge"
+    )
+
+    assert outcome.kind == ogh.OK
+    assert _contracts_sent(_fake_http) == [
+        ("/healthz", ""),
+        ("/graphs/council/load/ndjson?mode=merge", "0.14"),
+    ]
+    assert transport.contract() == "0.14"
+
+
+def test_a_failed_re_probe_keeps_the_cached_contract(_fake_http, probing):
+    _fake_http.script = [
+        ConnectionRefusedError("probe refused"),
+        stamped("0.13", body="{}"),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.13"
+
+    transport.load_ndjson("council", '{"type": "Memory"}\n', None, mode="merge")
+
+    assert _contracts_sent(_fake_http)[-1][1] == "0.13"
+    assert transport._contract == "0.13"
+
+
 def test_a_data_tier_that_changes_contract_under_a_live_process_is_followed(
     _fake_http,
 ):
