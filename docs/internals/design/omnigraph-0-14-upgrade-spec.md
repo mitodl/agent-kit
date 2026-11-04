@@ -457,8 +457,9 @@ stamp when it is in `SUPPORTED_HTTP_API_CONTRACTS` (`0.14`, `0.13`). On a
 mismatch whose stamp is supported, it switches and resends once, writes
 included. The wire difference between the two contracts on witan's routes is
 additive in both directions, and the served suites pass against both servers.
-The council probe discovers the contract the same way
-(tk-council-probe-discover-the-omnigraph-http-contra-9c8302).
+The council probe discovers the contract the same way, from `HEAD /healthz`
+(mitodl/ol-infrastructure#6811,
+tk-council-probe-discover-the-omnigraph-http-contra-9c8302).
 
 Verified (source): every server error body carries `code` and `disposition:
 {effects, action}`. `effects` is `none`, `partial` or `unknown`. `action` is
@@ -629,10 +630,10 @@ D3.
       (object count and bytes against the source prefix).
    4. Land the format-guard change (D2) in the stack, and roll the
       omnigraph-server, witan and witan-council images in either order: the
-      witan clients speak whichever contract the server stamps (D6). The
-      council probe does too once 9c8302 lands. Until then it pins `0.13` in
-      its own source (`check_council_health.py:134` on ol-infrastructure
-      main), so it fails against a 0.14 server until that line moves.
+      witan clients speak whichever contract the server stamps (D6), and so
+      does the council probe once mitodl/ol-infrastructure#6811 is deployed.
+      Without it the probe pins `0.13` and fails every run against a 0.14
+      server.
    5. Re-run representative reads, a controlled write per graph, and the
       search cases from 80b1fc.
    6. Run one maintenance window (D3 path), including a TERM mid-run.
