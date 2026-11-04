@@ -201,6 +201,11 @@ SUPPORTED_HTTP_API_CONTRACTS = (HTTP_API_CONTRACT, "0.13")
 #: request for the same reason.
 HEALTHZ_PATH = "/healthz"
 
+#: The probe's own timeout, well under :data:`DEFAULT_TIMEOUT_SECONDS`. The
+#: probe is a ``HEAD`` with no work behind it, so a server slower than this to
+#: answer it is not one the request should wait on twice.
+PROBE_TIMEOUT_SECONDS = 5.0
+
 #: The error code both supported servers give for a missing, repeated or
 #: wrong contract header. The refusal runs before graph resolution and body
 #: work, so nothing was applied and a write may be resent once.
@@ -521,17 +526,26 @@ class PooledTransport:
         matters for ``load/ndjson``: the server refuses a wrong contract at the
         middleware without reading the body, so a large upload can be cut
         mid-send and come back with no stamp to learn from.
+
+        The probe runs outside the lock, under :data:`PROBE_TIMEOUT_SECONDS`,
+        so a server that accepts connections and never answers costs each
+        caller that much once, in parallel, rather than queueing every thread
+        behind one probe at the full request timeout. Threads that probe at
+        once all learn the same stamp. A server that answers without a single
+        supported stamp is probed again on every call, at one ``HEAD`` each.
         """
         with self._contract_lock:
-            if self._contract is None:
-                stamp = self._probe_contract()
-                if stamp in SUPPORTED_HTTP_API_CONTRACTS:
-                    self._adopt(stamp)
+            if self._contract is not None:
+                return self._contract
+        stamp = self._probe_contract()
+        with self._contract_lock:
+            if self._contract is None and stamp in SUPPORTED_HTTP_API_CONTRACTS:
+                self._adopt(stamp)
             return self._contract or HTTP_API_CONTRACT
 
     def _probe_contract(self) -> str | None:
         """``HEAD /healthz``'s contract stamp, or ``None`` if there is no single one."""
-        conn = self._new_connection()
+        conn = self._new_connection(min(self._timeout, PROBE_TIMEOUT_SECONDS))
         try:
             conn.request("HEAD", HEALTHZ_PATH)
             response = conn.getresponse()
@@ -560,7 +574,8 @@ class PooledTransport:
         """Adopt the server's ``stamp`` after it refused ``sent``.
 
         Unless another thread already moved the transport on, in which case
-        its contract stands and the caller resends with that.
+        its contract stands. The refused call resends with ``stamp`` either
+        way, since that is what the server that refused it speaks.
         """
         with self._contract_lock:
             if self._contract in (None, sent):
@@ -568,15 +583,18 @@ class PooledTransport:
 
     # ── connection management ─────────────────────────────────────
 
-    def _new_connection(self) -> http.client.HTTPConnection:
+    def _new_connection(
+        self, timeout: float | None = None
+    ) -> http.client.HTTPConnection:
+        timeout = self._timeout if timeout is None else timeout
         if self._scheme == "https":
             return http.client.HTTPSConnection(
                 self._host,
                 self._port,
-                timeout=self._timeout,
+                timeout=timeout,
                 context=ssl.create_default_context(),
             )
-        return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+        return http.client.HTTPConnection(self._host, self._port, timeout=timeout)
 
     def _checkout(self) -> tuple[http.client.HTTPConnection, bool]:
         """This thread's connection and whether it is being reused.
@@ -803,9 +821,17 @@ class PooledTransport:
                 # tier was upgraded or rolled back). The refusal runs before
                 # anything is applied, so a write is resent too, once. A
                 # second mismatch on this call is a violation like any other.
-                self._switch_contract(sent, contract_values[0])
-                sent = self.contract()
+                #
+                # On a fresh connection: the server answers a mismatch without
+                # reading the body, and a connection whose request body was
+                # left unread may be closed without a `Connection: close`. A
+                # reused connection failing mid-flight would make the resend
+                # of a write FATAL, while a fresh one fails at connect, where
+                # nothing was sent.
+                sent = contract_values[0]
+                self._switch_contract(headers[HTTP_API_CONTRACT_HEADER], sent)
                 headers[HTTP_API_CONTRACT_HEADER] = sent
+                self._discard()
                 contract_resent = True
                 continue
             violation = contract_violation(contract_values, sent)

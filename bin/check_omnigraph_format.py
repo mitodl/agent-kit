@@ -26,12 +26,15 @@ on pull requests, and it still fires if the format moves without the version
 changing (a re-cut release, a rebuilt image).
 """
 
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import cyclopts
 
+from witan_core.omnigraph_http import HTTP_API_CONTRACT, SUPPORTED_HTTP_API_CONTRACTS
 from witan_core.omnigraph_install import (
     _OMNIGRAPH_INTERNAL_SCHEMA,
     _OMNIGRAPH_MIN_INTERNAL_SCHEMA,
@@ -48,6 +51,40 @@ app = cyclopts.App(
 _DECLARATION = (
     "packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_INTERNAL_SCHEMA"
 )
+
+_HTTP_CONTRACT_LINE = re.compile(r"^\s*http-contract\s+(\S+)", re.MULTILINE)
+
+
+def _check_http_contract(binary: str, running: str) -> None:
+    """Fail unless ``binary`` speaks :data:`HTTP_API_CONTRACT`.
+
+    A release can move the contract without moving the storage format, and a
+    client sending the old one is refused by every server on the new one.
+    """
+    output = subprocess.run(
+        [binary, "version"], capture_output=True, text=True, timeout=30, check=False
+    ).stdout
+    match = _HTTP_CONTRACT_LINE.search(output)
+    if match is None:
+        print(
+            f"`{binary} version` reported no http-contract line:\n{output}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    contract = match.group(1)
+    if contract == HTTP_API_CONTRACT:
+        return
+    print(
+        f"omnigraph {running} speaks HTTP contract {contract}, but "
+        f"omnigraph_http.HTTP_API_CONTRACT is {HTTP_API_CONTRACT}. Set it to "
+        f"{contract} and put it first in SUPPORTED_HTTP_API_CONTRACTS, keeping "
+        f"{SUPPORTED_HTTP_API_CONTRACTS[0]} after it until every deployed data "
+        "tier is on the new contract, so witan and the data tier can still "
+        "deploy in either order. Move PREVIOUS_RELEASE_TAG in "
+        "bin/install_omnigraph_server.py with it.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 @app.default
@@ -87,9 +124,11 @@ def check(binary: str = "omnigraph") -> None:
                 file=sys.stderr,
             )
             raise SystemExit(1)
+        _check_http_contract(resolved, running)
         print(
             f"omnigraph {running} reads storage format {actual} and opens "
-            f"{oldest} to {actual} in place, as declared."
+            f"{oldest} to {actual} in place, and speaks HTTP contract "
+            f"{HTTP_API_CONTRACT}, as declared."
         )
         return
 

@@ -838,7 +838,7 @@ def test_a_mismatch_switches_contract_and_resends_a_read(_fake_http, caplog):
         outcome = transport.query("council", "q", {"slug": "a"}, None)
 
     assert outcome == ogh.Outcome(kind=ogh.OK, body='{"rows": [1]}', status=200)
-    first, second = _fake_http.created[0].requests
+    first, second = _fake_http.sent
     assert first["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.14"
     assert second["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
     assert second["body"] == first["body"]
@@ -865,7 +865,7 @@ def test_a_mismatch_resends_a_write_once(_fake_http, send):
     outcome = send(transport)
 
     assert outcome.kind == ogh.OK
-    first, second = _fake_http.created[0].requests
+    first, second = _fake_http.sent
     assert second["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
     assert {k: v for k, v in second.items() if k != "headers"} == {
         k: v for k, v in first.items() if k != "headers"
@@ -883,7 +883,7 @@ def test_a_second_mismatch_on_the_same_call_is_terminal(_fake_http):
     outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
 
     assert outcome.kind == ogh.CONTRACT_VIOLATION
-    assert len(_fake_http.created[0].requests) == 2
+    assert len(_fake_http.sent) == 2
 
 
 def test_a_mismatch_naming_an_unsupported_contract_is_not_resent(_fake_http):
@@ -893,7 +893,7 @@ def test_a_mismatch_naming_an_unsupported_contract_is_not_resent(_fake_http):
     outcome = transport.query("council", "q", {}, None)
 
     assert outcome.kind == ogh.CONTRACT_VIOLATION
-    assert len(_fake_http.created[0].requests) == 1
+    assert len(_fake_http.sent) == 1
     assert transport.contract() == "0.14"
 
 
@@ -908,7 +908,61 @@ def test_a_400_stamped_with_another_contract_that_is_not_a_mismatch_is_not_resen
     outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
 
     assert outcome.kind == ogh.CONTRACT_VIOLATION
-    assert len(_fake_http.created[0].requests) == 1
+    assert len(_fake_http.sent) == 1
+
+
+def test_a_resend_goes_out_on_a_fresh_connection(_fake_http):
+    """The server answers a mismatch without reading the body, so the
+    connection it came back on is not trusted with the resend of a write."""
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body="{}")]
+
+    ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
+
+    refused, resent = _fake_http.created
+    assert refused.closed and len(refused.requests) == 1
+    assert len(resent.requests) == 1
+
+
+def test_a_resend_carries_the_refusing_servers_stamp(_fake_http, monkeypatch):
+    """Even when another thread moved the transport meanwhile: the stamp is
+    what the server that refused this call speaks."""
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    real_switch = transport._switch_contract
+
+    def moved_meanwhile(sent: str, stamp: str) -> None:
+        transport._contract = "0.12"
+        real_switch(sent, stamp)
+
+    monkeypatch.setattr(transport, "_switch_contract", moved_meanwhile)
+
+    outcome = transport.mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.OK
+    assert [c for _, c in _contracts_sent(_fake_http)] == ["0.14", "0.13"]
+    assert transport._contract == "0.12"
+
+
+def test_the_probe_runs_outside_the_lock_under_its_own_timeout(_fake_http, probing):
+    """A server that accepts and never answers must not queue every thread
+    behind one probe at the full request timeout."""
+    _fake_http.script = [stamped("0.14"), stamped("0.14", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    held: list[bool] = []
+    real_probe = transport._probe_contract
+
+    def probe() -> str | None:
+        held.append(transport._contract_lock.locked())
+        return real_probe()
+
+    transport._probe_contract = probe  # type: ignore[method-assign]
+
+    transport.query("council", "q", {}, None)
+
+    assert held == [False]
+    probe_conn, request_conn = _fake_http.created
+    assert probe_conn.timeout == ogh.PROBE_TIMEOUT_SECONDS
+    assert request_conn.timeout == ogh.DEFAULT_TIMEOUT_SECONDS
 
 
 def test_a_data_tier_that_changes_contract_under_a_live_process_is_followed(
@@ -949,16 +1003,16 @@ def test_threads_share_the_negotiated_contract(_fake_http):
     worker.start()
     worker.join()
 
-    assert _fake_http.created[1].thread != _fake_http.created[0].thread
-    sent = _fake_http.created[1].requests[0]["headers"]
+    worker_conn = _fake_http.created[-1]
+    assert worker_conn.thread != _fake_http.created[0].thread
+    sent = worker_conn.requests[0]["headers"]
     assert sent[ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
 
 
 def test_a_switch_does_not_undo_another_threads_newer_switch():
     """A thread that sent 0.14 and was refused learns 0.13, but by the time it
     records that another thread has moved the transport off 0.14. The lesson
-    is about a contract the transport no longer sends, so it is dropped and
-    the caller resends with the transport's current one."""
+    is about a contract the transport no longer sends, so it is dropped."""
     transport = ogh.PooledTransport("http://host:8080")
     transport._contract = "0.12"
 
