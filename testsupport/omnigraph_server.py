@@ -22,6 +22,13 @@ from pathlib import Path
 import pytest
 
 SERVER_BIN = os.environ.get("OMNIGRAPH_SERVER_BIN") or shutil.which("omnigraph-server")
+#: A server on the other contract in ``SUPPORTED_HTTP_API_CONTRACTS`` (0.13.0
+#: while the pin is 0.14), with its own ``omnigraph`` CLI beside it.
+#: ``bin/install_omnigraph_server.py --release previous`` fetches both. When
+#: set, every test taking :func:`omnigraph_server_bin` runs against both
+#: servers, which is what shows the client negotiates the contract.
+PREVIOUS_SERVER_BIN = os.environ.get("OMNIGRAPH_PREVIOUS_SERVER_BIN")
+SERVER_BINS = [path for path in (SERVER_BIN, PREVIOUS_SERVER_BIN) if path]
 _REQUIRED = os.environ.get("WITAN_REQUIRE_OMNIGRAPH", "") not in ("", "0", "false")
 requires_omnigraph_server = pytest.mark.skipif(
     SERVER_BIN is None and not _REQUIRED,
@@ -36,18 +43,38 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _cli() -> str:
-    sibling = Path(SERVER_BIN).with_name("omnigraph")
+def _cli(server_bin: str) -> str:
+    sibling = Path(server_bin).with_name("omnigraph")
     return str(sibling) if sibling.exists() else "omnigraph"
 
 
+def _server_id(server_bin: str | None) -> str:
+    """The test id for ``server_bin``: its sibling CLI's version line."""
+    if server_bin is None:
+        return "no-server"
+    version = subprocess.run(
+        [_cli(server_bin), "version"], capture_output=True, text=True, check=False
+    ).stdout.split()
+    return "-".join(version[:2]) or server_bin
+
+
+@pytest.fixture(params=SERVER_BINS or [None], ids=_server_id)
+def omnigraph_server_bin(request) -> str | None:
+    """Each configured ``omnigraph-server``, for :func:`serve`'s ``server_bin``."""
+    return request.param
+
+
 @contextmanager
-def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
+def serve(
+    workdir: Path, schema: Path, graph_id: str, server_bin: str | None = None
+) -> Iterator[str]:
     """Apply a one-graph cluster under ``workdir`` and serve it unauthenticated.
 
     :param workdir: an empty directory for the cluster and the server log.
     :param schema: the ``.pg`` schema the graph is applied with.
     :param graph_id: the id the graph is served under.
+    :param server_bin: the ``omnigraph-server`` to run, :data:`SERVER_BIN`
+        when not given. Its sibling ``omnigraph`` applies the cluster.
     :returns: the server's base URL, once ``/readyz`` answers 200. ``/healthz``
         answers while the graph is still loading, and a graph-scoped request in
         that window gets 503 ``graph_unavailable``, which a test's own raw
@@ -65,7 +92,9 @@ def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
     # directory itself.
     from witan_core.omnigraph import cli_speaks_targets
 
-    cli = _cli()
+    server_bin = server_bin or SERVER_BIN
+    assert server_bin is not None, "no omnigraph-server (set OMNIGRAPH_SERVER_BIN)"
+    cli = _cli(server_bin)
     root = ["--target", str(cluster.absolute())] if cli_speaks_targets(cli) else []
     unlock_scope = root or ["--config", str(cluster)]
     applied = subprocess.run(
@@ -91,7 +120,7 @@ def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
     with log_path.open("w") as log:
         proc = subprocess.Popen(
             [
-                SERVER_BIN,
+                server_bin,
                 "--cluster",
                 str(cluster),
                 "--unauthenticated",
