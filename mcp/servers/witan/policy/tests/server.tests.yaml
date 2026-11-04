@@ -1,5 +1,5 @@
 # Declarative policy tests for the server-level bundle (graph_list).
-# Run: omnigraph policy test --cluster policy --tests policy/tests/server.tests.yaml
+# Run: omnigraph policy test --target "$PWD/policy" --tests policy/tests/server.tests.yaml
 version: 1
 cases:
   - id: user-can-list-graphs

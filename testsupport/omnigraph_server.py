@@ -60,8 +60,16 @@ def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
     (cluster / "cluster.yaml").write_text(
         f"version: 1\ngraphs:\n  {graph_id}:\n    schema: schema.pg\n"
     )
+    # 0.14 takes the root as `--target` (`--config` is the source only), and
+    # its force-unlock takes no `--config`. Before 0.14 the root is the config
+    # directory itself.
+    from witan_core.omnigraph import cli_speaks_targets
+
+    cli = _cli()
+    root = ["--target", str(cluster.absolute())] if cli_speaks_targets(cli) else []
+    unlock_scope = root or ["--config", str(cluster)]
     applied = subprocess.run(
-        [_cli(), "cluster", "apply", "--config", str(cluster)],
+        [cli, "cluster", "apply", "--config", str(cluster), *root],
         check=True,
         capture_output=True,
         text=True,
@@ -74,7 +82,7 @@ def serve(workdir: Path, schema: Path, graph_id: str) -> Iterator[str]:
         if line.startswith("Admission lock:")
     )
     subprocess.run(
-        [_cli(), "cluster", "force-unlock", "--config", str(cluster), lock],
+        [cli, "cluster", "force-unlock", *unlock_scope, lock],
         check=True,
         capture_output=True,
     )

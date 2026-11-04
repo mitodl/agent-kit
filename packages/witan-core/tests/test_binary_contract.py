@@ -150,6 +150,17 @@ _CONTRACTS: dict[int, dict] = {
         # what sends `witan migrate storage` to the rebuild.
         "upgrade_check": {6: "check_failed", 9: "check_passed"},
     },
+    # Format 16. Measured on omnigraph 0.14.0 by running this suite
+    # against it; every surface below came out as format 14's. 0.14 takes
+    # the store as `--target`, not positionally, on `upgrade` too.
+    16: {
+        "export_datetime": "iso-string",
+        "keyed_row_cap": 8192,
+        "export_null_optional": "omitted",
+        "export_id": "top-level",
+        "keyed_edges": True,
+        "upgrade_check": {6: "check_failed", 9: "check_passed"},
+    },
 }
 
 # One node type carrying every field shape witan reads back (a @key String, an
@@ -896,7 +907,7 @@ def test_upgrade_check_reports_each_fixture_as_this_format_does(
     expected = contract["upgrade_check"][source_format]
     store = _fixture_store(tmp_path, source_format)
 
-    result = _run("upgrade", "--check", "--json", store, expect_ok=False)
+    result = _run("upgrade", "--check", "--json", *_at(store), expect_ok=False)
 
     if expected == "check_failed":
         assert result.returncode != 0, result.stdout
@@ -925,7 +936,7 @@ def test_upgrade_converts_a_store_its_check_passes(tmp_path, contract, reader_sc
     )
     store = _fixture_store(tmp_path, source_format)
 
-    _run("upgrade", store)
+    _run("upgrade", *_at(store))
 
     assert _store_format(store) == reader_schema
     assert [r["id"] for r in _export_records(store)] == ["doc-a"]

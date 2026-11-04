@@ -57,8 +57,9 @@ docs/internals/design/omnigraph-0-14-upgrade-spec.md (D3).
 
 TWO CLI DIALECTS
 
-The image ships 0.13 until the pin bump, so the CLI's own `version --json`
-picks the argument shapes (`cli_speaks_targets`). 0.14 takes the destination
+The image ships 0.14, but the CLI's own `version --json` still picks the
+argument shapes (`cli_speaks_targets`), so the 0.13 path keeps working for an
+image built with an overridden pin. 0.14 takes the destination
 as `--target <root>` and `--config` as source only, and its `cluster status`
 reports no lock operation, so a lock is read from `cluster plan`'s
 `state_observations` there. The root is `cluster.yaml`'s `storage`; an inline

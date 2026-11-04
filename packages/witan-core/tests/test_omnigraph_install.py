@@ -273,6 +273,39 @@ def test_reported_internal_schema_reads_the_0_13_version_line(tmp_path):
     assert oi.reported_internal_schema(binary) == 14
 
 
+def test_reported_internal_schema_range_reads_the_0_14_version_line(tmp_path):
+    """Verbatim from omnigraph 0.14.0, which writes 16 and opens 14 in place."""
+    binary = _fake_version_binary(
+        tmp_path / "og",
+        "echo 'omnigraph 0.14.0'\necho 'internal-schema 16 (serves v14 to v16)'",
+    )
+
+    assert oi.reported_internal_schema_range(binary) == (14, 16)
+    assert oi.reported_internal_schema(binary) == 16
+
+
+def test_reported_internal_schema_range_without_a_range_serves_only_its_own(
+    tmp_path,
+):
+    binary = _fake_version_binary(
+        tmp_path / "og", "echo 'omnigraph 0.11.0'\necho 'internal-schema 9'"
+    )
+
+    assert oi.reported_internal_schema_range(binary) == (9, 9)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["internal-schema 16 (serves v14..v16)", "internal-schema 16 (serves 14-16)"],
+)
+def test_reported_internal_schema_range_raises_on_an_unparsed_range(tmp_path, line):
+    """Reading these as (16, 16) would label the image as refusing fmt14 roots."""
+    binary = _fake_version_binary(tmp_path / "og", f"echo '{line}'")
+
+    with pytest.raises(RuntimeError, match="can't parse"):
+        oi.reported_internal_schema_range(binary)
+
+
 def test_reported_internal_schema_raises_when_the_line_is_gone(tmp_path):
     """Never a sentinel. Every caller compares the result against a declared
     format, and a comparison against "unknown" that quietly passes is the

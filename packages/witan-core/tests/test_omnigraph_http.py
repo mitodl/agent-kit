@@ -155,10 +155,17 @@ def ok(payload: dict, **kwargs) -> FakeResponse:
     return FakeResponse(200, json.dumps(payload), **kwargs)
 
 
-def err(status: int, message: str, code: str | None = None) -> FakeResponse:
-    body = {"error": message}
+def err(
+    status: int,
+    message: str,
+    code: str | None = None,
+    effects: str | None = None,
+) -> FakeResponse:
+    body: dict[str, object] = {"error": message}
     if code:
         body["code"] = code
+    if effects:
+        body["disposition"] = {"effects": effects, "action": "refresh"}
     return FakeResponse(status, json.dumps(body))
 
 
@@ -677,7 +684,7 @@ def test_every_request_carries_the_contract_header(_fake_http):
     transport.graphs("t")
 
     sent = [r["headers"] for r in _fake_http.created[0].requests]
-    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.13"] * 3
+    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.14"] * 3
 
 
 def test_an_unstamped_response_is_accepted_from_a_0_11_server(_fake_http, monkeypatch):
@@ -689,7 +696,7 @@ def test_an_unstamped_response_is_accepted_from_a_0_11_server(_fake_http, monkey
     assert outcome.kind == ogh.OK
 
 
-@pytest.mark.parametrize("values", ["0.12", ["0.13", "0.13"], "0.13, 0.13"])
+@pytest.mark.parametrize("values", ["0.13", ["0.14", "0.14"], "0.14, 0.14"])
 def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, values):
     """Present but wrong, which no pin gates: the body is not decoded."""
     _fake_http.script = [
@@ -711,13 +718,13 @@ def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, 
 def test_a_refusal_on_another_contract_is_not_classified_by_its_status(
     _fake_http, idempotent
 ):
-    """A 503 stamped 0.14 is not our server asking us to wait."""
+    """A 503 stamped 0.15 is not our server asking us to wait."""
     _fake_http.script = [
         FakeResponse(
             503,
             "loading",
             stamped=False,
-            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.14"},
+            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.15"},
         )
     ]
     transport = ogh.PooledTransport("http://host:8080")
@@ -1435,6 +1442,44 @@ def test_a_409_over_http_is_retried_for_an_ordinary_writer(
     monkeypatch.setattr(og.time, "sleep", lambda *_: None)
     _fake_http.script = [
         err(409, _WRITE_AUTHORITY_409, code="conflict"),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 2
+
+
+@pytest.mark.parametrize("effects", ["partial", "unknown"])
+def test_a_409_whose_disposition_says_effects_landed_is_never_replayed(
+    monkeypatch, tmp_path, _fake_http, effects
+):
+    """0.14 answers a load whose fork published before its rows were refused
+    with 409 and ``effects: partial``. The 409 rule would replay it. Scripting
+    one response is the assertion: a retry would exhaust the script."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, "key conflict on Person", code="key_conflict", effects=effects)
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="HTTP 409 with a disposition"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_409_whose_disposition_says_no_effects_is_still_retried(
+    monkeypatch, tmp_path, _fake_http
+):
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, _WRITE_AUTHORITY_409, code="conflict", effects="none"),
         ok({"affected_nodes": 1, "affected_edges": 0}),
     ]
     client = _client(

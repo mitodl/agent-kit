@@ -53,7 +53,10 @@ from pathlib import Path
 #:
 #: 0.13.0 (2026-10-07) moves it again, to 14, and 0.12 was never pinned. See
 #: docs/internals/design/omnigraph-0-13-upgrade-spec.md.
-_OMNIGRAPH_VERSION = "0.13.0"
+#:
+#: 0.14.0 (2026-10-22) writes 16. See
+#: docs/internals/design/omnigraph-0-14-upgrade-spec.md.
+_OMNIGRAPH_VERSION = "0.14.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
@@ -85,12 +88,13 @@ _OMNIGRAPH_VERSION = "0.13.0"
 #: a real ``v<version>``, a Renovate bump here IS meaningful — it must move this
 #: tag, the three digests, and both Dockerfiles together, which is what
 #: ``just check-omnigraph-pins`` enforces.
-_OMNIGRAPH_RELEASE_TAG = "v0.13.0"
+_OMNIGRAPH_RELEASE_TAG = "v0.14.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
 #: 0.9.x and 0.10.x read 6; 0.11.x reads 9 (and opens 8, which we never wrote);
-#: 0.13.x reads 14 and nothing else ("serves v14 to v14").
+#: 0.13.x reads 14 and nothing else ("serves v14 to v14"); 0.14.x writes 16
+#: and reads 14 to 16 ("serves v14 to v16").
 #:
 #: 6 -> 9 is planned: every deployed graph is exported with 0.10 and rebuilt
 #: under a keyed schema (``omnigraph upgrade`` refuses cluster-managed roots),
@@ -105,6 +109,11 @@ _OMNIGRAPH_RELEASE_TAG = "v0.13.0"
 #: treats an unstamped response as a contract violation: the data tier has to
 #: move before the witan clients in each environment, never after.
 #:
+#: 14 -> 16 needs no rebuild. 0.14 opens a format-14 graph in place, but the
+#: first publish under it stamps that branch 16 and a 0.13 binary refuses it
+#: from then on. The same ordering holds: the data tier moves first, in the
+#: cutover window, and there is no way back once a 0.14 server has written.
+#:
 #: THIS IS A DECLARATION, NOT A CACHE. Renovate bumps the version pin above and
 #: cannot know about this line, so a release that moves the storage format
 #: leaves the two disagreeing — which is exactly the signal
@@ -116,7 +125,16 @@ _OMNIGRAPH_RELEASE_TAG = "v0.13.0"
 #: migration, not the first: every local store and every deployed graph written
 #: under the old number has to be rebuilt, and a 0.8.x binary refuses a 0.9.x
 #: graph in both directions, so there is no gradual path and no downgrade.
-_OMNIGRAPH_INTERNAL_SCHEMA = 14
+_OMNIGRAPH_INTERNAL_SCHEMA = 16
+
+#: The oldest format ``_OMNIGRAPH_VERSION`` still opens in place, the low end
+#: of the same line's "serves vN to vM" range (N == M before 0.14, and 0.11
+#: prints no range at all). Both images carry it as
+#: ``edu.mit.ol.omnigraph.min-internal-schema``, so ol-infrastructure's preview
+#: can accept a 0.14 image against a root that still holds format 14 instead of
+#: demanding a rebuild the upgrade doesn't need. A declaration like the one
+#: above, and ``bin/check_omnigraph_format.py`` checks both.
+_OMNIGRAPH_MIN_INTERNAL_SCHEMA = 14
 
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
@@ -545,15 +563,33 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     linux-x86_64  da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
 #:     linux-arm64   af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
 #:     macos-arm64   64ed446169e01d2aceb9e8635b73a593681d71414e73dc0d67b0f6700048e4c0
+#:
+#: 2026-10-29, v0.13.0 -> v0.14.0 (tag commit 60bfd19db780). `omnigraph
+#: version` on this binary reads 0.14.0, "internal-schema 16 (serves v14 to
+#: v16)" and http-contract 0.14, so `_OMNIGRAPH_INTERNAL_SCHEMA` moves 14 -> 16
+#: and `omnigraph_http.HTTP_API_CONTRACT` moves to 0.14 in the same commit. The
+#: release notes say 15; the binary is what counts. The cutover is in
+#: docs/internals/design/omnigraph-0-14-upgrade-spec.md.
+#:
+#: CHECKS RUN:
+#:   * Digests: all three tarballs downloaded, `gzip -t` clean, hashed locally
+#:     and matched against each published `.sha256` and the release API digest.
+#:   * Format: `omnigraph version` and `bin/check_omnigraph_format.py` against
+#:     the 0.14.0 binary.
+#:
+#: The v0.13.0 triple this supersedes:
+#:     linux-x86_64  0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
+#:     linux-arm64   e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
+#:     macos-arm64   0a1c7f013e18465254fb925dc177f3089bf6e0cfe4a0ecfc9908a180ab84cc72
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30"
+        "02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96"
+        "f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "0a1c7f013e18465254fb925dc177f3089bf6e0cfe4a0ecfc9908a180ab84cc72"
+        "91c8af54b859f023c42e2d3db37a2f3a361def0d6bb093530d53d3357986db83"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
@@ -595,7 +631,9 @@ def default_install_path() -> Path:
     return Path.home() / ".local" / "bin" / "omnigraph"
 
 
-_INTERNAL_SCHEMA_LINE = re.compile(r"^\s*internal-schema\s+(\d+)\b", re.MULTILINE)
+_INTERNAL_SCHEMA_LINE = re.compile(
+    r"^\s*internal-schema\s+(\d+)\b(?:\s*\(serves v(\d+) to v\d+\))?", re.MULTILINE
+)
 
 
 def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
@@ -609,6 +647,20 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     asking in order to compare against a declared value, and a comparison
     against "unknown" that quietly passes is the failure mode this whole
     mechanism exists to prevent.
+    """
+    return reported_internal_schema_range(binary)[1]
+
+
+def reported_internal_schema_range(
+    binary: str | Path = "omnigraph",
+) -> tuple[int, int]:
+    """The oldest format ``binary`` opens in place and the format it writes.
+
+    :param binary: The omnigraph binary to run.
+    :returns: ``(oldest served, written)``. A binary that prints no
+        "serves" range (0.11 and older) serves only the format it writes.
+    :rtype: tuple[int, int]
+    :raises RuntimeError: as :func:`reported_internal_schema`.
     """
     try:
         result = subprocess.run(
@@ -628,7 +680,16 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     # `internal-schema 14 (serves v14 to v14)`.
     match = _INTERNAL_SCHEMA_LINE.search(result.stdout + result.stderr)
     if match is not None:
-        return int(match.group(1))
+        written = int(match.group(1))
+        line = match.string[match.start() :].splitlines()[0]
+        if match.group(2) is None and "serves" in line:
+            # A range in a shape this doesn't parse must not read as "serves
+            # only its own format": the min label would then claim too little.
+            raise RuntimeError(
+                f"`{binary} version` printed a served range this can't parse: "
+                f"{line.strip()!r}"
+            )
+        return int(match.group(2) or written), written
     raise RuntimeError(
         f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"
         "The storage-format checks depend on it; upstream may have renamed or "

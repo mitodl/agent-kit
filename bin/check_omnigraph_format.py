@@ -34,9 +34,10 @@ import cyclopts
 
 from witan_core.omnigraph_install import (
     _OMNIGRAPH_INTERNAL_SCHEMA,
+    _OMNIGRAPH_MIN_INTERNAL_SCHEMA,
     _OMNIGRAPH_VERSION,
     _installed_version,
-    reported_internal_schema,
+    reported_internal_schema_range,
 )
 
 app = cyclopts.App(
@@ -60,7 +61,7 @@ def check(binary: str = "omnigraph") -> None:
         on PATH, which in CI is the pinned release the install step fetched.
     """
     try:
-        actual = reported_internal_schema(binary)
+        oldest, actual = reported_internal_schema_range(binary)
     except RuntimeError as exc:
         print(f"could not read the binary's storage format:\n{exc}", file=sys.stderr)
         raise SystemExit(2) from exc
@@ -73,7 +74,23 @@ def check(binary: str = "omnigraph") -> None:
     running = _installed_version(Path(resolved)) or "unknown version"
 
     if actual == _OMNIGRAPH_INTERNAL_SCHEMA:
-        print(f"omnigraph {running} reads storage format {actual}, as declared.")
+        if oldest != _OMNIGRAPH_MIN_INTERNAL_SCHEMA:
+            print(
+                f"omnigraph {running} opens storage formats {oldest} to {actual} in "
+                f"place, but _OMNIGRAPH_MIN_INTERNAL_SCHEMA is "
+                f"{_OMNIGRAPH_MIN_INTERNAL_SCHEMA}. Both images label that number "
+                "for ol-infrastructure's preview, which accepts any served root "
+                f"from it up, so set it to {oldest} in this change. If that's "
+                f"higher than before, the binary refuses roots older than "
+                f"format {oldest}: confirm every deployed root is at {oldest} or "
+                "newer before merging.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(
+            f"omnigraph {running} reads storage format {actual} and opens "
+            f"{oldest} to {actual} in place, as declared."
+        )
         return
 
     direction = "newer" if actual > _OMNIGRAPH_INTERNAL_SCHEMA else "older"

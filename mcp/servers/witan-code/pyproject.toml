@@ -200,7 +200,13 @@ dependencies = [
     # same change, so on 0.48 the reaper raises AttributeError. 0.49 is also
     # the first that sends a branch view's reads and writes over HTTP; on 0.48
     # they shell out, which the 0.14 CLI refuses for a plain-http server.
-    "witan-core[cli,remote,observability,sentry]>=0.49,<1",
+    #
+    # ★ >=0.50 IS A COMPATIBILITY FLOOR: 0.50.0 pins omnigraph 0.14 (storage
+    # format 16) and sends `Omnigraph-Http-Api: 0.14`. A 0.14 server refuses
+    # a 0.13 request with `400 api_contract_mismatch`, and the reverse, so
+    # 0.49 imports and runs, then fails on the first read of a shared code
+    # graph once the data tier is on 0.14.
+    "witan-core[cli,remote,observability,sentry]>=0.50,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled

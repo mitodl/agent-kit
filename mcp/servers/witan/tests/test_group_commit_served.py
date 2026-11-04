@@ -1,4 +1,4 @@
-"""Group commit against a real omnigraph-server 0.13, through witan's tools.
+"""Group commit against a real omnigraph-server, through witan's tools.
 
 The unit suite (packages/witan-core/tests/test_group_commit.py) proves the
 lane logic with a fake store. These run the same concurrent shapes through the
@@ -19,6 +19,8 @@ import urllib.request
 import pytest
 from testsupport.omnigraph_server import requires_omnigraph_server
 
+from witan_core.omnigraph_http import HTTP_API_CONTRACT, HTTP_API_CONTRACT_HEADER
+
 from .conftest import SERVED_GRAPH, SERVED_REPO
 
 GRAPH = SERVED_GRAPH
@@ -28,7 +30,8 @@ pytestmark = requires_omnigraph_server
 
 def _commit_count(url: str) -> int:
     request = urllib.request.Request(
-        f"{url}/graphs/{GRAPH}/commits", headers={"omnigraph-http-api": "0.13"}
+        f"{url}/graphs/{GRAPH}/commits",
+        headers={HTTP_API_CONTRACT_HEADER: HTTP_API_CONTRACT},
     )
     with urllib.request.urlopen(request) as response:
         return len(json.loads(response.read())["commits"])
