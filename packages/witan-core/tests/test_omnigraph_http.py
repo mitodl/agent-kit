@@ -987,6 +987,40 @@ def test_a_load_re_probes_so_a_changed_data_tier_does_not_cut_it_at_send(
     assert transport.contract() == "0.14"
 
 
+def test_a_re_probe_overtaken_by_another_threads_switch_does_not_undo_it(
+    _fake_http,
+):
+    """The probe saw the old server; meanwhile another thread's request was
+    refused by the new one and switched the transport. The switch is newer."""
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.13"
+
+    def slow_probe() -> str:
+        transport._contract = "0.14"  # another thread switched meanwhile
+        return "0.13"
+
+    transport._probe_contract = slow_probe  # type: ignore[method-assign]
+
+    assert transport.refresh_contract() == "0.14"
+    assert transport._contract == "0.14"
+
+
+def test_a_load_goes_out_on_a_fresh_connection(_fake_http):
+    """Not on this thread's pooled socket, which may lead to a server the
+    data tier has since replaced: there a write would fail mid-upload."""
+    _fake_http.script = [ok({"rows": []}), stamped("0.14", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport.query("council", "q", {}, None)
+
+    transport.load_ndjson("council", '{"type": "Memory"}\n', None, mode="merge")
+
+    pooled, fresh = _fake_http.created
+    assert pooled.closed
+    assert [r["path"] for r in fresh.requests] == [
+        "/graphs/council/load/ndjson?mode=merge"
+    ]
+
+
 def test_a_failed_re_probe_keeps_the_cached_contract(_fake_http, probing):
     _fake_http.script = [
         ConnectionRefusedError("probe refused"),

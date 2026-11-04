@@ -550,11 +550,19 @@ class PooledTransport:
         with the wrong contract is cut at send, before any stamped answer, so
         a transport that cached the old contract would fail every such request
         after the data tier changed contract. A failed probe keeps what the
-        transport has.
+        transport has, and so does one that another thread overtook: if the
+        contract changed while this probe was in flight, that change is newer
+        than what this probe saw.
         """
+        with self._contract_lock:
+            before = self._contract
         stamp = self._probe_contract()
         with self._contract_lock:
-            if stamp in SUPPORTED_HTTP_API_CONTRACTS and stamp != self._contract:
+            if (
+                stamp in SUPPORTED_HTTP_API_CONTRACTS
+                and self._contract == before
+                and stamp != before
+            ):
                 self._adopt(stamp)
             return self._contract or HTTP_API_CONTRACT
 
@@ -1044,8 +1052,13 @@ class PooledTransport:
             query["branch"] = branch
         if from_branch is not None:
             query["from"] = from_branch
-        # Every load, not only the first: see refresh_contract.
+        # Every load, not only the first: see refresh_contract. Then a fresh
+        # connection, so an upload never rides a pooled socket to a server
+        # that has since been replaced: a dead peer then fails at connect,
+        # before anything was sent, rather than mid-upload, where a write is
+        # FATAL. One handshake per load.
         self.refresh_contract()
+        self._discard()
         return self._send(
             "POST",
             f"/graphs/{graph_id}/load/ndjson?{urllib.parse.urlencode(query)}",
