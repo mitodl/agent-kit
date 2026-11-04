@@ -15,7 +15,11 @@ from __future__ import annotations
 import time
 
 import pytest
-from testsupport.omnigraph_server import requires_omnigraph_server, serve
+from testsupport.omnigraph_server import (
+    omnigraph_server_bin,  # noqa: F401 (a fixture)
+    requires_omnigraph_server,
+    serve,
+)
 
 from witan_code import config as cfg_module
 from witan_code.graph import OmnigraphClient
@@ -43,11 +47,11 @@ def _slugs(client: OmnigraphClient) -> set[str]:
 
 
 @pytest.fixture
-def served(tmp_path, monkeypatch):
+def served(tmp_path, monkeypatch, omnigraph_server_bin):  # noqa: F811
     def no_subprocess(*args, **kwargs):
         raise AssertionError(f"shelled out against a served graph: {args}")
 
-    with serve(tmp_path, cfg_module._SCHEMA_FILE, GRAPH) as url:
+    with serve(tmp_path, cfg_module._SCHEMA_FILE, GRAPH, omnigraph_server_bin) as url:
         monkeypatch.setattr(og.subprocess, "run", no_subprocess)
 
         def client(branch: str | None = None) -> OmnigraphClient:

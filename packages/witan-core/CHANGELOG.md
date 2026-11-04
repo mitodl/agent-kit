@@ -14,11 +14,19 @@ a MINOR bump may include breaking changes).
 
 - Pins omnigraph 0.14.0 (`v0.14.0`, digests from the release), which writes
   storage format 16 and reads 14 to 16. `_OMNIGRAPH_INTERNAL_SCHEMA` moves
-  14 to 16 and `HTTP_API_CONTRACT` to `0.14`. A 0.13 server and this client
-  refuse each other, and the first write a 0.14 binary makes to a format-14
-  graph stamps it 16, which a 0.13 binary then refuses. Move the data tier
-  before the clients, in the cutover window; there is no way back once a
-  0.14 server has written.
+  14 to 16 and `HTTP_API_CONTRACT` to `0.14`. The first write a 0.14 binary
+  makes to a format-14 graph stamps it 16, which a 0.13 binary then refuses,
+  so there is no way back once a 0.14 server has written.
+- The pooled transport negotiates the HTTP contract per server instead of
+  pinning it, so witan and the data tier deploy in either order. It probes
+  `HEAD /healthz` on first use and speaks the stamp when it is in
+  `SUPPORTED_HTTP_API_CONTRACTS` (`0.14`, `0.13`), and on a
+  `400 api_contract_mismatch` stamped with a supported contract it switches
+  and resends once, writes included, since the server refuses before
+  applying anything. It logs a warning when the server is not on the pinned
+  contract. `contract_violation` takes the contract the request carried.
+  `RESPONSE_CONTRACT_REQUIRED` is gone: every supported server stamps its
+  responses, so an unstamped one is always a violation.
 - A CLI failure's JSON error object on stdout is classified even when stderr
   is not empty. 0.14 prints the resolved target on stderr for every call, so
   a read's failure (a recovery barrier, a conflict, an unreachable server)

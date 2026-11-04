@@ -19,7 +19,7 @@ import urllib.request
 import pytest
 from testsupport.omnigraph_server import requires_omnigraph_server
 
-from witan_core.omnigraph_http import HTTP_API_CONTRACT, HTTP_API_CONTRACT_HEADER
+from witan_core.omnigraph_http import HTTP_API_CONTRACT_HEADER, PooledTransport
 
 from .conftest import SERVED_GRAPH, SERVED_REPO
 
@@ -29,9 +29,11 @@ pytestmark = requires_omnigraph_server
 
 
 def _commit_count(url: str) -> int:
+    # A fresh transport, so the contract is probed from this server: the
+    # cached one may be from an earlier test's server on a reused port.
     request = urllib.request.Request(
         f"{url}/graphs/{GRAPH}/commits",
-        headers={HTTP_API_CONTRACT_HEADER: HTTP_API_CONTRACT},
+        headers={HTTP_API_CONTRACT_HEADER: PooledTransport(url).contract()},
     )
     with urllib.request.urlopen(request) as response:
         return len(json.loads(response.read())["commits"])

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import socket
 import ssl
 import threading
@@ -53,7 +54,7 @@ import time
 import urllib.parse
 from typing import BinaryIO, NamedTuple
 
-from .omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
+_log = logging.getLogger(__name__)
 
 # Classification vocabulary shared with the subprocess path. `_execute` maps a
 # subprocess's stderr onto these same names, so a condition is handled
@@ -178,22 +179,37 @@ IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
 #: server stamps the same header on every response, errors included.
 HTTP_API_CONTRACT_HEADER = "Omnigraph-Http-Api"
 
-#: The contract this client speaks. Upstream keeps it separate from the
-#: package version (``omnigraph-api-types``: "independent of the package
-#: version and graph-storage stamp"), so it is its own constant and not
-#: derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12``, 0.13.0
-#: ``0.13`` and 0.14.0 requires ``0.14``. A 0.11 server ignores the header.
-#: A 0.13 server and a 0.14 client refuse each other in both directions, so
-#: there is no mixed window: the data tier moves first.
+#: The contract of the pinned omnigraph release. Upstream keeps it separate
+#: from the package version (``omnigraph-api-types``: "independent of the
+#: package version and graph-storage stamp"), so it is its own constant and
+#: not derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12``, 0.13.0
+#: ``0.13`` and 0.14.0 requires ``0.14``. ``bin/check_omnigraph_format.py``
+#: asserts it against the pinned binary.
 HTTP_API_CONTRACT = "0.14"
 
-#: The storage format of the servers that stamp :data:`HTTP_API_CONTRACT_HEADER`
-#: on responses (observed on 0.13.0, format 14). A 0.11 server (format 9)
-#: sends none, so an absent header is tolerated until the pinned format
-#: reaches this. Moving ``_OMNIGRAPH_INTERNAL_SCHEMA`` is what turns the
-#: requirement on.
-_CONTRACT_STAMPED_FROM_SCHEMA = 14
-RESPONSE_CONTRACT_REQUIRED = _OMNIGRAPH_INTERNAL_SCHEMA >= _CONTRACT_STAMPED_FROM_SCHEMA
+#: Every contract this client can speak, the pinned one first. A transport
+#: speaks whichever of these its server stamps (see
+#: :meth:`PooledTransport.contract`), so witan and the data tier can deploy in
+#: either order across a contract bump. The wire difference from 0.13 to 0.14
+#: on every route this module calls is additive in both directions, and a 0.13
+#: error carries no ``disposition``, which :func:`disposition_effects` reads
+#: as absent.
+SUPPORTED_HTTP_API_CONTRACTS = (HTTP_API_CONTRACT, "0.13")
+
+#: The public route the contract is discovered from. Both supported servers
+#: stamp it, unauthenticated, and upstream's own CLI asks it before every data
+#: request for the same reason.
+HEALTHZ_PATH = "/healthz"
+
+#: The probe's own timeout, well under :data:`DEFAULT_TIMEOUT_SECONDS`. The
+#: probe is a ``HEAD`` with no work behind it, so a server slower than this to
+#: answer it is not one the request should wait on twice.
+PROBE_TIMEOUT_SECONDS = 5.0
+
+#: The error code both supported servers give for a missing, repeated or
+#: wrong contract header. The refusal runs before graph resolution and body
+#: work, so nothing was applied and a write may be resent once.
+CONTRACT_MISMATCH_CODE = "api_contract_mismatch"
 
 # A pooled connection idle longer than this is closed and reopened rather than
 # reused. It is not a performance knob — it is what keeps the connect-failure
@@ -434,7 +450,17 @@ def error_message(status: int, body: str) -> str:
     return f"HTTP {status}{f': {stripped}' if stripped else ''}"
 
 
-def contract_violation(values: list[str]) -> str | None:
+def error_code(body: str) -> str | None:
+    """The ``code`` of an omnigraph error body, or ``None`` without one."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    code = parsed.get("code") if isinstance(parsed, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def contract_violation(values: list[str], sent: str) -> str | None:
     """Why a response's contract header is unacceptable, or None if it is fine.
 
     Upstream's rule (``docs/user/operations/server.md`` § HTTP contract): check
@@ -444,20 +470,16 @@ def contract_violation(values: list[str]) -> str | None:
     answering in its place, or a server on another contract.
 
     :param values: Every :data:`HTTP_API_CONTRACT_HEADER` value on the response.
+    :param sent: The contract the request carried.
     :returns: A message naming the violation, or ``None``.
     :rtype: str | None
     """
-    if values == [HTTP_API_CONTRACT]:
+    if values == [sent]:
         return None
-    if not values:
-        if not RESPONSE_CONTRACT_REQUIRED:
-            return None
-        found = "none"
-    else:
-        found = ", ".join(repr(value) for value in values)
+    found = ", ".join(repr(value) for value in values) if values else "none"
     return (
         f"response did not carry exactly one {HTTP_API_CONTRACT_HEADER}: "
-        f"{HTTP_API_CONTRACT} header (found {found})"
+        f"{sent} header (found {found})"
     )
 
 
@@ -472,6 +494,9 @@ class PooledTransport:
 
     A per-thread connection is also why no cleanup is needed: threads in a pool
     are long-lived, and a connection dies with its thread.
+
+    The HTTP contract, unlike the connections, is one per transport: it is a
+    property of the server, and every thread must send the same one.
     """
 
     def __init__(self, server_url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS):
@@ -486,18 +511,113 @@ class PooledTransport:
         self._port = parts.port
         self._timeout = timeout
         self._local = threading.local()
+        self._contract: str | None = None
+        self._contract_lock = threading.Lock()
+
+    # ── the HTTP contract ─────────────────────────────────────────
+
+    def contract(self) -> str:
+        """The contract to send this server, discovered on first use.
+
+        A server that has not answered a probe yet gets the pinned contract and
+        is probed again on the next call, so a down server reads as
+        ``UNAVAILABLE`` from the request itself rather than from the probe.
+        Probing before the first request, instead of learning from its refusal,
+        matters for ``load/ndjson``: the server refuses a wrong contract at the
+        middleware without reading the body, so a large upload can be cut
+        mid-send and come back with no stamp to learn from.
+
+        The probe runs outside the lock, under :data:`PROBE_TIMEOUT_SECONDS`,
+        so a server that accepts connections and never answers costs each
+        caller that much once, in parallel, rather than queueing every thread
+        behind one probe at the full request timeout. Threads that probe at
+        once all learn the same stamp. A server that answers without a single
+        supported stamp is probed again on every call, at one ``HEAD`` each.
+        """
+        with self._contract_lock:
+            if self._contract is not None:
+                return self._contract
+        stamp = self._probe_contract()
+        with self._contract_lock:
+            if self._contract is None and stamp in SUPPORTED_HTTP_API_CONTRACTS:
+                self._adopt(stamp)
+            return self._contract or HTTP_API_CONTRACT
+
+    def refresh_contract(self) -> str:
+        """Probe again, adopt a changed stamp, and return the contract to send.
+
+        For a request that cannot learn from its own refusal: a large body sent
+        with the wrong contract is cut at send, before any stamped answer, so
+        a transport that cached the old contract would fail every such request
+        after the data tier changed contract. A failed probe keeps what the
+        transport has, and so does one that another thread overtook: if the
+        contract changed while this probe was in flight, that change is newer
+        than what this probe saw.
+        """
+        with self._contract_lock:
+            before = self._contract
+        stamp = self._probe_contract()
+        with self._contract_lock:
+            if (
+                stamp in SUPPORTED_HTTP_API_CONTRACTS
+                and self._contract == before
+                and stamp != before
+            ):
+                self._adopt(stamp)
+            return self._contract or HTTP_API_CONTRACT
+
+    def _probe_contract(self) -> str | None:
+        """``HEAD /healthz``'s contract stamp, or ``None`` if there is no single one."""
+        conn = self._new_connection(min(self._timeout, PROBE_TIMEOUT_SECONDS))
+        try:
+            conn.request("HEAD", HEALTHZ_PATH)
+            response = conn.getresponse()
+            response.read()
+        except (http.client.HTTPException, OSError):
+            return None
+        finally:
+            conn.close()
+        values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
+        return values[0] if len(values) == 1 else None
+
+    def _adopt(self, contract: str) -> None:
+        """Speak ``contract`` from now on. Called with the contract lock held."""
+        if contract != HTTP_API_CONTRACT and contract != self._contract:
+            _log.warning(
+                "%s speaks omnigraph HTTP contract %s, not the pinned %s; "
+                "sending %s until it changes",
+                self.server_url,
+                contract,
+                HTTP_API_CONTRACT,
+                contract,
+            )
+        self._contract = contract
+
+    def _switch_contract(self, sent: str, stamp: str) -> None:
+        """Adopt the server's ``stamp`` after it refused ``sent``.
+
+        Unless another thread already moved the transport on, in which case
+        its contract stands. The refused call resends with ``stamp`` either
+        way, since that is what the server that refused it speaks.
+        """
+        with self._contract_lock:
+            if self._contract in (None, sent):
+                self._adopt(stamp)
 
     # ── connection management ─────────────────────────────────────
 
-    def _new_connection(self) -> http.client.HTTPConnection:
+    def _new_connection(
+        self, timeout: float | None = None
+    ) -> http.client.HTTPConnection:
+        timeout = self._timeout if timeout is None else timeout
         if self._scheme == "https":
             return http.client.HTTPSConnection(
                 self._host,
                 self._port,
-                timeout=self._timeout,
+                timeout=timeout,
                 context=ssl.create_default_context(),
             )
-        return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+        return http.client.HTTPConnection(self._host, self._port, timeout=timeout)
 
     def _checkout(self) -> tuple[http.client.HTTPConnection, bool]:
         """This thread's connection and whether it is being reused.
@@ -625,9 +745,10 @@ class PooledTransport:
         buffering it, see :meth:`_stream`. An error body is still read whole,
         since it is the server's short JSON envelope.
         """
+        sent = self.contract()
         headers = {
             "Accept": NDJSON_CONTENT_TYPE if sink is not None else JSON_CONTENT_TYPE,
-            HTTP_API_CONTRACT_HEADER: HTTP_API_CONTRACT,
+            HTTP_API_CONTRACT_HEADER: sent,
         }
         # Encoded here rather than by http.client, which encodes a str body as
         # ISO-8859-1 and so raises on any character outside it.
@@ -646,7 +767,9 @@ class PooledTransport:
             # silently dropping the precondition and mutating unconditionally.
             headers[IF_GRAPH_COMMIT_HEADER] = if_graph_commit
 
-        for attempt in range(2):
+        stale_retried = False
+        contract_resent = False
+        while True:
             conn, reused = self._checkout()
             started = time.monotonic()
             try:
@@ -674,7 +797,8 @@ class PooledTransport:
                 raw = b"" if streaming else response.read()
             except (http.client.HTTPException, OSError) as exc:
                 self._discard()
-                if reused and idempotent and attempt == 0:
+                if reused and idempotent and not stale_retried:
+                    stale_retried = True
                     # Stale keep-alive: the server closed an idle connection and
                     # we found out by trying to use it. Safe to repeat because
                     # the caller said so; a fresh connection is what the retry
@@ -707,7 +831,33 @@ class PooledTransport:
 
             succeeded = 200 <= response.status < 300
             contract_values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
-            violation = contract_violation(contract_values)
+            if (
+                not contract_resent
+                and response.status == 400
+                and len(contract_values) == 1
+                and contract_values[0] in SUPPORTED_HTTP_API_CONTRACTS
+                and contract_values[0] != sent
+                and error_code(raw.decode("utf-8", errors="replace"))
+                == CONTRACT_MISMATCH_CODE
+            ):
+                # The server changed contract under a live process (the data
+                # tier was upgraded or rolled back). The refusal runs before
+                # anything is applied, so a write is resent too, once. A
+                # second mismatch on this call is a violation like any other.
+                #
+                # On a fresh connection: the server answers a mismatch without
+                # reading the body, and a connection whose request body was
+                # left unread may be closed without a `Connection: close`. A
+                # reused connection failing mid-flight would make the resend
+                # of a write FATAL, while a fresh one fails at connect, where
+                # nothing was sent.
+                sent = contract_values[0]
+                self._switch_contract(headers[HTTP_API_CONTRACT_HEADER], sent)
+                headers[HTTP_API_CONTRACT_HEADER] = sent
+                self._discard()
+                contract_resent = True
+                continue
+            violation = contract_violation(contract_values, sent)
             if violation is not None and (
                 succeeded or not idempotent or contract_values
             ):
@@ -763,9 +913,6 @@ class PooledTransport:
                 status=response.status,
                 retry_after=parse_retry_after(response.getheader("Retry-After")),
             )
-
-        # Unreachable: the loop either returns or continues exactly once.
-        raise AssertionError("_send() retry loop fell through")
 
     def _stream(
         self,
@@ -905,6 +1052,13 @@ class PooledTransport:
             query["branch"] = branch
         if from_branch is not None:
             query["from"] = from_branch
+        # Every load, not only the first: see refresh_contract. Then a fresh
+        # connection, so an upload never rides a pooled socket to a server
+        # that has since been replaced: a dead peer then fails at connect,
+        # before anything was sent, rather than mid-upload, where a write is
+        # FATAL. One handshake per load.
+        self.refresh_contract()
+        self._discard()
         return self._send(
             "POST",
             f"/graphs/{graph_id}/load/ndjson?{urllib.parse.urlencode(query)}",

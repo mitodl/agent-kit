@@ -158,12 +158,19 @@ jobs:
         if: steps.cache-omnigraph.outputs.cache-hit != 'true'
         run: uv run python ../../../bin/install_omnigraph_server.py
 
+      - name: Install the previous contract's omnigraph-server
+        # The served tests run once per server, so they show the client
+        # negotiating the previous HTTP contract as well as the pinned one.
+        # Outside ~/.local/bin, where its CLI would shadow the pinned one.
+        run: uv run python ../../../bin/install_omnigraph_server.py --release previous --dest "$RUNNER_TEMP/omnigraph-previous/omnigraph-server"
+
       - name: Run tests
         # WITAN_REQUIRE_OMNIGRAPH turns the served group-commit tests' "no
         # omnigraph-server, skip" into a failure, so losing the step above
         # fails loudly instead of quietly retiring them.
         env:
           WITAN_REQUIRE_OMNIGRAPH: "1"
+          OMNIGRAPH_PREVIOUS_SERVER_BIN: ${{ runner.temp }}/omnigraph-previous/omnigraph-server
         # Parallel across the runner's cores (4 on ubuntu-latest). Nearly all of
         # this suite's time is spent waiting on `omnigraph` subprocesses against
         # a per-test store, so the tests are independent and run serially they
@@ -267,9 +274,14 @@ jobs:
         # writes and commit list against a real server.
         run: uv run python ../../../bin/install_omnigraph_server.py
 
+      - name: Install the previous contract's omnigraph-server
+        # As in test-witan: the served tests run against both servers.
+        run: uv run python ../../../bin/install_omnigraph_server.py --release previous --dest "$RUNNER_TEMP/omnigraph-previous/omnigraph-server"
+
       - name: Run tests
         # WITAN_REQUIRE_OMNIGRAPH turns the served tests' "no omnigraph-server,
         # skip" into a failure, as in test-witan.
         env:
           WITAN_REQUIRE_OMNIGRAPH: "1"
+          OMNIGRAPH_PREVIOUS_SERVER_BIN: ${{ runner.temp }}/omnigraph-previous/omnigraph-server
         run: uv run pytest -v

@@ -104,15 +104,14 @@ _OMNIGRAPH_RELEASE_TAG = "v0.14.0"
 #:
 #: 9 -> 14 is planned the same way: a deployed cluster root is rebuilt by
 #: ol-infrastructure's storage-migration Job, and a local store goes through
-#: ``witan migrate storage``. This number also turns on
-#: ``omnigraph_http.RESPONSE_CONTRACT_REQUIRED``, so a client on this pin
-#: treats an unstamped response as a contract violation: the data tier has to
-#: move before the witan clients in each environment, never after.
+#: ``witan migrate storage``.
 #:
 #: 14 -> 16 needs no rebuild. 0.14 opens a format-14 graph in place, but the
 #: first publish under it stamps that branch 16 and a 0.13 binary refuses it
-#: from then on. The same ordering holds: the data tier moves first, in the
-#: cutover window, and there is no way back once a 0.14 server has written.
+#: from then on, so there is no way back once a 0.14 server has written. The
+#: witan clients don't have to wait for the data tier: the pooled transport
+#: speaks whichever of ``omnigraph_http.SUPPORTED_HTTP_API_CONTRACTS`` the
+#: server stamps.
 #:
 #: THIS IS A DECLARATION, NOT A CACHE. Renovate bumps the version pin above and
 #: cannot know about this line, so a release that moves the storage format
