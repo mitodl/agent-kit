@@ -50,10 +50,25 @@ def test_a_write_asserting_another_actor_is_refused_before_it_lands(
         monkeypatch.setenv(HTTP_TRANSPORT_ENV_VAR, "0")
     before = _titles(tools)
     _as_actor(monkeypatch, url, "act-pytest")
+    # task_create's duplicate search is a read, and the server checks the
+    # assertion on reads too, so without this the refusal comes from the
+    # search and the write is never attempted.
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_search_task_rows", lambda *_args: [])
+    writes = []
+    change_many = srv.client.change_many
+
+    def recording_change_many(*args, **kwargs):
+        writes.append(args)
+        return change_many(*args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change_many", recording_change_many)
 
     with pytest.raises(RuntimeError, match="does not belong to 'act-pytest'"):
         tools.task_create(title="misattributed", description="d", repo=SERVED_REPO)
 
+    assert len(writes) == 1
     monkeypatch.delenv(HTTP_TRANSPORT_ENV_VAR, raising=False)
     _as_actor(monkeypatch, url, None)
     assert _titles(tools) == before
