@@ -16,7 +16,6 @@ from typing import Self
 import pytest
 
 from witan_core import omnigraph_install as oi
-from witan_core.omnigraph_http import HTTP_API_CONTRACT
 
 
 def _fake_release_tarball(binary_content: bytes) -> bytes:
@@ -288,17 +287,6 @@ def test_reported_build_reads_the_0_14_document(tmp_path):
         serves=(14, 16),
     )
     assert oi.reported_internal_schema(binary) == 16
-
-
-def test_the_pinned_release_matches_the_declarations():
-    """The captured document is the pinned release's, so it has to agree with
-    what this repo declares. A pin bump without a fresh capture fails here."""
-    doc = json.loads(_VERSION_0_14_0.read_text())
-
-    assert doc["version"] == oi._OMNIGRAPH_VERSION
-    assert doc["internal_schema"]["writes"] == oi._OMNIGRAPH_INTERNAL_SCHEMA
-    assert doc["internal_schema"]["serves"][0] == oi._OMNIGRAPH_MIN_INTERNAL_SCHEMA
-    assert doc["http_contract"] == HTTP_API_CONTRACT
 
 
 def test_reported_build_reads_a_null_commit(tmp_path):

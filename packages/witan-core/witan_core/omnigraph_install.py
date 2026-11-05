@@ -662,8 +662,9 @@ def reported_build(binary: str | Path = "omnigraph") -> OmnigraphBuild:
     ``RuntimeError`` below rather than as a regex quietly matching less.
 
     NO TEXT FALLBACK FOR A PRE-0.14 BINARY. Every caller is checking the
-    pinned binary (``bin/check_omnigraph_format.py`` in CI, the contract
-    suites), and the pin has been 0.14 since storage format 16. A 0.13 binary
+    pinned binary (``bin/check_omnigraph_format.py`` in CI, witan's
+    server-entrypoint tests), and the pin has been 0.14 since storage format
+    16. A 0.13 binary
     reaching this is a stale install, so it fails with that said rather than
     being read through a second parser kept alive for it.
     ``_installed_version`` stays on ``--version``, which every release prints,
