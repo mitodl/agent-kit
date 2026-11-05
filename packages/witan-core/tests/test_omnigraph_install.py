@@ -138,9 +138,64 @@ def test_install_omnigraph_redownloads_when_version_differs(tmp_path, monkeypatc
     assert _dest(tmp_path).read_bytes() == b"#!/bin/sh\necho fake"
 
 
-#: The version an upgrade is coming *from*. Must differ from the current pin,
-#: or `_download_omnigraph` short-circuits on the already-at-this-version skip
-#: and never reaches the preservation step under test.
+def _newer_than_the_pin() -> str:
+    major, minor, _ = oi._version_key(oi._OMNIGRAPH_VERSION)
+    return f"{major}.{minor + 1}.0"
+
+
+def _install_over_a_newer_binary(tmp_path, monkeypatch, *, strict: bool) -> Path:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    _write_fake_binary(_dest(tmp_path), _newer_than_the_pin())
+    # A download that would succeed, so leaving the binary alone is the
+    # installer's decision and not a failed fetch.
+    _serve(monkeypatch, _fake_release_tarball(b"#!/bin/sh\necho older"))
+    oi.install_omnigraph(dry_run=False, strict=strict)
+    return _dest(tmp_path)
+
+
+def test_a_newer_binary_is_not_replaced_by_the_older_pin(tmp_path, monkeypatch, capsys):
+    """A newer binary may already have stamped local stores with a format the
+    pin refuses (0.14 writes 16, which 0.13 won't open), so `witan setup`,
+    which installs non-strict, leaves it alone and says so."""
+    dest = _install_over_a_newer_binary(tmp_path, monkeypatch, strict=False)
+
+    assert dest.read_text() == f"#!/bin/sh\necho 'omnigraph {_newer_than_the_pin()}'\n"
+    assert oi.preserved_binaries(dest) == []
+    # Rich wraps at the console width, so compare with the whitespace folded.
+    said = " ".join(capsys.readouterr().out.split())
+    assert f"newer than this witan's pin v{oi._OMNIGRAPH_VERSION}" in said
+    assert "re-run to install" in said
+
+
+def test_a_newer_binary_fails_a_strict_install(tmp_path, monkeypatch):
+    """The CI steps install strict: they asked for the pin and didn't get it."""
+    with pytest.raises(oi.OmnigraphInstallFailed, match="newer than the pinned"):
+        _install_over_a_newer_binary(tmp_path, monkeypatch, strict=True)
+
+    assert _dest(tmp_path).read_text() == (
+        f"#!/bin/sh\necho 'omnigraph {_newer_than_the_pin()}'\n"
+    )
+
+
+def test_an_older_binary_with_a_longer_minor_is_still_upgraded(tmp_path, monkeypatch):
+    """Ordered as numbers, not strings: "0.9.0" sorts above "0.14.0" as text."""
+    monkeypatch.setattr(oi, "_OMNIGRAPH_VERSION", "0.14.0")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    _write_fake_binary(_dest(tmp_path), "0.9.0")
+    _serve(monkeypatch, _fake_release_tarball(b"#!/bin/sh\necho fake"))
+
+    oi.install_omnigraph(dry_run=False)
+
+    assert _dest(tmp_path).read_bytes() == b"#!/bin/sh\necho fake"
+
+
+#: The version an upgrade is coming *from*. Must be older than the current
+#: pin: an equal one short-circuits on the already-at-this-version skip and a
+#: newer one is refused, so neither reaches the preservation step under test.
 _OLD = "0.7.2"
 
 
