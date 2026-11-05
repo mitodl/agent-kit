@@ -7,6 +7,7 @@ registration-bundle tests.
 
 import hashlib
 import io
+import json
 import subprocess
 import tarfile
 from pathlib import Path
@@ -254,78 +255,93 @@ def _fake_version_binary(path: Path, body: str) -> Path:
     return path
 
 
-def test_reported_internal_schema_reads_the_version_line(tmp_path):
-    binary = _fake_version_binary(
-        tmp_path / "og", "echo 'omnigraph 0.9.0'\necho 'internal-schema 6'"
+#: `omnigraph version --json` from the real v0.14.0 linux-x86_64 release
+#: (digest pinned in `_OMNIGRAPH_ASSET_SHA256`). The fields and values are as
+#: the binary printed them; biome re-indents the file.
+_VERSION_0_14_0 = Path(__file__).parent / "fixtures" / "omnigraph-version-0.14.0.json"
+
+
+def _json_version_binary(path: Path, document: str) -> Path:
+    """A fake binary answering `version --json` with ``document``, and refusing
+    anything else the way clap does."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = path.with_suffix(".json")
+    doc.write_text(document)
+    path.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1 $2" = "version --json" ]; then cat \'{doc}\'; exit 0; fi\n'
+        "echo 'error: unexpected argument' >&2\nexit 2\n"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def test_reported_build_reads_the_0_14_document(tmp_path):
+    binary = _json_version_binary(tmp_path / "og", _VERSION_0_14_0.read_text())
+
+    assert oi.reported_build(binary) == oi.OmnigraphBuild(
+        version="0.14.0",
+        commit="60bfd19db780fdff3a5178f959c1204143420114",
+        http_contract="0.14",
+        writes=16,
+        serves=(14, 16),
     )
 
-    assert oi.reported_internal_schema(binary) == 6
+
+def test_reported_build_reads_a_null_commit(tmp_path):
+    """Upstream reports `commit: null` for any build that isn't a release
+    archive, e.g. one built from source."""
+    doc = json.loads(_VERSION_0_14_0.read_text())
+    doc["commit"] = None
+    binary = _json_version_binary(tmp_path / "og", json.dumps(doc))
+
+    assert oi.reported_build(binary).commit is None
 
 
-def test_reported_internal_schema_reads_the_0_13_version_line(tmp_path):
-    """Verbatim from omnigraph 0.13.0. The line gained the range the binary
-    serves, so the number is no longer its last token."""
+def test_reported_build_refuses_a_pre_0_14_binary(tmp_path):
+    """0.13 exits 2 on `--json`. No fallback to its text output: every caller
+    is checking the pinned binary, so this is a stale install."""
     binary = _fake_version_binary(
         tmp_path / "og",
-        "echo 'omnigraph 0.13.0'\necho 'internal-schema 14 (serves v14 to v14)'",
+        "echo \"error: unexpected argument '--json' found\" >&2\nexit 2",
     )
 
-    assert oi.reported_internal_schema(binary) == 14
-
-
-def test_reported_internal_schema_range_reads_the_0_14_version_line(tmp_path):
-    """Verbatim from omnigraph 0.14.0, which writes 16 and opens 14 in place."""
-    binary = _fake_version_binary(
-        tmp_path / "og",
-        "echo 'omnigraph 0.14.0'\necho 'internal-schema 16 (serves v14 to v16)'",
-    )
-
-    assert oi.reported_internal_schema_range(binary) == (14, 16)
-    assert oi.reported_internal_schema(binary) == 16
-
-
-def test_reported_internal_schema_range_without_a_range_serves_only_its_own(
-    tmp_path,
-):
-    binary = _fake_version_binary(
-        tmp_path / "og", "echo 'omnigraph 0.11.0'\necho 'internal-schema 9'"
-    )
-
-    assert oi.reported_internal_schema_range(binary) == (9, 9)
+    with pytest.raises(RuntimeError, match="added `version --json` in 0.14"):
+        oi.reported_build(binary)
 
 
 @pytest.mark.parametrize(
-    "line",
-    ["internal-schema 16 (serves v14..v16)", "internal-schema 16 (serves 14-16)"],
+    "mutate",
+    [
+        lambda doc: doc.pop("internal_schema"),
+        lambda doc: doc["internal_schema"].pop("writes"),
+        lambda doc: doc["internal_schema"].update(serves=[16]),
+        lambda doc: doc.pop("http_contract"),
+    ],
+    ids=["no-internal-schema", "no-writes", "serves-not-a-range", "no-contract"],
 )
-def test_reported_internal_schema_range_raises_on_an_unparsed_range(tmp_path, line):
-    """Reading these as (16, 16) would label the image as refusing fmt14 roots."""
-    binary = _fake_version_binary(tmp_path / "og", f"echo '{line}'")
-
-    with pytest.raises(RuntimeError, match="can't parse"):
-        oi.reported_internal_schema_range(binary)
-
-
-def test_reported_internal_schema_raises_when_the_line_is_gone(tmp_path):
+def test_reported_build_raises_on_a_document_it_cannot_read(tmp_path, mutate):
     """Never a sentinel. Every caller compares the result against a declared
     format, and a comparison against "unknown" that quietly passes is the
     failure this whole mechanism exists to prevent."""
-    binary = _fake_version_binary(tmp_path / "og", "echo 'omnigraph 1.0.0'")
+    doc = json.loads(_VERSION_0_14_0.read_text())
+    mutate(doc)
+    binary = _json_version_binary(tmp_path / "og", json.dumps(doc))
 
-    with pytest.raises(RuntimeError, match="no internal-schema line"):
-        oi.reported_internal_schema(binary)
-
-
-def test_reported_internal_schema_raises_on_a_failing_binary(tmp_path):
-    binary = _fake_version_binary(tmp_path / "og", "echo boom >&2\nexit 3")
-
-    with pytest.raises(RuntimeError, match="failed"):
-        oi.reported_internal_schema(binary)
+    with pytest.raises(RuntimeError, match="can't read"):
+        oi.reported_build(binary)
 
 
-def test_reported_internal_schema_raises_when_the_binary_is_missing(tmp_path):
+def test_reported_build_raises_on_output_that_is_not_json(tmp_path):
+    binary = _json_version_binary(tmp_path / "og", "omnigraph 0.14.0\n")
+
+    with pytest.raises(RuntimeError, match="can't read"):
+        oi.reported_build(binary)
+
+
+def test_reported_build_raises_when_the_binary_is_missing(tmp_path):
     with pytest.raises(RuntimeError, match="could not run"):
-        oi.reported_internal_schema(tmp_path / "does-not-exist")
+        oi.reported_build(tmp_path / "does-not-exist")
 
 
 def test_the_declared_internal_schema_is_a_plausible_version():

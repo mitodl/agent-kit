@@ -256,7 +256,7 @@ def reader_schema() -> int:
     if line is None:
         pytest.fail(
             f"`omnigraph version` no longer reports internal-schema:\n{out}\n"
-            "This suite and the format-break detector both depend on that line."
+            "This suite depends on that line."
         )
     # `internal-schema 9` on 0.11; `internal-schema 14 (serves v14 to v14)`
     # on 0.13. The number is the second token on both.

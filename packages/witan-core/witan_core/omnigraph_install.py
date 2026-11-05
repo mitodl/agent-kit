@@ -27,6 +27,7 @@ sets the previous version aside as ``omnigraph-<version>`` beside ``dest``, and
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import re
@@ -35,6 +36,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 #: 0.10.0, from the real ``v0.10.0`` release — no longer the `edge` re-test.
@@ -91,7 +93,8 @@ _OMNIGRAPH_VERSION = "0.14.0"
 _OMNIGRAPH_RELEASE_TAG = "v0.14.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
-#: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
+#: reported by ``omnigraph version --json``'s ``internal_schema.writes`` (the
+#: number on the text output's ``internal-schema`` line). 0.8.x reads 4;
 #: 0.9.x and 0.10.x read 6; 0.11.x reads 9 (and opens 8, which we never wrote);
 #: 0.13.x reads 14 and nothing else ("serves v14 to v14"); 0.14.x writes 16
 #: and reads 14 to 16 ("serves v14 to v16").
@@ -127,8 +130,7 @@ _OMNIGRAPH_RELEASE_TAG = "v0.14.0"
 _OMNIGRAPH_INTERNAL_SCHEMA = 16
 
 #: The oldest format ``_OMNIGRAPH_VERSION`` still opens in place, the low end
-#: of the same line's "serves vN to vM" range (N == M before 0.14, and 0.11
-#: prints no range at all). Both images carry it as
+#: of the same report's ``internal_schema.serves`` range. Both images carry it as
 #: ``edu.mit.ol.omnigraph.min-internal-schema``, so ol-infrastructure's preview
 #: can accept a 0.14 image against a root that still holds format 14 instead of
 #: demanding a rebuild the upgrade doesn't need. A declaration like the one
@@ -630,70 +632,91 @@ def default_install_path() -> Path:
     return Path.home() / ".local" / "bin" / "omnigraph"
 
 
-_INTERNAL_SCHEMA_LINE = re.compile(
-    r"^\s*internal-schema\s+(\d+)\b(?:\s*\(serves v(\d+) to v\d+\))?", re.MULTILINE
-)
+@dataclass(frozen=True)
+class OmnigraphBuild:
+    """What ``omnigraph version --json`` says about a binary.
 
-
-def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
-    """The on-disk storage format ``binary`` reads, per ``omnigraph version``.
-
-    The number that decides whether an upgrade is a rebuild-everything event.
-    Read from the binary rather than inferred from its release number, because
-    the mapping is upstream's to change and has no published table.
-
-    Raises ``RuntimeError`` rather than returning a sentinel: every caller is
-    asking in order to compare against a declared value, and a comparison
-    against "unknown" that quietly passes is the failure mode this whole
-    mechanism exists to prevent.
+    :param version: The package version (``0.14.0``; an edge build appends
+        ``-edge+<short commit>``).
+    :param commit: The commit a packaged build was compiled from, ``None`` for
+        any other build.
+    :param http_contract: The ``omnigraph-http-api`` value it speaks.
+    :param writes: The storage format its publications stamp.
+    :param serves: The inclusive range of formats it opens in place, lowest
+        first.
     """
-    return reported_internal_schema_range(binary)[1]
+
+    version: str
+    commit: str | None
+    http_contract: str
+    writes: int
+    serves: tuple[int, int]
 
 
-def reported_internal_schema_range(
-    binary: str | Path = "omnigraph",
-) -> tuple[int, int]:
-    """The oldest format ``binary`` opens in place and the format it writes.
+def reported_build(binary: str | Path = "omnigraph") -> OmnigraphBuild:
+    """Read ``binary``'s version, HTTP contract and storage formats.
+
+    The storage format decides whether an upgrade is a rebuild-everything
+    event. It is read from the binary rather than inferred from its release
+    number, because the mapping is upstream's to change and has no published
+    table.
+
+    From ``omnigraph version --json``, which 0.14 added and which answers
+    without contacting a server. Upstream's own test pins the document's whole
+    field set, so a rename fails here as a ``KeyError`` turned into the
+    ``RuntimeError`` below rather than as a regex quietly matching less.
+
+    NO TEXT FALLBACK FOR A PRE-0.14 BINARY. The caller is
+    ``bin/check_omnigraph_format.py``, checking the pinned binary, and the pin
+    has been 0.14 since storage format 16. A 0.13 binary
+    reaching this is a stale install, so it fails with that said rather than
+    being read through a second parser kept alive for it.
+    ``_installed_version`` stays on ``--version``, which every release prints,
+    because the installer has to name whatever binary it replaces.
 
     :param binary: The omnigraph binary to run.
-    :returns: ``(oldest served, written)``. A binary that prints no
-        "serves" range (0.11 and older) serves only the format it writes.
-    :rtype: tuple[int, int]
-    :raises RuntimeError: as :func:`reported_internal_schema`.
+    :returns: The binary's report.
+    :rtype: OmnigraphBuild
+    :raises RuntimeError: when the binary can't be run, exits non-zero, or
+        prints a document this can't read. Never a sentinel: every caller
+        compares the result against a declared value, and a comparison against
+        "unknown" that quietly passes is the failure this exists to prevent.
     """
+    command = f"`{binary} version --json`"
     try:
         result = subprocess.run(
-            [str(binary), "version"],
+            [str(binary), "version", "--json"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"could not run `{binary} version`: {exc}") from exc
+        raise RuntimeError(f"could not run {command}: {exc}") from exc
     if result.returncode != 0:
+        # 0.13 exits 2 with "unexpected argument '--json' found".
         raise RuntimeError(
-            f"`{binary} version` failed ({result.returncode}):\n{result.stderr}"
+            f"{command} failed ({result.returncode}):\n{result.stderr}\n"
+            "omnigraph added `version --json` in 0.14, so an older binary "
+            f"fails here. `witan setup` installs the pinned {_OMNIGRAPH_VERSION}."
         )
-    # 0.11 prints `internal-schema 9`. 0.13 adds the range the binary serves:
-    # `internal-schema 14 (serves v14 to v14)`.
-    match = _INTERNAL_SCHEMA_LINE.search(result.stdout + result.stderr)
-    if match is not None:
-        written = int(match.group(1))
-        line = match.string[match.start() :].splitlines()[0]
-        if match.group(2) is None and "serves" in line:
-            # A range in a shape this doesn't parse must not read as "serves
-            # only its own format": the min label would then claim too little.
-            raise RuntimeError(
-                f"`{binary} version` printed a served range this can't parse: "
-                f"{line.strip()!r}"
-            )
-        return int(match.group(2) or written), written
-    raise RuntimeError(
-        f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"
-        "The storage-format checks depend on it; upstream may have renamed or "
-        "dropped it."
-    )
+    try:
+        doc = json.loads(result.stdout)
+        schema = doc["internal_schema"]
+        lowest, highest = schema["serves"]
+        return OmnigraphBuild(
+            version=doc["version"],
+            commit=doc["commit"],
+            http_contract=doc["http_contract"],
+            writes=int(schema["writes"]),
+            serves=(int(lowest), int(highest)),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"{command} printed a document this can't read ({exc!r}):\n"
+            f"{result.stdout}\nThe storage-format checks depend on it; upstream "
+            "may have renamed a field."
+        ) from exc
 
 
 def preserved_binaries(dest: Path | None = None) -> list[Path]:
