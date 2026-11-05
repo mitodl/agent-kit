@@ -2980,3 +2980,69 @@ def test_exit_75_from_a_503_gets_the_restart_budget(text):
 def test_exit_75_from_a_blocked_graph_is_still_fatal():
     """The one 503 that needs an operator, whatever the exit says."""
     assert og._classify_cli_error(_013_READ_BLOCKED_GRAPH_STDOUT, 75) == _http.FATAL
+
+
+def test_an_exhausted_exit_75_503_says_the_server_answered(monkeypatch):
+    """A server that kept refusing with 503 was reached, so the message must
+    not send an operator to look at the network."""
+    client = _client(monkeypatch)
+    _stub_run(
+        monkeypatch,
+        returncode=75,
+        stderr=(
+            "graph admission is paused\nHTTP 503\n"
+            'disposition: {"effects":"none","action":"retry"}\n'
+        ),
+    )
+    _fake_clock(monkeypatch)
+
+    with pytest.raises(og.StoreUnavailable) as raised:
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert "https://graph.example answered" in str(raised.value)
+    assert "could not connect" not in str(raised.value)
+
+
+def test_an_exhausted_0_13_loading_graph_says_the_server_answered(monkeypatch):
+    """0.13 exits 1, not 75, for a graph still loading, so only the server's
+    own wording shows it answered."""
+    client = _client(monkeypatch)
+    _stub_run(
+        monkeypatch,
+        returncode=1,
+        stderr="graph is loading; wait for its startup attempt to complete\nHTTP 503\n",
+    )
+    _fake_clock(monkeypatch)
+
+    with pytest.raises(og.StoreUnavailable, match="https://graph.example answered"):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+
+
+def test_an_exhausted_connect_failure_says_it_could_not_connect(monkeypatch):
+    client = _client(monkeypatch)
+    _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+    _fake_clock(monkeypatch)
+
+    with pytest.raises(og.StoreUnavailable) as raised:
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert "could not connect to https://graph.example" in str(raised.value)
+    assert "answered" not in str(raised.value)
+
+
+def test_an_exhausted_http_503_says_the_server_answered(monkeypatch):
+    """The pooled transport records the status of any response it got."""
+    client = _client(monkeypatch)
+    _fake_clock(monkeypatch)
+    refused = og._AttemptResult(
+        _http.UNAVAILABLE,
+        error="graph is loading (HTTP 503, graph_unavailable)",
+        status=503,
+    )
+
+    with pytest.raises(og.StoreUnavailable, match="https://graph.example answered"):
+        client._retry_loop(
+            lambda: refused,
+            "query",
+            is_write=False,
+            surface_conflict=False,
+            deadline=None,
+        )
