@@ -85,6 +85,18 @@ OK = "ok"
 #: classification is what makes that true on our side too.
 PRECONDITION_FAILED = "precondition_failed"
 
+#: The request's credential resolves to another actor than its
+#: :data:`IF_ACTOR_HEADER` names: omnigraph 0.14's ``412 actor_mismatch``,
+#: refused before graph lookup or any effect.
+#:
+#: ★ ITS OWN KIND BECAUSE IT SHARES 412 WITH :data:`PRECONDITION_FAILED` AND
+#: MEANS SOMETHING ELSE. A failed precondition says the graph moved, so the
+#: caller re-reads and decides again (and a compare-and-swap caller loses
+#: the race). This says witan holds the wrong token for the actor it is
+#: serving, which no re-read fixes and which must never read as a lost race.
+#: Terminal, and nothing was written.
+ACTOR_MISMATCH = "actor_mismatch"
+
 #: A full-text index whose analyzer generation cannot be proven compatible with
 #: the running engine — omnigraph 0.10.0's ``FullTextIndexRebuildRequired``,
 #: answered as HTTP 409 with a ``full_text_index_rebuild_required`` detail
@@ -166,6 +178,9 @@ INDETERMINATE_EFFECTS = frozenset({"partial", "unknown"})
 #: inside a write, which 0.13 sent as a plain 400, arrives as this.
 OUTCOME_UNKNOWN_CODE = "outcome_unknown"
 
+#: The 0.14 code for a refused :data:`IF_ACTOR_HEADER` assertion.
+ACTOR_MISMATCH_CODE = "actor_mismatch"
+
 #: The kinds the policy loop retries for a write, which a disposition in
 #: :data:`INDETERMINATE_EFFECTS` turns into :data:`OUTCOME_UNKNOWN`.
 _REPLAYED_KINDS = frozenset({RETRYABLE, UNAVAILABLE, ADMISSION_CAP})
@@ -178,6 +193,17 @@ IF_GRAPH_COMMIT_HEADER = "Omnigraph-If-Graph-Commit"
 
 #: Path suffix selecting the conditional variant of a write route.
 IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
+
+#: HTTP contract 0.14's actor assertion: the actor the caller expects its
+#: bearer token to resolve to. A 0.14 server refuses a request whose
+#: credential resolves to anyone else with ``412 actor_mismatch``, after
+#: authentication and before graph lookup or any effect
+#: (``require_expected_actor``, crates/omnigraph-server/src/handlers.rs at
+#: v0.14.0). A 0.13 server ignores it (sent locally to 0.13.0: the request
+#: ran as if it were absent), so it is sent whatever contract the transport
+#: speaks, and asserts nothing there. An unauthenticated server resolves no
+#: actor and refuses every request that carries it.
+IF_ACTOR_HEADER = "Omnigraph-If-Actor"
 
 #: The HTTP contract discriminator omnigraph-server 0.12 introduced. Every
 #: protected route (everything this module calls; ``/healthz`` and ``/readyz``
@@ -389,6 +415,8 @@ def classify_disposition(disposition: Disposition, message: str) -> str:
     code, effects, action = disposition
     if code == OUTCOME_UNKNOWN_CODE or effects == "partial":
         return OUTCOME_UNKNOWN
+    if code == ACTOR_MISMATCH_CODE:
+        return ACTOR_MISMATCH
     if action == "recover":
         # `recover` is what the server sends for a detail that must be
         # resolved or rebuilt first: a recovery intent, or a full-text index
@@ -808,6 +836,7 @@ class PooledTransport:
         idempotent: bool,
         if_graph_commit: str | None = None,
         sink: BinaryIO | None = None,
+        actor: str | None = None,
     ) -> Outcome:
         """POST ``payload`` as JSON to ``path`` and classify the result.
 
@@ -822,11 +851,12 @@ class PooledTransport:
             idempotent,
             if_graph_commit=if_graph_commit,
             sink=sink,
+            actor=actor,
         )
 
-    def get(self, path: str, token: str | None) -> Outcome:
+    def get(self, path: str, token: str | None, *, actor: str | None = None) -> Outcome:
         """GET ``path``. A read, so always safe to repeat."""
-        return self._send("GET", path, None, token, True)
+        return self._send("GET", path, None, token, True, actor=actor)
 
     def _send(
         self,
@@ -839,6 +869,7 @@ class PooledTransport:
         if_graph_commit: str | None = None,
         content_type: str = JSON_CONTENT_TYPE,
         sink: BinaryIO | None = None,
+        actor: str | None = None,
     ) -> Outcome:
         """Send one request and classify the result.
 
@@ -863,6 +894,9 @@ class PooledTransport:
         ``sink`` streams a successful body into a binary file instead of
         buffering it, see :meth:`_stream`. An error body is still read whole,
         since it is the server's short JSON envelope.
+
+        ``actor`` is sent as :data:`IF_ACTOR_HEADER`, so a token that resolves
+        to someone else is refused rather than attributed to them.
         """
         sent = self.contract()
         headers = {
@@ -877,6 +911,8 @@ class PooledTransport:
             headers["Content-Length"] = str(len(payload))
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if actor is not None:
+            headers[IF_ACTOR_HEADER] = actor
         if if_graph_commit is not None:
             # Upstream #470 requires EXACTLY ONE of these, sent raw, and only to
             # the dedicated `/…/if-graph-commit` routes — the ordinary routes
@@ -1075,6 +1111,7 @@ class PooledTransport:
         token: str | None,
         *,
         branch: str | None = None,
+        actor: str | None = None,
     ):
         """``POST /graphs/<id>/query`` — a read. Always safe to repeat.
 
@@ -1096,6 +1133,7 @@ class PooledTransport:
             _statement_payload(source, params, branch),
             token,
             idempotent=True,
+            actor=actor,
         )
 
     def mutate(
@@ -1107,6 +1145,7 @@ class PooledTransport:
         if_graph_commit: str | None = None,
         *,
         branch: str | None = None,
+        actor: str | None = None,
     ):
         """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly.
 
@@ -1129,6 +1168,7 @@ class PooledTransport:
             token,
             idempotent=False,
             if_graph_commit=if_graph_commit,
+            actor=actor,
         )
 
     def load_ndjson(
@@ -1140,6 +1180,7 @@ class PooledTransport:
         mode: str,
         branch: str | None = None,
         from_branch: str | None = None,
+        actor: str | None = None,
     ) -> Outcome:
         """``POST /graphs/<id>/load/ndjson`` — one bulk load. A write.
 
@@ -1175,9 +1216,17 @@ class PooledTransport:
             token,
             False,
             content_type=NDJSON_CONTENT_TYPE,
+            actor=actor,
         )
 
-    def export(self, graph_id: str, sink: BinaryIO, token: str | None) -> Outcome:
+    def export(
+        self,
+        graph_id: str,
+        sink: BinaryIO,
+        token: str | None,
+        *,
+        actor: str | None = None,
+    ) -> Outcome:
         """``POST /graphs/<id>/export`` — all of ``main``, streamed into ``sink``.
 
         POST with a JSON body (``branch``, ``type_names``), not a GET, on both
@@ -1193,9 +1242,17 @@ class PooledTransport:
             token,
             idempotent=True,
             sink=sink,
+            actor=actor,
         )
 
-    def commits(self, graph_id: str, token: str | None, *, branch: str) -> Outcome:
+    def commits(
+        self,
+        graph_id: str,
+        token: str | None,
+        *,
+        branch: str,
+        actor: str | None = None,
+    ) -> Outcome:
         """``GET /graphs/<id>/commits?branch=…`` — the history reachable from
         ``branch``'s head, newest first, as ``{"commits": [...]}``.
 
@@ -1203,7 +1260,7 @@ class PooledTransport:
         0.14.0 alike. Unpaged, so the whole history is one answer. A read.
         """
         query = urllib.parse.urlencode({"branch": branch})
-        return self.get(f"/graphs/{graph_id}/commits?{query}", token)
+        return self.get(f"/graphs/{graph_id}/commits?{query}", token, actor=actor)
 
     def graphs(self, token: str | None):
         """``GET /graphs`` — the server's graph registry.

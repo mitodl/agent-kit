@@ -8,6 +8,68 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.51.0] - 2026-11-05
+
+### Added
+
+- `omnigraph_install.reported_build()` reads a binary's version, commit, HTTP
+  contract and storage formats from `omnigraph version --json`, returning an
+  `OmnigraphBuild`. A pre-0.14 binary has no `--json`, so it raises
+  `RuntimeError` naming the stale install rather than being read.
+
+- `OmnigraphClient(..., actor=...)` asserts the actor its token belongs to on
+  every remote request: `Omnigraph-If-Actor` over the pooled transport
+  (query, mutate, load, export, commit list) and `--as` on a write over the
+  0.14 CLI. A 0.14 server refuses a token that resolves to anyone else with
+  `412 actor_mismatch` before doing anything; a 0.13 server ignores the
+  header. Without `actor`, requests are unchanged.
+- `ACTOR_MISMATCH` classifies that refusal. It is terminal and never a lost
+  race: a compare-and-swap caller gets a `RuntimeError` naming the actor,
+  not `OmnigraphConflict`, and group commit fails every member of the group
+  instead of reading the 412 as the fenced member's failed precondition.
+
+### Changed
+
+- `bin/check_omnigraph_format.py` reads the storage format and HTTP contract
+  from `omnigraph version --json` instead of regex-parsing the text output.
+
+- An omnigraph 0.14 error is classified from its `code` and
+  `disposition` (`classify_disposition`) instead of its status and message
+  markers, on the pooled transport and for a served JSON error from the CLI.
+  The markers stay for a body without a disposition (a 0.13 server or a
+  relay), and for the two conditions no code names: a graph that failed to
+  open and a drifted dataset. `Outcome` carries the parsed `Disposition`, and
+  `error_disposition` replaces `disposition_effects`.
+- Group commit replays a failed group one write at a time when a 0.14
+  server's disposition says `effects: none`, or `unknown` under
+  `bad_request` or `payload_too_large`. 0.14 reports `unknown` for a refusal
+  inside a write such as a missing edge endpoint, which upstream's mutation
+  path raises before its only publication; a write it could not settle
+  answers `500 outcome_unknown` and is never replayed.
+
+### Removed
+
+- `reported_internal_schema()` and `reported_internal_schema_range()`. Use
+  `reported_build().writes` and `reported_build().serves`.
+
+### Fixed
+
+- `StoreUnavailable` no longer says witan "could not connect" when the server
+  answered. A remote call that exhausts the unavailable budget on a refusal the
+  server sent (an HTTP 503 over the pooled transport, an omnigraph 0.14 CLI exit
+  75, or a 0.13 CLI reporting a graph that is still loading) now says the
+  server answered but kept refusing the call as unavailable, so an operator
+  checks the server's state instead of the network. A connect failure keeps the
+  "could not connect" wording.
+
+- The omnigraph installer (`witan setup`, `witan-code setup`) no longer
+  replaces a binary newer than its pin. A newer binary may already have
+  stamped local stores with a storage format the pin refuses (0.14 writes 16,
+  which 0.13 won't open), so it is left in place with a message saying why. A
+  strict install (`install_omnigraph()`'s default, which CI uses) raises
+  `OmnigraphInstallFailed` instead. Delete the binary and re-run to install
+  the pin anyway. Releases before this one still downgrade.
+
 ## [0.50.0] - 2026-10-29
 
 ### Changed

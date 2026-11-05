@@ -111,13 +111,15 @@ def test_the_callers_own_token_addresses_the_data_tier(tmp_path, monkeypatch):
         "fastmcp.server.dependencies.get_access_token", lambda: _token("alice")
     )
     seen: dict[str, str | None] = {}
-    monkeypatch.setattr(
-        ingest.store_module.StoreRef,
-        "client",
-        lambda self, *a, **kw: seen.setdefault("token", self.token) and None,
-    )
+
+    def client(self, *args, **kwargs):
+        seen.update(token=self.token, actor=self.actor)
+
+    monkeypatch.setattr(ingest.store_module.StoreRef, "client", client)
     ingest._client(REPO, None, cfg_module.load(), "act-alice")
-    assert seen["token"] == "tok-alice"
+    # The actor goes with the token, so the data tier refuses a token that
+    # resolves to anyone else.
+    assert seen == {"token": "tok-alice", "actor": "act-alice"}
 
 
 # ── Authorization ─────────────────────────────────────────────────────────────

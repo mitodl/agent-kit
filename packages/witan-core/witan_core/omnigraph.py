@@ -86,6 +86,10 @@ T = TypeVar("T", int, float)
 # advisory lock (prevention) and, as a safety net, retry transient "stale view"
 # conflicts.
 _WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
+# The subcommands witan runs that take the 0.14 CLI's `--as`. `optimize` and
+# `cleanup` are writes the CLI refuses it on (`accepts_actor`,
+# crates/omnigraph-cli/src/planes.rs at v0.14.0).
+_ACTOR_SUBCOMMANDS = {"mutate", "load"}
 # The last two markers are the REMOTE write-authority precondition — a racing
 # writer whose branch head moved between prepare and commit. Over HTTP that
 # arrives as a 409 and `classify_status` keys on the status, which is strictly
@@ -443,6 +447,14 @@ _EXIT_RETRY = 75
 # retry fixes.
 _EXIT_OUTCOME_UNKNOWN = 2
 _EXIT_USAGE = 64
+# 0.14 exits 4 for a failed condition, a refused `--as` included
+# (`Failure::classify`, crates/omnigraph-cli/src/command_outcome.rs at
+# v0.14.0). A write's text output carries no code, so the server's own
+# refusal text tells the two apart: `require_expected_actor`
+# (crates/omnigraph-server/src/handlers.rs) ends both of its messages with
+# "not the expected '<actor>'".
+_EXIT_CONDITION_FAILED = 4
+_ACTOR_MISMATCH_MARKER = ", not the expected '"
 # How a 0.14 write prints the status beside its message ("HTTP 503" on its own
 # line), and how a read's error object carries it.
 _HTTP_503 = re.compile(r'^http 503$|"http_status":\s*503\b', re.MULTILINE)
@@ -946,6 +958,8 @@ def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     served = _served_disposition(stderr)
     if served is not None:
         return _http.classify_disposition(served, stderr)
+    if returncode == _EXIT_CONDITION_FAILED and _ACTOR_MISMATCH_MARKER in lowered:
+        return _http.ACTOR_MISMATCH
     if any(m in lowered for m in _UNAVAILABLE_MARKERS):
         return _http.UNAVAILABLE
     # Ahead of the retryable 503 wordings below: all three are the same status
@@ -2159,10 +2173,19 @@ class OmnigraphClient:
         connect_retry: bool = True,
         s3_profile: str | None = None,
         s3_region: str | None = None,
+        *,
+        actor: str | None = None,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
+        # The actor `token` belongs to, for a client built per actor (ADR-0004).
+        # A remote request asserts it (`Omnigraph-If-Actor`, `--as` for a CLI
+        # write), so a token resolved for the wrong actor is refused by the
+        # server instead of writing under someone else's name. Ignored for a
+        # local or s3 store, where `--as` would set the actor instead of
+        # asserting it.
+        self.actor = actor
         self.guard = guard
         self.s3_profile = s3_profile
         self.s3_region = s3_region
@@ -2665,6 +2688,7 @@ class OmnigraphClient:
             verb,
             *self._store_args(),
             *(write_quiet_args(self._binary) if is_write else []),
+            *self._actor_args(verb),
             "-e",
             source,
             *cli_args,
@@ -2692,6 +2716,31 @@ class OmnigraphClient:
         """``_extra_args(verb)`` as request-body fields for ``/query`` or
         ``/mutate``, or ``None`` when one of them has no body field."""
         return _flag_fields(self._extra_args(verb), _STATEMENT_FLAG_FIELDS)
+
+    def _actor_field(self) -> dict[str, str]:
+        """The transport keyword asserting this client's actor, or none.
+
+        Empty without an actor, so a client built without one calls the
+        transport exactly as before.
+        """
+        return {"actor": self.actor} if self.actor and self.is_remote else {}
+
+    def _actor_args(self, subcommand: str) -> list[str]:
+        """``--as <actor>`` for a remote write with a 0.14 CLI, or nothing.
+
+        The 0.14 CLI sends ``--as`` to a served target as
+        ``Omnigraph-If-Actor`` (``accepts_actor``,
+        crates/omnigraph-cli/src/planes.rs at v0.14.0), and refuses it on the
+        read commands, so only the writes witan runs over the CLI take it. A
+        pre-0.14 CLI has no ``--as``.
+        """
+        if (
+            not self._actor_field()
+            or subcommand not in _ACTOR_SUBCOMMANDS
+            or not cli_speaks_targets(self._binary)
+        ):
+            return []
+        return ["--as", self.actor]
 
     # ── Pooled HTTP transport (reads/writes against a deployed server) ──
 
@@ -2818,6 +2867,7 @@ class OmnigraphClient:
         # Empty for an unbranched client, so it calls the transport exactly as
         # before, for the same reason `if_graph_commit` is kept off the call.
         fields = self._statement_fields(verb) if carries_extra_args else {}
+        fields = {**fields, **self._actor_field()}
 
         def attempt() -> _AttemptResult:
             if not is_write:
@@ -2882,7 +2932,8 @@ class OmnigraphClient:
         two actors' writes. It is hashed so the lane table holds no secret. The
         injected args are in it because the lane's leader sends its own
         ``branch``: two of witan-code's views sharing a lane would commit one
-        view's writes to the other.
+        view's writes to the other. The asserted actor is in it for the same
+        reason: the leader sends its own.
         """
         token = self._resolve_token()
         key = (
@@ -2890,6 +2941,7 @@ class OmnigraphClient:
             self.server_url,
             self.graph_id,
             hashlib.sha256(token.encode()).hexdigest() if token else None,
+            self.actor,
             str(self.queries_dir),
             self.connect_retry,
             tuple(self._extra_args("mutate")),
@@ -2971,6 +3023,10 @@ class OmnigraphClient:
             last = attempts[-1] if attempts else None
             if type(exc) is not RuntimeError or last is None:
                 raise
+            if last.kind == _http.ACTOR_MISMATCH:
+                # Also a 412, and every member's: they share the token that
+                # resolved to the wrong actor.
+                raise
             if last.status == _PRECONDITION_FAILED_STATUS:
                 # The fence of a caller that does not surface conflicts.
                 raise ConditionFailed(exc) from exc
@@ -3030,7 +3086,9 @@ class OmnigraphClient:
                 try:
                     with open(out, "wb") as fh:
                         return _attempt_result(
-                            transport.export(self.graph_id, fh, token)
+                            transport.export(
+                                self.graph_id, fh, token, **self._actor_field()
+                            )
                         )
                 except OSError as exc:
                     raise RuntimeError(
@@ -3109,7 +3167,12 @@ class OmnigraphClient:
             def attempt() -> _AttemptResult:
                 return _attempt_result(
                     transport.load_ndjson(
-                        self.graph_id, data, token, mode=mode, **target
+                        self.graph_id,
+                        data,
+                        token,
+                        mode=mode,
+                        **target,
+                        **self._actor_field(),
                     )
                 )
 
@@ -3176,7 +3239,9 @@ class OmnigraphClient:
 
             def attempt() -> _AttemptResult:
                 return _attempt_result(
-                    transport.commits(self.graph_id, token, branch=branch)
+                    transport.commits(
+                        self.graph_id, token, branch=branch, **self._actor_field()
+                    )
                 )
 
             result = self._with_retry_policy(attempt, "commit list", is_write=False)
@@ -3217,6 +3282,7 @@ class OmnigraphClient:
             subcommand,
             *self._store_args(),
             *quiet,
+            *self._actor_args(subcommand),
             *self._extra_args(subcommand),
             *args,
         ]
@@ -3546,6 +3612,18 @@ class OmnigraphClient:
                     f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
                     f"attempts — a recovery barrier on the branch kept "
                     f"blocking the read:\n{err.strip()}"
+                )
+            if kind == _http.ACTOR_MISMATCH:
+                # TERMINAL, and never a lost race even for a CAS caller: the
+                # server refused before doing anything because the token
+                # resolves to someone else, and a re-read does not change
+                # which token this client holds.
+                raise RuntimeError(
+                    f"omnigraph {label} was refused because this client's "
+                    f"bearer token does not belong to {self.actor!r}. NOTHING "
+                    f"WAS WRITTEN. The actor-to-token mapping is wrong for this "
+                    f"actor; retrying with the same token gets the same "
+                    f"refusal:\n{err.strip()}"
                 )
             if kind == _http.PRECONDITION_FAILED:
                 # TERMINAL. The caller stated a precondition and it was

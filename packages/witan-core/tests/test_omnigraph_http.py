@@ -1614,6 +1614,94 @@ def test_an_ordinary_write_sends_no_precondition_header(
     assert ogh.IF_GRAPH_COMMIT_HEADER not in request["headers"]
 
 
+# ── the actor assertion (Omnigraph-If-Actor) ─────────────────────────
+
+
+_ACTOR_MISMATCH_412 = err(
+    412,
+    "the credential resolves to actor 'act-b', not the expected 'act-a'",
+    code="actor_mismatch",
+    effects="none",
+    action="fix",
+)
+
+
+def test_a_per_actor_client_asserts_its_actor_on_reads_and_writes(
+    monkeypatch, tmp_path, _fake_http
+):
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _mutation_dir(tmp_path)
+    _fake_http.script = [
+        ok({"rows": []}),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+        ok({"commits": []}),
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", tmp_path, graph_id="council", actor="act-a"
+    )
+
+    client.read("read.gq", "find_memory", {"slug": "m-1"})
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+    client.commit_list("main")
+
+    requests = [r for conn in _fake_http.created for r in conn.requests]
+    assert [r["headers"][ogh.IF_ACTOR_HEADER] for r in requests] == ["act-a"] * 3
+
+
+def test_a_client_without_an_actor_asserts_none(monkeypatch, tmp_path, _fake_http):
+    """Local stdio use, and every non-per-actor client: unchanged requests."""
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert ogh.IF_ACTOR_HEADER not in _fake_http.created[0].requests[0]["headers"]
+
+
+def test_the_load_route_asserts_the_actor(monkeypatch, tmp_path, _fake_http):
+    _fake_http.script = [ok({})]
+    client = _client(
+        monkeypatch, "http://host:8080", tmp_path, graph_id="council", actor="act-a"
+    )
+
+    client.load_batch([{"type": "Task", "data": {"slug": "t-1"}}])
+
+    request = _fake_http.created[-1].requests[0]
+    assert request["path"].startswith("/graphs/council/load/ndjson")
+    assert request["headers"][ogh.IF_ACTOR_HEADER] == "act-a"
+
+
+def test_an_actor_mismatch_is_its_own_kind_not_a_failed_precondition():
+    disposition = ogh.Disposition("actor_mismatch", "none", "fix")
+    assert ogh.classify_status(412, "x", disposition) == ogh.ACTOR_MISMATCH
+
+
+@pytest.mark.parametrize("surface_conflict", [False, True])
+def test_an_actor_mismatch_is_terminal_and_never_a_lost_race(
+    monkeypatch, tmp_path, _fake_http, surface_conflict
+):
+    """A CAS caller that gets OmnigraphConflict re-reads and reports
+    `lost_race`, which would be a wrong answer here: the token is wrong, and
+    no re-read fixes it. One scripted response is the no-retry assertion."""
+    _fake_http.script = [_ACTOR_MISMATCH_412]
+    client = _client(
+        monkeypatch,
+        "http://host:8080",
+        _mutation_dir(tmp_path),
+        graph_id="council",
+        actor="act-a",
+    )
+
+    with pytest.raises(RuntimeError, match="does not belong to 'act-a'") as raised:
+        client.change(
+            "mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=surface_conflict
+        )
+    assert not isinstance(raised.value, og.OmnigraphConflict)
+    assert len(_fake_http.created[0].requests) == 1
+
+
 def test_read_with_commit_returns_the_snapshot_token(monkeypatch, tmp_path, _fake_http):
     """The token has to come back with the rows it belongs to.
 

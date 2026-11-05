@@ -3016,6 +3016,44 @@ def test_a_local_cli_error_object_keeps_the_markers():
     assert og._classify_cli_error(text, 1) == _http.RETRYABLE
 
 
+def test_a_refused_as_over_the_cli_is_an_actor_mismatch():
+    """How the 0.14 CLI prints a write refused for its `--as`: the server's
+    message, the status and the disposition, no code, and exit 4, which it
+    shares with a failed `--if-commit`."""
+    text = (
+        "the credential resolves to actor 'act-b', not the expected 'act-a'\n"
+        "HTTP 412\n"
+        'disposition: {"effects":"none","action":"fix"}\n'
+    )
+    assert og._classify_cli_error(text, 4) == _http.ACTOR_MISMATCH
+    assert og._classify_cli_error("precondition failed on branch 'main'", 4) == (
+        _http.PRECONDITION_FAILED
+    )
+
+
+@pytest.mark.parametrize(
+    ("uri", "speaks_targets", "subcommand", "expected"),
+    [
+        ("https://graph.example", True, "mutate", ["--as", "act-a"]),
+        ("https://graph.example", True, "load", ["--as", "act-a"]),
+        # The 0.14 CLI refuses `--as` on reads and on maintenance writes.
+        ("https://graph.example", True, "query", []),
+        ("https://graph.example", True, "optimize", []),
+        # A pre-0.14 CLI has no `--as`.
+        ("https://graph.example", False, "mutate", []),
+        # On a local store `--as` would set the actor, not assert it.
+        ("/var/lib/witan/graph.omni", True, "mutate", []),
+    ],
+)
+def test_a_cli_write_asserts_the_actor_only_where_it_is_an_assertion(
+    monkeypatch, uri, speaks_targets, subcommand, expected
+):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    _speaks_targets(monkeypatch, speaks_targets)
+    client = OmnigraphClient(uri, Path("/queries"), graph_id="g", actor="act-a")
+    assert client._actor_args(subcommand) == expected
+
+
 def test_exit_75_from_a_blocked_graph_is_still_fatal():
     """The one 503 that needs an operator, whatever the exit says."""
     assert og._classify_cli_error(_013_READ_BLOCKED_GRAPH_STDOUT, 75) == _http.FATAL
