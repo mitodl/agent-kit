@@ -2977,6 +2977,45 @@ def test_exit_75_from_a_503_gets_the_restart_budget(text):
     assert og._classify_cli_error(text, 75) == _http.UNAVAILABLE
 
 
+@pytest.mark.parametrize(
+    ("code", "status", "effects", "action", "expected"),
+    [
+        # Prose that the markers would read as retryable, under codes that say
+        # otherwise: the disposition decides.
+        ("bad_request", 400, "none", "fix", _http.FATAL),
+        ("conflict", 409, "none", "refresh", _http.RETRYABLE),
+        ("graph_unavailable", 503, "none", "retry", _http.UNAVAILABLE),
+        ("too_many_requests", 429, "none", "retry", _http.ADMISSION_CAP),
+        ("recovery_required", 503, "none", "recover", _http.RECOVERY_REQUIRED),
+    ],
+)
+def test_a_served_cli_error_object_is_classified_from_its_disposition(
+    code, status, effects, action, expected
+):
+    text = json.dumps(
+        {
+            "error": "stale view",
+            "code": code,
+            "disposition": {"effects": effects, "action": action},
+            "http_status": status,
+        }
+    )
+    assert og._classify_cli_error(text, 1) == expected
+
+
+def test_a_local_cli_error_object_keeps_the_markers():
+    """No `http_status`: a local store's failure, whose code is the CLI's own
+    reading of an engine error. The markers still decide it."""
+    text = json.dumps(
+        {
+            "error": "stale view",
+            "code": "internal",
+            "disposition": {"effects": "none", "action": "refresh"},
+        }
+    )
+    assert og._classify_cli_error(text, 1) == _http.RETRYABLE
+
+
 def test_exit_75_from_a_blocked_graph_is_still_fatal():
     """The one 503 that needs an operator, whatever the exit says."""
     assert og._classify_cli_error(_013_READ_BLOCKED_GRAPH_STDOUT, 75) == _http.FATAL

@@ -190,12 +190,13 @@ def err(
     message: str,
     code: str | None = None,
     effects: str | None = None,
+    action: str = "refresh",
 ) -> FakeResponse:
     body: dict[str, object] = {"error": message}
     if code:
         body["code"] = code
     if effects:
-        body["disposition"] = {"effects": effects, "action": "refresh"}
+        body["disposition"] = {"effects": effects, "action": action}
     return FakeResponse(status, json.dumps(body))
 
 
@@ -377,6 +378,93 @@ def test_a_plain_conflict_is_still_retryable():
         "current branch state"
     )
     assert ogh.classify_status(409, message) == ogh.RETRYABLE
+
+
+# ── classification from a 0.14 disposition ───────────────────────────
+#
+# Codes, actions and effects as omnigraph-server v0.14.0 pairs them
+# (`ErrorCode::action` in omnigraph-api-types, `ApiError::disposition` in
+# omnigraph-server/src/lib.rs). The messages are deliberately ones the status
+# fallback would read differently, so each row shows the disposition decided.
+
+
+@pytest.mark.parametrize(
+    ("code", "effects", "action", "message", "expected"),
+    [
+        # fix: the request is wrong. Terminal whatever the prose says.
+        ("bad_request", "none", "fix", "stale view", ogh.FATAL),
+        ("not_found", "none", "fix", "graph not found", ogh.FATAL),
+        # refresh: a moved branch is retried; any other refusal is terminal.
+        ("conflict", "none", "refresh", "key exists", ogh.RETRYABLE),
+        ("forbidden", "none", "refresh", "refresh and retry", ogh.FATAL),
+        ("precondition_failed", "none", "refresh", "x", ogh.PRECONDITION_FAILED),
+        ("internal", "none", "refresh", "manifest table version", ogh.FATAL),
+        # retry: waited out, the not-serving codes on the restart budget.
+        ("too_many_requests", "none", "retry", "busy", ogh.ADMISSION_CAP),
+        ("request_timeout", "none", "retry", "slow body", ogh.ADMISSION_CAP),
+        ("service_unavailable", "none", "retry", "closed", ogh.UNAVAILABLE),
+        ("graph_unavailable", "none", "retry", "graph is loading", ogh.UNAVAILABLE),
+        # …except the one graph_unavailable that waits on an operator.
+        ("graph_unavailable", "none", "retry", _GRAPH_BLOCKED, ogh.FATAL),
+        # recover: terminal, named for what has to be done first.
+        ("recovery_required", "none", "recover", "x", ogh.RECOVERY_REQUIRED),
+        ("conflict", "none", "recover", "x", ogh.FULL_TEXT_REBUILD_REQUIRED),
+        # reconcile: the write may have landed.
+        ("outcome_unknown", "unknown", "reconcile", "x", ogh.OUTCOME_UNKNOWN),
+        # A refusal inside a write the engine did not tag: unknown, but not
+        # replayed, so it stays terminal rather than indeterminate.
+        ("bad_request", "unknown", "reconcile", "not found", ogh.FATAL),
+        # An unknown or partial outcome under a kind that would be replayed.
+        ("conflict", "unknown", "reconcile", "x", ogh.OUTCOME_UNKNOWN),
+        ("conflict", "partial", "refresh", "key exists", ogh.OUTCOME_UNKNOWN),
+        ("service_unavailable", "unknown", "reconcile", "x", ogh.OUTCOME_UNKNOWN),
+        # Partial effects are indeterminate under any code.
+        ("forbidden", "partial", "refresh", "denied", ogh.OUTCOME_UNKNOWN),
+        # A drifted dataset has no code of its own; its prose still decides.
+        ("internal", "none", "refresh", "run omnigraph repair", ogh.NEEDS_REPAIR),
+    ],
+)
+def test_disposition_classification(code, effects, action, message, expected):
+    disposition = ogh.Disposition(code, effects, action)
+    assert ogh.classify_status(500, message, disposition) == expected
+
+
+def test_error_disposition_reads_code_effects_and_action():
+    body = json.dumps(
+        {
+            "error": "x",
+            "code": "bad_request",
+            "disposition": {"effects": "unknown", "action": "reconcile"},
+        }
+    )
+    assert ogh.error_disposition(body) == ogh.Disposition(
+        "bad_request", "unknown", "reconcile"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<html>502 Bad Gateway</html>",
+        json.dumps({"error": "x", "code": "conflict"}),
+        json.dumps({"error": "x", "disposition": {"effects": "none"}}),
+        json.dumps({"error": "x", "disposition": "none"}),
+    ],
+)
+def test_a_body_without_a_whole_disposition_has_none(body):
+    """0.13, a relay, or a malformed body: the status fallback decides."""
+    assert ogh.error_disposition(body) is None
+
+
+def test_the_transport_classifies_from_the_disposition(monkeypatch, _fake_http):
+    """A 0.14 400 that 0.13 prose would retry is terminal, and the outcome
+    carries the disposition for group commit to read."""
+    _fake_http.script = [
+        err(400, "stale view", code="bad_request", effects="none", action="fix")
+    ]
+    outcome = ogh.PooledTransport("http://host:8080").mutate("g", "q", {}, None)
+    assert outcome.kind == ogh.FATAL
+    assert outcome.disposition == ogh.Disposition("bad_request", "none", "fix")
 
 
 def test_error_message_uses_the_servers_own_wording():
@@ -1851,7 +1939,7 @@ def test_a_409_whose_disposition_says_effects_landed_is_never_replayed(
     one response is the assertion: a retry would exhaust the script."""
     monkeypatch.setattr(og.time, "sleep", lambda *_: None)
     _fake_http.script = [
-        err(409, "key conflict on Person", code="key_conflict", effects=effects)
+        err(409, "key conflict on Person", code="conflict", effects=effects)
     ]
     client = _client(
         monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"

@@ -159,6 +159,13 @@ OUTCOME_UNKNOWN = "outcome_unknown"
 #: the 409 rule in :func:`classify_status` would otherwise replay it.
 INDETERMINATE_EFFECTS = frozenset({"partial", "unknown"})
 
+#: The 0.14 code for a write the server could not settle. The server answers
+#: it (HTTP 500) in place of the failing step's own code whenever it marked
+#: the failure completion-uncertain (``ApiError::answered_code``,
+#: crates/omnigraph-server/src/lib.rs at v0.14.0), so a DataFusion error
+#: inside a write, which 0.13 sent as a plain 400, arrives as this.
+OUTCOME_UNKNOWN_CODE = "outcome_unknown"
+
 #: The kinds the policy loop retries for a write, which a disposition in
 #: :data:`INDETERMINATE_EFFECTS` turns into :data:`OUTCOME_UNKNOWN`.
 _REPLAYED_KINDS = frozenset({RETRYABLE, UNAVAILABLE, ADMISSION_CAP})
@@ -198,8 +205,8 @@ HTTP_API_CONTRACT = "0.14"
 #: refuses a server image whose contract the deployed witan image doesn't
 #: label. The wire difference from 0.13 to 0.14
 #: on every route this module calls is additive in both directions, and a 0.13
-#: error carries no ``disposition``, which :func:`disposition_effects` reads
-#: as absent.
+#: error carries no ``disposition``, which :func:`error_disposition` reads as
+#: absent, so :func:`classify_status` uses its status fallback for it.
 SUPPORTED_HTTP_API_CONTRACTS = (HTTP_API_CONTRACT, "0.13")
 
 #: The public route the contract is discovered from. Both supported servers
@@ -250,6 +257,21 @@ NDJSON_CONTENT_TYPE = "application/x-ndjson"
 EXPORT_CHUNK_BYTES = 1 << 20
 
 
+class Disposition(NamedTuple):
+    """What an omnigraph 0.14 error says the request did and asks for next.
+
+    ``effects`` is ``none``, ``partial`` or ``unknown``; ``action`` is
+    ``fix``, ``refresh``, ``retry``, ``recover`` or ``reconcile``
+    (``DispositionEffects``/``DispositionAction`` in omnigraph-api-types at
+    v0.14.0). ``code`` is the error's own code, which the server derives the
+    action from (``ErrorCode::action``).
+    """
+
+    code: str | None
+    effects: str
+    action: str
+
+
 class Outcome(NamedTuple):
     """The result of one HTTP attempt, in the shape ``_execute``'s loop wants.
 
@@ -264,6 +286,8 @@ class Outcome(NamedTuple):
     body's message and discards the response headers — so this is a signal only
     the HTTP transport can carry, and the policy loop treats its absence as
     "no hint" rather than as "retry immediately".
+
+    ``disposition`` is the error body's, when the server sent one (0.14).
     """
 
     kind: str
@@ -271,6 +295,7 @@ class Outcome(NamedTuple):
     error: str = ""
     status: int | None = None
     retry_after: float | None = None
+    disposition: Disposition | None = None
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -328,16 +353,96 @@ def is_graph_blocked(message: str) -> bool:
     return GRAPH_BLOCKED_MARKER in message.lower()
 
 
-def classify_status(status: int, message: str) -> str:
+#: Wording of a dataset whose Lance HEAD moved past the published version. No
+#: 0.14 code names this (the optimize path says "published dataset/Lance HEAD
+#: drift — run omnigraph repair", crates/omnigraph/src/db/omnigraph/optimize.rs
+#: at v0.14.0), so prose stays its only signal on both paths.
+_NEEDS_REPAIR_MARKERS = ("ahead of manifest", "omnigraph repair")
+
+#: The 0.14 codes whose disposition action is ``retry`` because the server or
+#: graph is not serving yet, as opposed to a busy actor or a request that ran
+#: out of time. They get the restart-length wait.
+_UNSERVED_CODES = frozenset({"service_unavailable", "graph_unavailable"})
+
+
+def classify_disposition(disposition: Disposition, message: str) -> str:
+    """Map a 0.14 error's code and disposition onto the shared classification
+    names.
+
+    The disposition is the server's own statement of what the request did
+    (``effects``) and what it asks for next (``action``), so it replaces the
+    status and message markers :func:`classify_status` falls back to. Two
+    conditions still need the message, because no code separates them:
+    a graph that failed to open (``graph_unavailable`` like a loading one,
+    see :data:`GRAPH_BLOCKED_MARKER`) and a drifted dataset
+    (:data:`_NEEDS_REPAIR_MARKERS`).
+
+    A write whose effects are partial, or unknown under a code that would
+    otherwise be replayed (a ``conflict``, a ``retry``), is
+    :data:`OUTCOME_UNKNOWN`: replaying it could apply it twice. A read never
+    carries either, since the server reports effects only for a request that
+    submitted a write. An ``unknown`` under a terminal code such as
+    ``bad_request`` stays :data:`FATAL`. Nothing retries it, and 0.14 reports
+    ``unknown`` for every refusal inside a write that the engine did not tag,
+    a missing edge endpoint included.
+    """
+    code, effects, action = disposition
+    if code == OUTCOME_UNKNOWN_CODE or effects == "partial":
+        return OUTCOME_UNKNOWN
+    if action == "recover":
+        # `recover` is what the server sends for a detail that must be
+        # resolved or rebuilt first: a recovery intent, or a full-text index
+        # to rebuild or build. Both are terminal for a write and neither
+        # clears by retrying the same request.
+        return (
+            RECOVERY_REQUIRED
+            if code == "recovery_required"
+            else FULL_TEXT_REBUILD_REQUIRED
+        )
+    # The code, not the action, names the failing step from here on: the
+    # server replaces the step's action with `reconcile` when effects are
+    # unknown, and the step is what decides whether this would be replayed.
+    if code == "precondition_failed":
+        kind = PRECONDITION_FAILED
+    elif code in _UNSERVED_CODES:
+        kind = FATAL if is_graph_blocked(message) else UNAVAILABLE
+    elif code == "too_many_requests" or action == "retry":
+        # A busy actor (429) or a request the server dropped before starting
+        # it (a request timeout): the admission cap's short budget, honouring
+        # Retry-After.
+        kind = ADMISSION_CAP
+    elif any(marker in message.lower() for marker in _NEEDS_REPAIR_MARKERS):
+        kind = NEEDS_REPAIR
+    elif code == "conflict":
+        # `refresh`: the branch moved under the request. The same write is
+        # still what the caller wants, so it is retried, as a 409 always was.
+        kind = RETRYABLE
+    else:
+        kind = FATAL
+    if kind in _REPLAYED_KINDS and effects in INDETERMINATE_EFFECTS:
+        return OUTCOME_UNKNOWN
+    return kind
+
+
+def classify_status(
+    status: int, message: str, disposition: Disposition | None = None
+) -> str:
     """Map an HTTP status + error message onto the shared classification names.
 
-    The status is the primary signal and is strictly better than what the CLI
-    path had: a 429 is unambiguously the per-actor admission cap, where the CLI
-    could only match the message text. The message is still consulted for the
-    conflict/repair conditions, which the server reports as a 4xx/5xx with the
-    same wording the CLI surfaced — so the markers those were tuned against
-    remain the right discriminator.
+    An error body with a disposition (0.14) is classified from it, by
+    :func:`classify_disposition`. The rest of this function is the fallback
+    for a body without one: a 0.13 server, or a proxy answering in the
+    server's place.
+
+    There, the status is the primary signal and is strictly better than what
+    the CLI path had: a 429 is unambiguously the per-actor admission cap,
+    where the CLI could only match the message text. The message is still
+    consulted for the conflict/repair conditions, which the server reports as
+    a 4xx/5xx with the same wording the CLI surfaced — so the markers those
+    were tuned against remain the right discriminator.
     """
+    if disposition is not None:
+        return classify_disposition(disposition, message)
     if status == 429:
         return ADMISSION_CAP
     lowered = message.lower()
@@ -370,7 +475,7 @@ def classify_status(status: int, message: str) -> str:
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.
         return UNAVAILABLE
-    if any(marker in lowered for marker in ("ahead of manifest", "omnigraph repair")):
+    if any(marker in lowered for marker in _NEEDS_REPAIR_MARKERS):
         return NEEDS_REPAIR
     if any(
         marker in lowered
@@ -420,8 +525,12 @@ def classify_status(status: int, message: str) -> str:
     return FATAL
 
 
-def disposition_effects(body: str) -> str | None:
-    """The ``disposition.effects`` of a 0.14 error body, or ``None`` without one."""
+def error_disposition(body: str) -> Disposition | None:
+    """The code and disposition of a 0.14 error body, or ``None`` without one.
+
+    The omnigraph 0.14 CLI prints the same object (plus ``http_status``) for a
+    failed command, so this reads its JSON output too.
+    """
     try:
         parsed = json.loads(body)
     except (json.JSONDecodeError, TypeError):
@@ -432,7 +541,11 @@ def disposition_effects(body: str) -> str | None:
     if not isinstance(disposition, dict):
         return None
     effects = disposition.get("effects")
-    return effects if isinstance(effects, str) else None
+    action = disposition.get("action")
+    if not isinstance(effects, str) or not isinstance(action, str):
+        return None
+    code = parsed.get("code")
+    return Disposition(code if isinstance(code, str) else None, effects, action)
 
 
 def error_message(status: int, body: str) -> str:
@@ -901,23 +1014,13 @@ class PooledTransport:
             if succeeded:
                 return Outcome(kind=OK, body=text, status=response.status)
             message = error_message(response.status, text)
-            kind = classify_status(response.status, message)
-            # A 409, 429 or 503 is retried on the premise that nothing was
-            # applied, and the disposition can say otherwise. Only those
-            # kinds are overridden: 0.14 reports `unknown` for every owned
-            # write that is not a typed refusal, a plain 400 included, and a
-            # FATAL is not replayed here anyway. A read has nothing to replay.
-            if (
-                not idempotent
-                and kind in _REPLAYED_KINDS
-                and disposition_effects(text) in INDETERMINATE_EFFECTS
-            ):
-                kind = OUTCOME_UNKNOWN
+            disposition = error_disposition(text)
             return Outcome(
-                kind=kind,
+                kind=classify_status(response.status, message, disposition),
                 error=message,
                 status=response.status,
                 retry_after=parse_retry_after(response.getheader("Retry-After")),
+                disposition=disposition,
             )
 
     def _stream(

@@ -501,14 +501,32 @@ _FALSEY = {"0", "false", "no", "off"}
 # for the same reason as HTTP_TRANSPORT_ENV_VAR.
 GROUP_COMMIT_ENV_VAR = "WITAN_GROUP_COMMIT"
 
-# A server answer that proves nothing was applied: the engine validates the
-# whole query before any effect, and a resource limit is checked before it too.
-# Only these let a failed group be replayed one write at a time; a failure
-# whose effects are unknown (a mid-flight timeout is FATAL too) must not be.
-# One 400 is NOT proof: omnigraph 0.13 answers a generic DataFusion error with
-# 400 and a "query: " message, and marks it completion-uncertain server-side
-# (`ApiError::from_omni`, omnigraph-server/src/lib.rs), without saying so on
-# the wire. `_DATAFUSION_ERROR_PREFIX` keeps that one out.
+# Which failed group commits are replayed one write at a time. Replaying is
+# only safe when the server applied nothing; a failure whose effects are
+# unknown (a mid-flight timeout is FATAL too) must not be replayed, or a write
+# that landed lands twice.
+#
+# A 0.14 server says so in the error's disposition. `effects: none` is proof.
+# So is `unknown` under one of `_SETTLED_REFUSAL_CODES`, which needs saying
+# because 0.14 reports `unknown` for every refusal inside a write that the
+# engine did not tag, a missing edge endpoint or a missing parameter included
+# (observed against a local 0.14.0 server). At v0.14.0 such a refusal cannot
+# follow a publication: `mutate_one_attempt`
+# (crates/omnigraph/src/exec/mutation.rs) validates before its first durable
+# effect, marks every failure from staging to the publisher `unpublished`,
+# and publishes once, last. The publisher's own failures leave the graph
+# unchanged or are publish-in-doubt, and a write the server could not settle
+# answers 500 `outcome_unknown` instead of its own code
+# (`ApiError::answered_code`, crates/omnigraph-server/src/lib.rs). That is
+# where 0.14 sends the DataFusion error 0.13 sent as a 400.
+_SETTLED_REFUSAL_CODES = frozenset({"bad_request", "payload_too_large"})
+# A server without a disposition (0.13, or a relay) gets the status rule: the
+# engine validates the whole query before any effect, and a resource limit is
+# checked before it too. One 400 is NOT proof there: omnigraph 0.13 answers a
+# generic DataFusion error with 400 and a "query: " message, and marks it
+# completion-uncertain server-side (`ApiError::from_omni`,
+# omnigraph-server/src/lib.rs), without saying so on the wire.
+# `_DATAFUSION_ERROR_PREFIX` keeps that one out.
 _DEFINITE_REJECTION_STATUSES = frozenset({400, 413})
 _DATAFUSION_ERROR_PREFIX = "query: "
 _PRECONDITION_FAILED_STATUS = 412
@@ -764,6 +782,16 @@ class _AttemptResult(NamedTuple):
     retry_after: float | None = None
     #: The HTTP status, when the server answered. HTTP transport only.
     status: int | None = None
+    #: The error body's 0.14 code and disposition. HTTP transport only.
+    disposition: _http.Disposition | None = None
+
+
+def _settled_rejection(disposition: _http.Disposition) -> bool:
+    """Whether a refused write applied nothing, so its group may be replayed
+    one write at a time. See :data:`_SETTLED_REFUSAL_CODES`."""
+    return disposition.effects == "none" or (
+        disposition.effects == "unknown" and disposition.code in _SETTLED_REFUSAL_CODES
+    )
 
 
 def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
@@ -774,6 +802,7 @@ def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
         error=outcome.error,
         retry_after=outcome.retry_after,
         status=outcome.status,
+        disposition=outcome.disposition,
     )
 
 
@@ -874,6 +903,22 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     return _CliFailure(message, stdout)
 
 
+def _served_disposition(text: str) -> _http.Disposition | None:
+    """The disposition in a 0.14 CLI's JSON error for a request the server
+    answered (one carrying ``http_status``), or ``None``.
+
+    A local store's failure is left to the markers: its code is the CLI's
+    reading of an engine error, which this module has no record of mapping.
+    """
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("http_status"), int):
+        return None
+    return _http.error_disposition(text)
+
+
 def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     """Map an omnigraph CLI failure's text and exit code onto the shared kinds.
 
@@ -892,6 +937,15 @@ def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     # "tcp connect error") must not turn that into a retry.
     if returncode == _EXIT_OUTCOME_UNKNOWN:
         return _http.OUTCOME_UNKNOWN
+    # A JSON error object (`--format json`, which witan's CLI reads ask for)
+    # for a request the server answered: classified from its code and
+    # disposition, as the HTTP transport classifies the same body. A write
+    # prints text instead (message, `HTTP <status>`, `disposition: {...}`, no
+    # code), and its exit code is the CLI's own reading of that disposition:
+    # 2 above for partial or unknown effects, 75 below for none and retry.
+    served = _served_disposition(stderr)
+    if served is not None:
+        return _http.classify_disposition(served, stderr)
     if any(m in lowered for m in _UNAVAILABLE_MARKERS):
         return _http.UNAVAILABLE
     # Ahead of the retryable 503 wordings below: all three are the same status
@@ -2920,6 +2974,10 @@ class OmnigraphClient:
             if last.status == _PRECONDITION_FAILED_STATUS:
                 # The fence of a caller that does not surface conflicts.
                 raise ConditionFailed(exc) from exc
+            if last.disposition is not None:
+                if last.kind == _http.FATAL and _settled_rejection(last.disposition):
+                    raise RejectedBatch(exc) from exc
+                raise
             if last.status not in _DEFINITE_REJECTION_STATUSES:
                 raise
             if last.error.lstrip().startswith(_DATAFUSION_ERROR_PREFIX):
