@@ -49,6 +49,7 @@ The script outputs a JSON object:
   },
   "checkin_targets": { "eod": {...}, "bod": {...}, "latest": {...} },
   "prs_authored":        [...],
+  "stack_parents":       [...],
   "prs_reviewed":        [...],
   "issues":              [...],
   "discussions_opened":  [...],
@@ -65,6 +66,14 @@ The script outputs a JSON object:
   `id` (GraphQL node ID), `number`, `title`, `url`, `createdAt`, `date` (the
   calendar date the title names) and `comment_count`. Any of the three may be
   `null`. See [Choosing the post target](#choosing-the-post-target).
+- `stack_parents` — open PRs that sit **below** an authored PR in a branch
+  stack but fall outside the activity window, so `prs_authored` alone would
+  show the chain with a hole in it. They exist only to complete the stack graph
+  in [Highlighting when announcements run long](#highlighting-when-announcements-run-long):
+  they carry no review state, they are **not** the user's activity, and they
+  never appear in the post or count toward any threshold. Frequently empty.
+  They are also not necessarily authored by the user — a colleague's PR resting
+  on yours is still something yours blocks.
 - `discussions_opened` — discussions the user **opened** in the window, any
   category. Opening one is announcement-worthy; see Step 3.
 - `discussion_comments` — comments and replies the user left in the window,
@@ -425,6 +434,16 @@ automatically nominating it.
    `review_state_unknown: true` carries `labels: []` because the lookup failed,
    not because it is unlabelled — rule 3 cannot fire for it, and that empty list
    is not evidence that it is unimportant.
+
+**Build the graph from `prs_authored` *plus* `stack_parents`.** The authored
+search is filtered to the activity window, so a stack whose middle PR has gone
+quiet arrives with a hole: the chain breaks, the bottom PR undercounts what it
+blocks, and the PR above the hole sees nothing beneath it and escapes
+suppression. That is the ordinary case, not a corner one — a stack goes quiet
+precisely because it is waiting on review. `stack_parents` holds the PRs the
+script recovered to close those holes; treat them as nodes for the walk and for
+suppression, and as nothing else. They cannot be highlighted, cannot appear in
+the post, and do not count toward the six-PR threshold.
 
 **Follow a stack all the way up, not one step.** In a four-deep stack
 `A ← B ← C ← D`, A blocks *three* PRs, not one — nothing above it can merge until
