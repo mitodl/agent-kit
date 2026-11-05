@@ -47,6 +47,13 @@ ARG OMNIGRAPH_INTERNAL_SCHEMA=16
 # `edu.mit.ol.omnigraph.min-internal-schema`. See
 # docker/omnigraph-server.Dockerfile.
 ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=14
+# Every HTTP contract witan-core speaks, comma-separated
+# (witan_core.omnigraph_http :: SUPPORTED_HTTP_API_CONTRACTS), stamped as
+# `edu.mit.ol.omnigraph.http-api-contracts`. ol-infrastructure's witan stack
+# reads it off this image while deploying it and exports the list, and the
+# omnigraph stack refuses a server image whose contract isn't in it.
+# `just check-omnigraph-pins` holds it to witan-core.
+ARG WITAN_HTTP_API_CONTRACTS=0.14,0.13
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0
@@ -153,12 +160,14 @@ FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
 ARG WITAN_VERSION
 ARG OMNIGRAPH_INTERNAL_SCHEMA
 ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA
+ARG WITAN_HTTP_API_CONTRACTS
 LABEL org.opencontainers.image.title="witan" \
       org.opencontainers.image.description="witan MCP server — agent memory, task, and code graph" \
       org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
       org.opencontainers.image.version="${WITAN_VERSION}" \
       edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}" \
-      edu.mit.ol.omnigraph.min-internal-schema="${OMNIGRAPH_MIN_INTERNAL_SCHEMA}"
+      edu.mit.ol.omnigraph.min-internal-schema="${OMNIGRAPH_MIN_INTERNAL_SCHEMA}" \
+      edu.mit.ol.omnigraph.http-api-contracts="${WITAN_HTTP_API_CONTRACTS}"
 
 RUN useradd --uid 1000 --user-group --create-home witan
 
