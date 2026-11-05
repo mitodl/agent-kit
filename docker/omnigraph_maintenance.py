@@ -150,10 +150,10 @@ def parse_cleanup_retention(keep: str, older_than: str) -> tuple[str, str]:
     """The `cleanup` retention arguments, ``--keep`` or ``--older-than``.
 
     Both together are refused because a cutoff makes cleanup read the commit
-    time of every `__manifest` version the count leaves undecided (omnigraph
-    #1188, `collector.rs` `retained_versions`), and a commit either one
-    retains survives. The pair then plans and retains what ``--older-than``
-    alone does, so a config meant to bound the plan by ``--keep`` would not.
+    time of every `__manifest` version below the newest ``keep`` (omnigraph
+    #1188, `collector.rs` `retained_versions`), so the pair's plan grows with
+    history as ``--older-than`` alone does, and a config meant to bound the
+    plan by ``--keep`` would not.
 
     :raises ValueError: on neither or both, or a ``keep`` that is not a whole
         number of at least 1. Settings are read before the server is stopped,
