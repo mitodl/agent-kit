@@ -447,8 +447,10 @@ A 0.13 client and a 0.14 server refuse each other in both directions.
 
 Decided (spike 3c94fb, evidence in memory
 `pf-omnigraph-0-13-and-0-14-servers-announce-their-h-229d01`): witan-core
-negotiates the contract per server instead of pinning one, so witan and the
-data tier deploy in either order. Verified (both servers, run locally): 0.13.0
+negotiates the contract per server instead of pinning one, so a witan that
+already speaks the new contract survives the data tier moving to it. The
+order still matters: the witan that negotiates has to be running before the
+server changes contract (see rollout step 4.4). Verified (both servers, run locally): 0.13.0
 and 0.14.0 stamp `Omnigraph-Http-Api` with their own contract on every
 response, the `400 api_contract_mismatch` and the public `HEAD /healthz`
 included, and the refusal runs before graph resolution, so nothing was
@@ -628,12 +630,23 @@ D3.
       reaper, and scale the writers to zero.
    3. Take a whole-root S3 backup, `__cluster/` included, and verify it
       (object count and bytes against the source prefix).
-   4. Land the format-guard change (D2) in the stack, and roll the
-      omnigraph-server, witan and witan-council images in either order: the
-      witan clients speak whichever contract the server stamps (D6), and so
-      does the council probe once mitodl/ol-infrastructure#6811 is deployed.
-      Without it the probe pins `0.13` and fails every run against a 0.14
-      server.
+   4. Land the format-guard change (D2) in the stack. Roll the witan image
+      first, confirm `deploy-ol-application-witan-<env>` finished and the
+      running witan-server's witan-core lists the new contract in
+      `SUPPORTED_HTTP_API_CONTRACTS`, then roll omnigraph-server. Negotiation
+      (D6) only helps a client that is already running, and Concourse orders
+      nothing between the two gates: on 2026-11-04 Production released both
+      together, omnigraph finished at 20:37Z, witan started at 20:47Z, and the
+      old witan (contract 0.13 only) failed every graph call for about 15
+      minutes. The omnigraph stack now refuses a server image whose
+      `edu.mit.ol.omnigraph.http-api-contract` label isn't in the
+      `edu.mit.ol.omnigraph.http-api-contracts` the running witan image
+      declares (exported by the witan stack as `witan_http_api_contracts`).
+      Released out of order, the omnigraph preview (QA, Production) or deploy
+      (CI) fails instead of opening the window, and has to be re-run by hand
+      once witan has deployed. The council probe speaks either contract once
+      mitodl/ol-infrastructure#6811 is deployed. Without it the probe pins
+      `0.13` and fails every run against a 0.14 server.
    5. Re-run representative reads, a controlled write per graph, and the
       search cases from 80b1fc.
    6. Run one maintenance window (D3 path), including a TERM mid-run.

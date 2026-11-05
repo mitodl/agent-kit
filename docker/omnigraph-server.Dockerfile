@@ -69,6 +69,12 @@ ARG OMNIGRAPH_INTERNAL_SCHEMA=16
 # accepts this image against any served root from this number up to the one
 # above, so an in-place upgrade isn't refused as if it needed a rebuild.
 ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=14
+# The HTTP contract the server speaks (witan_core.omnigraph_http ::
+# HTTP_API_CONTRACT), stamped as `edu.mit.ol.omnigraph.http-api-contract`.
+# ol-infrastructure's preview refuses this image while the deployed witan image
+# can't speak it, so a contract bump can't land before the client that
+# negotiates it. `just check-omnigraph-pins` holds it to witan-core.
+ARG OMNIGRAPH_HTTP_API_CONTRACT=0.14
 # Where the `omnigraph` CLI in this image comes from: `release` (the tarball
 # above, like omnigraph-server) or `patched` (the cli-patched stage below).
 #
@@ -185,6 +191,7 @@ ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA
 ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA
+ARG OMNIGRAPH_HTTP_API_CONTRACT
 ARG OMNIGRAPH_CLI_SOURCE
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \
@@ -192,6 +199,7 @@ LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.version="${OMNIGRAPH_VERSION}" \
       edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}" \
       edu.mit.ol.omnigraph.min-internal-schema="${OMNIGRAPH_MIN_INTERNAL_SCHEMA}" \
+      edu.mit.ol.omnigraph.http-api-contract="${OMNIGRAPH_HTTP_API_CONTRACT}" \
       edu.mit.ol.omnigraph.cli-source="${OMNIGRAPH_CLI_SOURCE}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.

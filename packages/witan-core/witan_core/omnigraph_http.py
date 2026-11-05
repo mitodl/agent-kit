@@ -189,8 +189,14 @@ HTTP_API_CONTRACT = "0.14"
 
 #: Every contract this client can speak, the pinned one first. A transport
 #: speaks whichever of these its server stamps (see
-#: :meth:`PooledTransport.contract`), so witan and the data tier can deploy in
-#: either order across a contract bump. The wire difference from 0.13 to 0.14
+#: :meth:`PooledTransport.contract`), so a running witan survives the data tier
+#: moving between any two of these. That needs this witan deployed first: one
+#: deployed before the list gained the new contract fails every call against
+#: the new server (Production, 2026-11-04). The witan image labels this list
+#: (``WITAN_HTTP_API_CONTRACTS`` in docker/witan.Dockerfile, held to it by
+#: ``just check-omnigraph-pins``), and ol-infrastructure's omnigraph preview
+#: refuses a server image whose contract the deployed witan image doesn't
+#: label. The wire difference from 0.13 to 0.14
 #: on every route this module calls is additive in both directions, and a 0.13
 #: error carries no ``disposition``, which :func:`disposition_effects` reads
 #: as absent.

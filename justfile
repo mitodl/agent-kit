@@ -207,6 +207,9 @@ check-omnigraph-pins:
     # from the tarball, so it has no digest for the checks above to compare.
     # This holds that build's inputs to the release pin instead.
     uv run --package witan-core --extra cli python bin/check_omnigraph_cli_patch.py
+    # The HTTP contracts each image labels, which ol-infrastructure's preview
+    # compares so a contract bump can't deploy ahead of the witan that speaks it.
+    uv run --package witan-core --extra cli python bin/check_omnigraph_contract_labels.py
 
 # Fail if the pinned omnigraph binary reads a storage format this repo does not
 # declare — i.e. if a version bump is secretly a rebuild-every-graph event.
