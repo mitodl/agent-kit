@@ -199,8 +199,8 @@ HTTP_API_CONTRACT = "0.14"
 #: :meth:`PooledTransport.contract`), so witan and the data tier can deploy in
 #: either order across a contract bump. The wire difference from 0.13 to 0.14
 #: on every route this module calls is additive in both directions, and a 0.13
-#: error carries no ``disposition``, which :func:`disposition_effects` reads
-#: as absent.
+#: error carries no ``disposition``, which :func:`error_disposition` reads as
+#: absent, so :func:`classify_status` uses its status fallback for it.
 SUPPORTED_HTTP_API_CONTRACTS = (HTTP_API_CONTRACT, "0.13")
 
 #: The public route the contract is discovered from. Both supported servers

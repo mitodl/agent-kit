@@ -13,9 +13,3 @@
   inside a write such as a missing edge endpoint, which upstream's mutation
   path raises before its only publication; a write it could not settle
   answers `500 outcome_unknown` and is never replayed.
-
-### Fixed
-
-- A 0.14 `recover` refusal for a full-text index that has to be built first
-  (`full_text_index_required`) is terminal. As a 409 it was retried to
-  exhaustion.
