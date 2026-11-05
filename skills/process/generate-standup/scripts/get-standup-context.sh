@@ -23,8 +23,8 @@
 #   meta.since      — ISO timestamp: midnight UTC on meta.yesterday (fetch window start)
 #
 # Every PR/issue carries createdAt, updatedAt, and closedAt (null when still
-# open); each authored PR that is still open also carries reviewDecision and
-# reviewRequests. All timestamps are UTC.
+# open); each authored PR that is still open also carries reviewDecision,
+# reviewRequests, labels, baseRefName and headRefName. All timestamps are UTC.
 #
 # Requires: gh (authenticated), jq
 
@@ -171,7 +171,7 @@ _enrich_review_state() {
 	while IFS= read -r url; do
 		# On lookup failure emit just the url, so the merge below can mark the
 		# PR review_state_unknown instead of silently omitting the fields.
-		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests 2>/dev/null ||
+		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests,labels,baseRefName,headRefName 2>/dev/null ||
 			jq -n --arg u "$url" '{url: $u}')"
 		details="$(jq -s 'add' <<<"$details"$'\n'"[$detail]")"
 	done <<<"$open_urls"
@@ -205,6 +205,20 @@ _enrich_review_state() {
                 reviewRequests: [($d.reviewRequests // [])[]
                                  | (.login // .slug // .name)
                                  | select(. != null and (is_bot | not))],
+                # Flattened to names: the caller ranks on label text, and the
+                # id/description/color gh returns alongside would be dead weight
+                # in every run. The // defaults matter — on a failed lookup $d is
+                # the bare {url} fallback, and absent keys would break the field
+                # contract the caller was promised.
+                labels: [($d.labels // [])[] | .name],
+                # For spotting a stack: another open authored PR in the SAME repo
+                # whose baseRefName equals the headRefName here sits directly on
+                # top of it, so this one is blocking it. The caller chains those
+                # links to get a transitive depth, so emit both ends raw and let
+                # it walk them. No apostrophes in this jq program — it is
+                # single-quoted, and one would end the string.
+                baseRefName: ($d.baseRefName // null),
+                headRefName: ($d.headRefName // null),
                 review_state_unknown: $unknown,
                 needs_review: (
                   if $unknown or ($pr.isDraft // false) then false
