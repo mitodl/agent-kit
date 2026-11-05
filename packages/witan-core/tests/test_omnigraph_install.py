@@ -154,7 +154,7 @@ def _install_over_a_newer_binary(tmp_path, monkeypatch, *, strict: bool) -> Path
     return _dest(tmp_path)
 
 
-def test_a_newer_binary_is_not_replaced_by_the_older_pin(tmp_path, monkeypatch):
+def test_a_newer_binary_is_not_replaced_by_the_older_pin(tmp_path, monkeypatch, capsys):
     """A newer binary may already have stamped local stores with a format the
     pin refuses (0.14 writes 16, which 0.13 won't open), so `witan setup`,
     which installs non-strict, leaves it alone and says so."""
@@ -162,6 +162,10 @@ def test_a_newer_binary_is_not_replaced_by_the_older_pin(tmp_path, monkeypatch):
 
     assert dest.read_text() == f"#!/bin/sh\necho 'omnigraph {_newer_than_the_pin()}'\n"
     assert oi.preserved_binaries(dest) == []
+    # Rich wraps at the console width, so compare with the whitespace folded.
+    said = " ".join(capsys.readouterr().out.split())
+    assert f"newer than this witan's pin v{oi._OMNIGRAPH_VERSION}" in said
+    assert "re-run to install" in said
 
 
 def test_a_newer_binary_fails_a_strict_install(tmp_path, monkeypatch):
@@ -188,9 +192,9 @@ def test_an_older_binary_with_a_longer_minor_is_still_upgraded(tmp_path, monkeyp
     assert _dest(tmp_path).read_bytes() == b"#!/bin/sh\necho fake"
 
 
-#: The version an upgrade is coming *from*. Must differ from the current pin,
-#: or `_download_omnigraph` short-circuits on the already-at-this-version skip
-#: and never reaches the preservation step under test.
+#: The version an upgrade is coming *from*. Must be older than the current
+#: pin: an equal one short-circuits on the already-at-this-version skip and a
+#: newer one is refused, so neither reaches the preservation step under test.
 _OLD = "0.7.2"
 
 
