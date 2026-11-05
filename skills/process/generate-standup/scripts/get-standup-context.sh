@@ -10,8 +10,13 @@
 #   -o ORGS         Comma-separated list of GitHub orgs to search
 #                   (default: mitodl,openedx)
 #
-# Output: JSON — keys: meta, checkin_targets, prs_authored, prs_reviewed,
-#                       issues, discussions_opened, discussion_comments
+# Output: JSON — keys: meta, checkin_targets, prs_authored, stack_parents,
+#                       prs_reviewed, issues, discussions_opened,
+#                       discussion_comments
+#
+#   stack_parents — open PRs below an authored one in a branch stack that fell
+#                   outside the activity window; graph-completion nodes only,
+#                   not the user's activity. Often empty.
 #
 #   checkin_targets.eod    — the Check-ins thread titled meta.tomorrow (EOD post target)
 #   checkin_targets.bod    — the Check-ins thread titled meta.today (BOD post target)
@@ -23,8 +28,8 @@
 #   meta.since      — ISO timestamp: midnight UTC on meta.yesterday (fetch window start)
 #
 # Every PR/issue carries createdAt, updatedAt, and closedAt (null when still
-# open); each authored PR that is still open also carries reviewDecision and
-# reviewRequests. All timestamps are UTC.
+# open); each authored PR that is still open also carries reviewDecision,
+# reviewRequests, labels, baseRefName and headRefName. All timestamps are UTC.
 #
 # Requires: gh (authenticated), jq
 
@@ -171,7 +176,7 @@ _enrich_review_state() {
 	while IFS= read -r url; do
 		# On lookup failure emit just the url, so the merge below can mark the
 		# PR review_state_unknown instead of silently omitting the fields.
-		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests 2>/dev/null ||
+		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests,labels,baseRefName,headRefName,isCrossRepository 2>/dev/null ||
 			jq -n --arg u "$url" '{url: $u}')"
 		details="$(jq -s 'add' <<<"$details"$'\n'"[$detail]")"
 	done <<<"$open_urls"
@@ -205,6 +210,29 @@ _enrich_review_state() {
                 reviewRequests: [($d.reviewRequests // [])[]
                                  | (.login // .slug // .name)
                                  | select(. != null and (is_bot | not))],
+                # Flattened to names: the caller ranks on label text, and the
+                # id/description/color gh returns alongside would be dead weight
+                # in every run. The // defaults matter — on a failed lookup $d is
+                # the bare {url} fallback, and absent keys would break the field
+                # contract the caller was promised.
+                labels: [($d.labels // [])[] | .name],
+                # For spotting a stack: another open authored PR in the SAME repo
+                # whose baseRefName equals the headRefName here sits directly on
+                # top of it, so this one is blocking it. The caller chains those
+                # links to get a transitive depth, so emit both ends raw and let
+                # it walk them. No apostrophes in this jq program — it is
+                # single-quoted, and one would end the string.
+                baseRefName: ($d.baseRefName // null),
+                headRefName: ($d.headRefName // null),
+                # The URL names the BASE repo, so headRefName alone does not say
+                # which repo the branch lives in. On a fork PR it is not this
+                # repo at all, and a fork of a branch named main would otherwise
+                # look like the parent of every same-repo PR targeting main.
+                # has() rather than //: jq treats false as empty, so
+                # `$d.isCrossRepository // null` would turn every same-repo PR
+                # into null and no PR would ever pass the stack test.
+                isCrossRepository: (if $d | has("isCrossRepository")
+                                    then $d.isCrossRepository else null end),
                 review_state_unknown: $unknown,
                 needs_review: (
                   if $unknown or ($pr.isDraft // false) then false
@@ -214,6 +242,78 @@ _enrich_review_state() {
               }
           end
       )' <<<"$prs"$'\n'"$details"
+}
+
+# Walk-depth cap for _resolve_stack_parents. A chain longer than this is
+# pathological, and the bound stops a malformed one from looping forever.
+STACK_WALK_MAX=10
+
+# Open PRs that complete a stack chain but fall outside the activity window.
+#
+# _search_prs filters on --updated, so a stack whose middle PR has gone quiet
+# comes back with a hole in it: the chain breaks, the bottom PR undercounts what
+# it blocks, and the PR above the hole sees nothing beneath it and escapes
+# suppression. That is the common case rather than a corner one — a stack sits
+# idle precisely because it is waiting on review.
+#
+# Rather than refetching every open PR, walk down from each authored PR whose
+# base branch is not already some known PR head, one `gh pr list --head` hop at
+# a time, until the chain reaches a branch with no open PR behind it. Most PRs
+# sit on the default branch, where that costs a single miss.
+#
+# Fork PRs are skipped for the reason the stack rule ignores them: their head
+# branch lives in another repository, so it cannot be a parent here.
+_resolve_stack_parents() {
+	local prs="$1"
+	local gaps
+	gaps="$(jq -r '
+    def repo_of: capture("^https://github.com/(?<r>[^/]+/[^/]+)/").r;
+    [.[] | select(.state == "open" and .isCrossRepository == false)] as $open
+    | ($open | map(select(.headRefName != null) | (.url | repo_of) + " " + .headRefName)
+             | unique) as $heads
+    | $open[]
+    | select(.baseRefName != null)
+    | [(.url | repo_of), .baseRefName]
+    | select(((.[0] + " " + .[1]) | IN($heads[])) | not)
+    | @tsv
+  ' <<<"$prs" | sort -u)"
+
+	if [[ -z "$gaps" ]]; then
+		printf '[]'
+		return
+	fi
+
+	local found="[]" seen="" repo branch hop page next
+	while IFS=$'\t' read -r repo branch; do
+		[[ -z "$repo" || -z "$branch" ]] && continue
+		hop=0
+		while [[ -n "$branch" ]] && ((hop < STACK_WALK_MAX)); do
+			# Two chains converging on one parent would otherwise re-query it.
+			if [[ "$seen" == *"|$repo $branch|"* ]]; then break; fi
+			seen+="|$repo $branch|"
+
+			if ! page="$(gh pr list --repo "$repo" --state open --head "$branch" --limit 1 \
+				--json number,title,state,url,createdAt,updatedAt,isDraft,baseRefName,headRefName,isCrossRepository 2>/dev/null)"; then
+				echo "Warning: stack-parent lookup failed for $repo:$branch" >&2
+				break
+			fi
+			[[ "$(jq length <<<"$page")" -eq 0 ]] && break
+
+			found="$(jq -s 'add | unique_by(.url)' <<<"$found"$'\n'"$page")"
+			# Keep descending only while the parent is same-repo, for the reason
+			# above; `// empty` ends the walk when it is not.
+			next="$(jq -r '.[0] | select(.isCrossRepository == false) | .baseRefName // empty' <<<"$page")"
+			branch="$next"
+			hop=$((hop + 1))
+		done
+		if [[ -n "$branch" ]] && ((hop >= STACK_WALK_MAX)); then
+			echo "Warning: stack walk in $repo hit the $STACK_WALK_MAX-hop cap; deeper parents are missing" >&2
+		fi
+	done <<<"$gaps"
+
+	# gh pr list reports state as OPEN where gh search prs says open, and omits
+	# closedAt; downstream compares the lowercase form and expects the key.
+	jq 'map(.state |= ascii_downcase | . + {closedAt: null})' <<<"$found"
 }
 
 # Fetch issues across all orgs involving the user, deduplicated by URL.
@@ -413,6 +513,12 @@ echo "Fetching GitHub activity for @${USERNAME} (since=${SINCE}, today=${TODAY})
 # would discard the search's exit status, so `set -e` could not see it fail.
 PRS_AUTHORED="$(_search_prs "--author" "$SINCE")"
 PRS_AUTHORED="$(_enrich_review_state "$PRS_AUTHORED")"
+STACK_PARENTS="$(_resolve_stack_parents "$PRS_AUTHORED")"
+# A fork PR is left out of the known-heads set, so the walk can rediscover one
+# that is already in prs_authored. Drop those: the authored copy carries the
+# review state this one lacks.
+STACK_PARENTS="$(jq -n --argjson p "$STACK_PARENTS" --argjson a "$PRS_AUTHORED" \
+	'($a | map(.url)) as $known | $p | map(select(.url | IN($known[]) | not))')"
 PRS_REVIEWED="$(_search_prs "--reviewed-by" "$SINCE")"
 ISSUES="$(_search_issues "$SINCE")"
 DISCUSSIONS_OPENED="$(_discussions_opened)"
@@ -426,6 +532,7 @@ CHECKIN_LATEST="$(jq 'sort_by(.createdAt) | last' <<<"$CHECKIN_DISCUSSIONS")"
 # Final guard: --argjson dies on an empty or malformed value, which would throw
 # away an otherwise complete run.
 PRS_AUTHORED="$(_json_array "$PRS_AUTHORED")"
+STACK_PARENTS="$(_json_array "$STACK_PARENTS")"
 PRS_REVIEWED="$(_json_array "$PRS_REVIEWED")"
 ISSUES="$(_json_array "$ISSUES")"
 
@@ -439,6 +546,7 @@ jq -n \
 	--arg tomorrow "$TOMORROW" \
 	--arg since "$SINCE" \
 	--argjson prs_authored "$PRS_AUTHORED" \
+	--argjson stack_parents "$STACK_PARENTS" \
 	--argjson prs_reviewed "$PRS_REVIEWED" \
 	--argjson issues "$ISSUES" \
 	--argjson discussions_opened "$DISCUSSIONS_OPENED" \
@@ -461,6 +569,7 @@ jq -n \
       latest: $checkin_latest
     },
     prs_authored:        $prs_authored,
+    stack_parents:       $stack_parents,
     prs_reviewed:        $prs_reviewed,
     issues:              $issues,
     discussions_opened:  $discussions_opened,
