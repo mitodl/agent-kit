@@ -222,6 +222,34 @@ def test_cleanup_follows_optimize_on_its_day(kube, cli, env):
     assert cli.lock is None
 
 
+def test_cleanup_keeps_a_count_instead_of_an_age(kube, cli, env):
+    today = str(datetime.now(UTC).isoweekday())
+    env = {k: v for k, v in env.items() if k != "OMNIGRAPH_CLEANUP_OLDER_THAN"}
+    keep_one = {**env, "OMNIGRAPH_CLEANUP_KEEP": "1"}
+    assert maintenance.main({**keep_one, "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": today}) == 0
+    assert sorted(cli.maintained[2:]) == [
+        ["cleanup", "code-bridge", "--keep", "1", "--confirm", "--yes"],
+        ["cleanup", "council", "--keep", "1", "--confirm", "--yes"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("keep", "older_than"),
+    [("", ""), ("1", "2d"), ("0", ""), ("-1", ""), ("x", ""), ("²", "")],
+)
+def test_an_invalid_cleanup_retention_fails_before_the_server_stops(
+    kube, cli, env, keep, older_than
+):
+    retention = {
+        "OMNIGRAPH_CLEANUP_KEEP": keep,
+        "OMNIGRAPH_CLEANUP_OLDER_THAN": older_than,
+    }
+    with pytest.raises(ValueError, match="OMNIGRAPH_CLEANUP_KEEP"):
+        maintenance.main({**env, **retention})
+    assert kube.scaled == []
+    assert cli.calls == []
+
+
 def test_cleanup_runs_on_a_day_in_a_list(kube, cli, env):
     today = datetime.now(UTC).isoweekday()
     days = ",".join(str(day) for day in {today, today % 7 + 1})

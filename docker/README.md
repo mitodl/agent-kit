@@ -213,7 +213,8 @@ ServiceAccount needs `list` on pods too.
 |---|---|---|
 | `OMNIGRAPH_SERVER_DEPLOYMENT` | yes | Name of the server Deployment. The ServiceAccount needs `get` on it and `get` and `update` on its `scale`. |
 | `OMNIGRAPH_WINDOW_SECONDS` | yes | How long after the start a new command may still begin. The Job's `activeDeadlineSeconds` has to be longer by one command's timeout and the restore. |
-| `OMNIGRAPH_CLEANUP_OLDER_THAN` | yes | Retention passed to `cleanup --older-than`, e.g. `30d`. |
+| `OMNIGRAPH_CLEANUP_OLDER_THAN` | one of these two | Retention passed to `cleanup --older-than`, e.g. `30d`. |
+| `OMNIGRAPH_CLEANUP_KEEP` | one of these two | Commits per live branch passed to `cleanup --keep`, e.g. `1`. With the #1188 backport its planning does not grow with history; `--older-than` reads one manifest per older version. Setting both fails the run before the server is stopped, because together they plan and retain what `--older-than` alone does. `--keep 1` is one-way: a later, wider policy still retains old commits whose table versions it deleted, and cleanup refuses those tables' sweep (upstream #644). |
 | `OMNIGRAPH_CLEANUP_ISO_WEEKDAY` | no | Comma-separated UTC days `cleanup` also runs on (1 is Monday, 7 is Sunday), e.g. `7` for Sundays or `1,2,3,4,5,6,7` for every night. Unset or empty, it never runs. A day outside 1-7 or listed twice fails the run before the server is stopped. |
 | `OMNIGRAPH_COMMAND_TIMEOUT_SECONDS` | no | Longest one `optimize` or `cleanup` may run before it is stopped (default 600). |
 | `OMNIGRAPH_SERVER_STOP_SECONDS` | no | How long to wait for the server pods to exit after the scale-down (default 90). |
