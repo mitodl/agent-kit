@@ -505,6 +505,26 @@ falls through to the text markers.
     `disposition.effects == "none"`.
 
   Keep the status fallbacks for non-JSON relays.
+
+  Outcome: `effects == "none"` alone would stop replaying the groups the
+  replay exists for. Observed against a local 0.14.0 server, a mutate refused
+  for a missing edge endpoint or a missing parameter answers `400
+  bad_request` with `effects: unknown, action: reconcile`: the server reports
+  `unknown` for any error after an owned write starts that the engine did not
+  tag (`ApiError::disposition`, `omnigraph-server/src/lib.rs:1430-1465`).
+  Such a refusal cannot follow a publication: `mutate_one_attempt`
+  (`omnigraph/src/exec/mutation.rs:1125-1250`) validates before staging,
+  marks staging-to-publisher failures `unpublished`, and publishes once, last,
+  and an uncertain write answers `500 outcome_unknown` in place of its own
+  code (`ApiError::answered_code`, `lib.rs:1262-1268`), which is where the
+  DataFusion error 0.13 sent as a 400 now goes. So group commit replays
+  `effects: none`, and `unknown` under `bad_request` or `payload_too_large`.
+  `_DEFINITE_REJECTION_STATUSES` and `_DATAFUSION_ERROR_PREFIX` stay for a
+  server with no disposition, since witan still speaks 0.13. A blocked graph
+  (`graph_unavailable` like a loading one) and a drifted dataset have no code
+  of their own, so their prose markers stay too. The CLI marker tuples stay:
+  a write over the CLI prints text without a code, and its exit code is
+  already the CLI's reading of the disposition.
 - `Omnigraph-If-Actor` on per-actor requests
   (tk-send-omnigraph-if-actor-on-per-actor-requests-so-f4fc67). A token for
   the wrong actor is then refused with `412 actor_mismatch` before graph
