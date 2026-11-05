@@ -836,12 +836,18 @@ def _has_persisted_locks() -> bool:
         return False
     from witan_core.omnigraph_install import reported_internal_schema
 
-    return reported_internal_schema() >= 14
+    try:
+        return reported_internal_schema() >= 14
+    except RuntimeError:
+        # The format is read from `version --json`, which 0.14 added, so a
+        # stale 0.13 install lands here rather than failing the whole
+        # collection.
+        return False
 
 
 requires_persisted_locks = pytest.mark.skipif(
     not _has_persisted_locks(),
-    reason="needs an omnigraph with persisted cluster locks (storage format 14)",
+    reason="needs omnigraph 0.14 or newer (persisted cluster locks, `version --json`)",
 )
 
 # `witan setup` and CI install only the `omnigraph` CLI from the release
