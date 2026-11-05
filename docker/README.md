@@ -122,8 +122,14 @@ stub in tests). See `witan_code/github_app.py`.
   builds `omnigraph` from the release commit plus
   [`patches/omnigraph-cli-inline-s3-root.patch`](./patches/omnigraph-cli-inline-s3-root.patch)
   (a backport of upstream
-  [#1189](https://github.com/ModernRelay/omnigraph/pull/1189)), and the image
-  carries `edu.mit.ol.omnigraph.cli-source=patched`. `omnigraph-server`, the
+  [#1189](https://github.com/ModernRelay/omnigraph/pull/1189)) and
+  [`patches/omnigraph-cleanup-keep-from-listing.patch`](./patches/omnigraph-cleanup-keep-from-listing.patch)
+  (a backport of [#1188](https://github.com/ModernRelay/omnigraph/pull/1188):
+  `cleanup` takes `__manifest` version numbers from the listing, so
+  `--keep N` planning no longer grows with history, and the maintenance
+  window's `--older-than` cleanup reads the manifests it decides concurrently
+  rather than one at a time). The image carries
+  `edu.mit.ol.omnigraph.cli-source=patched`. `omnigraph-server`, the
   `witan` image and `witan setup` keep the stock release binaries.
   `just check-omnigraph-pins` requires the patched CLI exactly when the release
   pin is the patch's base tag, and the `omnigraph patched CLI` workflow

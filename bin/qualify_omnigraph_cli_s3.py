@@ -6,7 +6,11 @@ The omnigraph-server image's CLI is built from a backport of upstream PR #1189
 address its S3 cluster root with the server stopped. Upstream showed apply,
 status and force-unlock against an S3 root; this drives the full set the image
 relies on (boot converge, maintenance, unlock) against a root that already
-holds data, the way a deployed root does:
+holds data, the way a deployed root does. The image also carries a backport of
+upstream PR #1188 (docker/patches/omnigraph-cleanup-keep-from-listing.patch),
+so cleanup takes version numbers from the S3 ``_versions/`` listing and reads
+the manifests a cutoff decides concurrently; the cleanup step below runs both
+policies:
 
 1. Deploy a small cluster to a LOCAL root and load several batches into it,
    so its datasets carry multiple versions and fragments.
@@ -16,8 +20,8 @@ holds data, the way a deployed root does:
    the copy as converged), apply of a config that adds a graph (a real write,
    as boot converge does after an image bump), status and replay by
    deployment id with ``--writers-stopped``, force-unlock, optimize (must
-   write), cleanup (refused without ``--yes``, then run with it, must remove
-   objects), force-unlock after each. Every retained lock must be released by
+   write), cleanup (refused without ``--yes``, then ``--older-than 0s``,
+   which must remove objects, then ``--keep 1``), force-unlock after each. Every retained lock must be released by
    its exact id and nothing may be left locked.
 4. Copy the root back and query it locally: every loaded row must survive
    maintenance.
@@ -307,6 +311,21 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     s3.json("--graph", GRAPH, "optimize")
     s3.unlock_retained("optimize")
     optimized = _object_count(s3_root)
+    # The policy the maintenance window runs: a cutoff and no --keep. With
+    # #1188 that reads every version the cutoff decides (here all but HEAD)
+    # concurrently, which is the backport's new S3 read path. It runs first,
+    # because after a --keep 1 run there would be no older version to read.
+    s3.json(
+        "--graph",
+        GRAPH,
+        "cleanup",
+        "--older-than",
+        "0s",
+        "--confirm",
+        "--yes",
+    )
+    s3.unlock_retained("cleanup --older-than")
+    aged = _object_count(s3_root)
     s3.json(
         "--graph",
         GRAPH,
@@ -316,15 +335,19 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
         "--confirm",
         "--yes",
     )
-    s3.unlock_retained("cleanup")
+    s3.unlock_retained("cleanup --keep")
     cleaned = _object_count(s3_root)
     print(
-        f"  objects: {before} before optimize, {optimized} after, {cleaned} after cleanup"
+        f"  objects: {before} before optimize, {optimized} after, {aged} after "
+        f"cleanup --older-than 0s, {cleaned} after cleanup --keep 1"
     )
     # The loads left one fragment per batch, so a real compaction writes a new
-    # one, and cleanup --keep 1 then removes what the older versions held.
+    # one, and the cutoff cleanup then removes what the older versions held.
     _expect(optimized > before, "optimize wrote nothing to the S3 root")
-    _expect(cleaned < optimized, "cleanup removed no objects from the S3 root")
+    _expect(
+        aged < optimized, "cleanup --older-than removed no objects from the S3 root"
+    )
+    _expect(cleaned <= aged, "cleanup --keep 1 added objects to the S3 root")
     s3.assert_unlocked("after maintenance")
 
     back = work / "round-trip-root"

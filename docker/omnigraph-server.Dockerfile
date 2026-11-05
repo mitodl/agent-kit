@@ -90,13 +90,29 @@ ARG OMNIGRAPH_HTTP_API_CONTRACT=0.14
 # image's CLI is patched: omnigraph-server here, the witan image and
 # `witan setup` all keep the stock release digests.
 #
+# The stage also applies docker/patches/omnigraph-cleanup-keep-from-listing.patch,
+# a backport of upstream PR #1188. Stock 0.14 cleanup reads every __manifest
+# version of every live branch, one at a time, on every run (upstream #644).
+# With the backport, version numbers come from the _versions/ listing:
+# - `--keep N` with no `--older-than` reads only the manifests it retains and
+#   the merge base, so its planning no longer grows with history.
+# - `--older-than` (what docker/omnigraph_maintenance.py runs) still reads one
+#   manifest per version older than HEAD, but up to the store's io_parallelism
+#   at a time instead of one by one. Its planning still grows with history.
+# It changes no storage format, so the CLI still reads and writes exactly what
+# the server does. It does change two refusals: `--keep N` alone no longer stops
+# on an unreadable manifest of a commit it drops (it prunes it), and a listed
+# version whose manifest body names another version is refused.
+#
 # `just check-omnigraph-pins` holds the selector to the release pin: it must
 # be `patched` exactly when OMNIGRAPH_RELEASE_TAG equals
 # OMNIGRAPH_CLI_PATCH_BASE_TAG, so the patched CLI ships with the 0.14 bump
 # and never beside a server from a different release (strict single-version
-# storage, as above). Drop the patch, these three ARGs and the cli-patched
-# stage once a release or an immutable edge build carries the change, or once
-# served maintenance (upstream RFC #1186 / #1177) replaces the direct CLI.
+# storage, as above). Drop each patch once the release OMNIGRAPH_RELEASE_TAG
+# pins carries its upstream PR (a release or edge build the image doesn't pin
+# doesn't count), and drop these three ARGs and the cli-patched stage with the last
+# one, or once served maintenance (upstream RFC #1186 / #1177) replaces the
+# direct CLI.
 ARG OMNIGRAPH_CLI_SOURCE=patched
 ARG OMNIGRAPH_CLI_PATCH_BASE_TAG=v0.14.0
 # The tag's commit, fetched by id so a moved tag cannot change what is built.
@@ -149,7 +165,7 @@ RUN set -eux; \
 # ── CLI, stock: the release tarball's binary ──────────────────────────────────
 FROM fetch AS cli-release
 
-# ── CLI, patched: the release source plus the inline-S3-root backport ─────────
+# ── CLI, patched: the release source plus the S3-root and cleanup backports ───
 # Built only when OMNIGRAPH_CLI_SOURCE=patched (BuildKit skips a stage nothing
 # selects). The compiler is the one the source's rust-toolchain.toml pins
 # (rustup honours it over the image's default, and fetches the clippy and
@@ -171,7 +187,9 @@ RUN git init -q . \
     && git fetch -q --depth 1 https://github.com/ModernRelay/omnigraph.git "${OMNIGRAPH_CLI_PATCH_BASE_COMMIT}" \
     && git checkout -q FETCH_HEAD
 COPY docker/patches/omnigraph-cli-inline-s3-root.patch /tmp/
-RUN git apply /tmp/omnigraph-cli-inline-s3-root.patch
+COPY docker/patches/omnigraph-cleanup-keep-from-listing.patch /tmp/
+RUN git apply /tmp/omnigraph-cli-inline-s3-root.patch \
+    && git apply /tmp/omnigraph-cleanup-keep-from-listing.patch
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     RUSTFLAGS= cargo build --release --locked -p omnigraph-cli \
