@@ -386,13 +386,22 @@ exists.
 - **Six or more → highlight at most three**, and still list every one.
 
 If a Step 2 answer later adds a PR that pushes the section to six, highlight
-anyway — the user has by definition just named one, so rule 1 below has content
-and there is nothing left to ask them.
+anyway, and do not go back to ask: the moment to ask has passed, and the user
+was just writing about their PRs unprompted. Whether that PR is itself a
+highlight depends on rule 1 below like any other — raising a PR is not
+automatically nominating it.
 
 **What qualifies as a highlight:**
 
-1. **Named by the user** — anything flagged in `priority_prs`, `announcements`,
-   or `extra_context`.
+1. **Nominated by the user** — a PR named in `priority_prs`, or one the user
+   asked for attention on in `announcements` or `extra_context`. **Mentioning a
+   PR is not nominating it.** `priority_prs` asks the question directly, so
+   anything there counts; the other two are free text, and a user writing "FYI
+   I'm closing `pull/999` tomorrow, nobody needs to look" has named a PR while
+   asking for the opposite of a highlight. Putting that in the top slot of
+   "please start with these" would invert what they wrote and attach a
+   needs-review claim the PR does not have. When the wording is genuinely
+   ambiguous, leave it out of the highlights — it still appears in the section.
 2. **Blocks other open PRs**, weighted by how many. For two open authored PRs A
    and B **in the same repository** — identical `https://github.com/<org>/<repo>/`
    URL prefix — B is stacked directly on top of A when `B.baseRefName` and
@@ -421,14 +430,19 @@ set and stop on a repeat: a set shared across the whole ranking would let the
 first PR walked mark everything above it visited and score every other root at
 zero, and a per-walk set still terminates the cycle it exists for.
 
-**One highlight per stack: the lowest announcement PR in it.** A PR stacked on
+**One highlight per stack: the lowest needs-review PR in it.** A PR stacked on
 another open PR cannot merge until its parent does, so highlighting both spends a
 slot on work nobody can finish — and a deep enough stack would otherwise fill all
-three slots from a single chain. Skip any PR that has another *announcement* PR
-below it in the same stack; the one at the bottom already carries the chain's
-whole weight. A PR whose parent is open but **not** in announcements (already
-approved, say) is still the lowest announcement PR in its stack, so it stands on
-its own count.
+three slots from a single chain. Skip any PR that has another **needs-review**
+PR below it in the same stack; the one at the bottom already carries the chain's
+whole weight.
+
+"Needs-review PR", not "announcement PR", and the distinction is load-bearing.
+The threshold above counts approved-and-ready and unknown-state PRs as part of
+the section, but neither is a candidate for the needs-review group, so neither
+can stand in as the bottom of a stack. A PR whose parent is open but already
+approved is therefore still the lowest needs-review PR in its stack and stands
+on its own count — the approved parent is not blocking review, only merge order.
 
 **Suppression runs before anything is counted.** A skipped PR does not qualify —
 not for the ranking below, and not for the "fewer than three qualify" test that
@@ -575,8 +589,9 @@ sentence; it does not compress what they wrote.
 - **Highlighted announcements** render as two parent bullets when
   [Highlighting when announcements run long](#highlighting-when-announcements-run-long)
   applies — up to three reference-led sub-bullets each carrying its reason, then
-  every remaining PR under a second parent. Below the threshold, or with nothing
-  qualifying, there are no groups at all and the section stays flat. See the
+  every remaining PR under a second parent. Below the threshold — counting the
+  PR a Step 2 answer added, if one did — or with nothing qualifying, there are no
+  groups at all and the section stays flat. See the
   [more-than-five example](#example-output-eod-more-than-five-prs-in-announcements).
   PRs in announcements under a *different* claim — approved-and-ready, review
   state unknown — keep their own top-level bullets after both groups; they count
@@ -766,11 +781,12 @@ Working the rules through:
 - `pull/4659` qualifies under rule 2 and carries the whole chain — **blocks 2**,
   transitively, not the 1 a direct-children count would give it.
 - `pull/4661` and `pull/4668` are **suppressed**. Both are blocked by `pull/4659`,
-  which is itself in announcements, so neither can merge first and the chain gets
-  one slot, not three.
+  which itself needs review, so neither can merge first and the chain gets one
+  slot, not three.
 - `pull/2238` qualifies under rule 3 on its `security` label.
 - That is only two qualifying on script-derived signals, so Step 2 asked
-  `priority_prs`, and the user named `pull/3346` — rule 1, so it leads.
+  `priority_prs`, and the user answered `pull/3346` — an unambiguous nomination,
+  so rule 1 puts it in the top slot.
 
 ```markdown
 _Tobias Macey_
