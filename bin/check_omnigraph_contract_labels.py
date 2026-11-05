@@ -84,13 +84,22 @@ def problems(
         found.append(f"{dockerfile} has no 'FROM ... AS runtime' stage.")
         return found
     stage = runtime.group(1)
-    if not re.search(rf"^ARG {arg}$", stage, re.MULTILINE):
+    arg_line = re.search(rf"^ARG {arg}$", stage, re.MULTILINE)
+    emitted = stage.find(f'{label}="${{{arg}}}"')
+    if arg_line is None:
         found.append(
             f"{dockerfile}'s runtime stage never re-declares {arg}, so {label} builds empty."
         )
-    if f'{label}="${{{arg}}}"' not in stage:
+    if emitted == -1:
         found.append(
             f"{dockerfile}'s runtime stage does not emit {label} from ${{{arg}}}."
+        )
+    # An ARG takes effect from its line on, so one declared below the LABEL
+    # still builds an empty label.
+    if arg_line is not None and emitted != -1 and arg_line.start() > emitted:
+        found.append(
+            f"{dockerfile}'s runtime stage declares ARG {arg} after the LABEL that "
+            f"uses it, so {label} builds empty. Move the ARG above the LABEL."
         )
     return found
 
