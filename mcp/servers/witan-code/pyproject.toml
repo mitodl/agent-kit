@@ -206,7 +206,12 @@ dependencies = [
     # server refuses a 0.13 request with `400 api_contract_mismatch`, so 0.49
     # imports and runs, then fails on the first read of a shared code graph
     # once the data tier is on 0.14.
-    "witan-core[cli,remote,observability,sentry]>=0.50,<1",
+    #
+    # ★ >=0.51 IS A RUNTIME FLOOR of the `strict` kind above: `graph.py`
+    # passes `actor=` to witan-core's `OmnigraphClient`, a keyword added in
+    # witan-core 0.51.0 in the same change (Omnigraph-If-Actor). 0.50 imports
+    # fine, then a deployed ingest raises TypeError.
+    "witan-core[cli,remote,observability,sentry]>=0.51,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled
