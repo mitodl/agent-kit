@@ -777,6 +777,23 @@ def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
     )
 
 
+def _server_answered(result: _AttemptResult) -> bool:
+    """Whether an ``UNAVAILABLE`` attempt reached a server that refused it,
+    rather than failing to reach one.
+
+    The HTTP transport records the status of every error response it read (a
+    read whose body is cut off mid-flight has none, and keeps the "could not
+    connect" wording). A 0.14 CLI exits 75 only for a refusal the server sent
+    (`command_outcome.rs` `exit_for` at v0.14.0; a connect failure exits 1),
+    and a 0.13 CLI reports a not-yet-serving graph in the server's own words.
+    """
+    return (
+        result.status is not None
+        or result.returncode == _EXIT_RETRY
+        or any(m in result.error.lower() for m in _GRAPH_NOT_YET_SERVING)
+    )
+
+
 #: The CLI flags a subclass may inject into ``load`` (via ``_extra_args``) and
 #: the ``/load/ndjson`` query parameter each one is. witan-code's branched
 #: clients inject ``--branch <view> --from main``.
@@ -1856,7 +1873,8 @@ def store_write_lock(store: str) -> Iterator[None]:
 
 
 class StoreUnavailable(RuntimeError):
-    """The store could not be reached for the whole ``_UNAVAILABLE_MAX_WAIT`` budget.
+    """The store could not be reached, or its server kept answering that it was
+    unavailable, for the whole ``_UNAVAILABLE_MAX_WAIT`` budget.
 
     A ``RuntimeError`` subclass, so every existing caller keeps catching it
     unchanged; it exists so a caller that can say something *useful* about an
@@ -3344,10 +3362,16 @@ class OmnigraphClient:
                         )
                     )
                     continue
+                cause = (
+                    f"{self.server_url} answered but kept refusing it as "
+                    "unavailable, so look at the server's state rather than "
+                    "the network"
+                    if _server_answered(result)
+                    else f"could not connect to {self.server_url}"
+                )
                 raise StoreUnavailable(
                     f"omnigraph {label} failed after {unavailable_attempt} "
-                    f"attempts over {elapsed:.0f}s — could not connect to "
-                    f"{self.server_url}:\n{err.strip()}"
+                    f"attempts over {elapsed:.0f}s: {cause}:\n{err.strip()}"
                 )
             if kind == _http.ADMISSION_CAP:
                 # Independent budget/backoff from the drift retries below —
