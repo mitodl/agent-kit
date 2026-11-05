@@ -644,7 +644,11 @@ D3.
       declares (exported by the witan stack as `witan_http_api_contracts`).
       Released out of order, the omnigraph preview (QA, Production) or deploy
       (CI) fails instead of opening the window, and has to be re-run by hand
-      once witan has deployed. The council probe speaks either contract once
+      once witan has deployed. It also refuses a server contract the council
+      probe's `SUPPORTED_HTTP_API_CONTRACTS` (ol-infrastructure
+      `scripts/check_council_health.py`) doesn't list, so a contract bump
+      needs that ol-infrastructure change first. The probe speaks either
+      contract once
       mitodl/ol-infrastructure#6811 is deployed. Without it the probe pins
       `0.13` and fails every run against a 0.14 server.
    5. Re-run representative reads, a controlled write per graph, and the
