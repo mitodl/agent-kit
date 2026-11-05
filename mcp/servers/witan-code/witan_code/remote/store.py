@@ -124,8 +124,6 @@ def _load_refusal(exc: BaseException, *, batch: int, mode: str, max_bytes: int) 
     )
 
 
-# Added to the store tier after the first clients shipped, so its presence is
-# asked rather than assumed — see `RemoteStoreClient.change_many`.
 _MUTATE_MANY_TOOL = "code_store_mutate_many"
 
 # The store tools that change nothing. Everything else on this transport is
@@ -218,7 +216,6 @@ class StoreSession:
         self._client_factory = client_factory or self._default_client
         self._loop: _LoopThread | None = None
         self._client: Client | None = None
-        self._tools: frozenset[str] | None = None
         # One connection, and every caller in the write path is synchronous:
         # serialize whole calls rather than interleaving them on the session.
         self._lock = threading.Lock()
@@ -269,41 +266,6 @@ class StoreSession:
                     _refuse_if_indeterminate(retried, tool, self.url)
                     raise
 
-    def has_tool(self, tool: str) -> bool:
-        """Whether the deployment serves ``tool``.
-
-        For features the server gained after clients shipped: a client one
-        release ahead of its deployment must fall back rather than fail, so ask
-        instead of assuming. Cached per connection — the tool set is a property
-        of the deployment, but a reconnect may land on a replica mid-rollout, so
-        the cache dies with the connection rather than with the process.
-
-        A server too old to answer at all is treated as not having the tool;
-        the caller's fallback is what a refusal would have to end in anyway.
-        THE FAILURE IS CACHED TOO, as an empty set — an index issues many
-        batches, and re-asking a server that has already refused once would put
-        a round trip and an exception on every one of them. Since the cache dies
-        with the connection, a transport-level blip costs the slow path only
-        until the next reconnect, not for the life of the process.
-        """
-        with self._lock:
-            if self._client is None:
-                self._connect()
-            if self._tools is None:
-                try:
-                    self._tools = frozenset(t.name for t in self._list_tools())
-                except Exception:  # fall back, don't fail
-                    # Warning: an empty tool set makes every `has_tool` answer
-                    # False, so the client silently takes its degraded path for
-                    # a deployment that actually serves the tool.
-                    logger.warning("witan.code.remote.list_tools_failed", exc_info=True)
-                    self._tools = frozenset()
-            return tool in self._tools
-
-    def _list_tools(self) -> Any:
-        assert self._loop is not None and self._client is not None
-        return self._loop.run(self._client.list_tools())
-
     def _invoke(self, tool: str, arguments: dict) -> Any:
         assert self._loop is not None and self._client is not None
         result = self._loop.run(self._client.call_tool(tool, arguments))
@@ -318,7 +280,6 @@ class StoreSession:
 
     def _disconnect(self) -> None:
         client, self._client = self._client, None
-        self._tools = None
         if client is None or self._loop is None:
             return
         try:
@@ -448,20 +409,21 @@ class RemoteStoreClient:
         ``surface_conflict`` is not carried over the wire (see :meth:`change`),
         and a batch could not attribute a conflict to a step anyway.
 
-        FEATURE-DETECTED, because this is a deployed contract: a client that
-        has this code may be talking to a server that predates the batch tool.
-        Such a server gets the old per-step loop, which is correct, just slow.
+        NO PER-STEP FALLBACK. This used to ask the server for its tool list and
+        send each step as its own `code_store_mutate` when the batch tool was
+        missing, and it cached a FAILED listing as "missing" for the life of
+        the connection. That path turns a reindex's deletes into one commit per
+        statement, which is the traffic Production saw from one actor for hours
+        at a time, about one commit every 3.5s
+        (tk-witan-code-commits-to-a-user-s-code-graph-branch-d0977f). The
+        store tier has served `code_store_mutate_many` since 0.12.0, so a
+        server without it now fails the call with its unknown-tool error
+        rather than being written to a row at a time.
         """
         if not steps:
             return
         if chunk_size is not None and chunk_size < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
-        if not self._session.has_tool(_MUTATE_MANY_TOOL):
-            for query_file, query_name, params in steps:
-                self.change(
-                    query_file, query_name, params, surface_conflict=surface_conflict
-                )
-            return
         size = chunk_size or len(steps)
         for start in range(0, len(steps), size):
             try:
