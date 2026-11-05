@@ -625,6 +625,11 @@ def _installed_version(dest: Path) -> str | None:
     return match.group(0) if match else None
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    """``0.10.0`` as ``(0, 10, 0)``, so it orders above ``0.9.0``."""
+    return tuple(int(part) for part in version.split("."))
+
+
 def default_install_path() -> Path:
     """Where :func:`install_omnigraph` puts the binary."""
     return Path.home() / ".local" / "bin" / "omnigraph"
@@ -718,8 +723,7 @@ def preserved_binaries(dest: Path | None = None) -> list[Path]:
     for entry in target.parent.glob("omnigraph-*"):
         match = _PRESERVED_RE.match(entry.name)
         if match and entry.is_file() and os.access(entry, os.X_OK):
-            parsed = tuple(int(part) for part in match.group(1).split("."))
-            found.append((parsed, entry))
+            found.append((_version_key(match.group(1)), entry))
     return [path for _, path in sorted(found, reverse=True)]
 
 
@@ -764,6 +768,13 @@ def install_omnigraph(dry_run: bool = False, *, strict: bool = True) -> None:
     platform this installer does not build for (witan works fine with an
     omnigraph put on PATH by other means), and the second is the converged
     state re-running is supposed to reach.
+
+    A BINARY NEWER THAN THE PIN IS LEFT IN PLACE, and that is a refusal like
+    any other, so ``strict`` raises it. A newer binary may already have stamped
+    local stores with a storage format the pinned one refuses, and the stamp
+    can't be undone, so replacing it would leave those stores unopenable until
+    someone noticed. Deleting the binary and re-running is the way to install
+    the pin anyway.
     """
     _download_omnigraph(default_install_path(), dry_run, strict=strict)
 
@@ -841,6 +852,26 @@ def _download_omnigraph(dest: Path, dry_run: bool, *, strict: bool = True) -> No
     if installed == _OMNIGRAPH_VERSION:
         console.print(
             f"  [dim]omnigraph[/dim] — {dest} already at v{_OMNIGRAPH_VERSION}, skipping"
+        )
+        return
+    if installed is not None and _version_key(installed) > _version_key(
+        _OMNIGRAPH_VERSION
+    ):
+        # Earlier releases replaced it with their older pin, so a witan-core
+        # pinned to 0.13 put 0.13 back over 0.14, which then refused every
+        # store 0.14 had stamped format 16.
+        consequence = (
+            f"It may have stamped local stores with a storage format "
+            f"v{_OMNIGRAPH_VERSION} can't open, and that can't be undone. "
+            f"Upgrade witan to use it, or delete {dest} and re-run to install "
+            f"v{_OMNIGRAPH_VERSION} anyway."
+        )
+        refuse(
+            f"  [yellow]omnigraph[/yellow] — {dest} is v{installed}, newer than "
+            f"this witan's pin v{_OMNIGRAPH_VERSION}; leaving it in place. "
+            f"{consequence}",
+            f"{dest} is omnigraph v{installed}, newer than the pinned "
+            f"v{_OMNIGRAPH_VERSION}; not replacing it. {consequence}",
         )
         return
 
