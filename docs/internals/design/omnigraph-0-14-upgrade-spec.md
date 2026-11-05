@@ -533,6 +533,16 @@ falls through to the text markers.
   lookup or effects (`omnigraph-api-types/src/lib.rs:37-43`). 412 is already
   terminal in `classify_status` (`omnigraph_http.py:314-320`). Give
   `actor_mismatch` its own kind so it isn't read as a failed `--if-commit`.
+
+  Outcome: `OmnigraphClient` takes `actor`, which witan's `_resolve_client`
+  and witan-code's ingest client set to the actor they resolved the token
+  for. The pooled transport sends it on every request, and the CLI sends
+  `--as` on `mutate` and `load` (the 0.14 CLI refuses it on reads, `optimize`
+  and `cleanup`). A 0.13.0 server ignores the header (sent locally: the
+  request ran as if it were absent), so it goes out whatever contract the
+  transport speaks. The CLI prints a refused write as text without a code
+  and exits 4, as for a failed `--if-commit`, so that path tells them apart
+  by the server's message ("not the expected '<actor>'").
 - `omnigraph version --json`
   (tk-read-the-binary-s-storage-format-from-omnigraph--ccb7ba) in place of
   `_INTERNAL_SCHEMA_LINE` (`witan_core/omnigraph_install.py:598`) and

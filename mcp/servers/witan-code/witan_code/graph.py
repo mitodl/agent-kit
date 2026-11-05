@@ -248,6 +248,7 @@ class OmnigraphClient(_BaseOmnigraphClient):
         branch: str | None = None,
         graph_id: str | None = None,
         connect_retry: bool = True,
+        actor: str | None = None,
     ) -> None:
         # Target omnigraph branch for query/mutate/load; None = the store's main
         # branch. Loads pass `--from main` so the branch forks lazily on first
@@ -259,6 +260,7 @@ class OmnigraphClient(_BaseOmnigraphClient):
             token,
             graph_id=graph_id,
             connect_retry=connect_retry,
+            actor=actor,
         )
 
     def load(

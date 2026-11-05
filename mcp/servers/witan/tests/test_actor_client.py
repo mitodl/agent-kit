@@ -76,6 +76,8 @@ def deployed_mode(monkeypatch):
             graph_id=None,
             s3_profile=None,
             s3_region=None,
+            *,
+            actor=None,
         ):
             self.graph_uri = graph_uri
             self.graph_id = graph_id
@@ -84,6 +86,7 @@ def deployed_mode(monkeypatch):
             self.guard = guard
             self.s3_profile = s3_profile
             self.s3_region = s3_region
+            self.actor = actor
             built.append(self)
 
     monkeypatch.setattr(srv, "OmnigraphClient", _FakeOmnigraphClient)
@@ -119,6 +122,9 @@ def test_deployed_mode_builds_per_actor_client_from_sub_claim(
     result = srv._resolve_client()
 
     assert result.token == "tok-alice"
+    # Asserted to the data tier as Omnigraph-If-Actor, so a mapping that hands
+    # out someone else's token is refused rather than misattributed.
+    assert result.actor == "act-alice"
     assert resolver.calls == ["act-alice"]
     assert len(built) == 1
 
