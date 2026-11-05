@@ -298,6 +298,11 @@ the message presenting the draft — not in the post itself.
   Also every entry in `discussions_opened` with `createdAt` on `report_date`
   (**opening a new discussion is always announcement-worthy** — it's a request
   for the team's attention, regardless of category), plus blockers and OOO info.
+  A `blocked` label on an authored PR (any case) is one source of a blocker
+  bullet, alongside the user's own `blockers` answer. It does not move the PR
+  out of the needs-review list — [Which PRs actually need review](#which-prs-actually-need-review)
+  admits no substitutions, and a blocked PR can still want eyes. It earns an
+  *extra* blocker bullet, and it never takes a highlight slot.
 - **Discussion comments (past section):** entries in `discussion_comments` with
   `createdAt` on `report_date` belong under done work. These are frequently
   substantive design work with no PR or issue attached, so they are easy to drop
@@ -430,10 +435,24 @@ automatically nominating it.
      dependency, and a two-PR cycle with no bottom for the suppression rule below
      to find.
 3. **Time-sensitive on label evidence.** A `labels` entry naming security/CVE,
-   hotfix, incident, release/deploy, or a deadline. A PR with
-   `review_state_unknown: true` carries `labels: []` because the lookup failed,
-   not because it is unlabelled — rule 3 cannot fire for it, and that empty list
-   is not evidence that it is unimportant.
+   hotfix, incident, release/deploy, a deadline, or blocking a release
+   (`release-blocker`). Compare label names **case-insensitively**: the same
+   label is spelled `Blocked` in `mitodl/hq` and `mitodl/mit-learn` but
+   `blocked` in `mitodl/ol-django`, and other repos vary the same way.
+
+   A PR with `review_state_unknown: true` carries `labels: []` because the
+   lookup failed, not because it is unlabelled — rule 3 cannot fire for it, and
+   that empty list is not evidence that it is unimportant.
+
+**A `blocked` label is not a rule 3 qualifier, and the direction is why.** It
+says the PR *is* blocked — stuck behind someone else — where every other rule 2
+and rule 3 signal says the PR has a claim on the team's attention right now. A
+blocked PR usually cannot move even if someone reviews it today, so a "please
+start with these" slot spent on one is a slot wasted. Surface it as a **blocker
+bullet** in announcements instead (Step 4's blockers rule), naming what it waits
+on and the `@handle` who can clear it — that is the thing that would actually
+move it. `release-blocker` is the opposite case and does qualify: that PR is
+holding up a release, which is as time-sensitive as the list gets.
 
 **Build the graph from `prs_authored` *plus* `stack_parents`.** The authored
 search is filtered to the activity window, so a stack whose middle PR has gone
