@@ -6,6 +6,7 @@ the lock handoff, stdin-JSON parsing, path resolution), not the real indexer
 or a real detached drainer. The lock itself is real: a kernel flock.
 """
 
+import itertools
 import json
 import os
 import shutil
@@ -47,10 +48,47 @@ def _spawned(monkeypatch):
     return calls
 
 
+class _Clock:
+    """Stands in for the `time` module inside hooks.py, so the flush interval
+    is walked instead of waited out."""
+
+    def __init__(self):
+        self.now = 1_000_000.0
+        self.slept: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture(autouse=True)
+def _clock(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(hooks, "time", clock)
+    return clock
+
+
 @pytest.fixture
 def _indexed(monkeypatch):
+    """Every target indexed, flattened: the foreground path's single files and
+    the drainer's batches alike."""
     calls = []
     monkeypatch.setattr(hooks.indexer, "index_path", lambda p, force: calls.append(p))
+    monkeypatch.setattr(
+        hooks.indexer, "index_paths", lambda ts, force: calls.extend(ts)
+    )
+    return calls
+
+
+@pytest.fixture
+def _batches(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        hooks.indexer, "index_paths", lambda ts, force: calls.append(list(ts))
+    )
     return calls
 
 
@@ -290,7 +328,7 @@ def test_reindex_hook_leaves_the_path_to_a_running_drainer(_repo, _spawned):
 # ── drain_pending ─────────────────────────────────────────────────────────────
 
 
-def test_drain_pending_indexes_each_queued_target_once_and_releases(_repo, _indexed):
+def test_drain_pending_indexes_the_queue_as_one_batch_and_releases(_repo, _batches):
     a, b = _repo / "a.py", _repo / "b.py"
     for path in (a, b):
         path.write_text("x = 1")
@@ -299,7 +337,7 @@ def test_drain_pending_indexes_each_queued_target_once_and_releases(_repo, _inde
 
     hooks.drain_pending(_repo, hooks._try_lock(_repo))
 
-    assert _indexed == [a, b]
+    assert _batches == [[a, b]]
     assert not hooks._has_pending(_repo)
     assert not context._busy_path(_repo).exists()
     fd = hooks._try_lock(_repo)
@@ -314,21 +352,21 @@ def test_drain_pending_picks_up_a_target_queued_while_it_held_the_lock(
     for path in (a, b):
         path.write_text("x = 1")
     hooks._enqueue(_repo, a)
-    indexed = []
+    batches = []
 
-    def _index(p, force):
-        indexed.append(p)
-        if p == a:
+    def _index(targets, force):
+        batches.append(targets)
+        if targets == [a]:
             # An edit landing mid-drain: its hook finds the lock held and
             # leaves the path to this drainer's re-check.
             assert hooks._try_lock(_repo) is None
             hooks._enqueue(_repo, b)
 
-    monkeypatch.setattr(hooks.indexer, "index_path", _index)
+    monkeypatch.setattr(hooks.indexer, "index_paths", _index)
 
     hooks.drain_pending(_repo, hooks._try_lock(_repo))
 
-    assert indexed == [a, b]
+    assert batches == [[a], [b]]
 
 
 def test_drain_pending_marks_the_checkout_busy_while_it_works(_repo, monkeypatch):
@@ -338,8 +376,8 @@ def test_drain_pending_marks_the_checkout_busy_while_it_works(_repo, monkeypatch
     seen = []
     monkeypatch.setattr(
         hooks.indexer,
-        "index_path",
-        lambda p, force: seen.append(context.indexing_in_progress()),
+        "index_paths",
+        lambda ts, force: seen.append(context.indexing_in_progress()),
     )
 
     hooks.drain_pending(_repo, hooks._try_lock(_repo))
@@ -376,26 +414,124 @@ def test_drain_pending_skips_targets_of_a_removed_checkout(_repo, _indexed):
     assert _indexed == []
 
 
-def test_drain_pending_continues_past_a_failing_target(_repo, monkeypatch):
-    a, b = _repo / "a.py", _repo / "b.py"
-    for path in (a, b):
-        path.write_text("x = 1")
-        hooks._enqueue(_repo, path)
-    indexed = []
+def test_drain_pending_releases_after_a_failing_batch(_repo, monkeypatch):
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
 
-    def _index(p, force):
-        if p == a:
-            raise RuntimeError("write authority changed during preparation")
-        indexed.append(p)
+    def _index(targets, force):
+        raise RuntimeError("write authority changed during preparation")
 
-    monkeypatch.setattr(hooks.indexer, "index_path", _index)
+    monkeypatch.setattr(hooks.indexer, "index_paths", _index)
 
     hooks.drain_pending(_repo, hooks._try_lock(_repo))
 
-    assert indexed == [b]
+    assert not hooks._has_pending(_repo)
     fd = hooks._try_lock(_repo)
     assert fd is not None  # released despite the failure
     os.close(fd)
+
+
+# ── Flush pacing ──────────────────────────────────────────────────────────────
+
+
+def test_an_edit_heavy_session_flushes_at_most_once_per_interval(
+    _repo, monkeypatch, _clock
+):
+    """The bound this exists for. Edits arrive every 3s for 5 minutes, each
+    during a flush or during the wait for the next, which is what an agent
+    editing continuously looks like to the drainer. Flushes start at least
+    FLUSH_INTERVAL_SECONDS apart, and every edit lands in one of them."""
+    edit_every = 3.0
+    index_takes = 8.0
+    session_ends = _clock.now + 300.0
+    edits: list = []
+    flushes: list[tuple[float, list]] = []
+    next_edit = [_clock.now]
+
+    def _edit_until(now: float) -> None:
+        while next_edit[0] <= now and next_edit[0] < session_ends:
+            path = _repo / f"f{len(edits)}.py"
+            path.write_text("x = 1")
+            edits.append(path)
+            hooks._enqueue(_repo, path)
+            next_edit[0] += edit_every
+
+    real_sleep = _clock.sleep
+
+    def _sleep(seconds: float) -> None:
+        real_sleep(seconds)
+        _edit_until(_clock.now)
+
+    def _index(targets, force):
+        flushes.append((_clock.now, list(targets)))
+        _clock.now += index_takes
+        _edit_until(_clock.now)
+
+    monkeypatch.setattr(_clock, "sleep", _sleep)
+    monkeypatch.setattr(hooks.indexer, "index_paths", _index)
+    _edit_until(_clock.now)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    starts = [at for at, _ in flushes]
+    gaps = [b - a for a, b in itertools.pairwise(starts)]
+    assert gaps
+    assert min(gaps) >= hooks.FLUSH_INTERVAL_SECONDS
+    # 100 edits; per-edit indexing would have been 100 writes.
+    assert len(edits) == 100
+    assert len(flushes) <= 300.0 / hooks.FLUSH_INTERVAL_SECONDS + 1
+    # Nothing lost, the last edit of the session included, each indexed once.
+    assert [t for _, batch in flushes for t in batch] == edits
+    assert edits[-1] in flushes[-1][1]
+    assert not hooks._has_pending(_repo)
+
+
+def test_a_new_drainer_waits_out_the_previous_one_s_interval(_repo, _batches, _clock):
+    """A drainer exits once its queue is empty, so the interval has to outlive
+    it: the next edit spawns a fresh drainer that must not flush at once."""
+    a, b = _repo / "a.py", _repo / "b.py"
+    for path in (a, b):
+        path.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+    _clock.now += 10.0
+
+    hooks._enqueue(_repo, b)
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == [[a], [b]]
+    assert _clock.slept == [hooks.FLUSH_INTERVAL_SECONDS - 10.0]
+
+
+def test_the_first_edit_after_a_quiet_spell_flushes_at_once(_repo, _batches, _clock):
+    a, b = _repo / "a.py", _repo / "b.py"
+    for path in (a, b):
+        path.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+    _clock.now += hooks.FLUSH_INTERVAL_SECONDS + 1
+
+    hooks._enqueue(_repo, b)
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == [[a], [b]]
+    assert _clock.slept == []
+
+
+def test_a_stamp_from_the_future_waits_one_interval_at_most(_repo, _batches, _clock):
+    """A wall clock that stepped back must not stall the queue for hours."""
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    stamp = hooks._flushed_path(_repo)
+    stamp.touch()
+    os.utime(stamp, (_clock.now + 3600, _clock.now + 3600))
+    hooks._enqueue(_repo, a)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == [[a]]
+    assert _clock.slept == [hooks.FLUSH_INTERVAL_SECONDS]
 
 
 # ── lock and state ────────────────────────────────────────────────────────────

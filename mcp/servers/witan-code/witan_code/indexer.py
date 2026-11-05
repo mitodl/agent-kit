@@ -15,7 +15,7 @@ import hashlib
 import importlib
 import os
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -430,11 +430,46 @@ def index_path(
     or renamed, which otherwise kept answering ``code_*`` queries until the
     next full-repo run purged it.
     """
+    return index_paths(
+        [target], force=force, repo_override=repo_override, config=config
+    )
+
+
+def index_paths(
+    targets: Sequence[Path],
+    *,
+    force: bool = False,
+    repo_override: str | None = None,
+    config: cfg_module.Config | None = None,
+) -> IndexStats:
+    """Index several ``targets`` of one checkout as ONE write.
+
+    :func:`index_path` for a batch. Every phase below commits once for the
+    whole batch rather than once per target, so N edited files cost the same
+    three commits on the branch view (one delete, two loads) as one file does.
+    The PostToolUse drainer hands its accumulated queue here for that reason.
+
+    :param targets: files or directories, all under the same git root. Without
+        a git root there is no checkout for them to share, so a batch of more
+        than one is refused.
+    :raises ValueError: when ``targets`` is empty, or holds more than one
+        target and they do not share a git root.
+    """
     cfg = config or cfg_module.load()
-    target = target.resolve()
-    gone = not target.exists()
+    resolved = list(dict.fromkeys(t.resolve() for t in targets))
+    if not resolved:
+        raise ValueError("index_paths needs at least one target")
+    target = resolved[0]
 
     repo_root = repo_module.root(anchor_dir(target))
+    if len(resolved) > 1 and (
+        repo_root is None
+        or any(repo_module.root(anchor_dir(t)) != repo_root for t in resolved[1:])
+    ):
+        raise ValueError(
+            "index_paths batches targets of one git checkout; got "
+            + ", ".join(str(t) for t in resolved)
+        )
     slug = resolve_repo_key(target, repo_override)
     base = repo_root or anchor_dir(target)
 
@@ -489,7 +524,15 @@ def index_path(
     # that is invisible from the result alone — and the purge below reads
     # "missing from the collected set" as "no longer part of the repo".
     walk_errors: list[OSError] = []
-    collected = [] if gone else _collect_files(target, on_error=walk_errors.append)
+    gone = [t for t in resolved if not t.exists()]
+    collected = list(
+        dict.fromkeys(
+            path
+            for t in resolved
+            if t.exists()
+            for path in _collect_files(t, on_error=walk_errors.append)
+        )
+    )
     for exc in walk_errors:
         stats.errors += 1
         # Warning: an unreadable directory silently shrinks `collected`, and
@@ -528,7 +571,7 @@ def index_path(
         touched_files.append(parsed.path)
         stats.indexed += 1
 
-    full_repo = target.is_dir() and target.resolve() == base.resolve()
+    full_repo = any(t.is_dir() and t == base.resolve() for t in resolved)
     can_purge = _may_purge(
         full_repo=full_repo,
         repo_root=repo_root,
@@ -569,9 +612,13 @@ def index_path(
     # Only under a git root, for `_may_purge`'s reason: without one `base` is
     # just the nearest directory, and under a WITAN_REPO override the path
     # relative to it can name a different file that is still in the repo.
-    if gone and repo_root is not None and indexable(target):
-        rel = _relative_path(target, base)
-        if f"{slug}#{rel}" in existing:
+    # Skipped under `can_purge`: a batch holding the repo root as well already
+    # purged every stored file missing from disk above.
+    for vanished in gone:
+        if repo_root is None or not indexable(vanished):
+            continue
+        rel = _relative_path(vanished, base)
+        if not can_purge and f"{slug}#{rel}" in existing:
             delete_steps += _delete_file_steps(f"{slug}#{rel}")
             stats.purged += 1
         touched_files.append(rel)
