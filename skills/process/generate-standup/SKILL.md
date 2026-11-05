@@ -110,6 +110,7 @@ be guessed — see [Timestamp discipline](#timestamp-discipline) and
 | `labels` | label names on the PR, flattened to strings. Open authored PRs only. `[]` means unlabelled **or** that the lookup failed — check `review_state_unknown` before reading anything into it. |
 | `baseRefName` | the branch the PR merges **into**. Open authored PRs only; `null` if the lookup failed. |
 | `headRefName` | the PR's own branch. Open authored PRs only; `null` if the lookup failed. |
+| `isCrossRepository` | `true` when the PR comes from a fork, so `headRefName` names a branch in **another** repo than the URL's. Open authored PRs only; `null` if the lookup failed. |
 | `review_state_unknown` | `true` if the review lookup failed. Say the state is unknown rather than guessing. |
 
 Entries in `discussions_opened` and `discussion_comments` both carry
@@ -403,15 +404,22 @@ automatically nominating it.
    needs-review claim the PR does not have. When the wording is genuinely
    ambiguous, leave it out of the highlights — it still appears in the section.
 2. **Blocks other open PRs**, weighted by how many. For two open authored PRs A
-   and B **in the same repository** — identical `https://github.com/<org>/<repo>/`
-   URL prefix — B is stacked directly on top of A when `B.baseRefName` and
-   `A.headRefName` are **both non-null and equal**, which makes A block it. Both
-   halves of that test carry weight. The same-repo half is not optional because
-   branch names are repo-scoped, so a `feat/foo` in two repositories is two
-   unrelated branches. The non-null half is not optional because a failed
-   `gh pr view` leaves both fields `null`, and `null == null` would read two
-   unrelated failed lookups as stacked on one another — inventing a dependency,
-   and a two-PR cycle with no bottom for the suppression rule below to find.
+   and B, B is stacked directly on top of A — making A block it — when all three
+   hold:
+   - **Same repository**: identical `https://github.com/<org>/<repo>/` URL
+     prefix. Branch names are repo-scoped, so a `feat/foo` in two repositories is
+     two unrelated branches.
+   - **`A.isCrossRepository` is `false`.** The URL names the repo the PR *targets*,
+     not the one holding its head branch, and those differ on a fork PR. Without
+     this test, a fork PR from a branch called `main` into `upstream:main` reads
+     as the parent of every same-repo PR targeting `main` — fabricating a large
+     blocked-count for a PR that blocks nothing. `true` or `null` both fail the
+     test; only an explicit `false` places A's head branch in the shared repo.
+   - **`B.baseRefName` and `A.headRefName` are both non-null and equal.** A
+     failed `gh pr view` leaves both fields `null`, and `null == null` would read
+     two unrelated failed lookups as stacked on one another — inventing a
+     dependency, and a two-PR cycle with no bottom for the suppression rule below
+     to find.
 3. **Time-sensitive on label evidence.** A `labels` entry naming security/CVE,
    hotfix, incident, release/deploy, or a deadline. A PR with
    `review_state_unknown: true` carries `labels: []` because the lookup failed,

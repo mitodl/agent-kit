@@ -171,7 +171,7 @@ _enrich_review_state() {
 	while IFS= read -r url; do
 		# On lookup failure emit just the url, so the merge below can mark the
 		# PR review_state_unknown instead of silently omitting the fields.
-		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests,labels,baseRefName,headRefName 2>/dev/null ||
+		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests,labels,baseRefName,headRefName,isCrossRepository 2>/dev/null ||
 			jq -n --arg u "$url" '{url: $u}')"
 		details="$(jq -s 'add' <<<"$details"$'\n'"[$detail]")"
 	done <<<"$open_urls"
@@ -219,6 +219,15 @@ _enrich_review_state() {
                 # single-quoted, and one would end the string.
                 baseRefName: ($d.baseRefName // null),
                 headRefName: ($d.headRefName // null),
+                # The URL names the BASE repo, so headRefName alone does not say
+                # which repo the branch lives in. On a fork PR it is not this
+                # repo at all, and a fork of a branch named main would otherwise
+                # look like the parent of every same-repo PR targeting main.
+                # has() rather than //: jq treats false as empty, so
+                # `$d.isCrossRepository // null` would turn every same-repo PR
+                # into null and no PR would ever pass the stack test.
+                isCrossRepository: (if $d | has("isCrossRepository")
+                                    then $d.isCrossRepository else null end),
                 review_state_unknown: $unknown,
                 needs_review: (
                   if $unknown or ($pr.isDraft // false) then false
