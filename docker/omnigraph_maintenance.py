@@ -88,6 +88,8 @@ LEASE_RETRY_SECONDS = 5
 DEFAULT_SERVER_STOP_SECONDS = 90
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
 RESTORE_ATTEMPTS = 10
+# The CLI parses `cleanup --keep` as a u32.
+MAX_CLEANUP_KEEP = 2**32 - 1
 
 
 class WindowTerminated(Exception):
@@ -156,7 +158,7 @@ def parse_cleanup_retention(keep: str, older_than: str) -> tuple[str, str]:
     plan by ``--keep`` would not.
 
     :raises ValueError: on neither or both, or a ``keep`` that is not a whole
-        number of at least 1. Settings are read before the server is stopped,
+        number from 1 to ``MAX_CLEANUP_KEEP``. Settings are read before the server is stopped,
         so this fails the run without opening a window.
     """
     keep = keep.strip()
@@ -170,8 +172,14 @@ def parse_cleanup_retention(keep: str, older_than: str) -> tuple[str, str]:
         raise ValueError(msg)
     if older_than:
         return ("--older-than", older_than)
-    if not (keep.isascii() and keep.isdigit()) or int(keep) < 1:
-        msg = f"OMNIGRAPH_CLEANUP_KEEP is a whole number of at least 1, not {keep!r}"
+    if (
+        not (keep.isascii() and keep.isdigit())
+        or not 1 <= int(keep) <= MAX_CLEANUP_KEEP
+    ):
+        msg = (
+            f"OMNIGRAPH_CLEANUP_KEEP is a whole number from 1 to {MAX_CLEANUP_KEEP}, "
+            f"not {keep!r}"
+        )
         raise ValueError(msg)
     return ("--keep", keep)
 

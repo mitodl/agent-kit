@@ -235,7 +235,15 @@ def test_cleanup_keeps_a_count_instead_of_an_age(kube, cli, env):
 
 @pytest.mark.parametrize(
     ("keep", "older_than"),
-    [("", ""), ("1", "2d"), ("0", ""), ("-1", ""), ("x", ""), ("²", "")],
+    [
+        ("", ""),
+        ("1", "2d"),
+        ("0", ""),
+        ("-1", ""),
+        ("x", ""),
+        ("²", ""),
+        ("4294967296", ""),
+    ],
 )
 def test_an_invalid_cleanup_retention_fails_before_the_server_stops(
     kube, cli, env, keep, older_than
