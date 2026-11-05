@@ -107,9 +107,9 @@ be guessed — see [Timestamp discipline](#timestamp-discipline) and
 | `needs_review` | **authored PRs only.** `true` iff a human still owes a review. Already accounts for draft status, approval, requested changes, and bot reviewers — use it as-is; do not re-derive it. |
 | `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (nobody has reviewed). Open authored PRs only. Use for *framing*, not for the needs-review decision. |
 | `reviewRequests` | human logins/team slugs with a review still pending; bots filtered out. Open authored PRs only. |
-| `labels` | label names on the PR, flattened to strings. Open authored PRs only; `[]` when unlabelled. |
-| `baseRefName` | the branch the PR merges **into**. Open authored PRs only. |
-| `headRefName` | the PR's own branch. Open authored PRs only. |
+| `labels` | label names on the PR, flattened to strings. Open authored PRs only. `[]` means unlabelled **or** that the lookup failed — check `review_state_unknown` before reading anything into it. |
+| `baseRefName` | the branch the PR merges **into**. Open authored PRs only; `null` if the lookup failed. |
+| `headRefName` | the PR's own branch. Open authored PRs only; `null` if the lookup failed. |
 | `review_state_unknown` | `true` if the review lookup failed. Say the state is unknown rather than guessing. |
 
 Entries in `discussions_opened` and `discussion_comments` both carry
@@ -218,7 +218,13 @@ A sixth field, included **only** when both of these hold:
 
 - the announcements PR count is **six or more**, and
 - **fewer than three** PRs qualify under rules 2–3 of
-  [Highlighting when announcements run long](#highlighting-when-announcements-run-long).
+  [Highlighting when announcements run long](#highlighting-when-announcements-run-long),
+  counted **after** the one-highlight-per-stack suppression described there.
+
+Both tests run on the script's data alone, which is the only thing that exists
+while this form is being built. That is why the threshold there is defined the
+same way — a count that included PRs the user raises in *these* answers could not
+be evaluated in time to decide whether to ask them.
 
 ```json
   "priority_prs": {
@@ -367,39 +373,53 @@ stack of open PRs a flat list of every one of them is a wall of links nobody
 triages. Past a threshold, call out the few that actually need attention first —
 without dropping any of the rest.
 
-**The threshold.** Count the PRs the announcements section would carry: authored
-PRs with `needs_review: true`, plus any PR appearing there under a different
-claim (approved-and-ready, review state unknown, a specific request the user
-made in Step 2). Discussion links, blockers and OOO lines do not count.
+**The threshold.** Count the PRs the announcements section would carry **on the
+script's data alone**: authored PRs with `needs_review: true`, plus any PR
+appearing there under a different claim (approved-and-ready, review state
+unknown). Discussion links, blockers and OOO lines do not count, and neither
+does a PR the user raises in their Step 2 answers — this count has to be
+computable while the Step 2 form is still being built, before any answer to it
+exists.
 
 - **Five or fewer → render flat, exactly as you would have anyway.** Skip the
   rest of this subsection; no groups, no highlights, no reasons.
 - **Six or more → highlight at most three**, and still list every one.
 
-**What qualifies as a highlight**, in precedence order:
+If a Step 2 answer later adds a PR that pushes the section to six, highlight
+anyway — the user has by definition just named one, so rule 1 below has content
+and there is nothing left to ask them.
 
-1. **Named by the user.** Authoritative, and it *replaces* the ranking rather
-   than seeding it — anything flagged in `priority_prs`, `announcements`, or
-   `extra_context`, in the order the user named them. Three or more named, and
-   that is the list.
+**What qualifies as a highlight:**
+
+1. **Named by the user** — anything flagged in `priority_prs`, `announcements`,
+   or `extra_context`.
 2. **Blocks other open PRs**, weighted by how many. For two open authored PRs A
    and B **in the same repository** — identical `https://github.com/<org>/<repo>/`
-   URL prefix — `B.baseRefName == A.headRefName` means B is stacked directly on
-   top of A, so A is blocking it. The same-repo test is not optional: branch names
-   are repo-scoped, so a `feat/foo` in two repositories is two unrelated branches,
-   and matching across them invents a dependency that does not exist.
+   URL prefix — B is stacked directly on top of A when `B.baseRefName` and
+   `A.headRefName` are **both non-null and equal**, which makes A block it. Both
+   halves of that test carry weight. The same-repo half is not optional because
+   branch names are repo-scoped, so a `feat/foo` in two repositories is two
+   unrelated branches. The non-null half is not optional because a failed
+   `gh pr view` leaves both fields `null`, and `null == null` would read two
+   unrelated failed lookups as stacked on one another — inventing a dependency,
+   and a two-PR cycle with no bottom for the suppression rule below to find.
 3. **Time-sensitive on label evidence.** A `labels` entry naming security/CVE,
-   hotfix, incident, release/deploy, or a deadline.
+   hotfix, incident, release/deploy, or a deadline. A PR with
+   `review_state_unknown: true` carries `labels: []` because the lookup failed,
+   not because it is unlabelled — rule 3 cannot fire for it, and that empty list
+   is not evidence that it is unimportant.
 
 **Follow a stack all the way up, not one step.** In a four-deep stack
 `A ← B ← C ← D`, A blocks *three* PRs, not one — nothing above it can merge until
-it does. Count every PR transitively above A, including the branching case where
-two PRs sit on the same parent, and use that total as A's weight under rule 2. A
-direct-children count would rank the root of a deep stack level with a PR that has
-one trivial follow-up behind it, which is backwards: the deep root is the single
-most unblocking review on the list. Walk the chain with a visited set and stop on
-a repeat — two branches somehow pointing at each other would otherwise loop
-forever.
+it does. A's weight under rule 2 is the count of **every open authored PR
+transitively above it**, whether or not those PRs are themselves in
+announcements, and including the branching case where two PRs sit on the same
+parent. A direct-children count would rank the root of a deep stack level with a
+PR that has one trivial follow-up behind it, which is backwards: the deep root is
+the single most unblocking review on the list. Give each walk **its own** visited
+set and stop on a repeat: a set shared across the whole ranking would let the
+first PR walked mark everything above it visited and score every other root at
+zero, and a per-walk set still terminates the cycle it exists for.
 
 **One highlight per stack: the lowest announcement PR in it.** A PR stacked on
 another open PR cannot merge until its parent does, so highlighting both spends a
@@ -410,11 +430,23 @@ whole weight. A PR whose parent is open but **not** in announcements (already
 approved, say) is still the lowest announcement PR in its stack, so it stands on
 its own count.
 
-**Ranking, when more than three qualify.** Rule 1 first, then rule 2, then rule 3.
-Within rule 2, order by descending transitive blocked-count — deepest stack root
-first. **Age breaks remaining ties and is never a qualification on its own:** a PR
-that is merely old, with no blocking or time-sensitive evidence behind it, is not
-a highlight, and promoting it buries the ones that are genuinely urgent.
+**Suppression runs before anything is counted.** A skipped PR does not qualify —
+not for the ranking below, and not for the "fewer than three qualify" test that
+decides whether Step 2 asks. The difference is not academic: in the
+[worked example](#example-output-eod-more-than-five-prs-in-announcements)
+`pull/4661` blocks one PR and would pass rule 2 read on its own, but `pull/4659`
+sits below it in the same stack, so it is out before the count is taken — three
+qualifiers if you count first, two if you suppress first, and only the second
+reading asks the user.
+
+**Ranking.** User-named PRs take the top slots, in the order the user named them,
+**capped at the first three**: `priority_prs` asks for up to three, but nothing
+caps what the user may write in `announcements` or `extra_context`, and naming
+five does not widen the group past three. Fill whatever slots they leave by rule
+2 — descending transitive blocked-count, deepest root first — and then rule 3.
+**Age breaks remaining ties and is never a qualification on its own:** a PR that
+is merely old, with no blocking or time-sensitive evidence behind it, is not a
+highlight, and promoting it buries the ones that are genuinely urgent.
 
 **Every highlight states its reason, and the reason must be licensed by a
 field** — the same discipline [Timestamp discipline](#timestamp-discipline)
@@ -424,8 +456,7 @@ fix" needs the label. A title that merely *sounds* urgent licenses nothing.
 
 **Fewer than three qualify → highlight fewer.** Do not pad. If nothing qualifies
 at all, render the flat list with no group header — never an empty "start with
-these" group. When six or more PRs are in play and fewer than three qualify under
-rules 2–3, Step 2 should already have asked; see `priority_prs` there.
+these" group.
 
 **Highlighting re-orders presentation only.** It never drops a PR, never changes
 a needs-review claim, and never promotes a PR into announcements that does not
