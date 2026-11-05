@@ -286,7 +286,6 @@ def test_reported_build_reads_the_0_14_document(tmp_path):
         writes=16,
         serves=(14, 16),
     )
-    assert oi.reported_internal_schema(binary) == 16
 
 
 def test_reported_build_reads_a_null_commit(tmp_path):

@@ -656,15 +656,19 @@ class OmnigraphBuild:
 def reported_build(binary: str | Path = "omnigraph") -> OmnigraphBuild:
     """Read ``binary``'s version, HTTP contract and storage formats.
 
+    The storage format decides whether an upgrade is a rebuild-everything
+    event. It is read from the binary rather than inferred from its release
+    number, because the mapping is upstream's to change and has no published
+    table.
+
     From ``omnigraph version --json``, which 0.14 added and which answers
     without contacting a server. Upstream's own test pins the document's whole
     field set, so a rename fails here as a ``KeyError`` turned into the
     ``RuntimeError`` below rather than as a regex quietly matching less.
 
-    NO TEXT FALLBACK FOR A PRE-0.14 BINARY. Every caller is checking the
-    pinned binary (``bin/check_omnigraph_format.py`` in CI, witan's
-    server-entrypoint tests), and the pin has been 0.14 since storage format
-    16. A 0.13 binary
+    NO TEXT FALLBACK FOR A PRE-0.14 BINARY. The caller is
+    ``bin/check_omnigraph_format.py``, checking the pinned binary, and the pin
+    has been 0.14 since storage format 16. A 0.13 binary
     reaching this is a stale install, so it fails with that said rather than
     being read through a second parser kept alive for it.
     ``_installed_version`` stays on ``--version``, which every release prints,
@@ -713,18 +717,6 @@ def reported_build(binary: str | Path = "omnigraph") -> OmnigraphBuild:
             f"{result.stdout}\nThe storage-format checks depend on it; upstream "
             "may have renamed a field."
         ) from exc
-
-
-def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
-    """The storage format ``binary`` writes, per :func:`reported_build`.
-
-    The number that decides whether an upgrade is a rebuild-everything event.
-    Read from the binary rather than inferred from its release number, because
-    the mapping is upstream's to change and has no published table.
-
-    :raises RuntimeError: as :func:`reported_build`.
-    """
-    return reported_build(binary).writes
 
 
 def preserved_binaries(dest: Path | None = None) -> list[Path]:

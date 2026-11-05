@@ -832,22 +832,21 @@ RENDER_TOKENS = {
 
 
 def _has_persisted_locks() -> bool:
-    if shutil.which("omnigraph") is None:
+    found = shutil.which("omnigraph")
+    if found is None:
         return False
-    from witan_core.omnigraph_install import reported_internal_schema
+    from witan_core.omnigraph_install import _installed_version
 
-    try:
-        return reported_internal_schema() >= 14
-    except RuntimeError:
-        # The format is read from `version --json`, which 0.14 added, so a
-        # stale 0.13 install lands here rather than failing the whole
-        # collection.
-        return False
+    # By release rather than by `version --json`, which 0.14 added: these
+    # tests also cover the 0.13 CLI path, and every release prints
+    # `--version`. 0.13 is the first pinned release on format 14.
+    version = _installed_version(Path(found))
+    return version is not None and tuple(map(int, version.split("."))) >= (0, 13, 0)
 
 
 requires_persisted_locks = pytest.mark.skipif(
     not _has_persisted_locks(),
-    reason="needs omnigraph 0.14 or newer (persisted cluster locks, `version --json`)",
+    reason="needs an omnigraph with persisted cluster locks (0.13 or newer)",
 )
 
 # `witan setup` and CI install only the `omnigraph` CLI from the release
