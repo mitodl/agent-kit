@@ -209,12 +209,18 @@ def _by_checkout(targets: list[Path]) -> list[list[Path]]:
     ``index_paths`` groups by the resolved one, so a symlink into another
     repo (or a path since swallowed by a nested repo) would make it refuse
     the whole batch and drop every other edit with it. Targets outside any
-    repo are indexed one at a time, since there is no checkout to share.
+    repo are indexed one at a time, since there is no checkout to share. So
+    is one that cannot be resolved (a symlink loop raises RuntimeError on
+    3.12, OSError on 3.13), which leaves its failure to that batch's own
+    handler rather than to the whole flush.
     """
     groups: dict[Path, list[Path]] = {}
     loose: list[list[Path]] = []
     for target in targets:
-        root = repo_module.root(indexer.anchor_dir(target.resolve()))
+        try:
+            root = repo_module.root(indexer.anchor_dir(target.resolve()))
+        except (OSError, RuntimeError):
+            root = None
         if root is None:
             loose.append([target])
         else:

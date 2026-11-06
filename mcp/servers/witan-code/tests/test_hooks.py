@@ -435,6 +435,22 @@ def test_drain_pending_batches_a_symlink_into_another_repo_on_its_own(
     assert not hooks._has_pending(_repo)
 
 
+def test_drain_pending_isolates_a_target_that_cannot_be_resolved(_repo, _batches):
+    """A symlink loop raises from Path.resolve(); it gets a batch of its own,
+    whose failure the per-batch handler absorbs, instead of taking down the
+    whole flush and the drainer's re-check of the queue."""
+    a, loop = _repo / "a.py", _repo / "loop.py"
+    a.write_text("x = 1")
+    loop.symlink_to(loop)
+    for path in (a, loop):
+        hooks._enqueue(_repo, path)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == [[a], [loop]]
+    assert not hooks._has_pending(_repo)
+
+
 def test_drain_pending_purges_a_target_deleted_since_it_was_queued(_repo, _indexed):
     hooks._enqueue(_repo, _repo / "gone.py")
 
