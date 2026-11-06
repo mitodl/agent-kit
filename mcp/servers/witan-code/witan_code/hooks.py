@@ -166,8 +166,12 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
     busy = _busy_path(checkout)
     while True:
         try:
-            busy.touch()
+            # Not busy while only waiting out the interval: the context block
+            # reads this marker as "a reindex is running" and holds back its
+            # broken-store warning on it.
+            busy.unlink(missing_ok=True)
             _await_flush_slot(checkout)
+            busy.touch()
             # One gone from disk is indexed too, which purges its rows,
             # unless the whole checkout went with it: git would then resolve
             # the path against whatever repo encloses it.
@@ -178,12 +182,13 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
             ]
             if targets:
                 _stamp_flush(checkout)
+            for batch in _by_checkout(targets):
                 try:
-                    indexer.index_paths(targets, force=False)
+                    indexer.index_paths(batch, force=False)
                 except Exception as exc:  # noqa: BLE001 — the drainer must still release
                     logger.warning(
                         "witan.code.hooks.reindex_failed",
-                        paths=[str(target) for target in targets],
+                        paths=[str(target) for target in batch],
                         error=str(exc),
                     )
         finally:
@@ -195,6 +200,26 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
         if next_fd is None:
             return  # a newer drainer has it, and drains before letting go
         lock_fd = next_fd
+
+
+def _by_checkout(targets: list[Path]) -> list[list[Path]]:
+    """Split ``targets`` into batches :func:`indexer.index_paths` accepts.
+
+    A target is queued under the git root of its unresolved path, but
+    ``index_paths`` groups by the resolved one, so a symlink into another
+    repo (or a path since swallowed by a nested repo) would make it refuse
+    the whole batch and drop every other edit with it. Targets outside any
+    repo are indexed one at a time, since there is no checkout to share.
+    """
+    groups: dict[Path, list[Path]] = {}
+    loose: list[list[Path]] = []
+    for target in targets:
+        root = repo_module.root(indexer.anchor_dir(target.resolve()))
+        if root is None:
+            loose.append([target])
+        else:
+            groups.setdefault(root, []).append(target)
+    return [*groups.values(), *loose]
 
 
 def _submit(checkout: Path, target: Path) -> None:

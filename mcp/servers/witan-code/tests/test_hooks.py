@@ -386,6 +386,55 @@ def test_drain_pending_marks_the_checkout_busy_while_it_works(_repo, monkeypatch
     assert context.indexing_in_progress() is False
 
 
+def test_drain_pending_is_not_busy_while_it_waits_out_the_interval(
+    _repo, _batches, _clock, monkeypatch
+):
+    """The context block reads the marker as "a reindex is running" and holds
+    back its broken-store warning on it, so the wait must not set it."""
+    a, b = _repo / "a.py", _repo / "b.py"
+    for path in (a, b):
+        path.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+    hooks._enqueue(_repo, b)
+    context._busy_path(_repo).touch()  # as _submit leaves it before spawning
+    during_wait = []
+    real_sleep = _clock.sleep
+
+    def _sleep(seconds: float) -> None:
+        during_wait.append(context.indexing_in_progress())
+        real_sleep(seconds)
+
+    monkeypatch.setattr(_clock, "sleep", _sleep)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert during_wait == [False]
+    assert _batches == [[a], [b]]
+
+
+def test_drain_pending_batches_a_symlink_into_another_repo_on_its_own(
+    _repo, tmp_path, _batches
+):
+    """A target is queued under its unresolved path's checkout, but
+    index_paths groups by the resolved one and refuses a mixed batch; one
+    such target must not drop the edits queued beside it."""
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    (other / "b.py").write_text("x = 1")
+    a, link = _repo / "a.py", _repo / "link.py"
+    a.write_text("x = 1")
+    link.symlink_to(other / "b.py")
+    for path in (a, link):
+        hooks._enqueue(_repo, path)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert sorted(_batches) == sorted([[a], [link]])
+    assert not hooks._has_pending(_repo)
+
+
 def test_drain_pending_purges_a_target_deleted_since_it_was_queued(_repo, _indexed):
     hooks._enqueue(_repo, _repo / "gone.py")
 
