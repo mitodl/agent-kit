@@ -435,15 +435,25 @@ def test_drain_pending_batches_a_symlink_into_another_repo_on_its_own(
     assert not hooks._has_pending(_repo)
 
 
-def test_drain_pending_isolates_a_target_that_cannot_be_resolved(_repo, _batches):
-    """A symlink loop raises from Path.resolve(); it gets a batch of its own,
-    whose failure the per-batch handler absorbs, instead of taking down the
-    whole flush and the drainer's re-check of the queue."""
+def test_drain_pending_isolates_a_target_that_cannot_be_resolved(
+    _repo, _batches, monkeypatch
+):
+    """Before 3.13, Path.resolve() raises RuntimeError on a symlink loop. The
+    failure is raised here directly so the test holds on every version: the
+    target gets a batch of its own, whose failure the per-batch handler
+    absorbs, instead of taking down the whole flush and the queue re-check."""
     a, loop = _repo / "a.py", _repo / "loop.py"
-    a.write_text("x = 1")
-    loop.symlink_to(loop)
     for path in (a, loop):
+        path.write_text("x = 1")
         hooks._enqueue(_repo, path)
+    real_anchor_dir = hooks.indexer.anchor_dir
+
+    def _anchor_dir(path):
+        if path.name == "loop.py":
+            raise RuntimeError(f"Symlink loop from {path!r}")
+        return real_anchor_dir(path)
+
+    monkeypatch.setattr(hooks.indexer, "anchor_dir", _anchor_dir)
 
     hooks.drain_pending(_repo, hooks._try_lock(_repo))
 
