@@ -189,6 +189,79 @@ def test_purge_survives_a_forced_reindex(tmp_path, monkeypatch):
 
 
 @requires_stack
+def test_a_batch_of_edits_is_one_delete_and_two_loads(tmp_path, monkeypatch):
+    """What the PostToolUse drainer relies on to bound its writes: edited,
+    created and deleted files land together, in the same three commits on
+    the repo's store that one edited file costs."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+    from witan_code.graph import OmnigraphClient
+
+    src = _repo(tmp_path, monkeypatch)
+    for name in ("b", "c", "gone"):
+        (src / f"{name}.py").write_text(f"def {name}():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+
+    writes: list[str] = []
+    for method in ("change_many", "load"):
+        real = getattr(OmnigraphClient, method)
+
+        def _counted(self, *args, _real=real, _method=method, **kwargs):
+            if self.graph_uri == str(store) and args[0]:
+                writes.append(_method)
+            return _real(self, *args, **kwargs)
+
+        monkeypatch.setattr(OmnigraphClient, method, _counted)
+
+    (src / "a.py").write_text("def a():\n    return 2\n")
+    (src / "b.py").write_text("def b():\n    return 2\n")
+    (src / "gone.py").unlink()
+    (src / "new.py").write_text("def new():\n    return 1\n")
+    stats = indexer.index_paths(
+        [src / "a.py", src / "b.py", src / "gone.py", src / "new.py"], config=cfg
+    )
+
+    assert writes == ["change_many", "load", "load"]
+    assert (stats.indexed, stats.purged) == (3, 1)
+    assert _files(store, cfg) == {"a.py", "b.py", "c.py", "new.py"}
+
+
+@requires_stack
+def test_a_vanished_file_batched_with_the_repo_root_is_purged_once(
+    tmp_path, monkeypatch
+):
+    """The drainer can hold SessionStart's project dir and a since-deleted
+    file in one batch; the full-repo purge covers the file on its own."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "gone.py").write_text("def gone():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+
+    (src / "gone.py").unlink()
+    stats = indexer.index_paths([src, src / "gone.py"], config=cfg)
+
+    assert stats.purged == 1
+    assert _files(store, cfg) == {"a.py"}
+
+
+def test_a_batch_spanning_two_checkouts_is_refused(tmp_path, monkeypatch):
+    src = _repo(tmp_path, monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=other, check=True)
+    (other / "b.py").write_text("def b():\n    return 1\n")
+
+    with pytest.raises(ValueError, match="one git checkout"):
+        indexer.index_paths([src / "a.py", other / "b.py"])
+
+
+@requires_stack
 def test_no_purge_without_a_confirmed_git_root(tmp_path, monkeypatch):
     """The guard on the destructive path.
 
