@@ -176,7 +176,7 @@ FROM fetch AS cli-release
 # empty for the reason upstream's release workflow gives: it replaces the
 # workspace's test-only `--cfg tokio_unstable`. The build is left unstamped
 # (no OMNIGRAPH_RELEASE_CHANNEL), so it never claims to be the stable build.
-FROM rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c AS cli-patched
+FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS cli-patched
 ARG OMNIGRAPH_CLI_PATCH_BASE_TAG
 ARG OMNIGRAPH_CLI_PATCH_BASE_COMMIT
 RUN apt-get update \
