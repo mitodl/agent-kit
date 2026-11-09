@@ -86,6 +86,10 @@ T = TypeVar("T", int, float)
 # advisory lock (prevention) and, as a safety net, retry transient "stale view"
 # conflicts.
 _WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
+# The subcommands witan runs that take the 0.14 CLI's `--as`. `optimize` and
+# `cleanup` are writes the CLI refuses it on (`accepts_actor`,
+# crates/omnigraph-cli/src/planes.rs at v0.14.0).
+_ACTOR_SUBCOMMANDS = {"mutate", "load"}
 # The last two markers are the REMOTE write-authority precondition — a racing
 # writer whose branch head moved between prepare and commit. Over HTTP that
 # arrives as a 409 and `classify_status` keys on the status, which is strictly
@@ -212,10 +216,10 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # cut-off can only end as a torn-down connection. Quoting the server's number
 # in the error is worth more than obeying it into a wall.
 #
-# `too_many_requests` is the 429's wire code. A 0.13 read reports its failure
-# as the JSON error object, code included, so the code covers whatever the
-# server words the cap as (upstream has at least two more spellings than the
-# pair here). A write does not print the code and exits 75 instead; see
+# `too_many_requests` is the 429's wire code. A 0.13 or 0.14 read reports its
+# failure as the JSON error object, code included, so the code covers whatever
+# the server words the cap as (upstream has at least two more spellings than
+# the pair here). A write does not print the code and exits 75 instead; see
 # `_EXIT_RETRY`.
 _ADMISSION_CAP_MARKERS = (
     "in-flight count cap",
@@ -376,6 +380,10 @@ _REMOTE_WRITE_QUEUE_WAIT = 10.0
 #   server discovery connection failed (DNS, TCP, proxy, or TLS); could not
 #   establish omnigraph-http-api: 0.13; this data request was not sent
 #
+# 0.14.0 prints the same sentence with its own contract, `0.14` (measured on
+# the binary for a refused connection, read and write), so the markers below
+# match both.
+#
 # "this data request was not sent" is the property the old markers were
 # standing in for, stated outright, so it is safe for a write too. The
 # timed-out spelling is from upstream's `graph_http.rs` and was not provoked
@@ -388,7 +396,7 @@ _REMOTE_WRITE_QUEUE_WAIT = 10.0
 # out of wording that was not provoked here.
 #
 # The old markers stay: a marker list is matched against whatever binary is
-# installed, and that is 0.11 until the pin moves.
+# installed, which is not always the pinned one.
 _UNAVAILABLE_MARKERS = (
     "tcp connect error",
     "dns error",
@@ -396,11 +404,11 @@ _UNAVAILABLE_MARKERS = (
     "server discovery timed out",
 )
 
-# The 0.13 CLI makes the same check on a data response that
-# `_http.contract_violation` makes for the pooled transport, and reports a
-# failure of it as (upstream `graph_http.rs`, not provoked here):
+# The 0.13 and 0.14 CLIs make the same check on a data response that
+# `_http.contract_violation` makes for the pooled transport, and report a
+# failure of it as (upstream `graph_http.rs` at both tags, not provoked here):
 #
-#   server response did not carry exactly one omnigraph-http-api: 0.13 header;
+#   server response did not carry exactly one omnigraph-http-api: 0.14 header;
 #   this request's effects are unknown; do not retry automatically
 #
 # Classified the same way, so a write over the CLI raises WriteIndeterminate
@@ -408,9 +416,10 @@ _UNAVAILABLE_MARKERS = (
 # sent" instead and do not match.
 _CLI_CONTRACT_VIOLATION = "this request's effects are unknown"
 
-# What a 0.13 server answers, with 503 `graph_unavailable`, for a graph it
-# knows but is not serving YET (upstream `handlers.rs`). Both clear on their
-# own, so they get the same wait as an unreachable server, which is what
+# What a 0.13 or 0.14 server answers, with 503 `graph_unavailable`, for a
+# graph it knows but is not serving YET (upstream `handlers.rs`, unchanged at
+# v0.14.0). Both clear on their own, so they get the same wait as an
+# unreachable server, which is what
 # `classify_status` already gives them over HTTP by status. The third 503 with
 # that code, a graph that failed to open, does not clear until an operator
 # acts; see `_http.is_graph_blocked`.
@@ -421,9 +430,35 @@ _GRAPH_NOT_YET_SERVING = (
 
 # The 0.13 CLI exits with this (EX_TEMPFAIL) for exactly one condition: a
 # single effectful request the server refused with 429 `too_many_requests`
-# before doing anything (upstream `command_outcome.rs`). That is the admission
-# cap, identified without reading prose.
+# before doing anything (upstream `command_outcome.rs`). 0.14 exits 75 for any
+# failure whose disposition is `effects: none, action: retry`
+# (`command_outcome.rs` `exit_for` at v0.14.0): the 429, and also a 503
+# `service_unavailable`/`graph_unavailable` and a request timeout, cancellation
+# or deadline the server refused before doing anything. Nothing ran in any of
+# them, so each is safe to repeat. A 503 gets the restart-length budget below;
+# everything else keeps the admission cap's short one.
 _EXIT_RETRY = 75
+# 0.14's other two new data-command exits (`lib.rs` at v0.14.0). 2 is a
+# failure whose effects are partial or unknown: a write may have landed, so it
+# is never retried. Before 0.14, 2 was also clap's usage exit; a pre-0.14 CLI
+# that refuses its arguments therefore reads as an indeterminate write too,
+# which overstates the risk but never retries. 64 (EX_USAGE) is 0.14's usage
+# refusal: witan built a command line the binary does not accept, which no
+# retry fixes.
+_EXIT_OUTCOME_UNKNOWN = 2
+_EXIT_USAGE = 64
+# 0.14 exits 4 for a failed condition, a refused `--as` included
+# (`Failure::classify`, crates/omnigraph-cli/src/command_outcome.rs at
+# v0.14.0). A write's text output carries no code, so the server's own
+# refusal text tells the two apart: `require_expected_actor`
+# (crates/omnigraph-server/src/handlers.rs) ends both of its messages with
+# "not the expected '<actor>'".
+_EXIT_CONDITION_FAILED = 4
+_ACTOR_MISMATCH_MARKER = ", not the expected '"
+# How a 0.14 write prints the status beside its message ("HTTP 503" on its own
+# line), and how a read's error object carries it.
+_HTTP_503 = re.compile(r'^http 503$|"http_status":\s*503\b', re.MULTILINE)
+_SERVICE_UNAVAILABLE_CODES = ("service_unavailable", "graph_unavailable")
 _UNAVAILABLE_MAX_WAIT = 150.0
 _UNAVAILABLE_BASE_DELAY = 0.5
 _UNAVAILABLE_MAX_DELAY = 10.0
@@ -478,14 +513,32 @@ _FALSEY = {"0", "false", "no", "off"}
 # for the same reason as HTTP_TRANSPORT_ENV_VAR.
 GROUP_COMMIT_ENV_VAR = "WITAN_GROUP_COMMIT"
 
-# A server answer that proves nothing was applied: the engine validates the
-# whole query before any effect, and a resource limit is checked before it too.
-# Only these let a failed group be replayed one write at a time; a failure
-# whose effects are unknown (a mid-flight timeout is FATAL too) must not be.
-# One 400 is NOT proof: omnigraph 0.13 answers a generic DataFusion error with
-# 400 and a "query: " message, and marks it completion-uncertain server-side
-# (`ApiError::from_omni`, omnigraph-server/src/lib.rs), without saying so on
-# the wire. `_DATAFUSION_ERROR_PREFIX` keeps that one out.
+# Which failed group commits are replayed one write at a time. Replaying is
+# only safe when the server applied nothing; a failure whose effects are
+# unknown (a mid-flight timeout is FATAL too) must not be replayed, or a write
+# that landed lands twice.
+#
+# A 0.14 server says so in the error's disposition. `effects: none` is proof.
+# So is `unknown` under one of `_SETTLED_REFUSAL_CODES`, which needs saying
+# because 0.14 reports `unknown` for every refusal inside a write that the
+# engine did not tag, a missing edge endpoint or a missing parameter included
+# (observed against a local 0.14.0 server). At v0.14.0 such a refusal cannot
+# follow a publication: `mutate_one_attempt`
+# (crates/omnigraph/src/exec/mutation.rs) validates before its first durable
+# effect, marks every failure from staging to the publisher `unpublished`,
+# and publishes once, last. The publisher's own failures leave the graph
+# unchanged or are publish-in-doubt, and a write the server could not settle
+# answers 500 `outcome_unknown` instead of its own code
+# (`ApiError::answered_code`, crates/omnigraph-server/src/lib.rs). That is
+# where 0.14 sends the DataFusion error 0.13 sent as a 400.
+_SETTLED_REFUSAL_CODES = frozenset({"bad_request", "payload_too_large"})
+# A server without a disposition (0.13, or a relay) gets the status rule: the
+# engine validates the whole query before any effect, and a resource limit is
+# checked before it too. One 400 is NOT proof there: omnigraph 0.13 answers a
+# generic DataFusion error with 400 and a "query: " message, and marks it
+# completion-uncertain server-side (`ApiError::from_omni`,
+# omnigraph-server/src/lib.rs), without saying so on the wire.
+# `_DATAFUSION_ERROR_PREFIX` keeps that one out.
 _DEFINITE_REJECTION_STATUSES = frozenset({400, 413})
 _DATAFUSION_ERROR_PREFIX = "query: "
 _PRECONDITION_FAILED_STATUS = 412
@@ -741,6 +794,16 @@ class _AttemptResult(NamedTuple):
     retry_after: float | None = None
     #: The HTTP status, when the server answered. HTTP transport only.
     status: int | None = None
+    #: The error body's 0.14 code and disposition. HTTP transport only.
+    disposition: _http.Disposition | None = None
+
+
+def _settled_rejection(disposition: _http.Disposition) -> bool:
+    """Whether a refused write applied nothing, so its group may be replayed
+    one write at a time. See :data:`_SETTLED_REFUSAL_CODES`."""
+    return disposition.effects == "none" or (
+        disposition.effects == "unknown" and disposition.code in _SETTLED_REFUSAL_CODES
+    )
 
 
 def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
@@ -751,6 +814,24 @@ def _attempt_result(outcome: _http.Outcome) -> _AttemptResult:
         error=outcome.error,
         retry_after=outcome.retry_after,
         status=outcome.status,
+        disposition=outcome.disposition,
+    )
+
+
+def _server_answered(result: _AttemptResult) -> bool:
+    """Whether an ``UNAVAILABLE`` attempt reached a server that refused it,
+    rather than failing to reach one.
+
+    The HTTP transport records the status of every error response it read (a
+    read whose body is cut off mid-flight has none, and keeps the "could not
+    connect" wording). A 0.14 CLI exits 75 only for a refusal the server sent
+    (`command_outcome.rs` `exit_for` at v0.14.0; a connect failure exits 1),
+    and a 0.13 CLI reports a not-yet-serving graph in the server's own words.
+    """
+    return (
+        result.status is not None
+        or result.returncode == _EXIT_RETRY
+        or any(m in result.error.lower() for m in _GRAPH_NOT_YET_SERVING)
     )
 
 
@@ -786,15 +867,30 @@ class _CliFailure(NamedTuple):
     classify: str
 
 
+#: The lines 0.14 prints on stderr before every command (upstream
+#: `scope.rs` `report` and `report_write_scope` at v0.14.0). They name the
+#: graph, branch and paths, which a marker without spaces
+#: (``recovery_required``) could match, so they are not classified. The label
+#: is matched up to its provenance rather than as ``\S+``, because an inline
+#: local path can contain spaces.
+_TARGET_REPORT_LINE = re.compile(
+    r"^target (?:write scope: |.+? \((?:explicit|default|inline)\): ).*\n?",
+    re.MULTILINE,
+)
+
+
 def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     """The text of a failed CLI call, wherever the binary put it.
 
     On 0.11 every failure is on stderr. On 0.13 a read made with
     ``--format json`` against a server reports its failure as a JSON object on
     STDOUT and leaves stderr empty (measured on 0.13.0: an unknown graph, a
-    blocked graph and an unreachable server all do). Classifying stderr alone
-    would see nothing, call every one of those FATAL, and raise an error with
-    no message in it.
+    blocked graph and an unreachable server all do). 0.14 does the same for
+    every read, local ones included, but prints the resolved target on stderr
+    first (measured on 0.14.0: "target <store> (inline): direct graph …"), so
+    stderr is never empty there. The error object therefore wins whenever
+    there is one; classifying stderr would see only the target line and call
+    every read failure FATAL, recovery barriers and conflicts included.
 
     Stdout is used ONLY when it is such an error object. Anything else there
     is the command's own output (rows a read printed before it was killed,
@@ -805,14 +901,12 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     :func:`witan_core.omnigraph_http.error_message` renders the same body off
     the wire, so one condition reads the same on either transport.
     """
-    if stderr.strip():
-        return _CliFailure(stderr, stderr)
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError:
-        return _CliFailure(stderr, stderr)
+        return _CliFailure(stderr, _TARGET_REPORT_LINE.sub("", stderr))
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), str):
-        return _CliFailure(stderr, stderr)
+        return _CliFailure(stderr, _TARGET_REPORT_LINE.sub("", stderr))
     status = parsed.get("http_status")
     if isinstance(status, int):
         return _CliFailure(_http.error_message(status, stdout), stdout)
@@ -821,17 +915,51 @@ def _cli_failure(stdout: str, stderr: str) -> _CliFailure:
     return _CliFailure(message, stdout)
 
 
+def _served_disposition(text: str) -> _http.Disposition | None:
+    """The disposition in a 0.14 CLI's JSON error for a request the server
+    answered (one carrying ``http_status``), or ``None``.
+
+    A local store's failure is left to the markers: its code is the CLI's
+    reading of an engine error, which this module has no record of mapping.
+    """
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("http_status"), int):
+        return None
+    return _http.error_disposition(text)
+
+
 def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     """Map an omnigraph CLI failure's text and exit code onto the shared kinds.
 
-    ``stderr`` is :func:`_cli_failure`'s ``classify`` text, which on 0.13 can
-    be the JSON error object the binary printed on stdout.
+    ``stderr`` is :func:`_cli_failure`'s ``classify`` text, which on 0.13 and
+    0.14 can be the JSON error object the binary printed on stdout.
     """
     lowered = stderr.lower()
     # First, because nothing else in a response the CLI itself distrusts
     # should be believed either. See _CLI_CONTRACT_VIOLATION.
     if _CLI_CONTRACT_VIOLATION in lowered:
         return _http.CONTRACT_VIOLATION
+    if returncode == _EXIT_USAGE:
+        return _http.FATAL
+    # Ahead of every retryable reading: the CLI has said a write may have
+    # landed, and a marker in the same text (a dropped connection reads as
+    # "tcp connect error") must not turn that into a retry.
+    if returncode == _EXIT_OUTCOME_UNKNOWN:
+        return _http.OUTCOME_UNKNOWN
+    # A JSON error object (`--format json`, which witan's CLI reads ask for)
+    # for a request the server answered: classified from its code and
+    # disposition, as the HTTP transport classifies the same body. A write
+    # prints text instead (message, `HTTP <status>`, `disposition: {...}`, no
+    # code), and its exit code is the CLI's own reading of that disposition:
+    # 2 above for partial or unknown effects, 75 below for none and retry.
+    served = _served_disposition(stderr)
+    if served is not None:
+        return _http.classify_disposition(served, stderr)
+    if returncode == _EXIT_CONDITION_FAILED and _ACTOR_MISMATCH_MARKER in lowered:
+        return _http.ACTOR_MISMATCH
     if any(m in lowered for m in _UNAVAILABLE_MARKERS):
         return _http.UNAVAILABLE
     # Ahead of the retryable 503 wordings below: all three are the same status
@@ -839,6 +967,11 @@ def _classify_cli_error(stderr: str, returncode: int | None = None) -> str:
     if _http.is_graph_blocked(lowered):
         return _http.FATAL
     if any(m in lowered for m in _GRAPH_NOT_YET_SERVING):
+        return _http.UNAVAILABLE
+    if returncode == _EXIT_RETRY and (
+        _HTTP_503.search(lowered)
+        or any(code in lowered for code in _SERVICE_UNAVAILABLE_CODES)
+    ):
         return _http.UNAVAILABLE
     if returncode == _EXIT_RETRY or any(m in lowered for m in _ADMISSION_CAP_MARKERS):
         return _http.ADMISSION_CAP
@@ -1808,7 +1941,8 @@ def store_write_lock(store: str) -> Iterator[None]:
 
 
 class StoreUnavailable(RuntimeError):
-    """The store could not be reached for the whole ``_UNAVAILABLE_MAX_WAIT`` budget.
+    """The store could not be reached, or its server kept answering that it was
+    unavailable, for the whole ``_UNAVAILABLE_MAX_WAIT`` budget.
 
     A ``RuntimeError`` subclass, so every existing caller keeps catching it
     unchanged; it exists so a caller that can say something *useful* about an
@@ -2039,10 +2173,19 @@ class OmnigraphClient:
         connect_retry: bool = True,
         s3_profile: str | None = None,
         s3_region: str | None = None,
+        *,
+        actor: str | None = None,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
+        # The actor `token` belongs to, for a client built per actor (ADR-0004).
+        # A remote request asserts it (`Omnigraph-If-Actor`, `--as` for a CLI
+        # write), so a token resolved for the wrong actor is refused by the
+        # server instead of writing under someone else's name. Ignored for a
+        # local or s3 store, where `--as` would set the actor instead of
+        # asserting it.
+        self.actor = actor
         self.guard = guard
         self.s3_profile = s3_profile
         self.s3_region = s3_region
@@ -2545,6 +2688,7 @@ class OmnigraphClient:
             verb,
             *self._store_args(),
             *(write_quiet_args(self._binary) if is_write else []),
+            *self._actor_args(verb),
             "-e",
             source,
             *cli_args,
@@ -2572,6 +2716,31 @@ class OmnigraphClient:
         """``_extra_args(verb)`` as request-body fields for ``/query`` or
         ``/mutate``, or ``None`` when one of them has no body field."""
         return _flag_fields(self._extra_args(verb), _STATEMENT_FLAG_FIELDS)
+
+    def _actor_field(self) -> dict[str, str]:
+        """The transport keyword asserting this client's actor, or none.
+
+        Empty without an actor, so a client built without one calls the
+        transport exactly as before.
+        """
+        return {"actor": self.actor} if self.actor and self.is_remote else {}
+
+    def _actor_args(self, subcommand: str) -> list[str]:
+        """``--as <actor>`` for a remote write with a 0.14 CLI, or nothing.
+
+        The 0.14 CLI sends ``--as`` to a served target as
+        ``Omnigraph-If-Actor`` (``accepts_actor``,
+        crates/omnigraph-cli/src/planes.rs at v0.14.0), and refuses it on the
+        read commands, so only the writes witan runs over the CLI take it. A
+        pre-0.14 CLI has no ``--as``.
+        """
+        if (
+            not self._actor_field()
+            or subcommand not in _ACTOR_SUBCOMMANDS
+            or not cli_speaks_targets(self._binary)
+        ):
+            return []
+        return ["--as", self.actor]
 
     # ── Pooled HTTP transport (reads/writes against a deployed server) ──
 
@@ -2698,6 +2867,7 @@ class OmnigraphClient:
         # Empty for an unbranched client, so it calls the transport exactly as
         # before, for the same reason `if_graph_commit` is kept off the call.
         fields = self._statement_fields(verb) if carries_extra_args else {}
+        fields = {**fields, **self._actor_field()}
 
         def attempt() -> _AttemptResult:
             if not is_write:
@@ -2762,7 +2932,8 @@ class OmnigraphClient:
         two actors' writes. It is hashed so the lane table holds no secret. The
         injected args are in it because the lane's leader sends its own
         ``branch``: two of witan-code's views sharing a lane would commit one
-        view's writes to the other.
+        view's writes to the other. The asserted actor is in it for the same
+        reason: the leader sends its own.
         """
         token = self._resolve_token()
         key = (
@@ -2770,6 +2941,7 @@ class OmnigraphClient:
             self.server_url,
             self.graph_id,
             hashlib.sha256(token.encode()).hexdigest() if token else None,
+            self.actor,
             str(self.queries_dir),
             self.connect_retry,
             tuple(self._extra_args("mutate")),
@@ -2851,9 +3023,17 @@ class OmnigraphClient:
             last = attempts[-1] if attempts else None
             if type(exc) is not RuntimeError or last is None:
                 raise
+            if last.kind == _http.ACTOR_MISMATCH:
+                # Also a 412, and every member's: they share the token that
+                # resolved to the wrong actor.
+                raise
             if last.status == _PRECONDITION_FAILED_STATUS:
                 # The fence of a caller that does not surface conflicts.
                 raise ConditionFailed(exc) from exc
+            if last.disposition is not None:
+                if last.kind == _http.FATAL and _settled_rejection(last.disposition):
+                    raise RejectedBatch(exc) from exc
+                raise
             if last.status not in _DEFINITE_REJECTION_STATUSES:
                 raise
             if last.error.lstrip().startswith(_DATAFUSION_ERROR_PREFIX):
@@ -2906,7 +3086,9 @@ class OmnigraphClient:
                 try:
                     with open(out, "wb") as fh:
                         return _attempt_result(
-                            transport.export(self.graph_id, fh, token)
+                            transport.export(
+                                self.graph_id, fh, token, **self._actor_field()
+                            )
                         )
                 except OSError as exc:
                     raise RuntimeError(
@@ -2985,7 +3167,12 @@ class OmnigraphClient:
             def attempt() -> _AttemptResult:
                 return _attempt_result(
                     transport.load_ndjson(
-                        self.graph_id, data, token, mode=mode, **target
+                        self.graph_id,
+                        data,
+                        token,
+                        mode=mode,
+                        **target,
+                        **self._actor_field(),
                     )
                 )
 
@@ -3052,7 +3239,9 @@ class OmnigraphClient:
 
             def attempt() -> _AttemptResult:
                 return _attempt_result(
-                    transport.commits(self.graph_id, token, branch=branch)
+                    transport.commits(
+                        self.graph_id, token, branch=branch, **self._actor_field()
+                    )
                 )
 
             result = self._with_retry_policy(attempt, "commit list", is_write=False)
@@ -3093,6 +3282,7 @@ class OmnigraphClient:
             subcommand,
             *self._store_args(),
             *quiet,
+            *self._actor_args(subcommand),
             *self._extra_args(subcommand),
             *args,
         ]
@@ -3296,10 +3486,16 @@ class OmnigraphClient:
                         )
                     )
                     continue
+                cause = (
+                    f"{self.server_url} answered but kept refusing it as "
+                    "unavailable, so look at the server's state rather than "
+                    "the network"
+                    if _server_answered(result)
+                    else f"could not connect to {self.server_url}"
+                )
                 raise StoreUnavailable(
                     f"omnigraph {label} failed after {unavailable_attempt} "
-                    f"attempts over {elapsed:.0f}s — could not connect to "
-                    f"{self.server_url}:\n{err.strip()}"
+                    f"attempts over {elapsed:.0f}s: {cause}:\n{err.strip()}"
                 )
             if kind == _http.ADMISSION_CAP:
                 # Independent budget/backoff from the drift retries below —
@@ -3366,6 +3562,22 @@ class OmnigraphClient:
                     f"write may or may not have been applied. Re-read before "
                     f"retrying:\n{err.strip()}"
                 ) from None
+            if kind == _http.OUTCOME_UNKNOWN and is_write:
+                # The CLI exited 2, or the server's disposition said partial
+                # or unknown effects: nobody can tell whether the write took
+                # effect. Anything else falls through to the RuntimeError
+                # below, unretried.
+                said = (
+                    f"exited {result.returncode}, which omnigraph uses"
+                    if result.returncode is not None
+                    else f"got HTTP {result.status} with a disposition"
+                )
+                raise WriteIndeterminate(
+                    f"omnigraph {label} {said} for partial or unknown effects. "
+                    f"ITS OUTCOME IS INDETERMINATE: the write may or may not "
+                    f"have been applied. Re-read before retrying:\n"
+                    f"{err.strip()}"
+                ) from None
             if kind == _http.RECOVERY_REQUIRED:
                 # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one
                 # response covers both an effect-free bystander barrier and
@@ -3400,6 +3612,18 @@ class OmnigraphClient:
                     f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
                     f"attempts — a recovery barrier on the branch kept "
                     f"blocking the read:\n{err.strip()}"
+                )
+            if kind == _http.ACTOR_MISMATCH:
+                # TERMINAL, and never a lost race even for a CAS caller: the
+                # server refused before doing anything because the token
+                # resolves to someone else, and a re-read does not change
+                # which token this client holds.
+                raise RuntimeError(
+                    f"omnigraph {label} was refused because this client's "
+                    f"bearer token does not belong to {self.actor!r}. NOTHING "
+                    f"WAS WRITTEN. The actor-to-token mapping is wrong for this "
+                    f"actor; retrying with the same token gets the same "
+                    f"refusal:\n{err.strip()}"
                 )
             if kind == _http.PRECONDITION_FAILED:
                 # TERMINAL. The caller stated a precondition and it was

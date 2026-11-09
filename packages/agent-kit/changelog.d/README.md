@@ -5,7 +5,7 @@ to `../CHANGELOG.md` — parallel branches editing the same lines in one shared
 file is what caused the version/changelog drift `bin/check_versions.py`
 exists to catch.
 
-Add one with `just changelog ol-agent-kit` (or `uvx scriv@1.8.0 create` from
+Add one with `just changelog ol-agent-kit` (or `uvx scriv@1.8.1 create` from
 this directory's parent), fill in whichever category section(s) apply, and
 commit the file alongside your change. `just bump ol-agent-kit <part>` folds
 every pending fragment into `../CHANGELOG.md` under the new version heading

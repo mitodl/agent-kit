@@ -1,0 +1,625 @@
+omnigraph cleanup: take __manifest version numbers from the listing.
+
+Backport of https://github.com/ModernRelay/omnigraph/pull/1188 (merge commit
+269299b757f9dcce1a9a45449ebbaefa054b4be3) onto the v0.14.0 tag
+(60bfd19db780fdff3a5178f959c1204143420114). Stock v0.14.0 cleanup reads and
+decodes every __manifest version of every live branch, one at a time, on every
+run. With this, every policy takes version numbers from the _versions/ listing:
+--keep N alone reads only the manifests it retains and the merge base, and
+--older-than reads the versions its cutoff decides, concurrently. It also
+changes two refusals: --keep N alone prunes a dropped commit whose manifest
+can't be read instead of stopping, and a listed version whose manifest body
+names another version is refused.
+
+Its crates/ hunks apply to v0.14.0 as they are (three at line offsets), and touch
+none of the files omnigraph-cli-inline-s3-root.patch does, so this is that diff
+regenerated against the tag. Its docs/ and changelog.d/ hunks are left out.
+
+docker/omnigraph-server.Dockerfile's cli-patched stage applies it with
+`git apply`, which skips this header. Delete this file, and its COPY and
+`git apply` lines, once the release the Dockerfile's OMNIGRAPH_RELEASE_TAG pins
+carries #1188.
+
+diff --git a/crates/omnigraph-catalog/src/lib.rs b/crates/omnigraph-catalog/src/lib.rs
+index 8523d4e..9377b5d 100644
+--- a/crates/omnigraph-catalog/src/lib.rs
++++ b/crates/omnigraph-catalog/src/lib.rs
+@@ -1179,20 +1179,61 @@ impl CollectorBranch {
+         .with_registry(Arc::new(rows.registry), &self.dataset))
+     }
+ 
+-    /// The version history up to the opened version; a version published
+-    /// after the open is listed by the store and dropped here.
+-    pub async fn versions(&self) -> Result<Vec<lance::dataset::Version>> {
++    /// The attached version numbers up to the opened version, ascending, from
++    /// the `_versions/` listing alone: `Dataset::version_refs` reads no
++    /// manifest (`Dataset::versions` reads and decodes every one, one after
++    /// another). A version published after the open is listed by the store
++    /// and dropped here.
++    pub async fn version_numbers(&self) -> Result<Vec<u64>> {
+         let head = self.head_version();
+         Ok(self
+             .dataset
+-            .versions()
++            .version_refs()
+             .await
+             .map_err(OmniError::storage)?
+             .into_iter()
+-            .filter(|version| version.version <= head)
++            .map(|version| version.version)
++            .filter(|version| *version <= head)
+             .collect())
+     }
+ 
++    /// The listed `versions`' manifests, read through the opened branch in
++    /// the order given, as many at once as the store's I/O parallelism allows
++    /// (Lance's own bound: 8 on a local store, 64 on object storage). Each
++    /// read resolves the version's manifest path with a HEAD (V2, else V1),
++    /// then reads the manifest. A manifest whose body names another version
++    /// than the listed path it was read from is refused: `checkout_version`
++    /// does not compare them, and a caller keyed by the body's number would
++    /// lose the listed version.
++    pub async fn read_versions(&self, versions: &[u64]) -> Result<Vec<lance::dataset::Version>> {
++        use futures::{StreamExt, TryStreamExt};
++        let concurrency = self
++            .dataset
++            .object_store(None)
++            .await
++            .map_err(OmniError::storage)?
++            .io_parallelism();
++        futures::stream::iter(versions.iter().copied())
++            .map(|version| async move {
++                let read = self
++                    .dataset
++                    .checkout_version(version)
++                    .await
++                    .map_err(OmniError::storage)?
++                    .version();
++                if read.version != version {
++                    return Err(OmniError::manifest_internal(format!(
++                        "__manifest version {version} holds a manifest of version {}",
++                        read.version
++                    )));
++                }
++                Ok(read)
++            })
++            .buffered(concurrency.max(1))
++            .try_collect()
++            .await
++    }
++
+     /// Every pin the branch has held up to the opened version.
+     pub async fn rows(&self) -> Result<Vec<DatasetEntry>> {
+         state::read_manifest_entries(&self.root_uri, &self.dataset).await
+diff --git a/crates/omnigraph-dst/cost_table.txt b/crates/omnigraph-dst/cost_table.txt
+index 65920e4..f9bf04f 100644
+--- a/crates/omnigraph-dst/cost_table.txt
++++ b/crates/omnigraph-dst/cost_table.txt
+@@ -9,7 +9,7 @@ BranchDelete                 l.get        calls=26
+ BranchDelete                 l.list       calls=6
+ BranchDelete                 l.put        calls=2
+ Cleanup                      l.delete     calls=20
+-Cleanup                      l.get        calls=163
++Cleanup                      l.get        calls=147
+ Cleanup                      l.list       calls=164
+ DeletePerson                 l.get        calls=6
+ EnsureIndices                l.get        calls=6
+@@ -32,7 +32,7 @@ _audit                       a.delete     calls=1
+ _audit                       a.get        calls=2
+ _audit                       a.list       calls=2
+ _audit                       a.put_if_absent calls=1
+-_audit                       l.get        calls=693
++_audit                       l.get        calls=679
+ _audit                       l.list       calls=92
+ _close                       l.get        calls=3
+ _history                     l.get        calls=30
+@@ -44,7 +44,7 @@ _setup                       l.get        calls=40
+ _setup                       l.list       calls=13
+ _setup                       l.put        calls=35
+ _verify                      a.get        calls=10
+-_verify                      l.get        calls=1520
++_verify                      l.get        calls=1488
+ _verify                      l.list       calls=254
+ MergeTargetHistory2          l.delete     calls=3
+ MergeTargetHistory2          l.get        calls=100
+diff --git a/crates/omnigraph/src/db/omnigraph/collector.rs b/crates/omnigraph/src/db/omnigraph/collector.rs
+index f803fd8..1ae0596 100644
+--- a/crates/omnigraph/src/db/omnigraph/collector.rs
++++ b/crates/omnigraph/src/db/omnigraph/collector.rs
+@@ -24,8 +24,9 @@ use super::promotion::{open_at, table_location};
+ 
+ decide_seam! {
+     /// Inside the collector's read of one live branch's `__manifest`, after
+-    /// its version history and before its registration rows; both come from
+-    /// one open, so a publication landing here is invisible to both.
++    /// its version listing and before the commit times and registration rows
++    /// it reads; all come from one open, so a publication landing here is
++    /// invisible to every one of them.
+     pub static CLEANUP_COLLECTOR_MID_BRANCH_READ = ("cleanup.collector_mid_branch_read", Unreachable, [Fail]);
+ }
+ 
+@@ -70,6 +71,11 @@ pub struct CollectorCost {
+     /// `__manifest` reads: one per live branch at HEAD plus one per retained
+     /// version below HEAD.
+     pub manifest_snapshots: u64,
++    /// `__manifest` versions read for their commit time: under a cutoff,
++    /// each live branch's versions the newest-N / HEAD / base rule does not
++    /// already retain; none without one. The version numbers come from the
++    /// `_versions/` listing, which reads no manifest.
++    pub manifest_time_reads: u64,
+     /// HEAD reads that prove the captured branch snapshots coexisted.
+     pub manifest_rechecks: u64,
+     /// Listings: per table location its `_versions/` once, then its objects
+@@ -711,41 +717,66 @@ fn incarnation_key(identifier: &lance::dataset::refs::BranchIdentifier) -> Resul
+     })
+ }
+ 
+-/// The `__manifest` versions `keep` and `cutoff` retain: the newest-N /
+-/// newer-than rule of Lance's `cleanup_old_versions`, applied to graph commits
+-/// (`__manifest` versions) per branch rather than to a table's Lance versions.
+-/// HEAD is always among them and, with
+-/// `keep_base` (a graph branch, deleting), its oldest: the fork-point merge base.
+-fn retained_versions(
+-    versions: &[lance::dataset::Version],
++/// The `__manifest` versions of one live branch that `keep` and `cutoff`
++/// retain, and the ones they prune, both ascending: the newest-N /
++/// newer-than rule of Lance's `cleanup_old_versions`, applied to graph
++/// commits (`__manifest` versions) per branch rather than to a table's Lance
++/// versions. HEAD is always among them and, with `keep_base` (a graph branch,
++/// deleting), its oldest: the fork-point merge base.
++///
++/// Every policy takes the version numbers from the `_versions/` listing,
++/// which reads no manifest (Lance's `retain_n_versions` does the same,
++/// lance#9019). A commit time is read only where it decides: for the
++/// versions the newest-N / HEAD / base rule leaves undecided, and only under
++/// a cutoff. Manifest times are not monotonic in the version (each writer
++/// stamps its own clock), so every undecided version is read, as many at
++/// once as the store's I/O parallelism allows.
++async fn retained_versions(
++    opened: &CollectorBranch,
+     keep: Option<u32>,
+     cutoff: Option<chrono::DateTime<chrono::Utc>>,
+     keep_base: bool,
+-) -> (Vec<u64>, Vec<u64>) {
+-    let mut sorted: Vec<&lance::dataset::Version> = versions.iter().collect();
+-    sorted.sort_by_key(|version| version.version);
+-    let Some(head) = sorted.last().map(|version| version.version) else {
+-        return (Vec::new(), Vec::new());
++    cost: &mut CollectorCost,
++) -> Result<(Vec<u64>, Vec<u64>)> {
++    let versions = opened.version_numbers().await?;
++    fail(&CLEANUP_COLLECTOR_MID_BRANCH_READ)?;
++    let (mut retained, undecided) = retained_by_position(&versions, keep, keep_base);
++    let Some(cutoff) = cutoff else {
++        return Ok((retained, undecided));
+     };
+-    let base = sorted.first().map(|version| version.version);
+-    let floor = keep.map(|keep| {
+-        let retain = (keep as usize).max(1);
+-        sorted[sorted.len().saturating_sub(retain)].version
+-    });
+-    let mut retained = Vec::new();
++    cost.manifest_time_reads += undecided.len() as u64;
+     let mut would_prune = Vec::new();
+-    for version in sorted {
+-        let kept = version.version == head
+-            || (keep_base && Some(version.version) == base)
+-            || floor.is_some_and(|floor| version.version >= floor)
+-            || cutoff.is_some_and(|cutoff| version.timestamp >= cutoff);
+-        if kept {
+-            retained.push(version.version);
++    let read = opened.read_versions(&undecided).await?;
++    for (listed, manifest) in undecided.into_iter().zip(read) {
++        if manifest.timestamp >= cutoff {
++            retained.push(listed);
+         } else {
+-            would_prune.push(version.version);
++            would_prune.push(listed);
+         }
+     }
+-    (retained, would_prune)
++    retained.sort_unstable();
++    Ok((retained, would_prune))
++}
++
++/// The part of the retention rule that version numbers decide: HEAD, the
++/// newest `keep` and, with `keep_base`, the oldest are retained; the rest,
++/// ascending, are left to the cutoff, and pruned without one.
++fn retained_by_position(
++    versions: &[u64],
++    keep: Option<u32>,
++    keep_base: bool,
++) -> (Vec<u64>, Vec<u64>) {
++    let mut sorted = versions.to_vec();
++    sorted.sort_unstable();
++    let (Some(&base), Some(&head)) = (sorted.first(), sorted.last()) else {
++        return (Vec::new(), Vec::new());
++    };
++    let floor = keep.map(|keep| sorted[sorted.len().saturating_sub((keep as usize).max(1))]);
++    sorted.into_iter().partition(|&version| {
++        version == head
++            || (keep_base && version == base)
++            || floor.is_some_and(|floor| version >= floor)
++    })
+ }
+ 
+ /// Per table location, the staged pins as `(staged version, linear twin)`
+@@ -1018,10 +1049,14 @@ pub(crate) async fn plan_collection(
+                 .insert(incarnation.to_string());
+         }
+         let head_version = opened.head_version();
+-        let versions = opened.versions().await?;
+-        fail(&CLEANUP_COLLECTOR_MID_BRANCH_READ)?;
+-        let (retained, would_prune) =
+-            retained_versions(&versions, options.keep_versions, cutoff, branch.is_some());
++        let (retained, would_prune) = retained_versions(
++            &opened,
++            options.keep_versions,
++            cutoff,
++            branch.is_some(),
++            &mut report.cost,
++        )
++        .await?;
+         for entry in opened.rows().await? {
+             let full_path = format!("{}/{}", db.root_uri(), entry.dataset_path);
+             let location = table_location(&full_path, entry.native_dataset_branch.as_deref());
+@@ -3205,3 +3240,45 @@ mod unattached_release_order_tests {
+         assert!(unattached_release_order(&cyclic, &[record("c_kept", "z", "x", "c")]).is_empty());
+     }
+ }
++
++#[cfg(test)]
++mod retention_tests {
++    use super::retained_by_position;
++
++    /// HEAD always; the newest `keep` (at least one); the oldest only for a
++    /// graph branch; everything else is left to the cutoff, ascending, and
++    /// the listing's order does not matter.
++    #[test]
++    fn version_numbers_decide_head_newest_and_base() {
++        let listed = [4, 1, 5, 2, 3];
++        assert_eq!(
++            retained_by_position(&[], Some(2), true),
++            (Vec::new(), Vec::new())
++        );
++        assert_eq!(
++            retained_by_position(&listed, None, false),
++            (vec![5], vec![1, 2, 3, 4])
++        );
++        assert_eq!(
++            retained_by_position(&listed, Some(2), false),
++            (vec![4, 5], vec![1, 2, 3])
++        );
++        assert_eq!(
++            retained_by_position(&listed, Some(0), false),
++            (vec![5], vec![1, 2, 3, 4]),
++            "a zero keep still keeps HEAD"
++        );
++        assert_eq!(
++            retained_by_position(&listed, Some(9), false),
++            (vec![1, 2, 3, 4, 5], Vec::new())
++        );
++        assert_eq!(
++            retained_by_position(&listed, Some(2), true),
++            (vec![1, 4, 5], vec![2, 3])
++        );
++        assert_eq!(
++            retained_by_position(&[7], None, true),
++            (vec![7], Vec::new())
++        );
++    }
++}
+diff --git a/crates/omnigraph/tests/integration/maintenance.rs b/crates/omnigraph/tests/integration/maintenance.rs
+index 15afbc9..bf8470a 100644
+--- a/crates/omnigraph/tests/integration/maintenance.rs
++++ b/crates/omnigraph/tests/integration/maintenance.rs
+@@ -5,7 +5,8 @@
+ 
+ use crate::helpers;
+ 
+-use std::collections::BTreeSet;
++use std::collections::{BTreeMap, BTreeSet};
++use std::sync::Arc;
+ use std::time::Duration;
+ 
+ use arrow_array::{Array, LargeBinaryArray, StringArray};
+@@ -13,13 +14,17 @@ use base64::Engine;
+ use futures::TryStreamExt;
+ use lance::Dataset;
+ use lance::dataset::optimize::{CompactionOptions, compact_files};
++use lance::io::WrappingObjectStore;
+ use lance_core::datatypes::BlobHandling;
++use lance_io::utils::tracking_store::IOTracker;
++use lance_table::io::commit::ManifestNamingScheme;
+ use omnigraph::IndexCoverage;
+ use omnigraph::db::{
+     CleanupPolicyOptions, MergeOutcome, Omnigraph, ReadTarget, RepairAction, RepairClassification,
+     RepairOptions, SnapshotId,
+ };
+ use omnigraph::error::{BranchStartRefusal, OmniError};
++use omnigraph::instrumentation::{QueryIoProbes, with_query_io_probes};
+ use omnigraph::loader::LoadMode;
+ use omnigraph::{ExternalBlobBase, ExternalBlobExecutionScope, ExternalBlobPolicy};
+ 
+@@ -4115,6 +4120,10 @@ async fn collector_cost_is_bounded_by_retained_versions_and_garbage_examined() {
+         "root marking reads one `__manifest` snapshot per retained version plus at most one HEAD per live branch; {} exceed retained {retained} + live {live}",
+         report.cost.manifest_snapshots
+     );
++    assert_eq!(
++        report.cost.manifest_time_reads, 0,
++        "--keep alone decides retention from the version listing, reading no commit time"
++    );
+     assert_eq!(
+         report.cost.manifest_rechecks, live,
+         "coherent capture revalidates each live branch exactly once"
+@@ -4171,6 +4180,270 @@ async fn collector_cost_is_bounded_by_retained_versions_and_garbage_examined() {
+     );
+ }
+ 
++/// Attached `__manifest` versions by live branch: `None` for main's
++/// `__manifest/_versions/`, the branch's logical name for
++/// `__manifest/tree/<branch>.<incarnation>/_versions/`.
++type ManifestVersions = BTreeMap<Option<String>, BTreeSet<u64>>;
++
++fn attached_manifest_version(path: &str) -> Option<(Option<String>, u64)> {
++    let start = path.find("__manifest")?;
++    let (dir, file) = path[start..].rsplit_once("/_versions/")?;
++    let version = ManifestNamingScheme::detect_scheme(file)
++        .filter(|_| !file.starts_with('d'))?
++        .parse_version(file)?;
++    let branch = match dir.strip_prefix("__manifest/tree/") {
++        Some(tree) => Some(tree.rsplit_once('.')?.0.to_string()),
++        None if dir == "__manifest" => None,
++        None => return None,
++    };
++    Some((branch, version))
++}
++
++fn attached_manifests_on_disk(root: &std::path::Path) -> ManifestVersions {
++    let mut versions = ManifestVersions::new();
++    let mut pending = vec![root.join("__manifest")];
++    while let Some(dir) = pending.pop() {
++        for entry in std::fs::read_dir(&dir).unwrap() {
++            let path = entry.unwrap().path();
++            if path.is_dir() {
++                pending.push(path);
++            } else if let Some((branch, version)) =
++                attached_manifest_version(path.to_str().unwrap())
++            {
++                versions.entry(branch).or_default().insert(version);
++            }
++        }
++    }
++    versions
++}
++
++/// Plan `options` and return the attached `__manifest` versions whose
++/// manifest the plan read, from the request log of every `__manifest` store it opened (a
++/// store's own tracker also sees Lance's direct local reads).
++async fn plan_reading_manifests(
++    db: &Omnigraph,
++    options: CleanupPolicyOptions,
++) -> (omnigraph::db::CollectorReport, ManifestVersions) {
++    let probes = QueryIoProbes {
++        manifest_wrapper: Some(Arc::new(IOTracker::default()) as Arc<dyn WrappingObjectStore>),
++        ..Default::default()
++    };
++    let stores = probes.manifest_stores.clone();
++    let report = with_query_io_probes(probes, db.cleanup_plan(options))
++        .await
++        .unwrap();
++    let mut read = ManifestVersions::new();
++    for store in stores.stores() {
++        for request in store.io_stats_incremental().requests {
++            if let Some((branch, version)) = attached_manifest_version(request.path.as_ref()) {
++                read.entry(branch).or_default().insert(version);
++            }
++        }
++    }
++    (report, read)
++}
++
++/// Issue 644: every policy takes each live branch's `__manifest` version
++/// numbers from the `_versions/` listing. `--keep` alone reads the manifests
++/// of the versions it retains and of the merge base, however long the history
++/// grows; `--older-than` reads the commit time of exactly the versions
++/// `--keep` leaves undecided. With a
++/// zero age window the cutoff retains nothing `--keep` does not, so both
++/// policies plan the same retention and the same sweep, at both depths.
++#[tokio::test]
++async fn cleanup_plans_from_the_manifest_listing_issue_644() {
++    let dir = tempfile::tempdir().unwrap();
++    let db = init_and_load(&dir).await;
++    for name in ["Eve", "Frank", "Grace", "Heidi"] {
++        insert_person(&db, "main", name).await;
++    }
++    db.branch_create("feature").await.unwrap();
++    for name in ["Ivan", "Judy", "Mallory"] {
++        insert_person(&db, "feature", name).await;
++    }
++    insert_person(&db, "main", "Niaj").await;
++    let keep = CleanupPolicyOptions {
++        keep_versions: Some(2),
++        older_than: None,
++    };
++    let aged = CleanupPolicyOptions {
++        keep_versions: Some(2),
++        older_than: Some(Duration::ZERO),
++    };
++
++    let mut time_reads = Vec::new();
++    for later in [
++        &[][..],
++        &["Olivia", "Peggy", "Rupert", "Sybil", "Trent", "Victor"][..],
++    ] {
++        for name in later {
++            insert_person(&db, "main", name).await;
++        }
++        let on_disk = attached_manifests_on_disk(dir.path());
++        assert_eq!(
++            on_disk.keys().cloned().collect::<Vec<_>>(),
++            vec![None, Some("feature".to_string())],
++            "main and the feature tree: {on_disk:?}"
++        );
++        let (keep_plan, keep_read) = plan_reading_manifests(&db, keep.clone()).await;
++        let (aged_plan, aged_read) = plan_reading_manifests(&db, aged.clone()).await;
++        assert_eq!(
++            keep_plan.cost.manifest_time_reads, 0,
++            "--keep alone reads no commit time"
++        );
++
++        // The feature tree's oldest version is main's commit at the fork, the
++        // merge base of the two heads, which cleanup retains on its own rule.
++        let fork = *on_disk[&Some("feature".to_string())].first().unwrap();
++        let mut pruned_total = 0;
++        for (branch, versions) in &on_disk {
++            let row = retained_on(&keep_plan, branch.as_deref());
++            let retained = row.retained.iter().copied().collect::<BTreeSet<_>>();
++            let pruned = row.would_prune.iter().copied().collect::<BTreeSet<_>>();
++            assert_eq!(
++                &retained.union(&pruned).copied().collect::<BTreeSet<_>>(),
++                versions,
++                "{branch:?}: the listing names every attached manifest"
++            );
++            assert!(!pruned.is_empty(), "{branch:?}: {row:?}");
++            pruned_total += pruned.len() as u64;
++            let mut kept = retained.clone();
++            if branch.is_none() {
++                kept.insert(fork);
++            }
++            assert_eq!(
++                keep_read.get(branch).cloned().unwrap_or_default(),
++                kept,
++                "{branch:?}: --keep reads the manifests of the versions it retains \
++                 and of the merge base {fork}, and no other"
++            );
++            let read = aged_read.get(branch).cloned().unwrap_or_default();
++            assert!(
++                pruned.is_subset(&read),
++                "{branch:?}: the cutoff reads each undecided version for its time: \
++                 read {read:?}, pruned {pruned:?}"
++            );
++        }
++        assert_eq!(
++            aged_plan.cost.manifest_time_reads, pruned_total,
++            "the cutoff reads the time of the versions below the --keep floor, \
++             other than HEAD and a branch's base, and no other"
++        );
++        time_reads.push(aged_plan.cost.manifest_time_reads);
++
++        for branch in [None, Some("feature")] {
++            let (keep_row, aged_row) = (
++                retained_on(&keep_plan, branch),
++                retained_on(&aged_plan, branch),
++            );
++            assert_eq!(keep_row.retained, aged_row.retained, "{branch:?}");
++            assert_eq!(keep_row.would_prune, aged_row.would_prune, "{branch:?}");
++        }
++        let sweep = |report: &omnigraph::db::CollectorReport| {
++            report
++                .tables
++                .iter()
++                .map(|plan| {
++                    assert!(
++                        plan.errors.is_empty(),
++                        "{}: {:?}",
++                        plan.location,
++                        plan.errors
++                    );
++                    (
++                        plan.location.clone(),
++                        (
++                            plan.roots.clone(),
++                            plan.linear_roots.clone(),
++                            plan.sweep.clone(),
++                            plan.sweep_paths.clone(),
++                        ),
++                    )
++                })
++                .collect::<BTreeMap<_, _>>()
++        };
++        let keep_sweep = sweep(&keep_plan);
++        assert!(
++            keep_sweep
++                .values()
++                .any(|(_, _, sweep, _)| !sweep.is_empty()),
++            "the fixture has table versions to sweep: {keep_sweep:?}"
++        );
++        assert_eq!(keep_sweep, sweep(&aged_plan));
++    }
++    assert_eq!(
++        time_reads[1],
++        time_reads[0] + 6,
++        "the cutoff's time reads grow with main's history, one per new commit"
++    );
++
++    // A manifest below the floor that is not the merge base is not read by
++    // `--keep`, so a broken one leaves its plan unchanged; the cutoff reads
++    // it for its time and refuses. Each plan opens a fresh handle, so no
++    // session cache stands in for the store.
++    let uri = dir.path().to_str().unwrap().to_string();
++    let plan = |options: CleanupPolicyOptions| {
++        let uri = uri.clone();
++        async move {
++            let fresh = Omnigraph::open(&uri).await.unwrap();
++            fresh.cleanup_plan(options).await
++        }
++    };
++    let outcome = |report: &omnigraph::db::CollectorReport| {
++        let rows = [None, Some("feature")].map(|branch| {
++            let row = retained_on(report, branch);
++            (row.retained.clone(), row.would_prune.clone())
++        });
++        let sweep = report
++            .tables
++            .iter()
++            .map(|plan| {
++                (
++                    plan.location.clone(),
++                    (plan.roots.clone(), plan.sweep.clone()),
++                )
++            })
++            .collect::<BTreeMap<_, _>>();
++        (rows, sweep)
++    };
++    let main_manifest = |version: u64| {
++        std::fs::read_dir(dir.path().join("__manifest/_versions"))
++            .unwrap()
++            .map(|entry| entry.unwrap().path())
++            .find(|path| attached_manifest_version(path.to_str().unwrap()) == Some((None, version)))
++            .unwrap()
++    };
++    let before = outcome(&plan(keep.clone()).await.unwrap());
++    let fork = *attached_manifests_on_disk(dir.path())[&Some("feature".to_string())]
++        .first()
++        .unwrap();
++    let (_, pruned) = &before.0[0];
++    let (body_swapped, garbage) = (pruned[1], pruned[0]);
++    assert!(
++        garbage < body_swapped && body_swapped < fork,
++        "{pruned:?}, fork {fork}"
++    );
++
++    std::fs::copy(main_manifest(body_swapped + 1), main_manifest(body_swapped)).unwrap();
++    assert_eq!(outcome(&plan(keep.clone()).await.unwrap()), before);
++    let error = plan(aged.clone()).await.unwrap_err();
++    assert!(
++        error.to_string().contains(&format!(
++            "__manifest version {body_swapped} holds a manifest of version {}",
++            body_swapped + 1
++        )),
++        "the cutoff refuses a manifest whose body names another version: {error}"
++    );
++
++    std::fs::write(main_manifest(garbage), b"not a manifest").unwrap();
++    assert_eq!(outcome(&plan(keep).await.unwrap()), before);
++    let error = plan(aged).await.unwrap_err();
++    assert!(
++        error.storage_failure().is_some(),
++        "the cutoff refuses a manifest it cannot decode: {error}"
++    );
++}
++
+ /// Object ages and physical reclamation need filesystem assertions beyond GQT.
+ #[tokio::test]
+ async fn collector_reclaims_aged_orphans_without_deleting_recent_blob_sidecars() {

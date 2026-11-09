@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import socket
 import ssl
 import threading
@@ -53,7 +54,7 @@ import time
 import urllib.parse
 from typing import BinaryIO, NamedTuple
 
-from .omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
+_log = logging.getLogger(__name__)
 
 # Classification vocabulary shared with the subprocess path. `_execute` maps a
 # subprocess's stderr onto these same names, so a condition is handled
@@ -83,6 +84,18 @@ OK = "ok"
 #: that it "is never replayed by the insert-only reprepare loop", and this
 #: classification is what makes that true on our side too.
 PRECONDITION_FAILED = "precondition_failed"
+
+#: The request's credential resolves to another actor than its
+#: :data:`IF_ACTOR_HEADER` names: omnigraph 0.14's ``412 actor_mismatch``,
+#: refused before graph lookup or any effect.
+#:
+#: ★ ITS OWN KIND BECAUSE IT SHARES 412 WITH :data:`PRECONDITION_FAILED` AND
+#: MEANS SOMETHING ELSE. A failed precondition says the graph moved, so the
+#: caller re-reads and decides again (and a compare-and-swap caller loses
+#: the race). This says witan holds the wrong token for the actor it is
+#: serving, which no re-read fixes and which must never read as a lost race.
+#: Terminal, and nothing was written.
+ACTOR_MISMATCH = "actor_mismatch"
 
 #: A full-text index whose analyzer generation cannot be proven compatible with
 #: the running engine — omnigraph 0.10.0's ``FullTextIndexRebuildRequired``,
@@ -145,6 +158,33 @@ RECOVERY_REQUIRED = "recovery_required"
 #: write: nothing in such a response says whether the write was applied.
 CONTRACT_VIOLATION = "contract_violation"
 
+#: The command's effects are partial or unknown, so a write may have landed:
+#: the omnigraph 0.14 CLI exited 2, or a write's error body carried a
+#: disposition in :data:`INDETERMINATE_EFFECTS`. Never retried, and a write
+#: raises ``WriteIndeterminate``, as for :data:`CONTRACT_VIOLATION`.
+OUTCOME_UNKNOWN = "outcome_unknown"
+
+#: The 0.14 ``disposition.effects`` values that say a refused request may
+#: still have changed the graph. Upstream answers a ``/load`` whose fork
+#: published before its rows were refused with HTTP 409 and ``partial``
+#: (crates/omnigraph-server/tests/integration/data_routes.rs at v0.14.0), and
+#: the 409 rule in :func:`classify_status` would otherwise replay it.
+INDETERMINATE_EFFECTS = frozenset({"partial", "unknown"})
+
+#: The 0.14 code for a write the server could not settle. The server answers
+#: it (HTTP 500) in place of the failing step's own code whenever it marked
+#: the failure completion-uncertain (``ApiError::answered_code``,
+#: crates/omnigraph-server/src/lib.rs at v0.14.0), so a DataFusion error
+#: inside a write, which 0.13 sent as a plain 400, arrives as this.
+OUTCOME_UNKNOWN_CODE = "outcome_unknown"
+
+#: The 0.14 code for a refused :data:`IF_ACTOR_HEADER` assertion.
+ACTOR_MISMATCH_CODE = "actor_mismatch"
+
+#: The kinds the policy loop retries for a write, which a disposition in
+#: :data:`INDETERMINATE_EFFECTS` turns into :data:`OUTCOME_UNKNOWN`.
+_REPLAYED_KINDS = frozenset({RETRYABLE, UNAVAILABLE, ADMISSION_CAP})
+
 #: The conditional-write precondition header (upstream #470). Sent raw and
 #: exactly once, and ONLY to the dedicated routes below — the ordinary
 #: ``/mutate`` rejects it outright rather than ignoring an unknown header,
@@ -154,6 +194,17 @@ IF_GRAPH_COMMIT_HEADER = "Omnigraph-If-Graph-Commit"
 #: Path suffix selecting the conditional variant of a write route.
 IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
 
+#: HTTP contract 0.14's actor assertion: the actor the caller expects its
+#: bearer token to resolve to. A 0.14 server refuses a request whose
+#: credential resolves to anyone else with ``412 actor_mismatch``, after
+#: authentication and before graph lookup or any effect
+#: (``require_expected_actor``, crates/omnigraph-server/src/handlers.rs at
+#: v0.14.0). A 0.13 server ignores it (sent locally to 0.13.0: the request
+#: ran as if it were absent), so it is sent whatever contract the transport
+#: speaks, and asserts nothing there. An unauthenticated server resolves no
+#: actor and refuses every request that carries it.
+IF_ACTOR_HEADER = "Omnigraph-If-Actor"
+
 #: The HTTP contract discriminator omnigraph-server 0.12 introduced. Every
 #: protected route (everything this module calls; ``/healthz`` and ``/readyz``
 #: are public) answers ``400 api_contract_mismatch`` unless the request
@@ -161,20 +212,43 @@ IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
 #: server stamps the same header on every response, errors included.
 HTTP_API_CONTRACT_HEADER = "Omnigraph-Http-Api"
 
-#: The contract this client speaks. Upstream keeps it separate from the
-#: package version (``omnigraph-api-types``: "independent of the package
-#: version and graph-storage stamp"), so it is its own constant and not
-#: derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12`` and 0.13.0
-#: requires ``0.13``. A 0.11 server ignores the header.
-HTTP_API_CONTRACT = "0.13"
+#: The contract of the pinned omnigraph release. Upstream keeps it separate
+#: from the package version (``omnigraph-api-types``: "independent of the
+#: package version and graph-storage stamp"), so it is its own constant and
+#: not derived from ``_OMNIGRAPH_VERSION``. 0.12.0 required ``0.12``, 0.13.0
+#: ``0.13`` and 0.14.0 requires ``0.14``. ``bin/check_omnigraph_format.py``
+#: asserts it against the pinned binary.
+HTTP_API_CONTRACT = "0.14"
 
-#: The storage format of the servers that stamp :data:`HTTP_API_CONTRACT_HEADER`
-#: on responses (observed on 0.13.0, format 14). A 0.11 server (format 9)
-#: sends none, so an absent header is tolerated until the pinned format
-#: reaches this. Moving ``_OMNIGRAPH_INTERNAL_SCHEMA`` is what turns the
-#: requirement on.
-_CONTRACT_STAMPED_FROM_SCHEMA = 14
-RESPONSE_CONTRACT_REQUIRED = _OMNIGRAPH_INTERNAL_SCHEMA >= _CONTRACT_STAMPED_FROM_SCHEMA
+#: Every contract this client can speak, the pinned one first. A transport
+#: speaks whichever of these its server stamps (see
+#: :meth:`PooledTransport.contract`), so a running witan survives the data tier
+#: moving between any two of these. That needs this witan deployed first: one
+#: deployed before the list gained the new contract fails every call against
+#: the new server (Production, 2026-11-04). The witan image labels this list
+#: (``WITAN_HTTP_API_CONTRACTS`` in docker/witan.Dockerfile, held to it by
+#: ``just check-omnigraph-pins``), and ol-infrastructure's omnigraph preview
+#: refuses a server image whose contract the deployed witan image doesn't
+#: label. The wire difference from 0.13 to 0.14
+#: on every route this module calls is additive in both directions, and a 0.13
+#: error carries no ``disposition``, which :func:`error_disposition` reads as
+#: absent, so :func:`classify_status` uses its status fallback for it.
+SUPPORTED_HTTP_API_CONTRACTS = (HTTP_API_CONTRACT, "0.13")
+
+#: The public route the contract is discovered from. Both supported servers
+#: stamp it, unauthenticated, and upstream's own CLI asks it before every data
+#: request for the same reason.
+HEALTHZ_PATH = "/healthz"
+
+#: The probe's own timeout, well under :data:`DEFAULT_TIMEOUT_SECONDS`. The
+#: probe is a ``HEAD`` with no work behind it, so a server slower than this to
+#: answer it is not one the request should wait on twice.
+PROBE_TIMEOUT_SECONDS = 5.0
+
+#: The error code both supported servers give for a missing, repeated or
+#: wrong contract header. The refusal runs before graph resolution and body
+#: work, so nothing was applied and a write may be resent once.
+CONTRACT_MISMATCH_CODE = "api_contract_mismatch"
 
 # A pooled connection idle longer than this is closed and reopened rather than
 # reused. It is not a performance knob — it is what keeps the connect-failure
@@ -209,6 +283,21 @@ NDJSON_CONTENT_TYPE = "application/x-ndjson"
 EXPORT_CHUNK_BYTES = 1 << 20
 
 
+class Disposition(NamedTuple):
+    """What an omnigraph 0.14 error says the request did and asks for next.
+
+    ``effects`` is ``none``, ``partial`` or ``unknown``; ``action`` is
+    ``fix``, ``refresh``, ``retry``, ``recover`` or ``reconcile``
+    (``DispositionEffects``/``DispositionAction`` in omnigraph-api-types at
+    v0.14.0). ``code`` is the error's own code, which the server derives the
+    action from (``ErrorCode::action``).
+    """
+
+    code: str | None
+    effects: str
+    action: str
+
+
 class Outcome(NamedTuple):
     """The result of one HTTP attempt, in the shape ``_execute``'s loop wants.
 
@@ -223,6 +312,8 @@ class Outcome(NamedTuple):
     body's message and discards the response headers — so this is a signal only
     the HTTP transport can carry, and the policy loop treats its absence as
     "no hint" rather than as "retry immediately".
+
+    ``disposition`` is the error body's, when the server sent one (0.14).
     """
 
     kind: str
@@ -230,6 +321,7 @@ class Outcome(NamedTuple):
     error: str = ""
     status: int | None = None
     retry_after: float | None = None
+    disposition: Disposition | None = None
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -287,16 +379,98 @@ def is_graph_blocked(message: str) -> bool:
     return GRAPH_BLOCKED_MARKER in message.lower()
 
 
-def classify_status(status: int, message: str) -> str:
+#: Wording of a dataset whose Lance HEAD moved past the published version. No
+#: 0.14 code names this (the optimize path says "published dataset/Lance HEAD
+#: drift — run omnigraph repair", crates/omnigraph/src/db/omnigraph/optimize.rs
+#: at v0.14.0), so prose stays its only signal on both paths.
+_NEEDS_REPAIR_MARKERS = ("ahead of manifest", "omnigraph repair")
+
+#: The 0.14 codes whose disposition action is ``retry`` because the server or
+#: graph is not serving yet, as opposed to a busy actor or a request that ran
+#: out of time. They get the restart-length wait.
+_UNSERVED_CODES = frozenset({"service_unavailable", "graph_unavailable"})
+
+
+def classify_disposition(disposition: Disposition, message: str) -> str:
+    """Map a 0.14 error's code and disposition onto the shared classification
+    names.
+
+    The disposition is the server's own statement of what the request did
+    (``effects``) and what it asks for next (``action``), so it replaces the
+    status and message markers :func:`classify_status` falls back to. Two
+    conditions still need the message, because no code separates them:
+    a graph that failed to open (``graph_unavailable`` like a loading one,
+    see :data:`GRAPH_BLOCKED_MARKER`) and a drifted dataset
+    (:data:`_NEEDS_REPAIR_MARKERS`).
+
+    A write whose effects are partial, or unknown under a code that would
+    otherwise be replayed (a ``conflict``, a ``retry``), is
+    :data:`OUTCOME_UNKNOWN`: replaying it could apply it twice. A read never
+    carries either, since the server reports effects only for a request that
+    submitted a write. An ``unknown`` under a terminal code such as
+    ``bad_request`` stays :data:`FATAL`. Nothing retries it, and 0.14 reports
+    ``unknown`` for every refusal inside a write that the engine did not tag,
+    a missing edge endpoint included.
+    """
+    code, effects, action = disposition
+    if code == OUTCOME_UNKNOWN_CODE or effects == "partial":
+        return OUTCOME_UNKNOWN
+    if code == ACTOR_MISMATCH_CODE:
+        return ACTOR_MISMATCH
+    if action == "recover":
+        # `recover` is what the server sends for a detail that must be
+        # resolved or rebuilt first: a recovery intent, or a full-text index
+        # to rebuild or build. Both are terminal for a write and neither
+        # clears by retrying the same request.
+        return (
+            RECOVERY_REQUIRED
+            if code == "recovery_required"
+            else FULL_TEXT_REBUILD_REQUIRED
+        )
+    # The code, not the action, names the failing step from here on: the
+    # server replaces the step's action with `reconcile` when effects are
+    # unknown, and the step is what decides whether this would be replayed.
+    if code == "precondition_failed":
+        kind = PRECONDITION_FAILED
+    elif code in _UNSERVED_CODES:
+        kind = FATAL if is_graph_blocked(message) else UNAVAILABLE
+    elif code == "too_many_requests" or action == "retry":
+        # A busy actor (429) or a request the server dropped before starting
+        # it (a request timeout): the admission cap's short budget, honouring
+        # Retry-After.
+        kind = ADMISSION_CAP
+    elif any(marker in message.lower() for marker in _NEEDS_REPAIR_MARKERS):
+        kind = NEEDS_REPAIR
+    elif code == "conflict":
+        # `refresh`: the branch moved under the request. The same write is
+        # still what the caller wants, so it is retried, as a 409 always was.
+        kind = RETRYABLE
+    else:
+        kind = FATAL
+    if kind in _REPLAYED_KINDS and effects in INDETERMINATE_EFFECTS:
+        return OUTCOME_UNKNOWN
+    return kind
+
+
+def classify_status(
+    status: int, message: str, disposition: Disposition | None = None
+) -> str:
     """Map an HTTP status + error message onto the shared classification names.
 
-    The status is the primary signal and is strictly better than what the CLI
-    path had: a 429 is unambiguously the per-actor admission cap, where the CLI
-    could only match the message text. The message is still consulted for the
-    conflict/repair conditions, which the server reports as a 4xx/5xx with the
-    same wording the CLI surfaced — so the markers those were tuned against
-    remain the right discriminator.
+    An error body with a disposition (0.14) is classified from it, by
+    :func:`classify_disposition`. The rest of this function is the fallback
+    for a body without one: a 0.13 server, or a proxy answering in the
+    server's place.
+
+    There, the status is the primary signal and is strictly better than what
+    the CLI path had: a 429 is unambiguously the per-actor admission cap,
+    where the CLI could only match the message text. The message is still
+    consulted for the conflict/repair conditions, which the server reports as
+    a 4xx/5xx with the same wording the CLI surfaced — so the markers those
+    were tuned against remain the right discriminator.
     """
+    if disposition is not None:
+        return classify_disposition(disposition, message)
     if status == 429:
         return ADMISSION_CAP
     lowered = message.lower()
@@ -329,7 +503,7 @@ def classify_status(status: int, message: str) -> str:
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.
         return UNAVAILABLE
-    if any(marker in lowered for marker in ("ahead of manifest", "omnigraph repair")):
+    if any(marker in lowered for marker in _NEEDS_REPAIR_MARKERS):
         return NEEDS_REPAIR
     if any(
         marker in lowered
@@ -379,6 +553,29 @@ def classify_status(status: int, message: str) -> str:
     return FATAL
 
 
+def error_disposition(body: str) -> Disposition | None:
+    """The code and disposition of a 0.14 error body, or ``None`` without one.
+
+    The omnigraph 0.14 CLI prints the same object (plus ``http_status``) for a
+    failed command, so this reads its JSON output too.
+    """
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    disposition = parsed.get("disposition")
+    if not isinstance(disposition, dict):
+        return None
+    effects = disposition.get("effects")
+    action = disposition.get("action")
+    if not isinstance(effects, str) or not isinstance(action, str):
+        return None
+    code = parsed.get("code")
+    return Disposition(code if isinstance(code, str) else None, effects, action)
+
+
 def error_message(status: int, body: str) -> str:
     """Pull the server's own message out of an error response.
 
@@ -400,7 +597,17 @@ def error_message(status: int, body: str) -> str:
     return f"HTTP {status}{f': {stripped}' if stripped else ''}"
 
 
-def contract_violation(values: list[str]) -> str | None:
+def error_code(body: str) -> str | None:
+    """The ``code`` of an omnigraph error body, or ``None`` without one."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    code = parsed.get("code") if isinstance(parsed, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def contract_violation(values: list[str], sent: str) -> str | None:
     """Why a response's contract header is unacceptable, or None if it is fine.
 
     Upstream's rule (``docs/user/operations/server.md`` § HTTP contract): check
@@ -410,20 +617,16 @@ def contract_violation(values: list[str]) -> str | None:
     answering in its place, or a server on another contract.
 
     :param values: Every :data:`HTTP_API_CONTRACT_HEADER` value on the response.
+    :param sent: The contract the request carried.
     :returns: A message naming the violation, or ``None``.
     :rtype: str | None
     """
-    if values == [HTTP_API_CONTRACT]:
+    if values == [sent]:
         return None
-    if not values:
-        if not RESPONSE_CONTRACT_REQUIRED:
-            return None
-        found = "none"
-    else:
-        found = ", ".join(repr(value) for value in values)
+    found = ", ".join(repr(value) for value in values) if values else "none"
     return (
         f"response did not carry exactly one {HTTP_API_CONTRACT_HEADER}: "
-        f"{HTTP_API_CONTRACT} header (found {found})"
+        f"{sent} header (found {found})"
     )
 
 
@@ -438,6 +641,9 @@ class PooledTransport:
 
     A per-thread connection is also why no cleanup is needed: threads in a pool
     are long-lived, and a connection dies with its thread.
+
+    The HTTP contract, unlike the connections, is one per transport: it is a
+    property of the server, and every thread must send the same one.
     """
 
     def __init__(self, server_url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS):
@@ -452,18 +658,113 @@ class PooledTransport:
         self._port = parts.port
         self._timeout = timeout
         self._local = threading.local()
+        self._contract: str | None = None
+        self._contract_lock = threading.Lock()
+
+    # ── the HTTP contract ─────────────────────────────────────────
+
+    def contract(self) -> str:
+        """The contract to send this server, discovered on first use.
+
+        A server that has not answered a probe yet gets the pinned contract and
+        is probed again on the next call, so a down server reads as
+        ``UNAVAILABLE`` from the request itself rather than from the probe.
+        Probing before the first request, instead of learning from its refusal,
+        matters for ``load/ndjson``: the server refuses a wrong contract at the
+        middleware without reading the body, so a large upload can be cut
+        mid-send and come back with no stamp to learn from.
+
+        The probe runs outside the lock, under :data:`PROBE_TIMEOUT_SECONDS`,
+        so a server that accepts connections and never answers costs each
+        caller that much once, in parallel, rather than queueing every thread
+        behind one probe at the full request timeout. Threads that probe at
+        once all learn the same stamp. A server that answers without a single
+        supported stamp is probed again on every call, at one ``HEAD`` each.
+        """
+        with self._contract_lock:
+            if self._contract is not None:
+                return self._contract
+        stamp = self._probe_contract()
+        with self._contract_lock:
+            if self._contract is None and stamp in SUPPORTED_HTTP_API_CONTRACTS:
+                self._adopt(stamp)
+            return self._contract or HTTP_API_CONTRACT
+
+    def refresh_contract(self) -> str:
+        """Probe again, adopt a changed stamp, and return the contract to send.
+
+        For a request that cannot learn from its own refusal: a large body sent
+        with the wrong contract is cut at send, before any stamped answer, so
+        a transport that cached the old contract would fail every such request
+        after the data tier changed contract. A failed probe keeps what the
+        transport has, and so does one that another thread overtook: if the
+        contract changed while this probe was in flight, that change is newer
+        than what this probe saw.
+        """
+        with self._contract_lock:
+            before = self._contract
+        stamp = self._probe_contract()
+        with self._contract_lock:
+            if (
+                stamp in SUPPORTED_HTTP_API_CONTRACTS
+                and self._contract == before
+                and stamp != before
+            ):
+                self._adopt(stamp)
+            return self._contract or HTTP_API_CONTRACT
+
+    def _probe_contract(self) -> str | None:
+        """``HEAD /healthz``'s contract stamp, or ``None`` if there is no single one."""
+        conn = self._new_connection(min(self._timeout, PROBE_TIMEOUT_SECONDS))
+        try:
+            conn.request("HEAD", HEALTHZ_PATH)
+            response = conn.getresponse()
+            response.read()
+        except (http.client.HTTPException, OSError):
+            return None
+        finally:
+            conn.close()
+        values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
+        return values[0] if len(values) == 1 else None
+
+    def _adopt(self, contract: str) -> None:
+        """Speak ``contract`` from now on. Called with the contract lock held."""
+        if contract != HTTP_API_CONTRACT and contract != self._contract:
+            _log.warning(
+                "%s speaks omnigraph HTTP contract %s, not the pinned %s; "
+                "sending %s until it changes",
+                self.server_url,
+                contract,
+                HTTP_API_CONTRACT,
+                contract,
+            )
+        self._contract = contract
+
+    def _switch_contract(self, sent: str, stamp: str) -> None:
+        """Adopt the server's ``stamp`` after it refused ``sent``.
+
+        Unless another thread already moved the transport on, in which case
+        its contract stands. The refused call resends with ``stamp`` either
+        way, since that is what the server that refused it speaks.
+        """
+        with self._contract_lock:
+            if self._contract in (None, sent):
+                self._adopt(stamp)
 
     # ── connection management ─────────────────────────────────────
 
-    def _new_connection(self) -> http.client.HTTPConnection:
+    def _new_connection(
+        self, timeout: float | None = None
+    ) -> http.client.HTTPConnection:
+        timeout = self._timeout if timeout is None else timeout
         if self._scheme == "https":
             return http.client.HTTPSConnection(
                 self._host,
                 self._port,
-                timeout=self._timeout,
+                timeout=timeout,
                 context=ssl.create_default_context(),
             )
-        return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+        return http.client.HTTPConnection(self._host, self._port, timeout=timeout)
 
     def _checkout(self) -> tuple[http.client.HTTPConnection, bool]:
         """This thread's connection and whether it is being reused.
@@ -535,6 +836,7 @@ class PooledTransport:
         idempotent: bool,
         if_graph_commit: str | None = None,
         sink: BinaryIO | None = None,
+        actor: str | None = None,
     ) -> Outcome:
         """POST ``payload`` as JSON to ``path`` and classify the result.
 
@@ -549,11 +851,12 @@ class PooledTransport:
             idempotent,
             if_graph_commit=if_graph_commit,
             sink=sink,
+            actor=actor,
         )
 
-    def get(self, path: str, token: str | None) -> Outcome:
+    def get(self, path: str, token: str | None, *, actor: str | None = None) -> Outcome:
         """GET ``path``. A read, so always safe to repeat."""
-        return self._send("GET", path, None, token, True)
+        return self._send("GET", path, None, token, True, actor=actor)
 
     def _send(
         self,
@@ -566,6 +869,7 @@ class PooledTransport:
         if_graph_commit: str | None = None,
         content_type: str = JSON_CONTENT_TYPE,
         sink: BinaryIO | None = None,
+        actor: str | None = None,
     ) -> Outcome:
         """Send one request and classify the result.
 
@@ -590,10 +894,14 @@ class PooledTransport:
         ``sink`` streams a successful body into a binary file instead of
         buffering it, see :meth:`_stream`. An error body is still read whole,
         since it is the server's short JSON envelope.
+
+        ``actor`` is sent as :data:`IF_ACTOR_HEADER`, so a token that resolves
+        to someone else is refused rather than attributed to them.
         """
+        sent = self.contract()
         headers = {
             "Accept": NDJSON_CONTENT_TYPE if sink is not None else JSON_CONTENT_TYPE,
-            HTTP_API_CONTRACT_HEADER: HTTP_API_CONTRACT,
+            HTTP_API_CONTRACT_HEADER: sent,
         }
         # Encoded here rather than by http.client, which encodes a str body as
         # ISO-8859-1 and so raises on any character outside it.
@@ -603,6 +911,8 @@ class PooledTransport:
             headers["Content-Length"] = str(len(payload))
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if actor is not None:
+            headers[IF_ACTOR_HEADER] = actor
         if if_graph_commit is not None:
             # Upstream #470 requires EXACTLY ONE of these, sent raw, and only to
             # the dedicated `/…/if-graph-commit` routes — the ordinary routes
@@ -612,7 +922,9 @@ class PooledTransport:
             # silently dropping the precondition and mutating unconditionally.
             headers[IF_GRAPH_COMMIT_HEADER] = if_graph_commit
 
-        for attempt in range(2):
+        stale_retried = False
+        contract_resent = False
+        while True:
             conn, reused = self._checkout()
             started = time.monotonic()
             try:
@@ -640,7 +952,8 @@ class PooledTransport:
                 raw = b"" if streaming else response.read()
             except (http.client.HTTPException, OSError) as exc:
                 self._discard()
-                if reused and idempotent and attempt == 0:
+                if reused and idempotent and not stale_retried:
+                    stale_retried = True
                     # Stale keep-alive: the server closed an idle connection and
                     # we found out by trying to use it. Safe to repeat because
                     # the caller said so; a fresh connection is what the retry
@@ -673,7 +986,33 @@ class PooledTransport:
 
             succeeded = 200 <= response.status < 300
             contract_values = response.headers.get_all(HTTP_API_CONTRACT_HEADER) or []
-            violation = contract_violation(contract_values)
+            if (
+                not contract_resent
+                and response.status == 400
+                and len(contract_values) == 1
+                and contract_values[0] in SUPPORTED_HTTP_API_CONTRACTS
+                and contract_values[0] != sent
+                and error_code(raw.decode("utf-8", errors="replace"))
+                == CONTRACT_MISMATCH_CODE
+            ):
+                # The server changed contract under a live process (the data
+                # tier was upgraded or rolled back). The refusal runs before
+                # anything is applied, so a write is resent too, once. A
+                # second mismatch on this call is a violation like any other.
+                #
+                # On a fresh connection: the server answers a mismatch without
+                # reading the body, and a connection whose request body was
+                # left unread may be closed without a `Connection: close`. A
+                # reused connection failing mid-flight would make the resend
+                # of a write FATAL, while a fresh one fails at connect, where
+                # nothing was sent.
+                sent = contract_values[0]
+                self._switch_contract(headers[HTTP_API_CONTRACT_HEADER], sent)
+                headers[HTTP_API_CONTRACT_HEADER] = sent
+                self._discard()
+                contract_resent = True
+                continue
+            violation = contract_violation(contract_values, sent)
             if violation is not None and (
                 succeeded or not idempotent or contract_values
             ):
@@ -711,15 +1050,14 @@ class PooledTransport:
             if succeeded:
                 return Outcome(kind=OK, body=text, status=response.status)
             message = error_message(response.status, text)
+            disposition = error_disposition(text)
             return Outcome(
-                kind=classify_status(response.status, message),
+                kind=classify_status(response.status, message, disposition),
                 error=message,
                 status=response.status,
                 retry_after=parse_retry_after(response.getheader("Retry-After")),
+                disposition=disposition,
             )
-
-        # Unreachable: the loop either returns or continues exactly once.
-        raise AssertionError("_send() retry loop fell through")
 
     def _stream(
         self,
@@ -773,6 +1111,7 @@ class PooledTransport:
         token: str | None,
         *,
         branch: str | None = None,
+        actor: str | None = None,
     ):
         """``POST /graphs/<id>/query`` — a read. Always safe to repeat.
 
@@ -794,6 +1133,7 @@ class PooledTransport:
             _statement_payload(source, params, branch),
             token,
             idempotent=True,
+            actor=actor,
         )
 
     def mutate(
@@ -805,6 +1145,7 @@ class PooledTransport:
         if_graph_commit: str | None = None,
         *,
         branch: str | None = None,
+        actor: str | None = None,
     ):
         """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly.
 
@@ -827,6 +1168,7 @@ class PooledTransport:
             token,
             idempotent=False,
             if_graph_commit=if_graph_commit,
+            actor=actor,
         )
 
     def load_ndjson(
@@ -838,6 +1180,7 @@ class PooledTransport:
         mode: str,
         branch: str | None = None,
         from_branch: str | None = None,
+        actor: str | None = None,
     ) -> Outcome:
         """``POST /graphs/<id>/load/ndjson`` — one bulk load. A write.
 
@@ -859,6 +1202,13 @@ class PooledTransport:
             query["branch"] = branch
         if from_branch is not None:
             query["from"] = from_branch
+        # Every load, not only the first: see refresh_contract. Then a fresh
+        # connection, so an upload never rides a pooled socket to a server
+        # that has since been replaced: a dead peer then fails at connect,
+        # before anything was sent, rather than mid-upload, where a write is
+        # FATAL. One handshake per load.
+        self.refresh_contract()
+        self._discard()
         return self._send(
             "POST",
             f"/graphs/{graph_id}/load/ndjson?{urllib.parse.urlencode(query)}",
@@ -866,9 +1216,17 @@ class PooledTransport:
             token,
             False,
             content_type=NDJSON_CONTENT_TYPE,
+            actor=actor,
         )
 
-    def export(self, graph_id: str, sink: BinaryIO, token: str | None) -> Outcome:
+    def export(
+        self,
+        graph_id: str,
+        sink: BinaryIO,
+        token: str | None,
+        *,
+        actor: str | None = None,
+    ) -> Outcome:
         """``POST /graphs/<id>/export`` — all of ``main``, streamed into ``sink``.
 
         POST with a JSON body (``branch``, ``type_names``), not a GET, on both
@@ -884,9 +1242,17 @@ class PooledTransport:
             token,
             idempotent=True,
             sink=sink,
+            actor=actor,
         )
 
-    def commits(self, graph_id: str, token: str | None, *, branch: str) -> Outcome:
+    def commits(
+        self,
+        graph_id: str,
+        token: str | None,
+        *,
+        branch: str,
+        actor: str | None = None,
+    ) -> Outcome:
         """``GET /graphs/<id>/commits?branch=…`` — the history reachable from
         ``branch``'s head, newest first, as ``{"commits": [...]}``.
 
@@ -894,7 +1260,7 @@ class PooledTransport:
         0.14.0 alike. Unpaged, so the whole history is one answer. A read.
         """
         query = urllib.parse.urlencode({"branch": branch})
-        return self.get(f"/graphs/{graph_id}/commits?{query}", token)
+        return self.get(f"/graphs/{graph_id}/commits?{query}", token, actor=actor)
 
     def graphs(self, token: str | None):
         """``GET /graphs`` — the server's graph registry.

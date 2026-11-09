@@ -88,6 +88,8 @@ LEASE_RETRY_SECONDS = 5
 DEFAULT_SERVER_STOP_SECONDS = 90
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
 RESTORE_ATTEMPTS = 10
+# The CLI parses `cleanup --keep` as a u32.
+MAX_CLEANUP_KEEP = 2**32 - 1
 
 
 class WindowTerminated(Exception):
@@ -98,7 +100,8 @@ class WindowTerminated(Exception):
 class Settings:
     """What the CronJob supplies through the environment.
 
-    :param cleanup_older_than: the retention passed to `cleanup --older-than`.
+    :param cleanup_retention: the retention arguments passed to `cleanup`,
+        ``--keep N`` or ``--older-than D`` (see ``parse_cleanup_retention``).
     :param cleanup_iso_weekdays: the UTC days `cleanup` also runs on (1 is
         Monday, 7 is Sunday). Empty, it never runs.
     :param window_seconds: how long after the start a new command may still
@@ -110,7 +113,7 @@ class Settings:
     deployment: str
     lease_name: str
     pod_name: str
-    cleanup_older_than: str
+    cleanup_retention: tuple[str, str]
     cleanup_iso_weekdays: frozenset[int]
     window_seconds: float
     command_timeout_seconds: float
@@ -125,7 +128,10 @@ class Settings:
             deployment=env["OMNIGRAPH_SERVER_DEPLOYMENT"],
             lease_name=env["OMNIGRAPH_UNLOCK_LEASE"],
             pod_name=env.get("POD_NAME") or env["HOSTNAME"],
-            cleanup_older_than=env["OMNIGRAPH_CLEANUP_OLDER_THAN"],
+            cleanup_retention=parse_cleanup_retention(
+                env.get("OMNIGRAPH_CLEANUP_KEEP", ""),
+                env.get("OMNIGRAPH_CLEANUP_OLDER_THAN", ""),
+            ),
             cleanup_iso_weekdays=parse_iso_weekdays(
                 env.get("OMNIGRAPH_CLEANUP_ISO_WEEKDAY", "")
             ),
@@ -140,6 +146,42 @@ class Settings:
                 env.get("OMNIGRAPH_SERVER_STOP_SECONDS", DEFAULT_SERVER_STOP_SECONDS)
             ),
         )
+
+
+def parse_cleanup_retention(keep: str, older_than: str) -> tuple[str, str]:
+    """The `cleanup` retention arguments, ``--keep`` or ``--older-than``.
+
+    Both together are refused because a cutoff makes cleanup read the commit
+    time of every `__manifest` version below the newest ``keep`` (omnigraph
+    #1188, `collector.rs` `retained_versions`), so the pair's plan grows with
+    history as ``--older-than`` alone does, and a config meant to bound the
+    plan by ``--keep`` would not.
+
+    :raises ValueError: on neither or both, or a ``keep`` that is not a whole
+        number from 1 to ``MAX_CLEANUP_KEEP``. Settings are read before the server is stopped,
+        so this fails the run without opening a window.
+    """
+    keep = keep.strip()
+    older_than = older_than.strip()
+    if bool(keep) == bool(older_than):
+        msg = (
+            "set exactly one of OMNIGRAPH_CLEANUP_KEEP and "
+            f"OMNIGRAPH_CLEANUP_OLDER_THAN, not keep={keep!r} "
+            f"older_than={older_than!r}"
+        )
+        raise ValueError(msg)
+    if older_than:
+        return ("--older-than", older_than)
+    if (
+        not (keep.isascii() and keep.isdigit())
+        or not 1 <= int(keep) <= MAX_CLEANUP_KEEP
+    ):
+        msg = (
+            f"OMNIGRAPH_CLEANUP_KEEP is a whole number from 1 to {MAX_CLEANUP_KEEP}, "
+            f"not {keep!r}"
+        )
+        raise ValueError(msg)
+    return ("--keep", keep)
 
 
 def parse_iso_weekdays(value: str) -> frozenset[int]:
@@ -352,8 +394,7 @@ class Window:
             self._maintain(
                 graph,
                 "cleanup",
-                "--older-than",
-                self._settings.cleanup_older_than,
+                *self._settings.cleanup_retention,
                 "--confirm",
                 "--yes",
             )

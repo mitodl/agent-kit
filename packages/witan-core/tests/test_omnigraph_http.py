@@ -108,6 +108,8 @@ class FakeConnection:
     """
 
     created: ClassVar[list[FakeConnection]] = []
+    #: Every request on every connection, in the order sent.
+    sent: ClassVar[list[dict]] = []
 
     connect_error: BaseException | None = None
     script: ClassVar[list] = []
@@ -127,8 +129,15 @@ class FakeConnection:
 
     def request(self, method, path, body=None, headers=None):
         self.requests.append(
-            {"method": method, "path": path, "body": body, "headers": headers or {}}
+            # A copy, as the wire has one: a resend reuses the caller's dict.
+            {
+                "method": method,
+                "path": path,
+                "body": body,
+                "headers": dict(headers or {}),
+            }
         )
+        FakeConnection.sent.append(self.requests[-1])
         nxt = FakeConnection.script[0]
         if isinstance(nxt, BaseException):
             FakeConnection.script.pop(0)
@@ -144,6 +153,7 @@ class FakeConnection:
 @pytest.fixture(autouse=True)
 def _fake_http(monkeypatch):
     FakeConnection.created = []
+    FakeConnection.sent = []
     FakeConnection.script = []
     FakeConnection.connect_error = None
     monkeypatch.setattr(ogh.http.client, "HTTPConnection", FakeConnection)
@@ -151,14 +161,42 @@ def _fake_http(monkeypatch):
     return FakeConnection
 
 
+_REAL_PROBE = ogh.PooledTransport._probe_contract
+
+
+@pytest.fixture(autouse=True)
+def _pinned_server(monkeypatch):
+    """A server that stamps the pinned contract, without a probe connection.
+
+    Every scripted test here is about what happens after discovery, and a
+    probe would take the first scripted response and the first connection.
+    The negotiation tests take :func:`probing` to run the real one."""
+    monkeypatch.setattr(
+        ogh.PooledTransport, "_probe_contract", lambda self: ogh.HTTP_API_CONTRACT
+    )
+
+
+@pytest.fixture
+def probing(monkeypatch):
+    monkeypatch.setattr(ogh.PooledTransport, "_probe_contract", _REAL_PROBE)
+
+
 def ok(payload: dict, **kwargs) -> FakeResponse:
     return FakeResponse(200, json.dumps(payload), **kwargs)
 
 
-def err(status: int, message: str, code: str | None = None) -> FakeResponse:
-    body = {"error": message}
+def err(
+    status: int,
+    message: str,
+    code: str | None = None,
+    effects: str | None = None,
+    action: str = "refresh",
+) -> FakeResponse:
+    body: dict[str, object] = {"error": message}
     if code:
         body["code"] = code
+    if effects:
+        body["disposition"] = {"effects": effects, "action": action}
     return FakeResponse(status, json.dumps(body))
 
 
@@ -340,6 +378,93 @@ def test_a_plain_conflict_is_still_retryable():
         "current branch state"
     )
     assert ogh.classify_status(409, message) == ogh.RETRYABLE
+
+
+# ── classification from a 0.14 disposition ───────────────────────────
+#
+# Codes, actions and effects as omnigraph-server v0.14.0 pairs them
+# (`ErrorCode::action` in omnigraph-api-types, `ApiError::disposition` in
+# omnigraph-server/src/lib.rs). The messages are deliberately ones the status
+# fallback would read differently, so each row shows the disposition decided.
+
+
+@pytest.mark.parametrize(
+    ("code", "effects", "action", "message", "expected"),
+    [
+        # fix: the request is wrong. Terminal whatever the prose says.
+        ("bad_request", "none", "fix", "stale view", ogh.FATAL),
+        ("not_found", "none", "fix", "graph not found", ogh.FATAL),
+        # refresh: a moved branch is retried; any other refusal is terminal.
+        ("conflict", "none", "refresh", "key exists", ogh.RETRYABLE),
+        ("forbidden", "none", "refresh", "refresh and retry", ogh.FATAL),
+        ("precondition_failed", "none", "refresh", "x", ogh.PRECONDITION_FAILED),
+        ("internal", "none", "refresh", "manifest table version", ogh.FATAL),
+        # retry: waited out, the not-serving codes on the restart budget.
+        ("too_many_requests", "none", "retry", "busy", ogh.ADMISSION_CAP),
+        ("request_timeout", "none", "retry", "slow body", ogh.ADMISSION_CAP),
+        ("service_unavailable", "none", "retry", "closed", ogh.UNAVAILABLE),
+        ("graph_unavailable", "none", "retry", "graph is loading", ogh.UNAVAILABLE),
+        # …except the one graph_unavailable that waits on an operator.
+        ("graph_unavailable", "none", "retry", _GRAPH_BLOCKED, ogh.FATAL),
+        # recover: terminal, named for what has to be done first.
+        ("recovery_required", "none", "recover", "x", ogh.RECOVERY_REQUIRED),
+        ("conflict", "none", "recover", "x", ogh.FULL_TEXT_REBUILD_REQUIRED),
+        # reconcile: the write may have landed.
+        ("outcome_unknown", "unknown", "reconcile", "x", ogh.OUTCOME_UNKNOWN),
+        # A refusal inside a write the engine did not tag: unknown, but not
+        # replayed, so it stays terminal rather than indeterminate.
+        ("bad_request", "unknown", "reconcile", "not found", ogh.FATAL),
+        # An unknown or partial outcome under a kind that would be replayed.
+        ("conflict", "unknown", "reconcile", "x", ogh.OUTCOME_UNKNOWN),
+        ("conflict", "partial", "refresh", "key exists", ogh.OUTCOME_UNKNOWN),
+        ("service_unavailable", "unknown", "reconcile", "x", ogh.OUTCOME_UNKNOWN),
+        # Partial effects are indeterminate under any code.
+        ("forbidden", "partial", "refresh", "denied", ogh.OUTCOME_UNKNOWN),
+        # A drifted dataset has no code of its own; its prose still decides.
+        ("internal", "none", "refresh", "run omnigraph repair", ogh.NEEDS_REPAIR),
+    ],
+)
+def test_disposition_classification(code, effects, action, message, expected):
+    disposition = ogh.Disposition(code, effects, action)
+    assert ogh.classify_status(500, message, disposition) == expected
+
+
+def test_error_disposition_reads_code_effects_and_action():
+    body = json.dumps(
+        {
+            "error": "x",
+            "code": "bad_request",
+            "disposition": {"effects": "unknown", "action": "reconcile"},
+        }
+    )
+    assert ogh.error_disposition(body) == ogh.Disposition(
+        "bad_request", "unknown", "reconcile"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<html>502 Bad Gateway</html>",
+        json.dumps({"error": "x", "code": "conflict"}),
+        json.dumps({"error": "x", "disposition": {"effects": "none"}}),
+        json.dumps({"error": "x", "disposition": "none"}),
+    ],
+)
+def test_a_body_without_a_whole_disposition_has_none(body):
+    """0.13, a relay, or a malformed body: the status fallback decides."""
+    assert ogh.error_disposition(body) is None
+
+
+def test_the_transport_classifies_from_the_disposition(monkeypatch, _fake_http):
+    """A 0.14 400 that 0.13 prose would retry is terminal, and the outcome
+    carries the disposition for group commit to read."""
+    _fake_http.script = [
+        err(400, "stale view", code="bad_request", effects="none", action="fix")
+    ]
+    outcome = ogh.PooledTransport("http://host:8080").mutate("g", "q", {}, None)
+    assert outcome.kind == ogh.FATAL
+    assert outcome.disposition == ogh.Disposition("bad_request", "none", "fix")
 
 
 def test_error_message_uses_the_servers_own_wording():
@@ -662,13 +787,6 @@ def test_no_token_sends_no_authorization_header(_fake_http):
 # ── the HTTP API contract header (omnigraph 0.12+) ───────────────────
 
 
-@pytest.fixture
-def contract_required(monkeypatch):
-    """The state after the pin reaches format 14: an unstamped response is a
-    violation. Until then a 0.11 server legitimately sends none."""
-    monkeypatch.setattr(ogh, "RESPONSE_CONTRACT_REQUIRED", True)
-
-
 def test_every_request_carries_the_contract_header(_fake_http):
     _fake_http.script = [ok({"rows": []}), ok({}), ok({"graphs": []})]
     transport = ogh.PooledTransport("http://host:8080")
@@ -677,19 +795,391 @@ def test_every_request_carries_the_contract_header(_fake_http):
     transport.graphs("t")
 
     sent = [r["headers"] for r in _fake_http.created[0].requests]
-    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.13"] * 3
+    assert [h[ogh.HTTP_API_CONTRACT_HEADER] for h in sent] == ["0.14"] * 3
 
 
-def test_an_unstamped_response_is_accepted_from_a_0_11_server(_fake_http, monkeypatch):
-    monkeypatch.setattr(ogh, "RESPONSE_CONTRACT_REQUIRED", False)
-    _fake_http.script = [ok({"rows": []}, stamped=False)]
+def test_the_pinned_contract_is_the_first_supported_one():
+    assert ogh.SUPPORTED_HTTP_API_CONTRACTS[0] == ogh.HTTP_API_CONTRACT
 
-    outcome = ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
+
+# ── negotiating the contract (0.13 or 0.14) ──────────────────────────
+
+
+def stamped(contract: str, status: int = 200, body: str = "") -> FakeResponse:
+    """A response from a server on ``contract``."""
+    return FakeResponse(
+        status, body, stamped=False, headers={ogh.HTTP_API_CONTRACT_HEADER: contract}
+    )
+
+
+def mismatch(contract: str) -> FakeResponse:
+    """What a server on ``contract`` answers a request carrying another one,
+    verbatim on 0.13.0 apart from the version."""
+    return stamped(
+        contract,
+        400,
+        json.dumps(
+            {
+                "error": f"exactly one omnigraph-http-api header with value "
+                f"{contract} is required",
+                "code": "api_contract_mismatch",
+            }
+        ),
+    )
+
+
+def _contracts_sent(fake) -> list[tuple[str, str]]:
+    return [
+        (r["path"], r["headers"].get(ogh.HTTP_API_CONTRACT_HEADER, ""))
+        for r in fake.sent
+    ]
+
+
+def test_the_contract_is_discovered_from_healthz_before_the_first_request(
+    _fake_http, probing, caplog
+):
+    _fake_http.script = [stamped("0.13"), stamped("0.13", body='{"rows": []}')]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    with caplog.at_level("WARNING", logger=ogh.__name__):
+        outcome = transport.query("council", "q", {}, None)
 
     assert outcome.kind == ogh.OK
+    probe, request = [r for conn in _fake_http.created for r in conn.requests]
+    assert (probe["method"], probe["path"]) == ("HEAD", "/healthz")
+    assert request["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
+    assert _fake_http.created[0].closed  # the probe's own connection
+    assert "speaks omnigraph HTTP contract 0.13, not the pinned 0.14" in caplog.text
 
 
-@pytest.mark.parametrize("values", ["0.12", ["0.13", "0.13"], "0.13, 0.13"])
+def test_the_contract_is_discovered_once_per_transport(_fake_http, probing, caplog):
+    _fake_http.script = [
+        stamped("0.13"),
+        stamped("0.13", body='{"rows": []}'),
+        stamped("0.13", body='{"rows": []}'),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    with caplog.at_level("WARNING", logger=ogh.__name__):
+        transport.query("council", "q", {}, None)
+        transport.query("council", "q", {}, None)
+
+    assert [path for path, _ in _contracts_sent(_fake_http)].count("/healthz") == 1
+    assert caplog.text.count("speaks omnigraph HTTP contract") == 1
+
+
+def test_a_server_on_the_pinned_contract_logs_nothing(_fake_http, probing, caplog):
+    _fake_http.script = [stamped("0.14"), stamped("0.14", body='{"rows": []}')]
+
+    with caplog.at_level("WARNING", logger=ogh.__name__):
+        ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
+
+    assert caplog.text == ""
+
+
+def test_a_failed_probe_sends_the_pinned_contract_and_probes_again(_fake_http, probing):
+    """A down server must read as down from the request, and the next call
+    must still discover the contract once the server is back."""
+    _fake_http.script = [
+        ConnectionRefusedError("probe refused"),
+        stamped("0.14", body='{"rows": []}'),
+        stamped("0.13"),
+        stamped("0.13", body='{"rows": []}'),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    transport.query("council", "q", {}, None)
+    transport.query("council", "q", {}, None)
+
+    assert _contracts_sent(_fake_http) == [
+        ("/healthz", ""),
+        ("/graphs/council/query", "0.14"),
+        ("/healthz", ""),
+        ("/graphs/council/query", "0.13"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        stamped("0.15"),
+        FakeResponse(200, stamped=False),
+        FakeResponse(200, stamped=False, headers={"Omnigraph-Http-Api": ["0.13"] * 2}),
+    ],
+    ids=["unsupported", "unstamped", "repeated"],
+)
+def test_a_probe_without_one_supported_stamp_is_not_adopted(_fake_http, probing, probe):
+    _fake_http.script = [probe, stamped("0.14", body='{"rows": []}')]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    transport.query("council", "q", {}, None)
+
+    assert _contracts_sent(_fake_http)[1] == ("/graphs/council/query", "0.14")
+    assert transport._contract is None
+
+
+def test_a_mismatch_switches_contract_and_resends_a_read(_fake_http, caplog):
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body='{"rows": [1]}')]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    with caplog.at_level("WARNING", logger=ogh.__name__):
+        outcome = transport.query("council", "q", {"slug": "a"}, None)
+
+    assert outcome == ogh.Outcome(kind=ogh.OK, body='{"rows": [1]}', status=200)
+    first, second = _fake_http.sent
+    assert first["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.14"
+    assert second["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
+    assert second["body"] == first["body"]
+    assert transport.contract() == "0.13"
+    assert "speaks omnigraph HTTP contract 0.13" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "send",
+    [
+        lambda t: t.mutate("council", "q", {"slug": "a"}, None),
+        lambda t: t.mutate("council", "q", {}, None, if_graph_commit="c1"),
+        lambda t: t.load_ndjson("council", '{"type": "Memory"}\n', None, mode="merge"),
+    ],
+    ids=["mutate", "conditional-mutate", "load"],
+)
+def test_a_mismatch_resends_a_write_once(_fake_http, send):
+    """The refusal runs before graph resolution and body work on both
+    supported servers, so the write was not applied and resending it once
+    cannot duplicate it."""
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    outcome = send(transport)
+
+    assert outcome.kind == ogh.OK
+    first, second = _fake_http.sent
+    assert second["headers"][ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
+    assert {k: v for k, v in second.items() if k != "headers"} == {
+        k: v for k, v in first.items() if k != "headers"
+    }
+    assert second["headers"].get(ogh.IF_GRAPH_COMMIT_HEADER) == first["headers"].get(
+        ogh.IF_GRAPH_COMMIT_HEADER
+    )
+
+
+def test_a_second_mismatch_on_the_same_call_is_terminal(_fake_http):
+    """A server that refuses both contracts, or flips again mid-call, is not
+    chased: one resend, then a violation that says the effects are unknown."""
+    _fake_http.script = [mismatch("0.13"), mismatch("0.14")]
+
+    outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+    assert len(_fake_http.sent) == 2
+
+
+def test_a_mismatch_naming_an_unsupported_contract_is_not_resent(_fake_http):
+    _fake_http.script = [mismatch("0.15")]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    outcome = transport.query("council", "q", {}, None)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+    assert len(_fake_http.sent) == 1
+    assert transport.contract() == "0.14"
+
+
+def test_a_400_stamped_with_another_contract_that_is_not_a_mismatch_is_not_resent(
+    _fake_http,
+):
+    """Only the server's own refusal of our header proves nothing ran."""
+    _fake_http.script = [
+        stamped("0.13", 400, json.dumps({"error": "bad", "code": "x"}))
+    ]
+
+    outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.CONTRACT_VIOLATION
+    assert len(_fake_http.sent) == 1
+
+
+def test_a_resend_goes_out_on_a_fresh_connection(_fake_http):
+    """The server answers a mismatch without reading the body, so the
+    connection it came back on is not trusted with the resend of a write."""
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body="{}")]
+
+    ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
+
+    refused, resent = _fake_http.created
+    assert refused.closed and len(refused.requests) == 1
+    assert len(resent.requests) == 1
+
+
+def test_a_resend_carries_the_refusing_servers_stamp(_fake_http, monkeypatch):
+    """Even when another thread moved the transport meanwhile: the stamp is
+    what the server that refused this call speaks."""
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    real_switch = transport._switch_contract
+
+    def moved_meanwhile(sent: str, stamp: str) -> None:
+        transport._contract = "0.12"
+        real_switch(sent, stamp)
+
+    monkeypatch.setattr(transport, "_switch_contract", moved_meanwhile)
+
+    outcome = transport.mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.OK
+    assert [c for _, c in _contracts_sent(_fake_http)] == ["0.14", "0.13"]
+    assert transport._contract == "0.12"
+
+
+def test_the_probe_runs_outside_the_lock_under_its_own_timeout(_fake_http, probing):
+    """A server that accepts and never answers must not queue every thread
+    behind one probe at the full request timeout."""
+    _fake_http.script = [stamped("0.14"), stamped("0.14", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    held: list[bool] = []
+    real_probe = transport._probe_contract
+
+    def probe() -> str | None:
+        held.append(transport._contract_lock.locked())
+        return real_probe()
+
+    transport._probe_contract = probe  # type: ignore[method-assign]
+
+    transport.query("council", "q", {}, None)
+
+    assert held == [False]
+    probe_conn, request_conn = _fake_http.created
+    assert probe_conn.timeout == ogh.PROBE_TIMEOUT_SECONDS
+    assert request_conn.timeout == ogh.DEFAULT_TIMEOUT_SECONDS
+
+
+def test_a_load_re_probes_so_a_changed_data_tier_does_not_cut_it_at_send(
+    _fake_http, probing
+):
+    """A 6 MB load sent with the wrong contract dies at send with a broken
+    pipe on both servers (no stamped refusal to learn from), so a transport
+    that cached 0.13 before the data tier moved to 0.14 must check first."""
+    _fake_http.script = [stamped("0.14"), stamped("0.14", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.13"
+
+    outcome = transport.load_ndjson(
+        "council", '{"type": "Memory"}\n', None, mode="merge"
+    )
+
+    assert outcome.kind == ogh.OK
+    assert _contracts_sent(_fake_http) == [
+        ("/healthz", ""),
+        ("/graphs/council/load/ndjson?mode=merge", "0.14"),
+    ]
+    assert transport.contract() == "0.14"
+
+
+def test_a_re_probe_overtaken_by_another_threads_switch_does_not_undo_it(
+    _fake_http,
+):
+    """The probe saw the old server; meanwhile another thread's request was
+    refused by the new one and switched the transport. The switch is newer."""
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.13"
+
+    def slow_probe() -> str:
+        transport._contract = "0.14"  # another thread switched meanwhile
+        return "0.13"
+
+    transport._probe_contract = slow_probe  # type: ignore[method-assign]
+
+    assert transport.refresh_contract() == "0.14"
+    assert transport._contract == "0.14"
+
+
+def test_a_load_goes_out_on_a_fresh_connection(_fake_http):
+    """Not on this thread's pooled socket, which may lead to a server the
+    data tier has since replaced: there a write would fail mid-upload."""
+    _fake_http.script = [ok({"rows": []}), stamped("0.14", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport.query("council", "q", {}, None)
+
+    transport.load_ndjson("council", '{"type": "Memory"}\n', None, mode="merge")
+
+    pooled, fresh = _fake_http.created
+    assert pooled.closed
+    assert [r["path"] for r in fresh.requests] == [
+        "/graphs/council/load/ndjson?mode=merge"
+    ]
+
+
+def test_a_failed_re_probe_keeps_the_cached_contract(_fake_http, probing):
+    _fake_http.script = [
+        ConnectionRefusedError("probe refused"),
+        stamped("0.13", body="{}"),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.13"
+
+    transport.load_ndjson("council", '{"type": "Memory"}\n', None, mode="merge")
+
+    assert _contracts_sent(_fake_http)[-1][1] == "0.13"
+    assert transport._contract == "0.13"
+
+
+def test_a_data_tier_that_changes_contract_under_a_live_process_is_followed(
+    _fake_http,
+):
+    """The data tier rolls to 0.14 while witan runs on 0.13, then back."""
+    _fake_http.script = [
+        mismatch("0.13"),
+        stamped("0.13", body='{"rows": []}'),
+        stamped("0.13", body='{"rows": []}'),
+        mismatch("0.14"),
+        stamped("0.14", body='{"rows": []}'),
+        stamped("0.14", body='{"rows": []}'),
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    kinds = [transport.query("council", "q", {}, None).kind for _ in range(4)]
+
+    assert kinds == [ogh.OK] * 4
+    assert [c for _, c in _contracts_sent(_fake_http)] == [
+        "0.14",
+        "0.13",
+        "0.13",
+        "0.13",
+        "0.14",
+        "0.14",
+    ]
+
+
+def test_threads_share_the_negotiated_contract(_fake_http):
+    """The contract is the server's, so a switch on one thread holds on all."""
+    _fake_http.script = [mismatch("0.13"), stamped("0.13", body="{}")]
+    transport = ogh.PooledTransport("http://host:8080")
+    transport.query("council", "q", {}, None)
+    _fake_http.script = [stamped("0.13", body="{}")]
+
+    worker = threading.Thread(target=transport.query, args=("council", "q", {}, None))
+    worker.start()
+    worker.join()
+
+    worker_conn = _fake_http.created[-1]
+    assert worker_conn.thread != _fake_http.created[0].thread
+    sent = worker_conn.requests[0]["headers"]
+    assert sent[ogh.HTTP_API_CONTRACT_HEADER] == "0.13"
+
+
+def test_a_switch_does_not_undo_another_threads_newer_switch():
+    """A thread that sent 0.14 and was refused learns 0.13, but by the time it
+    records that another thread has moved the transport off 0.14. The lesson
+    is about a contract the transport no longer sends, so it is dropped."""
+    transport = ogh.PooledTransport("http://host:8080")
+    transport._contract = "0.12"
+
+    transport._switch_contract("0.14", "0.13")
+
+    assert transport._contract == "0.12"
+
+
+@pytest.mark.parametrize("values", ["0.13", ["0.14", "0.14"], "0.14, 0.14"])
 def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, values):
     """Present but wrong, which no pin gates: the body is not decoded."""
     _fake_http.script = [
@@ -711,13 +1201,13 @@ def test_a_response_on_another_contract_is_terminal_even_for_a_read(_fake_http, 
 def test_a_refusal_on_another_contract_is_not_classified_by_its_status(
     _fake_http, idempotent
 ):
-    """A 503 stamped 0.14 is not our server asking us to wait."""
+    """A 503 stamped 0.15 is not our server asking us to wait."""
     _fake_http.script = [
         FakeResponse(
             503,
             "loading",
             stamped=False,
-            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.14"},
+            headers={ogh.HTTP_API_CONTRACT_HEADER: "0.15"},
         )
     ]
     transport = ogh.PooledTransport("http://host:8080")
@@ -727,7 +1217,7 @@ def test_a_refusal_on_another_contract_is_not_classified_by_its_status(
     assert outcome.kind == ogh.CONTRACT_VIOLATION
 
 
-def test_an_unstamped_success_is_not_a_result(_fake_http, contract_required):
+def test_an_unstamped_success_is_not_a_result(_fake_http):
     _fake_http.script = [ok({"rows": []}, stamped=False)]
 
     outcome = ogh.PooledTransport("http://host:8080").query("council", "q", {}, None)
@@ -737,9 +1227,7 @@ def test_an_unstamped_success_is_not_a_result(_fake_http, contract_required):
 
 
 @pytest.mark.parametrize("status", [409, 429, 502, 503])
-def test_an_unstamped_refusal_of_a_write_is_never_retryable(
-    _fake_http, contract_required, status
-):
+def test_an_unstamped_refusal_of_a_write_is_never_retryable(_fake_http, status):
     """Each of these is retried when the server says it, because the server
     saying it proves nothing was applied. A proxy saying it proves nothing."""
     _fake_http.script = [FakeResponse(status, "upstream reset", stamped=False)]
@@ -751,9 +1239,7 @@ def test_an_unstamped_refusal_of_a_write_is_never_retryable(
     assert "effects are unknown" in outcome.error
 
 
-def test_a_stamped_refusal_of_a_write_keeps_its_classification(
-    _fake_http, contract_required
-):
+def test_a_stamped_refusal_of_a_write_keeps_its_classification(_fake_http):
     _fake_http.script = [err(503, "graph is loading", code="graph_unavailable")]
 
     outcome = ogh.PooledTransport("http://host:8080").mutate("council", "q", {}, None)
@@ -761,9 +1247,7 @@ def test_a_stamped_refusal_of_a_write_keeps_its_classification(
     assert outcome.kind == ogh.UNAVAILABLE
 
 
-def test_an_unstamped_failure_of_a_read_keeps_its_classification(
-    _fake_http, contract_required
-):
+def test_an_unstamped_failure_of_a_read_keeps_its_classification(_fake_http):
     """A proxy's 503 while the server restarts. Repeating a read is safe."""
     _fake_http.script = [FakeResponse(503, "no healthy upstream", stamped=False)]
 
@@ -1130,6 +1614,94 @@ def test_an_ordinary_write_sends_no_precondition_header(
     assert ogh.IF_GRAPH_COMMIT_HEADER not in request["headers"]
 
 
+# ── the actor assertion (Omnigraph-If-Actor) ─────────────────────────
+
+
+_ACTOR_MISMATCH_412 = err(
+    412,
+    "the credential resolves to actor 'act-b', not the expected 'act-a'",
+    code="actor_mismatch",
+    effects="none",
+    action="fix",
+)
+
+
+def test_a_per_actor_client_asserts_its_actor_on_reads_and_writes(
+    monkeypatch, tmp_path, _fake_http
+):
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _mutation_dir(tmp_path)
+    _fake_http.script = [
+        ok({"rows": []}),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+        ok({"commits": []}),
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", tmp_path, graph_id="council", actor="act-a"
+    )
+
+    client.read("read.gq", "find_memory", {"slug": "m-1"})
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+    client.commit_list("main")
+
+    requests = [r for conn in _fake_http.created for r in conn.requests]
+    assert [r["headers"][ogh.IF_ACTOR_HEADER] for r in requests] == ["act-a"] * 3
+
+
+def test_a_client_without_an_actor_asserts_none(monkeypatch, tmp_path, _fake_http):
+    """Local stdio use, and every non-per-actor client: unchanged requests."""
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert ogh.IF_ACTOR_HEADER not in _fake_http.created[0].requests[0]["headers"]
+
+
+def test_the_load_route_asserts_the_actor(monkeypatch, tmp_path, _fake_http):
+    _fake_http.script = [ok({})]
+    client = _client(
+        monkeypatch, "http://host:8080", tmp_path, graph_id="council", actor="act-a"
+    )
+
+    client.load_batch([{"type": "Task", "data": {"slug": "t-1"}}])
+
+    request = _fake_http.created[-1].requests[0]
+    assert request["path"].startswith("/graphs/council/load/ndjson")
+    assert request["headers"][ogh.IF_ACTOR_HEADER] == "act-a"
+
+
+def test_an_actor_mismatch_is_its_own_kind_not_a_failed_precondition():
+    disposition = ogh.Disposition("actor_mismatch", "none", "fix")
+    assert ogh.classify_status(412, "x", disposition) == ogh.ACTOR_MISMATCH
+
+
+@pytest.mark.parametrize("surface_conflict", [False, True])
+def test_an_actor_mismatch_is_terminal_and_never_a_lost_race(
+    monkeypatch, tmp_path, _fake_http, surface_conflict
+):
+    """A CAS caller that gets OmnigraphConflict re-reads and reports
+    `lost_race`, which would be a wrong answer here: the token is wrong, and
+    no re-read fixes it. One scripted response is the no-retry assertion."""
+    _fake_http.script = [_ACTOR_MISMATCH_412]
+    client = _client(
+        monkeypatch,
+        "http://host:8080",
+        _mutation_dir(tmp_path),
+        graph_id="council",
+        actor="act-a",
+    )
+
+    with pytest.raises(RuntimeError, match="does not belong to 'act-a'") as raised:
+        client.change(
+            "mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=surface_conflict
+        )
+    assert not isinstance(raised.value, og.OmnigraphConflict)
+    assert len(_fake_http.created[0].requests) == 1
+
+
 def test_read_with_commit_returns_the_snapshot_token(monkeypatch, tmp_path, _fake_http):
     """The token has to come back with the rows it belongs to.
 
@@ -1346,7 +1918,7 @@ def test_recovery_required_on_a_write_is_indeterminate_and_terminal(
 
 
 def test_an_unstamped_refusal_of_a_write_is_indeterminate_and_terminal(
-    monkeypatch, tmp_path, _fake_http, contract_required
+    monkeypatch, tmp_path, _fake_http
 ):
     """One response scripted: a retry would exhaust the script. Raised as
     WriteIndeterminate so a caller that re-reads on that does so here too."""
@@ -1363,7 +1935,7 @@ def test_an_unstamped_refusal_of_a_write_is_indeterminate_and_terminal(
 
 
 def test_an_unstamped_success_of_a_read_is_an_error_not_rows(
-    monkeypatch, queries_dir, _fake_http, contract_required
+    monkeypatch, queries_dir, _fake_http
 ):
     _fake_http.script = [ok({"rows": [{"m.slug": "x"}]}, stamped=False)]
     client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
@@ -1435,6 +2007,44 @@ def test_a_409_over_http_is_retried_for_an_ordinary_writer(
     monkeypatch.setattr(og.time, "sleep", lambda *_: None)
     _fake_http.script = [
         err(409, _WRITE_AUTHORITY_409, code="conflict"),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 2
+
+
+@pytest.mark.parametrize("effects", ["partial", "unknown"])
+def test_a_409_whose_disposition_says_effects_landed_is_never_replayed(
+    monkeypatch, tmp_path, _fake_http, effects
+):
+    """0.14 answers a load whose fork published before its rows were refused
+    with 409 and ``effects: partial``. The 409 rule would replay it. Scripting
+    one response is the assertion: a retry would exhaust the script."""
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, "key conflict on Person", code="conflict", effects=effects)
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="HTTP 409 with a disposition"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_409_whose_disposition_says_no_effects_is_still_retried(
+    monkeypatch, tmp_path, _fake_http
+):
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, _WRITE_AUTHORITY_409, code="conflict", effects="none"),
         ok({"affected_nodes": 1, "affected_edges": 0}),
     ]
     client = _client(
@@ -1925,7 +2535,7 @@ def test_an_export_refusal_is_raised_with_the_servers_message(
 
 
 def test_an_unstamped_export_is_not_streamed_into_the_file(
-    monkeypatch, queries_dir, tmp_path, _fake_http, contract_required
+    monkeypatch, queries_dir, tmp_path, _fake_http
 ):
     """A 200 without the contract stamp is not the server's export. Its body
     is left unread, so the connection holding it is discarded too."""

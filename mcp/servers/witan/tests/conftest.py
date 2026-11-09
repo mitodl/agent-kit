@@ -13,7 +13,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from testsupport.omnigraph_server import serve
+from testsupport.omnigraph_server import (
+    omnigraph_server_bin,  # noqa: F401 (a fixture)
+    serve,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = ROOT / "schema" / "schema.pg"
@@ -225,9 +228,16 @@ SERVED_REPO = "https://github.com/test/repo"
 
 
 @pytest.fixture
-def served(tmp_path, monkeypatch, tmp_state_dir, no_background_optimize):
-    """witan's tools pointed at a fresh one-graph omnigraph-server."""
-    with serve(tmp_path, SCHEMA, SERVED_GRAPH) as url:
+def served(
+    tmp_path,
+    monkeypatch,
+    tmp_state_dir,
+    no_background_optimize,
+    omnigraph_server_bin,  # noqa: F811
+):
+    """witan's tools pointed at a fresh one-graph omnigraph-server, once per
+    configured server (see ``testsupport.omnigraph_server.SERVER_BINS``)."""
+    with serve(tmp_path, SCHEMA, SERVED_GRAPH, omnigraph_server_bin) as url:
         yield _served_tools(monkeypatch, url), url
 
 

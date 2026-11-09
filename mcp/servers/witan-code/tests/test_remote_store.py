@@ -274,31 +274,12 @@ def test_an_unknown_transport_is_rejected_at_load(monkeypatch, tmp_path):
 # ── The transport itself ──────────────────────────────────────────────────────
 
 
-class _Tool:
-    def __init__(self, name):
-        self.name = name
-
-
 class _FakeClient:
-    """Stands in for a connected MCP client; records the calls it served.
+    """Stands in for a connected MCP client; records the calls it served."""
 
-    ``tools`` is the surface the deployment advertises. It defaults to the full
-    current one; a test pins an OLDER deployment by passing a narrower set.
-    """
-
-    DEFAULT_TOOLS = (
-        "code_store_read",
-        "code_store_mutate",
-        "code_store_mutate_many",
-        "code_store_load",
-        "code_store_open",
-        "code_store_views",
-    )
-
-    def __init__(self, log, fail_first=False, tools=None):
+    def __init__(self, log, fail_first=False):
         self._log = log
         self._fail_first = fail_first
-        self._tools = self.DEFAULT_TOOLS if tools is None else tuple(tools)
 
     async def __aenter__(self):
         self._log.append(("connect", None))
@@ -306,10 +287,6 @@ class _FakeClient:
 
     async def __aexit__(self, *_exc):
         self._log.append(("disconnect", None))
-
-    async def list_tools(self):
-        self._log.append(("list_tools", None))
-        return [_Tool(name) for name in self._tools]
 
     async def call_tool(self, name, arguments):
         if self._fail_first:
@@ -735,102 +712,32 @@ def test_an_empty_batch_costs_nothing():
     assert log == []
 
 
-def test_a_deployment_without_the_batch_tool_gets_the_per_step_loop():
-    """This is a DEPLOYED contract: the server ships before its clients, but a
-    client can still meet an older one. It must be slow, not broken."""
-    log: list = []
-    older = [t for t in _FakeClient.DEFAULT_TOOLS if t != "code_store_mutate_many"]
-    session = StoreSession(
-        "http://x/mcp", lambda: "jwt", lambda _t: _FakeClient(log, tools=older)
-    )
-    RemoteStoreClient(REPO, session, branch="act-alice/x").change_many(_steps(3))
-    session.close()
-
-    assert _calls(log, "code_store_mutate_many") == []
-    assert [c["params"]["id"] for c in _calls(log, "code_store_mutate")] == [
-        "f0",
-        "f1",
-        "f2",
-    ]
-
-
-class _Unaskable(_FakeClient):
-    """A deployment too old to answer `list_tools` at all."""
-
-    def __init__(self, log, **kw):
-        super().__init__(log, **kw)
-        self.asked = 0
+class _Unlistable(_FakeClient):
+    """A deployment whose tool listing fails, e.g. mid-restart."""
 
     async def list_tools(self):
-        self.asked += 1
-        raise RuntimeError("no such method")
+        self._log.append(("list_tools", None))
+        raise RuntimeError("listing failed")
 
 
-def test_a_server_that_cannot_be_asked_falls_back_rather_than_failing():
-    """A deployment too old to answer `list_tools` is certainly too old to have
-    the batch tool, and refusing here would fail an index that can succeed."""
+def test_a_batch_never_degrades_to_one_commit_per_statement():
+    """The per-step fallback is gone. It cached a failed tool listing as "no
+    batch tool" for the life of the connection and then sent every delete of a
+    reindex as its own commit, which is how one actor wrote its branch view
+    about every 3.5s for hours on Production."""
     log: list = []
-    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: _Unaskable(log))
-    RemoteStoreClient(REPO, session).change_many(_steps(2))
-    session.close()
-    assert len(_calls(log, "code_store_mutate")) == 2
-
-
-def test_a_failed_tool_listing_is_cached_like_a_successful_one():
-    """Otherwise an index re-asks a server that already refused once, paying a
-    round trip AND an exception on every batch — the per-call cost this whole
-    change exists to remove."""
-    log: list = []
-    old = _Unaskable(log)
-    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: old)
-    client = RemoteStoreClient(REPO, session)
-    for _ in range(5):
-        client.change_many(_steps(1))
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: _Unlistable(log))
+    client = RemoteStoreClient(REPO, session, branch="act-alice/x")
+    for _ in range(3):
+        client.change_many(_steps(200), chunk_size=128)
     session.close()
 
-    assert old.asked == 1, f"re-asked {old.asked} times; should ask once per connection"
-    assert len(_calls(log, "code_store_mutate")) == 5  # all five still written
-
-
-def test_a_reconnect_clears_a_cached_failure_too():
-    """The cache dies with the connection, so a transport blip costs the slow
-    path only until the next reconnect — not for the life of the process."""
-    log: list = []
-    old = _Unaskable(log)
-    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: old)
-    client = RemoteStoreClient(REPO, session)
-    client.change_many(_steps(1))
-    assert old.asked == 1
-    session._disconnect()
-    client.change_many(_steps(1))
-    session.close()
-    assert old.asked == 2
-
-
-def test_the_tool_surface_is_asked_once_per_connection_not_once_per_batch():
-    """An index issues many batches; re-listing the surface each time would put
-    back the round trip batching just removed."""
-    log: list = []
-    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: _FakeClient(log))
-    client = RemoteStoreClient(REPO, session)
-    client.change_many(_steps(2))
-    client.change_many(_steps(2))
-    client.change_many(_steps(2))
-    session.close()
-    assert [entry for entry, _ in log].count("list_tools") == 1
-
-
-def test_a_reconnect_re_asks_the_surface():
-    """A dropped connection may reconnect to a different replica mid-rollout,
-    so the cached surface must not outlive the connection it describes."""
-    log: list = []
-    clients = iter([_FakeClient(log, fail_first=True), _FakeClient(log)])
-    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: next(clients))
-    client = RemoteStoreClient(REPO, session)
-    client.change_many(_steps(1))
-    client.change_many(_steps(1))
-    session.close()
-    assert [entry for entry, _ in log].count("list_tools") == 2
+    assert _calls(log, "code_store_mutate") == []
+    assert [len(c["steps"]) for c in _calls(log, "code_store_mutate_many")] == [
+        128,
+        72,
+    ] * 3
+    assert "list_tools" not in [entry for entry, _ in log]
 
 
 def _gateway(status: int):

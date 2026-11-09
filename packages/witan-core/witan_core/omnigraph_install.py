@@ -27,6 +27,7 @@ sets the previous version aside as ``omnigraph-<version>`` beside ``dest``, and
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import re
@@ -35,6 +36,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 #: 0.10.0, from the real ``v0.10.0`` release — no longer the `edge` re-test.
@@ -53,7 +55,10 @@ from pathlib import Path
 #:
 #: 0.13.0 (2026-10-07) moves it again, to 14, and 0.12 was never pinned. See
 #: docs/internals/design/omnigraph-0-13-upgrade-spec.md.
-_OMNIGRAPH_VERSION = "0.13.0"
+#:
+#: 0.14.0 (2026-10-22) writes 16. See
+#: docs/internals/design/omnigraph-0-14-upgrade-spec.md.
+_OMNIGRAPH_VERSION = "0.14.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
@@ -85,12 +90,14 @@ _OMNIGRAPH_VERSION = "0.13.0"
 #: a real ``v<version>``, a Renovate bump here IS meaningful — it must move this
 #: tag, the three digests, and both Dockerfiles together, which is what
 #: ``just check-omnigraph-pins`` enforces.
-_OMNIGRAPH_RELEASE_TAG = "v0.13.0"
+_OMNIGRAPH_RELEASE_TAG = "v0.14.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
-#: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
+#: reported by ``omnigraph version --json``'s ``internal_schema.writes`` (the
+#: number on the text output's ``internal-schema`` line). 0.8.x reads 4;
 #: 0.9.x and 0.10.x read 6; 0.11.x reads 9 (and opens 8, which we never wrote);
-#: 0.13.x reads 14 and nothing else ("serves v14 to v14").
+#: 0.13.x reads 14 and nothing else ("serves v14 to v14"); 0.14.x writes 16
+#: and reads 14 to 16 ("serves v14 to v16").
 #:
 #: 6 -> 9 is planned: every deployed graph is exported with 0.10 and rebuilt
 #: under a keyed schema (``omnigraph upgrade`` refuses cluster-managed roots),
@@ -100,10 +107,14 @@ _OMNIGRAPH_RELEASE_TAG = "v0.13.0"
 #:
 #: 9 -> 14 is planned the same way: a deployed cluster root is rebuilt by
 #: ol-infrastructure's storage-migration Job, and a local store goes through
-#: ``witan migrate storage``. This number also turns on
-#: ``omnigraph_http.RESPONSE_CONTRACT_REQUIRED``, so a client on this pin
-#: treats an unstamped response as a contract violation: the data tier has to
-#: move before the witan clients in each environment, never after.
+#: ``witan migrate storage``.
+#:
+#: 14 -> 16 needs no rebuild. 0.14 opens a format-14 graph in place, but the
+#: first publish under it stamps that branch 16 and a 0.13 binary refuses it
+#: from then on, so there is no way back once a 0.14 server has written. The
+#: witan clients don't have to wait for the data tier: the pooled transport
+#: speaks whichever of ``omnigraph_http.SUPPORTED_HTTP_API_CONTRACTS`` the
+#: server stamps.
 #:
 #: THIS IS A DECLARATION, NOT A CACHE. Renovate bumps the version pin above and
 #: cannot know about this line, so a release that moves the storage format
@@ -116,7 +127,15 @@ _OMNIGRAPH_RELEASE_TAG = "v0.13.0"
 #: migration, not the first: every local store and every deployed graph written
 #: under the old number has to be rebuilt, and a 0.8.x binary refuses a 0.9.x
 #: graph in both directions, so there is no gradual path and no downgrade.
-_OMNIGRAPH_INTERNAL_SCHEMA = 14
+_OMNIGRAPH_INTERNAL_SCHEMA = 16
+
+#: The oldest format ``_OMNIGRAPH_VERSION`` still opens in place, the low end
+#: of the same report's ``internal_schema.serves`` range. Both images carry it as
+#: ``edu.mit.ol.omnigraph.min-internal-schema``, so ol-infrastructure's preview
+#: can accept a 0.14 image against a root that still holds format 14 instead of
+#: demanding a rebuild the upgrade doesn't need. A declaration like the one
+#: above, and ``bin/check_omnigraph_format.py`` checks both.
+_OMNIGRAPH_MIN_INTERNAL_SCHEMA = 14
 
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
@@ -545,15 +564,33 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     linux-x86_64  da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
 #:     linux-arm64   af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
 #:     macos-arm64   64ed446169e01d2aceb9e8635b73a593681d71414e73dc0d67b0f6700048e4c0
+#:
+#: 2026-10-29, v0.13.0 -> v0.14.0 (tag commit 60bfd19db780). `omnigraph
+#: version` on this binary reads 0.14.0, "internal-schema 16 (serves v14 to
+#: v16)" and http-contract 0.14, so `_OMNIGRAPH_INTERNAL_SCHEMA` moves 14 -> 16
+#: and `omnigraph_http.HTTP_API_CONTRACT` moves to 0.14 in the same commit. The
+#: release notes say 15; the binary is what counts. The cutover is in
+#: docs/internals/design/omnigraph-0-14-upgrade-spec.md.
+#:
+#: CHECKS RUN:
+#:   * Digests: all three tarballs downloaded, `gzip -t` clean, hashed locally
+#:     and matched against each published `.sha256` and the release API digest.
+#:   * Format: `omnigraph version` and `bin/check_omnigraph_format.py` against
+#:     the 0.14.0 binary.
+#:
+#: The v0.13.0 triple this supersedes:
+#:     linux-x86_64  0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
+#:     linux-arm64   e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
+#:     macos-arm64   0a1c7f013e18465254fb925dc177f3089bf6e0cfe4a0ecfc9908a180ab84cc72
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30"
+        "02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96"
+        "f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "0a1c7f013e18465254fb925dc177f3089bf6e0cfe4a0ecfc9908a180ab84cc72"
+        "91c8af54b859f023c42e2d3db37a2f3a361def0d6bb093530d53d3357986db83"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
@@ -590,50 +627,101 @@ def _installed_version(dest: Path) -> str | None:
     return match.group(0) if match else None
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    """``0.10.0`` as ``(0, 10, 0)``, so it orders above ``0.9.0``."""
+    return tuple(int(part) for part in version.split("."))
+
+
 def default_install_path() -> Path:
     """Where :func:`install_omnigraph` puts the binary."""
     return Path.home() / ".local" / "bin" / "omnigraph"
 
 
-_INTERNAL_SCHEMA_LINE = re.compile(r"^\s*internal-schema\s+(\d+)\b", re.MULTILINE)
+@dataclass(frozen=True)
+class OmnigraphBuild:
+    """What ``omnigraph version --json`` says about a binary.
 
-
-def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
-    """The on-disk storage format ``binary`` reads, per ``omnigraph version``.
-
-    The number that decides whether an upgrade is a rebuild-everything event.
-    Read from the binary rather than inferred from its release number, because
-    the mapping is upstream's to change and has no published table.
-
-    Raises ``RuntimeError`` rather than returning a sentinel: every caller is
-    asking in order to compare against a declared value, and a comparison
-    against "unknown" that quietly passes is the failure mode this whole
-    mechanism exists to prevent.
+    :param version: The package version (``0.14.0``; an edge build appends
+        ``-edge+<short commit>``).
+    :param commit: The commit a packaged build was compiled from, ``None`` for
+        any other build.
+    :param http_contract: The ``omnigraph-http-api`` value it speaks.
+    :param writes: The storage format its publications stamp.
+    :param serves: The inclusive range of formats it opens in place, lowest
+        first.
     """
+
+    version: str
+    commit: str | None
+    http_contract: str
+    writes: int
+    serves: tuple[int, int]
+
+
+def reported_build(binary: str | Path = "omnigraph") -> OmnigraphBuild:
+    """Read ``binary``'s version, HTTP contract and storage formats.
+
+    The storage format decides whether an upgrade is a rebuild-everything
+    event. It is read from the binary rather than inferred from its release
+    number, because the mapping is upstream's to change and has no published
+    table.
+
+    From ``omnigraph version --json``, which 0.14 added and which answers
+    without contacting a server. Upstream's own test pins the document's whole
+    field set, so a rename fails here as a ``KeyError`` turned into the
+    ``RuntimeError`` below rather than as a regex quietly matching less.
+
+    NO TEXT FALLBACK FOR A PRE-0.14 BINARY. The caller is
+    ``bin/check_omnigraph_format.py``, checking the pinned binary, and the pin
+    has been 0.14 since storage format 16. A 0.13 binary
+    reaching this is a stale install, so it fails with that said rather than
+    being read through a second parser kept alive for it.
+    ``_installed_version`` stays on ``--version``, which every release prints,
+    because the installer has to name whatever binary it replaces.
+
+    :param binary: The omnigraph binary to run.
+    :returns: The binary's report.
+    :rtype: OmnigraphBuild
+    :raises RuntimeError: when the binary can't be run, exits non-zero, or
+        prints a document this can't read. Never a sentinel: every caller
+        compares the result against a declared value, and a comparison against
+        "unknown" that quietly passes is the failure this exists to prevent.
+    """
+    command = f"`{binary} version --json`"
     try:
         result = subprocess.run(
-            [str(binary), "version"],
+            [str(binary), "version", "--json"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"could not run `{binary} version`: {exc}") from exc
+        raise RuntimeError(f"could not run {command}: {exc}") from exc
     if result.returncode != 0:
+        # 0.13 exits 2 with "unexpected argument '--json' found".
         raise RuntimeError(
-            f"`{binary} version` failed ({result.returncode}):\n{result.stderr}"
+            f"{command} failed ({result.returncode}):\n{result.stderr}\n"
+            "omnigraph added `version --json` in 0.14, so an older binary "
+            f"fails here. `witan setup` installs the pinned {_OMNIGRAPH_VERSION}."
         )
-    # 0.11 prints `internal-schema 9`. 0.13 adds the range the binary serves:
-    # `internal-schema 14 (serves v14 to v14)`.
-    match = _INTERNAL_SCHEMA_LINE.search(result.stdout + result.stderr)
-    if match is not None:
-        return int(match.group(1))
-    raise RuntimeError(
-        f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"
-        "The storage-format checks depend on it; upstream may have renamed or "
-        "dropped it."
-    )
+    try:
+        doc = json.loads(result.stdout)
+        schema = doc["internal_schema"]
+        lowest, highest = schema["serves"]
+        return OmnigraphBuild(
+            version=doc["version"],
+            commit=doc["commit"],
+            http_contract=doc["http_contract"],
+            writes=int(schema["writes"]),
+            serves=(int(lowest), int(highest)),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"{command} printed a document this can't read ({exc!r}):\n"
+            f"{result.stdout}\nThe storage-format checks depend on it; upstream "
+            "may have renamed a field."
+        ) from exc
 
 
 def preserved_binaries(dest: Path | None = None) -> list[Path]:
@@ -658,8 +746,7 @@ def preserved_binaries(dest: Path | None = None) -> list[Path]:
     for entry in target.parent.glob("omnigraph-*"):
         match = _PRESERVED_RE.match(entry.name)
         if match and entry.is_file() and os.access(entry, os.X_OK):
-            parsed = tuple(int(part) for part in match.group(1).split("."))
-            found.append((parsed, entry))
+            found.append((_version_key(match.group(1)), entry))
     return [path for _, path in sorted(found, reverse=True)]
 
 
@@ -704,6 +791,13 @@ def install_omnigraph(dry_run: bool = False, *, strict: bool = True) -> None:
     platform this installer does not build for (witan works fine with an
     omnigraph put on PATH by other means), and the second is the converged
     state re-running is supposed to reach.
+
+    A BINARY NEWER THAN THE PIN IS LEFT IN PLACE, and that is a refusal like
+    any other, so ``strict`` raises it. A newer binary may already have stamped
+    local stores with a storage format the pinned one refuses, and the stamp
+    can't be undone, so replacing it would leave those stores unopenable until
+    someone noticed. Deleting the binary and re-running is the way to install
+    the pin anyway.
     """
     _download_omnigraph(default_install_path(), dry_run, strict=strict)
 
@@ -781,6 +875,26 @@ def _download_omnigraph(dest: Path, dry_run: bool, *, strict: bool = True) -> No
     if installed == _OMNIGRAPH_VERSION:
         console.print(
             f"  [dim]omnigraph[/dim] — {dest} already at v{_OMNIGRAPH_VERSION}, skipping"
+        )
+        return
+    if installed is not None and _version_key(installed) > _version_key(
+        _OMNIGRAPH_VERSION
+    ):
+        # Earlier releases replaced it with their older pin, so a witan-core
+        # pinned to 0.13 put 0.13 back over 0.14, which then refused every
+        # store 0.14 had stamped format 16.
+        consequence = (
+            f"It may have stamped local stores with a storage format "
+            f"v{_OMNIGRAPH_VERSION} can't open, and that can't be undone. "
+            f"Upgrade witan to use it, or delete {dest} and re-run to install "
+            f"v{_OMNIGRAPH_VERSION} anyway."
+        )
+        refuse(
+            f"  [yellow]omnigraph[/yellow] — {dest} is v{installed}, newer than "
+            f"this witan's pin v{_OMNIGRAPH_VERSION}; leaving it in place. "
+            f"{consequence}",
+            f"{dest} is omnigraph v{installed}, newer than the pinned "
+            f"v{_OMNIGRAPH_VERSION}; not replacing it. {consequence}",
         )
         return
 

@@ -94,12 +94,18 @@ check-omnigraph-pins:
     installer_schema=$(awk '/^_OMNIGRAPH_INTERNAL_SCHEMA = /{print $3; exit}' packages/witan-core/witan_core/omnigraph_install.py)
     server_schema=$(awk -F= '/^ARG OMNIGRAPH_INTERNAL_SCHEMA=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
     mcp_schema=$(awk -F= '/^ARG OMNIGRAPH_INTERNAL_SCHEMA=/{print $2; exit}' docker/witan.Dockerfile)
+    # The oldest format served in place, labelled the same way so the preview
+    # can accept a root the binary opens without having written it.
+    installer_min_schema=$(awk '/^_OMNIGRAPH_MIN_INTERNAL_SCHEMA = /{print $3; exit}' packages/witan-core/witan_core/omnigraph_install.py)
+    server_min_schema=$(awk -F= '/^ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
+    mcp_min_schema=$(awk -F= '/^ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=/{print $2; exit}' docker/witan.Dockerfile)
     # An empty capture means the line moved or was renamed, not that the pins
     # agree — three empty strings would otherwise compare equal and pass.
     for pair in "installer:$installer" "server:$server" "mcp:$mcp" \
                 "installer_tag:$installer_tag" "server_tag:$server_tag" "mcp_tag:$mcp_tag" \
                 "installer_sha:$installer_sha" "server_sha:$server_sha" "mcp_sha:$mcp_sha" \
-                "installer_schema:$installer_schema" "server_schema:$server_schema" "mcp_schema:$mcp_schema"; do
+                "installer_schema:$installer_schema" "server_schema:$server_schema" "mcp_schema:$mcp_schema" \
+                "installer_min_schema:$installer_min_schema" "server_min_schema:$server_min_schema" "mcp_min_schema:$mcp_min_schema"; do
         if [[ -z "${pair#*:}" ]]; then
             echo "could not read the omnigraph pin for '${pair%%:*}' — the declaration moved or was renamed" >&2
             exit 1
@@ -157,22 +163,37 @@ check-omnigraph-pins:
             echo "stage to check the internal-schema label against." >&2
             exit 1
         fi
-        if ! grep -q '^ARG OMNIGRAPH_INTERNAL_SCHEMA$' <<<"$runtime"; then
-            echo "$dockerfile declares OMNIGRAPH_INTERNAL_SCHEMA but its runtime" >&2
-            echo "stage never re-declares it, so the label would build EMPTY." >&2
-            echo "(An ARG in any other stage does not carry into runtime.)" >&2
-            echo "Add a bare 'ARG OMNIGRAPH_INTERNAL_SCHEMA' before the LABEL." >&2
-            exit 1
-        fi
-        if ! grep -q 'edu.mit.ol.omnigraph.internal-schema="\${OMNIGRAPH_INTERNAL_SCHEMA}"' <<<"$runtime"; then
-            echo "$dockerfile's runtime stage does not emit" >&2
-            echo "edu.mit.ol.omnigraph.internal-schema" >&2
-            echo "from \${OMNIGRAPH_INTERNAL_SCHEMA}. ol-infrastructure reads that" >&2
-            echo "label to refuse a preview whose image reads the wrong format;" >&2
-            echo "without it the check silently degrades to skipped." >&2
-            exit 1
-        fi
+        for arg_label in OMNIGRAPH_INTERNAL_SCHEMA:internal-schema OMNIGRAPH_MIN_INTERNAL_SCHEMA:min-internal-schema; do
+            arg=${arg_label%%:*}
+            label=edu.mit.ol.omnigraph.${arg_label#*:}
+            if ! grep -q "^ARG $arg\$" <<<"$runtime"; then
+                echo "$dockerfile declares $arg but its runtime" >&2
+                echo "stage never re-declares it, so the label would build EMPTY." >&2
+                echo "(An ARG in any other stage does not carry into runtime.)" >&2
+                echo "Add a bare 'ARG $arg' before the LABEL." >&2
+                exit 1
+            fi
+            if ! grep -qF "$label=\"\${$arg}\"" <<<"$runtime"; then
+                echo "$dockerfile's runtime stage does not emit $label" >&2
+                echo "from \${$arg}. ol-infrastructure reads that" >&2
+                echo "label to refuse a preview whose image reads the wrong format;" >&2
+                echo "without it the check silently degrades to skipped." >&2
+                exit 1
+            fi
+        done
     done
+    if [[ "$installer_min_schema" != "$server_min_schema" || "$installer_min_schema" != "$mcp_min_schema" ]]; then
+        echo "omnigraph min-internal-schema declarations have drifted:" >&2
+        echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer_min_schema" >&2
+        echo "  docker/omnigraph-server.Dockerfile:                  $server_min_schema" >&2
+        echo "  docker/witan.Dockerfile:                             $mcp_min_schema" >&2
+        exit 1
+    fi
+    if (( installer_min_schema > installer_schema )); then
+        echo "_OMNIGRAPH_MIN_INTERNAL_SCHEMA ($installer_min_schema) is above" >&2
+        echo "_OMNIGRAPH_INTERNAL_SCHEMA ($installer_schema): the labelled range would be empty." >&2
+        exit 1
+    fi
     if [[ "$installer_schema" != "$server_schema" || "$installer_schema" != "$mcp_schema" ]]; then
         echo "omnigraph internal-schema declarations have drifted — the images" >&2
         echo "would advertise a storage format this repo does not declare:" >&2
@@ -181,11 +202,14 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp_schema" >&2
         exit 1
     fi
-    echo "omnigraph pins agree: $installer (tag $installer_tag, sha ${installer_sha:0:12}…, format $installer_schema)"
+    echo "omnigraph pins agree: $installer (tag $installer_tag, sha ${installer_sha:0:12}…, format $installer_schema, serves from $installer_min_schema)"
     # The data tier's CLI may be built from patched source instead of taken
     # from the tarball, so it has no digest for the checks above to compare.
     # This holds that build's inputs to the release pin instead.
     uv run --package witan-core --extra cli python bin/check_omnigraph_cli_patch.py
+    # The HTTP contracts each image labels, which ol-infrastructure's preview
+    # compares so a contract bump can't deploy ahead of the witan that speaks it.
+    uv run --package witan-core --extra cli python bin/check_omnigraph_contract_labels.py
 
 # Fail if the pinned omnigraph binary reads a storage format this repo does not
 # declare — i.e. if a version bump is secretly a rebuild-every-graph event.
@@ -264,7 +288,7 @@ check-core-floor *args:
 changelog package:
     #!/usr/bin/env bash
     set -euo pipefail
-    SCRIV_TOOL="scriv@1.8.0"   # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.1"   # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
@@ -281,7 +305,7 @@ bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
     BUMP_TOOL="bump-my-version@1.5.1"   # keep in step with AGENTS.md
-    SCRIV_TOOL="scriv@1.8.0"            # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.1"            # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;

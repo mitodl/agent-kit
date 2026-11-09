@@ -121,6 +121,9 @@ class StoreRef:
     graph_id: str | None = None
     token: str | None = None
     via_mcp: str | None = None
+    #: The actor ``token`` was resolved for, which the client asserts to the
+    #: server so a token for anyone else is refused.
+    actor: str | None = None
 
     @property
     def is_remote(self) -> bool:
@@ -196,6 +199,9 @@ class StoreRef:
             branch=branch,
             graph_id=self.graph_id,
             connect_retry=connect_retry,
+            # Off the call without one, so a ref with no actor builds the
+            # client exactly as before.
+            **({"actor": self.actor} if self.actor else {}),
         )
 
     def exists(self, config: cfg_module.Config | None = None) -> bool:

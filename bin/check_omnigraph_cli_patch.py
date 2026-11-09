@@ -10,15 +10,17 @@ so this check holds its inputs to the pin instead:
 * ``OMNIGRAPH_CLI_SOURCE`` is ``patched`` exactly when ``OMNIGRAPH_RELEASE_TAG``
   equals ``OMNIGRAPH_CLI_PATCH_BASE_TAG``. A patched CLI from a different
   release than the server reads a different storage format (strict
-  single-version storage), and a stock CLI on the patch's release cannot reach
-  the S3 cluster root, which is the reason the patch exists. Either mismatch
-  is a partial bump.
+  single-version storage), and a stock CLI on the patches' release lacks their
+  backports (it cannot reach the S3 cluster root at all). Either mismatch is a
+  partial bump.
 * The base commit is a full commit id and the stage fetches by it, so a moved
   tag cannot change the build.
 * The runtime stage installs ``omnigraph`` once, from the selected stage, and
-  every patch the Dockerfile copies exists. Otherwise the selector could read
-  ``patched`` while the image still ships the stock binary, or the build fails
-  only in Concourse.
+  every ``docker/patches/*.patch`` is copied into the ``cli-patched`` stage and
+  ``git apply``-ed there, without ``||`` swallowing a failure. Otherwise the
+  selector could read ``patched`` while the image still ships the stock
+  binary, a backport could sit in the repo while the image leaves it out, or
+  the build fails only in Concourse.
 
 A Dockerfile that declares none of the three CLI pins and expands none of them
 has dropped the patch and passes. Declaring some but not all is an error.
@@ -36,6 +38,7 @@ app = cyclopts.App(
 )
 
 DOCKERFILE = Path("docker/omnigraph-server.Dockerfile")
+PATCHES_DIR = Path("docker/patches")
 CLI_PINS = (
     "OMNIGRAPH_CLI_SOURCE",
     "OMNIGRAPH_CLI_PATCH_BASE_TAG",
@@ -51,13 +54,20 @@ def _arg_defaults(text: str) -> dict[str, str]:
     return dict(re.findall(r"^ARG (\w+)=(\S+)$", text, flags=re.MULTILINE))
 
 
-def _runtime_stage(text: str) -> str:
+def _stage(text: str, name: str) -> str | None:
     match = re.search(
-        r"^FROM .* AS runtime$(.*?)(?=^FROM |\Z)", text, re.MULTILINE | re.DOTALL
+        rf"^FROM .* AS {re.escape(name)}$(.*?)(?=^FROM |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
     )
-    if match is None:
+    return None if match is None else match.group(1)
+
+
+def _runtime_stage(text: str) -> str:
+    stage = _stage(text, "runtime")
+    if stage is None:
         raise SystemExit(f"{DOCKERFILE} has no 'FROM ... AS runtime' stage.")
-    return match.group(1)
+    return stage
 
 
 def problems(text: str, root: Path) -> list[str]:
@@ -104,7 +114,8 @@ def problems(text: str, root: Path) -> list[str]:
     elif source == "release" and release_tag == base_tag:
         found.append(
             f"OMNIGRAPH_RELEASE_TAG is {release_tag}, the patch's base, but OMNIGRAPH_CLI_SOURCE="
-            "release ships the stock CLI, which cannot address the S3 cluster root. Set "
+            "release ships the stock CLI, which lacks the backports in docker/patches/ (it "
+            "cannot address the S3 cluster root at all). Set "
             "OMNIGRAPH_CLI_SOURCE=patched in the same change as the bump."
         )
     if not re.fullmatch(r"[0-9a-f]{40}", args["OMNIGRAPH_CLI_PATCH_BASE_COMMIT"]):
@@ -128,14 +139,61 @@ def problems(text: str, root: Path) -> list[str]:
         found.append(
             "the runtime stage does not re-declare OMNIGRAPH_CLI_SOURCE, so its label builds empty."
         )
-    patches = re.findall(r"^COPY (docker/patches/\S+)", text, re.MULTILINE)
-    if not patches:
-        found.append(
-            "no 'COPY docker/patches/...' line, so the patched stage applies nothing."
-        )
-    found.extend(
-        f"{patch} does not exist." for patch in patches if not (root / patch).is_file()
+    found.extend(_patch_problems(text, root))
+    return found
+
+
+def _patch_problems(text: str, root: Path) -> list[str]:
+    """Hold every patch in ``docker/patches/`` to being built into the CLI.
+
+    Starts from the files on disk, not the Dockerfile's COPY lines, so a
+    backport whose COPY and apply were both deleted still fails.
+
+    :param text: the Dockerfile's contents.
+    :param root: the repository root.
+    :returns: one message per patch problem.
+    :rtype: list[str]
+    """
+    stage = _stage(text, "cli-patched")
+    if stage is None:
+        return [
+            "no 'FROM ... AS cli-patched' stage, so the patched selector builds nothing."
+        ]
+    code = "\n".join(
+        line for line in stage.splitlines() if not line.lstrip().startswith("#")
     )
+    # Every source of every COPY: all tokens but the flags and the destination.
+    copied = {
+        Path(source).name: source
+        for line in re.findall(r"^COPY\s+(.*)$", code, re.MULTILINE)
+        for source in line.split()[:-1]
+        if source.startswith(f"{PATCHES_DIR}/")
+    }
+    on_disk = sorted(path.name for path in (root / PATCHES_DIR).glob("*.patch"))
+    found = [
+        f"{source} does not exist."
+        for source in copied.values()
+        if not (root / source).is_file()
+    ]
+    if not on_disk:
+        found.append(
+            f"{PATCHES_DIR}/ holds no patch, so the patched stage applies nothing."
+        )
+    for name in on_disk:
+        applied = re.search(
+            rf"git apply(?:\s+-\S+)*\s+(?:\S*/)?{re.escape(name)}(?!\S)(?![^\n]*\|\|)",
+            code,
+        )
+        if name not in copied:
+            found.append(
+                f"{PATCHES_DIR}/{name} is never copied into the cli-patched stage, so the "
+                "image leaves it out. Copy and apply it, or delete it."
+            )
+        elif applied is None:
+            found.append(
+                f"{PATCHES_DIR}/{name} is copied into the cli-patched stage but never "
+                "applied, or its failure is ignored."
+            )
     return found
 
 

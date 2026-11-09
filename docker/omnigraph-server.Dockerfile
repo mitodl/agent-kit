@@ -33,15 +33,15 @@
 # The CLI is the one exception to "both binaries come from the release
 # tarball": see OMNIGRAPH_CLI_SOURCE below.
 
-ARG OMNIGRAPH_VERSION=0.13.0
+ARG OMNIGRAPH_VERSION=0.14.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.13.0
-ARG OMNIGRAPH_SHA256_X86_64=0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
-ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
+ARG OMNIGRAPH_RELEASE_TAG=v0.14.0
+ARG OMNIGRAPH_SHA256_X86_64=02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9
+ARG OMNIGRAPH_SHA256_ARM64=f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff
 # The on-disk storage format the pinned binary reads, mirrored from witan_core's
 # declaration (packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image below as
@@ -62,7 +62,19 @@ ARG OMNIGRAPH_SHA256_ARM64=e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d
 # runtime stage's re-declaration of it, and the LABEL line that emits it — an
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=14
+ARG OMNIGRAPH_INTERNAL_SCHEMA=16
+# The oldest format the binary opens in place (0.14 serves 14 to 16), mirrored
+# from _OMNIGRAPH_MIN_INTERNAL_SCHEMA and stamped as
+# `edu.mit.ol.omnigraph.min-internal-schema`. ol-infrastructure's preview
+# accepts this image against any served root from this number up to the one
+# above, so an in-place upgrade isn't refused as if it needed a rebuild.
+ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=14
+# The HTTP contract the server speaks (witan_core.omnigraph_http ::
+# HTTP_API_CONTRACT), stamped as `edu.mit.ol.omnigraph.http-api-contract`.
+# ol-infrastructure's preview refuses this image while the deployed witan image
+# can't speak it, so a contract bump can't land before the client that
+# negotiates it. `just check-omnigraph-pins` holds it to witan-core.
+ARG OMNIGRAPH_HTTP_API_CONTRACT=0.14
 # Where the `omnigraph` CLI in this image comes from: `release` (the tarball
 # above, like omnigraph-server) or `patched` (the cli-patched stage below).
 #
@@ -78,14 +90,30 @@ ARG OMNIGRAPH_INTERNAL_SCHEMA=14
 # image's CLI is patched: omnigraph-server here, the witan image and
 # `witan setup` all keep the stock release digests.
 #
+# The stage also applies docker/patches/omnigraph-cleanup-keep-from-listing.patch,
+# a backport of upstream PR #1188. Stock 0.14 cleanup reads every __manifest
+# version of every live branch, one at a time, on every run (upstream #644).
+# With the backport, version numbers come from the _versions/ listing:
+# - `--keep N` with no `--older-than` reads only the manifests it retains and
+#   the merge base, so its planning no longer grows with history.
+# - `--older-than` (what docker/omnigraph_maintenance.py runs) still reads one
+#   manifest per version older than HEAD, but up to the store's io_parallelism
+#   at a time instead of one by one. Its planning still grows with history.
+# It changes no storage format, so the CLI still reads and writes exactly what
+# the server does. It does change two refusals: `--keep N` alone no longer stops
+# on an unreadable manifest of a commit it drops (it prunes it), and a listed
+# version whose manifest body names another version is refused.
+#
 # `just check-omnigraph-pins` holds the selector to the release pin: it must
 # be `patched` exactly when OMNIGRAPH_RELEASE_TAG equals
 # OMNIGRAPH_CLI_PATCH_BASE_TAG, so the patched CLI ships with the 0.14 bump
 # and never beside a server from a different release (strict single-version
-# storage, as above). Drop the patch, these three ARGs and the cli-patched
-# stage once a release or an immutable edge build carries the change, or once
-# served maintenance (upstream RFC #1186 / #1177) replaces the direct CLI.
-ARG OMNIGRAPH_CLI_SOURCE=release
+# storage, as above). Drop each patch once the release OMNIGRAPH_RELEASE_TAG
+# pins carries its upstream PR (a release or edge build the image doesn't pin
+# doesn't count), and drop these three ARGs and the cli-patched stage with the last
+# one, or once served maintenance (upstream RFC #1186 / #1177) replaces the
+# direct CLI.
+ARG OMNIGRAPH_CLI_SOURCE=patched
 ARG OMNIGRAPH_CLI_PATCH_BASE_TAG=v0.14.0
 # The tag's commit, fetched by id so a moved tag cannot change what is built.
 ARG OMNIGRAPH_CLI_PATCH_BASE_COMMIT=60bfd19db780fdff3a5178f959c1204143420114
@@ -137,7 +165,7 @@ RUN set -eux; \
 # ── CLI, stock: the release tarball's binary ──────────────────────────────────
 FROM fetch AS cli-release
 
-# ── CLI, patched: the release source plus the inline-S3-root backport ─────────
+# ── CLI, patched: the release source plus the S3-root and cleanup backports ───
 # Built only when OMNIGRAPH_CLI_SOURCE=patched (BuildKit skips a stage nothing
 # selects). The compiler is the one the source's rust-toolchain.toml pins
 # (rustup honours it over the image's default, and fetches the clippy and
@@ -159,7 +187,9 @@ RUN git init -q . \
     && git fetch -q --depth 1 https://github.com/ModernRelay/omnigraph.git "${OMNIGRAPH_CLI_PATCH_BASE_COMMIT}" \
     && git checkout -q FETCH_HEAD
 COPY docker/patches/omnigraph-cli-inline-s3-root.patch /tmp/
-RUN git apply /tmp/omnigraph-cli-inline-s3-root.patch
+COPY docker/patches/omnigraph-cleanup-keep-from-listing.patch /tmp/
+RUN git apply /tmp/omnigraph-cli-inline-s3-root.patch \
+    && git apply /tmp/omnigraph-cleanup-keep-from-listing.patch
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     RUSTFLAGS= cargo build --release --locked -p omnigraph-cli \
@@ -178,12 +208,16 @@ FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA
+ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA
+ARG OMNIGRAPH_HTTP_API_CONTRACT
 ARG OMNIGRAPH_CLI_SOURCE
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \
       org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
       org.opencontainers.image.version="${OMNIGRAPH_VERSION}" \
       edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}" \
+      edu.mit.ol.omnigraph.min-internal-schema="${OMNIGRAPH_MIN_INTERNAL_SCHEMA}" \
+      edu.mit.ol.omnigraph.http-api-contract="${OMNIGRAPH_HTTP_API_CONTRACT}" \
       edu.mit.ol.omnigraph.cli-source="${OMNIGRAPH_CLI_SOURCE}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.

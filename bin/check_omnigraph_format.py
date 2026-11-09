@@ -26,17 +26,17 @@ on pull requests, and it still fires if the format moves without the version
 changing (a re-cut release, a rebuilt image).
 """
 
-import shutil
 import sys
-from pathlib import Path
 
 import cyclopts
 
+from witan_core.omnigraph_http import HTTP_API_CONTRACT, SUPPORTED_HTTP_API_CONTRACTS
 from witan_core.omnigraph_install import (
     _OMNIGRAPH_INTERNAL_SCHEMA,
+    _OMNIGRAPH_MIN_INTERNAL_SCHEMA,
     _OMNIGRAPH_VERSION,
-    _installed_version,
-    reported_internal_schema,
+    OmnigraphBuild,
+    reported_build,
 )
 
 app = cyclopts.App(
@@ -49,9 +49,31 @@ _DECLARATION = (
 )
 
 
+def _check_http_contract(build: OmnigraphBuild) -> None:
+    """Fail unless the binary speaks :data:`HTTP_API_CONTRACT`.
+
+    A release can move the contract without moving the storage format, and a
+    client sending the old one is refused by every server on the new one.
+    """
+    contract = build.http_contract
+    if contract == HTTP_API_CONTRACT:
+        return
+    print(
+        f"omnigraph {build.version} speaks HTTP contract {contract}, but "
+        f"omnigraph_http.HTTP_API_CONTRACT is {HTTP_API_CONTRACT}. Set it to "
+        f"{contract} and put it first in SUPPORTED_HTTP_API_CONTRACTS, keeping "
+        f"{SUPPORTED_HTTP_API_CONTRACTS[0]} after it until every deployed data "
+        "tier is on the new contract, so witan and the data tier can still "
+        "deploy in either order. Move PREVIOUS_RELEASE_TAG in "
+        "bin/install_omnigraph_server.py with it.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 @app.default
 def check(binary: str = "omnigraph") -> None:
-    """Compare ``binary``'s reported internal-schema to the declared one.
+    """Compare ``binary``'s reported storage format to the declared one.
 
     Parameters
     ----------
@@ -60,20 +82,38 @@ def check(binary: str = "omnigraph") -> None:
         on PATH, which in CI is the pinned release the install step fetched.
     """
     try:
-        actual = reported_internal_schema(binary)
+        build = reported_build(binary)
     except RuntimeError as exc:
         print(f"could not read the binary's storage format:\n{exc}", file=sys.stderr)
         raise SystemExit(2) from exc
+    oldest, actual = build.serves[0], build.writes
 
     # The binary's OWN version, not the pin. They match in CI, where this runs
     # against what the install step fetched — but reporting the declared pin
     # for a binary passed via --binary would name the wrong release in the one
     # message a reader is going to act on.
-    resolved = shutil.which(binary) or binary
-    running = _installed_version(Path(resolved)) or "unknown version"
+    running = build.version
 
     if actual == _OMNIGRAPH_INTERNAL_SCHEMA:
-        print(f"omnigraph {running} reads storage format {actual}, as declared.")
+        if oldest != _OMNIGRAPH_MIN_INTERNAL_SCHEMA:
+            print(
+                f"omnigraph {running} opens storage formats {oldest} to {actual} in "
+                f"place, but _OMNIGRAPH_MIN_INTERNAL_SCHEMA is "
+                f"{_OMNIGRAPH_MIN_INTERNAL_SCHEMA}. Both images label that number "
+                "for ol-infrastructure's preview, which accepts any served root "
+                f"from it up, so set it to {oldest} in this change. If that's "
+                f"higher than before, the binary refuses roots older than "
+                f"format {oldest}: confirm every deployed root is at {oldest} or "
+                "newer before merging.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        _check_http_contract(build)
+        print(
+            f"omnigraph {running} reads storage format {actual} and opens "
+            f"{oldest} to {actual} in place, and speaks HTTP contract "
+            f"{HTTP_API_CONTRACT}, as declared."
+        )
         return
 
     direction = "newer" if actual > _OMNIGRAPH_INTERNAL_SCHEMA else "older"

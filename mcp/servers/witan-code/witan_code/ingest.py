@@ -218,7 +218,7 @@ def _client(
                 "caller's token, and this request carries none."
             )
         try:
-            ref = replace(ref, token=resolver.resolve(actor))
+            ref = replace(ref, token=resolver.resolve(actor), actor=actor)
         except LookupError as exc:
             raise IngestRefused(str(exc)) from exc
     return ref.client(cfg, branch=view)

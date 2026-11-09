@@ -8,6 +8,120 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.51.0] - 2026-11-05
+
+### Added
+
+- `omnigraph_install.reported_build()` reads a binary's version, commit, HTTP
+  contract and storage formats from `omnigraph version --json`, returning an
+  `OmnigraphBuild`. A pre-0.14 binary has no `--json`, so it raises
+  `RuntimeError` naming the stale install rather than being read.
+
+- `OmnigraphClient(..., actor=...)` asserts the actor its token belongs to on
+  every remote request: `Omnigraph-If-Actor` over the pooled transport
+  (query, mutate, load, export, commit list) and `--as` on a write over the
+  0.14 CLI. A 0.14 server refuses a token that resolves to anyone else with
+  `412 actor_mismatch` before doing anything; a 0.13 server ignores the
+  header. Without `actor`, requests are unchanged.
+- `ACTOR_MISMATCH` classifies that refusal. It is terminal and never a lost
+  race: a compare-and-swap caller gets a `RuntimeError` naming the actor,
+  not `OmnigraphConflict`, and group commit fails every member of the group
+  instead of reading the 412 as the fenced member's failed precondition.
+
+### Changed
+
+- `bin/check_omnigraph_format.py` reads the storage format and HTTP contract
+  from `omnigraph version --json` instead of regex-parsing the text output.
+
+- An omnigraph 0.14 error is classified from its `code` and
+  `disposition` (`classify_disposition`) instead of its status and message
+  markers, on the pooled transport and for a served JSON error from the CLI.
+  The markers stay for a body without a disposition (a 0.13 server or a
+  relay), and for the two conditions no code names: a graph that failed to
+  open and a drifted dataset. `Outcome` carries the parsed `Disposition`, and
+  `error_disposition` replaces `disposition_effects`.
+- Group commit replays a failed group one write at a time when a 0.14
+  server's disposition says `effects: none`, or `unknown` under
+  `bad_request` or `payload_too_large`. 0.14 reports `unknown` for a refusal
+  inside a write such as a missing edge endpoint, which upstream's mutation
+  path raises before its only publication; a write it could not settle
+  answers `500 outcome_unknown` and is never replayed.
+
+### Removed
+
+- `reported_internal_schema()` and `reported_internal_schema_range()`. Use
+  `reported_build().writes` and `reported_build().serves`.
+
+### Fixed
+
+- `StoreUnavailable` no longer says witan "could not connect" when the server
+  answered. A remote call that exhausts the unavailable budget on a refusal the
+  server sent (an HTTP 503 over the pooled transport, an omnigraph 0.14 CLI exit
+  75, or a 0.13 CLI reporting a graph that is still loading) now says the
+  server answered but kept refusing the call as unavailable, so an operator
+  checks the server's state instead of the network. A connect failure keeps the
+  "could not connect" wording.
+
+- The omnigraph installer (`witan setup`, `witan-code setup`) no longer
+  replaces a binary newer than its pin. A newer binary may already have
+  stamped local stores with a storage format the pin refuses (0.14 writes 16,
+  which 0.13 won't open), so it is left in place with a message saying why. A
+  strict install (`install_omnigraph()`'s default, which CI uses) raises
+  `OmnigraphInstallFailed` instead. Delete the binary and re-run to install
+  the pin anyway. Releases before this one still downgrade.
+
+## [0.50.0] - 2026-10-29
+
+### Changed
+
+- Pins omnigraph 0.14.0 (`v0.14.0`, digests from the release), which writes
+  storage format 16 and reads 14 to 16. `_OMNIGRAPH_INTERNAL_SCHEMA` moves
+  14 to 16 and `HTTP_API_CONTRACT` to `0.14`. The first write a 0.14 binary
+  makes to a format-14 graph stamps it 16, which a 0.13 binary then refuses,
+  so there is no way back once a 0.14 server has written.
+- The pooled transport negotiates the HTTP contract per server instead of
+  pinning it, so witan and the data tier deploy in either order. It probes
+  `HEAD /healthz` on first use and speaks the stamp when it is in
+  `SUPPORTED_HTTP_API_CONTRACTS` (`0.14`, `0.13`), and on a
+  `400 api_contract_mismatch` stamped with a supported contract it switches
+  and resends once, writes included, since the server refuses before
+  applying anything. It logs a warning when the server is not on the pinned
+  contract. `contract_violation` takes the contract the request carried.
+  `RESPONSE_CONTRACT_REQUIRED` is gone: every supported server stamps its
+  responses, so an unstamped one is always a violation.
+- A CLI failure's JSON error object on stdout is classified even when stderr
+  is not empty. 0.14 prints the resolved target on stderr for every call, so
+  a read's failure (a recovery barrier, a conflict, an unreachable server)
+  was otherwise classified from that line alone and reported as fatal.
+- The 0.14 CLI's exits are read: 2 (partial or unknown effects) is never
+  retried and a write raises `WriteIndeterminate`, 64 (a refused command
+  line) is fatal, and 75 from a 503 gets the unavailable-server budget
+  instead of the admission cap's. Adds the `OUTCOME_UNKNOWN` outcome kind.
+- A write whose HTTP error body carries a 0.14 disposition with `effects`
+  `partial` or `unknown` is classified `OUTCOME_UNKNOWN` and raises
+  `WriteIndeterminate` instead of being retried. 0.14 answers a load whose
+  fork published before its rows were refused with a 409 that says
+  `partial`, which the 409 rule would otherwise have replayed.
+
+### Added
+
+- `_OMNIGRAPH_MIN_INTERNAL_SCHEMA` (14) declares the oldest format the pinned
+  binary opens in place, and `reported_internal_schema_range()` reads it from
+  `omnigraph version`'s "serves vN to vM". Both images label it
+  `edu.mit.ol.omnigraph.min-internal-schema`, so ol-infrastructure's preview
+  can accept a 0.14 image against a root that still holds format 14.
+
+### Removed
+
+- `StoreQuarantined`, `RUNBOOK_URL`, `sidecar_operation_id`, and the
+  `STORE_QUARANTINED` classification with its `QUARANTINE_MARKERS` /
+  `is_store_quarantined`. They matched the 0.11 "OCC recovery sidecar … manifest
+  delta differs" error, but omnigraph 0.12 removed recovery sidecars and
+  0.13 and later cannot open a format 8 or 9 store that carries one, so no binary
+  witan drives can produce that message. `recovery required for operation`
+  keeps its `RECOVERY_REQUIRED` classification. The store-quarantine runbook
+  stays, for converting an old local store with `witan migrate storage`.
+
 ## [0.49.0] - 2026-10-28
 
 ### Added

@@ -533,9 +533,13 @@ def remote(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     client = og.OmnigraphClient("http://og.test", tmp_path, graph_id="g")
 
-    def answer(status=None, error="", raises=None):
+    def answer(status=None, error="", raises=None, disposition=None, kind="fatal"):
         def stub(*args, attempts=None, **kwargs):
-            attempts.append(og._AttemptResult("fatal", error=error, status=status))
+            attempts.append(
+                og._AttemptResult(
+                    kind, error=error, status=status, disposition=disposition
+                )
+            )
             raise raises or RuntimeError(f"omnigraph mutate failed:\n{error}")
 
         monkeypatch.setattr(client, "_http_execute", stub)
@@ -562,6 +566,50 @@ def test_a_datafusion_400_is_indeterminate_and_not_replayed(remote):
     client, answer = remote
     answer(400, "query: execution failed (HTTP 400, bad_request)")
     with pytest.raises(WriteIndeterminate, match="INDETERMINATE"):
+        client._commit_group(STEPS, None, False, time.monotonic())
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "effects", "action"),
+    [
+        # Refused before the write started.
+        (404, "not_found", "none", "fix"),
+        (403, "forbidden", "none", "refresh"),
+        # What a 0.14.0 server answers for a missing edge endpoint or a
+        # missing parameter inside the write (observed locally): settled, so
+        # replayed, as the same 400 from 0.13 was.
+        (400, "bad_request", "unknown", "reconcile"),
+        (413, "payload_too_large", "unknown", "reconcile"),
+    ],
+)
+def test_a_settled_014_refusal_is_replayed(remote, status, code, effects, action):
+    from witan_core.omnigraph_http import Disposition
+
+    client, answer = remote
+    answer(status, "query: whatever", disposition=Disposition(code, effects, action))
+    with pytest.raises(RejectedBatch):
+        client._commit_group(STEPS, None, False, time.monotonic())
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "effects", "action", "kind"),
+    [
+        # A refusal whose effects 0.14 does not call settled.
+        (404, "not_found", "unknown", "reconcile", "fatal"),
+        (400, "bad_request", "partial", "fix", "fatal"),
+        # A kind the retry loop already gave up on: replaying it is the same
+        # request again.
+        (500, "internal", "none", "refresh", "needs_repair"),
+    ],
+)
+def test_an_unsettled_014_refusal_is_not_replayed(
+    remote, status, code, effects, action, kind
+):
+    from witan_core.omnigraph_http import Disposition
+
+    client, answer = remote
+    answer(status, "x", disposition=Disposition(code, effects, action), kind=kind)
+    with pytest.raises(RuntimeError, match="omnigraph mutate failed"):
         client._commit_group(STEPS, None, False, time.monotonic())
 
 

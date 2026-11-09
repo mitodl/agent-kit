@@ -15,6 +15,11 @@ put N uncoordinated writers on one branch view. Against a deployed graph they
 lost each other's optimistic-concurrency races until the retry budget ran out
 (Sentry WITAN-12).
 
+ONE WRITE PER FLUSH. The drainer indexes its whole queue as one batch, and
+waits out ``FLUSH_INTERVAL_SECONDS`` since the checkout's last flush before
+starting the next, so a session editing every few seconds writes its branch
+view a bounded number of times per interval rather than once per edit.
+
 The lock is a kernel ``flock`` on a file, taken by the hook and handed to the
 drainer as an inherited descriptor. The kernel drops it when the holder exits
 however it exits, so a killed indexer cannot leave the checkout locked.
@@ -28,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from witan_core import popen_detached
@@ -40,6 +46,16 @@ from .context import _busy_path, _lock_path, _project_dir, _state_path
 logger = get_logger("witan.code.hooks")
 
 _LOG_MAX_BYTES = 1024 * 1024
+
+# The least time between two flushes of one checkout's queue, which bounds how
+# often an edit session writes its branch view: at most one batched index per
+# interval, and a batch under `indexer._DELETE_BATCH_SIZE` statements of
+# deletes and `chunking.MCP_LOAD_MAX_BYTES` of records is three commits (one
+# delete, two loads). Before this an edit-heavy session indexed each edit as
+# its own run, back to back, about three commits every 10-20s. The first edit
+# after a quiet spell still flushes at once; the cost is that an edit landing
+# inside the interval reaches the graph up to this much later.
+FLUSH_INTERVAL_SECONDS = 30.0
 
 # Codex edits files with its `apply_patch` tool, whose hook payload carries the
 # patch text (`tool_input.command`) rather than a path; its `Edit|Write`
@@ -79,8 +95,8 @@ def reindex_hook(payload: str) -> None:
 
     ``payload`` is the raw hook JSON read from stdin. Inside a git checkout
     the path is queued for the checkout's drainer (see the module docstring
-    for why), so the index lands a few seconds after the edit rather than
-    before the hook returns. Outside one there is no branch view to contend
+    for why), so the index lands after the hook returns, up to
+    ``FLUSH_INTERVAL_SECONDS`` later when an earlier edit was just flushed. Outside one there is no branch view to contend
     over and the file is indexed in the foreground, as before.
 
     Claude Code's payload names one file; Codex's ``apply_patch`` payload
@@ -137,32 +153,42 @@ def _reindex_one(raw: str) -> None:
 
 
 def drain_pending(checkout: Path, lock_fd: int) -> None:
-    """Index everything queued for ``checkout``, one target at a time.
+    """Index everything queued for ``checkout`` as one batch per flush.
 
     Run by the detached child :func:`_submit` spawns, holding the lock it was
-    handed as ``lock_fd``. After letting go it looks at the queue once more
-    and takes the lock back if anything arrived: a hook that queued while the
-    lock was held did not spawn anyone, trusting this re-check to pick its
-    target up.
+    handed as ``lock_fd``. A flush waits out :data:`FLUSH_INTERVAL_SECONDS`
+    since the checkout's previous one, so edits that land in the meantime
+    join it rather than each starting their own write. After letting go it
+    looks at the queue once more and takes the lock back if anything arrived:
+    a hook that queued while the lock was held did not spawn anyone, trusting
+    this re-check to pick its target up.
     """
     busy = _busy_path(checkout)
     while True:
         try:
+            # Not busy while only waiting out the interval: the context block
+            # reads this marker as "a reindex is running" and holds back its
+            # broken-store warning on it.
+            busy.unlink(missing_ok=True)
+            _await_flush_slot(checkout)
             busy.touch()
-            for target in _take_pending(checkout):
-                # One gone from disk is indexed too, which purges its rows,
-                # unless the whole checkout went with it: git would then
-                # resolve the path against whatever repo encloses it.
-                if not target.exists() and not (
-                    checkout.is_dir() and indexer.indexable(target)
-                ):
-                    continue
+            # One gone from disk is indexed too, which purges its rows,
+            # unless the whole checkout went with it: git would then resolve
+            # the path against whatever repo encloses it.
+            targets = [
+                target
+                for target in _take_pending(checkout)
+                if target.exists() or (checkout.is_dir() and indexer.indexable(target))
+            ]
+            if targets:
+                _stamp_flush(checkout)
+            for batch in _by_checkout(targets):
                 try:
-                    indexer.index_path(target, force=False)
-                except Exception as exc:  # noqa: BLE001 — one target must not stop the rest
+                    indexer.index_paths(batch, force=False)
+                except Exception as exc:  # noqa: BLE001 — the drainer must still release
                     logger.warning(
                         "witan.code.hooks.reindex_failed",
-                        path=str(target),
+                        paths=[str(target) for target in batch],
                         error=str(exc),
                     )
         finally:
@@ -174,6 +200,32 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
         if next_fd is None:
             return  # a newer drainer has it, and drains before letting go
         lock_fd = next_fd
+
+
+def _by_checkout(targets: list[Path]) -> list[list[Path]]:
+    """Split ``targets`` into batches :func:`indexer.index_paths` accepts.
+
+    A target is queued under the git root of its unresolved path, but
+    ``index_paths`` groups by the resolved one, so a symlink into another
+    repo (or a path since swallowed by a nested repo) would make it refuse
+    the whole batch and drop every other edit with it. Targets outside any
+    repo are indexed one at a time, since there is no checkout to share. So
+    is one that cannot be resolved (before Python 3.13, resolve() raises
+    RuntimeError on a symlink loop), which leaves its failure to that
+    batch's own handler rather than to the whole flush.
+    """
+    groups: dict[Path, list[Path]] = {}
+    loose: list[list[Path]] = []
+    for target in targets:
+        try:
+            root = repo_module.root(indexer.anchor_dir(target.resolve()))
+        except (OSError, RuntimeError):
+            root = None
+        if root is None:
+            loose.append([target])
+        else:
+            groups.setdefault(root, []).append(target)
+    return [*groups.values(), *loose]
 
 
 def _submit(checkout: Path, target: Path) -> None:
@@ -261,6 +313,40 @@ def _take_pending(checkout: Path) -> list[Path]:
         fh.seek(0)
         fh.truncate()
     return [Path(line) for line in dict.fromkeys(lines) if line]
+
+
+# ── Flush pacing ──────────────────────────────────────────────────────────────
+
+
+def _flushed_path(checkout: Path) -> Path:
+    """Stamped when a flush starts. A file, not drainer state, because a
+    drainer exits once the queue is empty and the next edit spawns a new one,
+    which must still wait out the previous drainer's interval."""
+    return _state_path(checkout, "flushed")
+
+
+def _stamp_flush(checkout: Path) -> None:
+    # Set from time.time() rather than left to touch(), so the stamp and the
+    # wait below read one clock.
+    path = _flushed_path(checkout)
+    path.touch()
+    now = time.time()
+    os.utime(path, (now, now))
+
+
+def _await_flush_slot(checkout: Path) -> None:
+    """Sleep until :data:`FLUSH_INTERVAL_SECONDS` have passed since the last flush.
+
+    Capped at one interval, so a stamp from a clock that has since stepped
+    back cannot stall the queue.
+    """
+    try:
+        last = _flushed_path(checkout).stat().st_mtime
+    except FileNotFoundError:
+        return
+    wait = min(last + FLUSH_INTERVAL_SECONDS - time.time(), FLUSH_INTERVAL_SECONDS)
+    if wait > 0:
+        time.sleep(wait)
 
 
 # ── Lock ──────────────────────────────────────────────────────────────────────

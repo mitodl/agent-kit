@@ -1,5 +1,5 @@
 # Declarative policy tests for the Layer-2.5 cross-repo bridge graph bundle.
-# Run: omnigraph policy test --cluster policy --graph bridge \
+# Run: omnigraph policy test --target "$PWD/policy" --graph bridge \
 #        --tests policy/tests/bridge.tests.yaml
 version: 1
 cases:

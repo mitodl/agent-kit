@@ -443,8 +443,25 @@ witan sends and checks `Omnigraph-Http-Api: 0.13`
 (`witan_core/omnigraph_http.py:177,184,437-447,605,679`).
 ol-infrastructure's council probe does the same
 (`src/ol_infrastructure/applications/omnigraph/scripts/check_council_health.py:133-134`).
-A 0.13 client and a 0.14 server refuse each other in both directions, so
-there is no mixed window (D2).
+A 0.13 client and a 0.14 server refuse each other in both directions.
+
+Decided (spike 3c94fb, evidence in memory
+`pf-omnigraph-0-13-and-0-14-servers-announce-their-h-229d01`): witan-core
+negotiates the contract per server instead of pinning one, so a witan that
+already speaks the new contract survives the data tier moving to it. The
+order still matters: the witan that negotiates has to be running before the
+server changes contract (see rollout step 4.4). Verified (both servers, run locally): 0.13.0
+and 0.14.0 stamp `Omnigraph-Http-Api` with their own contract on every
+response, the `400 api_contract_mismatch` and the public `HEAD /healthz`
+included, and the refusal runs before graph resolution, so nothing was
+applied. `PooledTransport` probes `HEAD /healthz` on first use and sends the
+stamp when it is in `SUPPORTED_HTTP_API_CONTRACTS` (`0.14`, `0.13`). On a
+mismatch whose stamp is supported, it switches and resends once, writes
+included. The wire difference between the two contracts on witan's routes is
+additive in both directions, and the served suites pass against both servers.
+The council probe discovers the contract the same way, from `HEAD /healthz`
+(mitodl/ol-infrastructure#6811,
+tk-council-probe-discover-the-omnigraph-http-contra-9c8302).
 
 Verified (source): every server error body carries `code` and `disposition:
 {effects, action}`. `effects` is `none`, `partial` or `unknown`. `action` is
@@ -490,12 +507,42 @@ falls through to the text markers.
     `disposition.effects == "none"`.
 
   Keep the status fallbacks for non-JSON relays.
+
+  Outcome: `effects == "none"` alone would stop replaying the groups the
+  replay exists for. Observed against a local 0.14.0 server, a mutate refused
+  for a missing edge endpoint or a missing parameter answers `400
+  bad_request` with `effects: unknown, action: reconcile`: the server reports
+  `unknown` for any error after an owned write starts that the engine did not
+  tag (`ApiError::disposition`, `omnigraph-server/src/lib.rs:1430-1465`).
+  Such a refusal cannot follow a publication: `mutate_one_attempt`
+  (`omnigraph/src/exec/mutation.rs:1125-1250`) validates before staging,
+  marks staging-to-publisher failures `unpublished`, and publishes once, last,
+  and an uncertain write answers `500 outcome_unknown` in place of its own
+  code (`ApiError::answered_code`, `lib.rs:1262-1268`), which is where the
+  DataFusion error 0.13 sent as a 400 now goes. So group commit replays
+  `effects: none`, and `unknown` under `bad_request` or `payload_too_large`.
+  `_DEFINITE_REJECTION_STATUSES` and `_DATAFUSION_ERROR_PREFIX` stay for a
+  server with no disposition, since witan still speaks 0.13. A blocked graph
+  (`graph_unavailable` like a loading one) and a drifted dataset have no code
+  of their own, so their prose markers stay too. The CLI marker tuples stay:
+  a write over the CLI prints text without a code, and its exit code is
+  already the CLI's reading of the disposition.
 - `Omnigraph-If-Actor` on per-actor requests
   (tk-send-omnigraph-if-actor-on-per-actor-requests-so-f4fc67). A token for
   the wrong actor is then refused with `412 actor_mismatch` before graph
   lookup or effects (`omnigraph-api-types/src/lib.rs:37-43`). 412 is already
   terminal in `classify_status` (`omnigraph_http.py:314-320`). Give
   `actor_mismatch` its own kind so it isn't read as a failed `--if-commit`.
+
+  Outcome: `OmnigraphClient` takes `actor`, which witan's `_resolve_client`
+  and witan-code's ingest client set to the actor they resolved the token
+  for. The pooled transport sends it on every request, and the CLI sends
+  `--as` on `mutate` and `load` (the 0.14 CLI refuses it on reads, `optimize`
+  and `cleanup`). A 0.13.0 server ignores the header (sent locally: the
+  request ran as if it were absent), so it goes out whatever contract the
+  transport speaks. The CLI prints a refused write as text without a code
+  and exits 4, as for a failed `--if-commit`, so that path tells them apart
+  by the server's message ("not the expected '<actor>'").
 - `omnigraph version --json`
   (tk-read-the-binary-s-storage-format-from-omnigraph--ccb7ba) in place of
   `_INTERNAL_SCHEMA_LINE` (`witan_core/omnigraph_install.py:598`) and
@@ -590,7 +637,8 @@ D3.
    - the Dockerfile pins (`just check-omnigraph-pins`);
    - `_OMNIGRAPH_INTERNAL_SCHEMA` 14 to 16 (`omnigraph_install.py:119`) and
      the `edu.mit.ol.omnigraph.internal-schema` labels;
-   - `HTTP_API_CONTRACT` (`omnigraph_http.py:184`);
+   - `HTTP_API_CONTRACT` (`omnigraph_http.py:184`), with 0.13 kept in
+     `SUPPORTED_HTTP_API_CONTRACTS` (D6);
    - the 0.13-worded CLI markers and exit codes (D6);
    - `_repair` (`witan_core/omnigraph.py:3123`), which #564 leaves passing
      `--confirm --force`. Verified (binary, plus a local 0.13.0 install for
@@ -612,9 +660,27 @@ D3.
       reaper, and scale the writers to zero.
    3. Take a whole-root S3 backup, `__cluster/` included, and verify it
       (object count and bytes against the source prefix).
-   4. Land the format-guard change (D2) in the stack. Roll the
-      omnigraph-server image, then the witan and witan-council images. Bump the council probe's contract header in the same
-      ol-infrastructure change.
+   4. Land the format-guard change (D2) in the stack. Roll the witan image
+      first, confirm `deploy-ol-application-witan-<env>` finished and the
+      running witan-server's witan-core lists the new contract in
+      `SUPPORTED_HTTP_API_CONTRACTS`, then roll omnigraph-server. Negotiation
+      (D6) only helps a client that is already running, and Concourse orders
+      nothing between the two gates: on 2026-11-04 Production released both
+      together, omnigraph finished at 20:37Z, witan started at 20:47Z, and the
+      old witan (contract 0.13 only) failed every graph call for about 15
+      minutes. The omnigraph stack now refuses a server image whose
+      `edu.mit.ol.omnigraph.http-api-contract` label isn't in the
+      `edu.mit.ol.omnigraph.http-api-contracts` the running witan image
+      declares (exported by the witan stack as `witan_http_api_contracts`).
+      Released out of order, the omnigraph preview (QA, Production) or deploy
+      (CI) fails instead of opening the window, and has to be re-run by hand
+      once witan has deployed. It also refuses a server contract the council
+      probe's `SUPPORTED_HTTP_API_CONTRACTS` (ol-infrastructure
+      `scripts/check_council_health.py`) doesn't list, so a contract bump
+      needs that ol-infrastructure change first. The probe speaks either
+      contract once
+      mitodl/ol-infrastructure#6811 is deployed. Without it the probe pins
+      `0.13` and fails every run against a 0.14 server.
    5. Re-run representative reads, a controlled write per graph, and the
       search cases from 80b1fc.
    6. Run one maintenance window (D3 path), including a TERM mid-run.

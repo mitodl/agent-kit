@@ -291,6 +291,7 @@ def _resolve_client() -> OmnigraphClient:
                 graph_id=cfg.graph_name,
                 s3_profile=cfg.s3_profile,
                 s3_region=cfg.s3_region,
+                actor=actor_id,
             )
     return _actor_clients[actor_id]
 

@@ -18,7 +18,8 @@
 # target version from the closest pyproject.toml that *contains* a [tool.ruff]
 # table — and none did, so it fell back to its py39 default and flagged 3.11
 # builtins (`ExceptionGroup`, `BaseExceptionGroup`) as undefined names. This
-# table is that anchor. Rule selection is ruff's default set.
+# table is that anchor. Rule selection is ruff's default set, plus the
+# [tool.ruff.lint] additions below.
 target-version = "py311"
 # The members' import roots. Without them ruff resolves first-party from the
 # repo root, finds none of the packages there, and isort (I001) folds
@@ -30,6 +31,13 @@ src = [
     "mcp/servers/witan",
     "mcp/servers/witan-code",
 ]
+
+[tool.ruff.lint]
+# ruff 0.17 dropped these flake8-datetimez rules from its default set. witan
+# parses export timestamps that are naive UTC, so a naive datetime is a real
+# bug class here, and the existing `# noqa: DTZ...` comments mark the
+# deliberate exceptions. Keep them on rather than lose the check silently.
+extend-select = ["DTZ001", "DTZ005", "DTZ006", "DTZ007", "DTZ011", "DTZ012", "DTZ901"]
 
 # prek runs the repo's hooks (prek.toml) locally and in CI. It is pinned here,
 # the single place both read it from: `uv sync --frozen --only-group prek` in
@@ -50,4 +58,13 @@ members = [
 ]
 
 [tool.uv]
-constraint-dependencies = ["certifi>=2026.10.19"]  # eMudhra CA compromise: never resolve a certifi that trusts the compromised CAs
+# Security floors: each keeps a vulnerable version from ever resolving again.
+constraint-dependencies = [
+    "authlib>=1.9.1",  # GHSA-6v38-4h7w-rj9h, PYSEC-2026-4355..4360 (JWS/JWT forgery, nonce and audience checks)
+    "certifi>=2026.10.19",  # eMudhra CA compromise: never resolve a certifi that trusts the compromised CAs
+    "dnspython>=2.9.0",  # GHSA-45c3-73f7-pv4m
+    "fastmcp>=4.1.2",  # GHSA-7xgj-8392-5q4r, GHSA-vqqp-x5qm-5qp4
+    "fastmcp-slim>=4.1.2",  # same advisories; fastmcp's installable core
+    "joserfc>=1.7.6",  # GHSA-jpxq-7h8p-2q76, GHSA-9pg5-8c7x-5hfx
+    "opentelemetry-api>=1.45.1",  # GHSA-xcq7-p3pf-p88h
+]
