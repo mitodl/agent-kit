@@ -165,7 +165,7 @@ priority = 30
 # `*emphasis*`, which markdownlint (the Markdown owner) then rejects.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
-rev = "v2.5.15"
+rev = "v2.6.3"
 hooks = [
   { id = "biome-check", priority = 20, files = '\.(jsx?|tsx?|c(js|ts)|m(js|ts)|d\.(ts|cts|mts)|jsonc?|css|svelte|vue|astro|graphql|gql)$', exclude = "^(mcp/servers/witan/ui/fixtures|packages/witan-core/tests/fixtures/omnigraph-stores)/" },
 ]
