@@ -49,6 +49,7 @@ The script outputs a JSON object:
   },
   "checkin_targets": { "eod": {...}, "bod": {...}, "latest": {...} },
   "prs_authored":        [...],
+  "stack_parents":       [...],
   "prs_reviewed":        [...],
   "issues":              [...],
   "discussions_opened":  [...],
@@ -65,6 +66,14 @@ The script outputs a JSON object:
   `id` (GraphQL node ID), `number`, `title`, `url`, `createdAt`, `date` (the
   calendar date the title names) and `comment_count`. Any of the three may be
   `null`. See [Choosing the post target](#choosing-the-post-target).
+- `stack_parents` — open PRs that sit **below** an authored PR in a branch
+  stack but fall outside the activity window, so `prs_authored` alone would
+  show the chain with a hole in it. They exist only to complete the stack graph
+  in [Highlighting when announcements run long](#highlighting-when-announcements-run-long):
+  they carry no review state, they are **not** the user's activity, and they
+  never appear in the post or count toward any threshold. Frequently empty.
+  They are also not necessarily authored by the user — a colleague's PR resting
+  on yours is still something yours blocks.
 - `discussions_opened` — discussions the user **opened** in the window, any
   category. Opening one is announcement-worthy; see Step 3.
 - `discussion_comments` — comments and replies the user left in the window,
@@ -107,6 +116,10 @@ be guessed — see [Timestamp discipline](#timestamp-discipline) and
 | `needs_review` | **authored PRs only.** `true` iff a human still owes a review. Already accounts for draft status, approval, requested changes, and bot reviewers — use it as-is; do not re-derive it. |
 | `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (nobody has reviewed). Open authored PRs only. Use for *framing*, not for the needs-review decision. |
 | `reviewRequests` | human logins/team slugs with a review still pending; bots filtered out. Open authored PRs only. |
+| `labels` | label names on the PR, flattened to strings. Open authored PRs only. `[]` means unlabelled **or** that the lookup failed — check `review_state_unknown` before reading anything into it. |
+| `baseRefName` | the branch the PR merges **into**. Open authored PRs only; `null` if the lookup failed. |
+| `headRefName` | the PR's own branch. Open authored PRs only; `null` if the lookup failed. |
+| `isCrossRepository` | `true` when the PR comes from a fork, so `headRefName` names a branch in **another** repo than the URL's. Open authored PRs only; `null` if the lookup failed. |
 | `review_state_unknown` | `true` if the review lookup failed. Say the state is unknown rather than guessing. |
 
 Entries in `discussions_opened` and `discussion_comments` both carry
@@ -171,6 +184,9 @@ First, identify **session-only work** from Step 1b (sessions with `repository:
 null` or whose repository doesn't appear in `prs_authored`). Format them as a
 short suggestion list for the `off_github` field description.
 
+Second, work out whether the **conditional `priority_prs` field** belongs in the
+call — see [the field below](#when-to-include-priority_prs).
+
 The most important field is `timing` — it controls the section headers and
 which date's activity is treated as "done" work:
 
@@ -205,6 +221,40 @@ which date's activity is treated as "done" work:
   }
 }
 ```
+
+### When to include `priority_prs`
+
+A sixth field, included **only** when both of these hold:
+
+- the announcements PR count is **six or more**, and
+- **fewer than three** PRs qualify under rules 2–3 of
+  [Highlighting when announcements run long](#highlighting-when-announcements-run-long),
+  counted **after** the one-highlight-per-stack suppression described there.
+
+Both tests run on the script's data alone, which is the only thing that exists
+while this form is being built. That is why the threshold there is defined the
+same way — a count that included PRs the user raises in *these* answers could not
+be evaluated in time to decide whether to ask them.
+
+```json
+  "priority_prs": {
+    "type": "string",
+    "title": "Which PRs should the team look at first?",
+    "description": "You have <N> PRs in announcements. Which are blocking other work or time-sensitive? Name up to 3 by URL or number. Leave blank and I'll pick.\n\nAlready identified:\n<bullet list of qualifying PRs with their reasons, or 'none'>\n\nThe rest:\n<bullet list of the remaining PR URLs>"
+  }
+```
+
+Rule 1 of that subsection — PRs the user named — is deliberately **not** part of
+the test. `announcements` and `extra_context` are answers to this very
+questionnaire, so they cannot be consulted when deciding whether to ask. Only the
+script-derived signals are available at this point, which is what keeps the ask a
+genuine fallback rather than a reflex: when the data already identifies three,
+don't ask.
+
+Pre-naming the PRs that did qualify, with their reasons, means the user fills a
+gap instead of re-deriving the whole list. **Blank is a valid answer** and means
+"you pick" — highlight however many qualify, even if that is fewer than three or
+none at all.
 
 ---
 
@@ -248,6 +298,11 @@ the message presenting the draft — not in the post itself.
   Also every entry in `discussions_opened` with `createdAt` on `report_date`
   (**opening a new discussion is always announcement-worthy** — it's a request
   for the team's attention, regardless of category), plus blockers and OOO info.
+  A `blocked` label on an authored PR (any case) is one source of a blocker
+  bullet, alongside the user's own `blockers` answer. It does not move the PR
+  out of the needs-review list — [Which PRs actually need review](#which-prs-actually-need-review)
+  admits no substitutions, and a blocked PR can still want eyes. It earns an
+  *extra* blocker bullet, and it never takes a highlight slot.
 - **Discussion comments (past section):** entries in `discussion_comments` with
   `createdAt` on `report_date` belong under done work. These are frequently
   substantive design work with no PR or issue attached, so they are easy to drop
@@ -325,6 +380,148 @@ Two caveats:
   need another look.
 - `review_state_unknown: true` means the lookup failed. Report the state as
   unknown; do not fall back to "open, so it needs review".
+
+### Highlighting when announcements run long
+
+Announcements are the first thing the team reads, and for anyone carrying a
+stack of open PRs a flat list of every one of them is a wall of links nobody
+triages. Past a threshold, call out the few that actually need attention first —
+without dropping any of the rest.
+
+**The threshold.** Count the PRs the announcements section would carry **on the
+script's data alone**: authored PRs with `needs_review: true`, plus any PR
+appearing there under a different claim (approved-and-ready, review state
+unknown). Discussion links, blockers and OOO lines do not count, and neither
+does a PR the user raises in their Step 2 answers — this count has to be
+computable while the Step 2 form is still being built, before any answer to it
+exists.
+
+- **Five or fewer → render flat, exactly as you would have anyway.** Skip the
+  rest of this subsection; no groups, no highlights, no reasons.
+- **Six or more → highlight at most three**, and still list every one.
+
+If a Step 2 answer later adds a PR that pushes the section to six, highlight
+anyway, and do not go back to ask: the moment to ask has passed, and the user
+was just writing about their PRs unprompted. Whether that PR is itself a
+highlight depends on rule 1 below like any other — raising a PR is not
+automatically nominating it.
+
+**What qualifies as a highlight:**
+
+1. **Nominated by the user** — a PR named in `priority_prs`, or one the user
+   asked for attention on in `announcements` or `extra_context`. **Mentioning a
+   PR is not nominating it.** `priority_prs` asks the question directly, so
+   anything there counts; the other two are free text, and a user writing "FYI
+   I'm closing `pull/999` tomorrow, nobody needs to look" has named a PR while
+   asking for the opposite of a highlight. Putting that in the top slot of
+   "please start with these" would invert what they wrote and attach a
+   needs-review claim the PR does not have. When the wording is genuinely
+   ambiguous, leave it out of the highlights — it still appears in the section.
+2. **Blocks other open PRs**, weighted by how many. For two open authored PRs A
+   and B, B is stacked directly on top of A — making A block it — when all three
+   hold:
+   - **Same repository**: identical `https://github.com/<org>/<repo>/` URL
+     prefix. Branch names are repo-scoped, so a `feat/foo` in two repositories is
+     two unrelated branches.
+   - **`A.isCrossRepository` is `false`.** The URL names the repo the PR *targets*,
+     not the one holding its head branch, and those differ on a fork PR. Without
+     this test, a fork PR from a branch called `main` into `upstream:main` reads
+     as the parent of every same-repo PR targeting `main` — fabricating a large
+     blocked-count for a PR that blocks nothing. `true` or `null` both fail the
+     test; only an explicit `false` places A's head branch in the shared repo.
+   - **`B.baseRefName` and `A.headRefName` are both non-null and equal.** A
+     failed `gh pr view` leaves both fields `null`, and `null == null` would read
+     two unrelated failed lookups as stacked on one another — inventing a
+     dependency, and a two-PR cycle with no bottom for the suppression rule below
+     to find.
+3. **Time-sensitive on label evidence.** A `labels` entry naming security/CVE,
+   hotfix, incident, release/deploy, a deadline, or blocking a release
+   (`release-blocker`). Compare label names **case-insensitively**: the same
+   label is spelled `Blocked` in `mitodl/hq` and `mitodl/mit-learn` but
+   `blocked` in `mitodl/ol-django`, and other repos vary the same way.
+
+   A PR with `review_state_unknown: true` carries `labels: []` because the
+   lookup failed, not because it is unlabelled — rule 3 cannot fire for it, and
+   that empty list is not evidence that it is unimportant.
+
+**A `blocked` label is not a rule 3 qualifier, and the direction is why.** It
+says the PR *is* blocked — stuck behind someone else — where every other rule 2
+and rule 3 signal says the PR has a claim on the team's attention right now. A
+blocked PR usually cannot move even if someone reviews it today, so a "please
+start with these" slot spent on one is a slot wasted. Surface it as a **blocker
+bullet** in announcements instead (Step 4's blockers rule), naming what it waits
+on and the `@handle` who can clear it — that is the thing that would actually
+move it. `release-blocker` is the opposite case and does qualify: that PR is
+holding up a release, which is as time-sensitive as the list gets.
+
+**Build the graph from `prs_authored` *plus* `stack_parents`.** The authored
+search is filtered to the activity window, so a stack whose middle PR has gone
+quiet arrives with a hole: the chain breaks, the bottom PR undercounts what it
+blocks, and the PR above the hole sees nothing beneath it and escapes
+suppression. That is the ordinary case, not a corner one — a stack goes quiet
+precisely because it is waiting on review. `stack_parents` holds the PRs the
+script recovered to close those holes; treat them as nodes for the walk and for
+suppression, and as nothing else. They cannot be highlighted, cannot appear in
+the post, and do not count toward the six-PR threshold.
+
+**Follow a stack all the way up, not one step.** In a four-deep stack
+`A ← B ← C ← D`, A blocks *three* PRs, not one — nothing above it can merge until
+it does. A's weight under rule 2 is the count of **every open authored PR
+transitively above it**, whether or not those PRs are themselves in
+announcements, and including the branching case where two PRs sit on the same
+parent. A direct-children count would rank the root of a deep stack level with a
+PR that has one trivial follow-up behind it, which is backwards: the deep root is
+the single most unblocking review on the list. Give each walk **its own** visited
+set and stop on a repeat: a set shared across the whole ranking would let the
+first PR walked mark everything above it visited and score every other root at
+zero, and a per-walk set still terminates the cycle it exists for.
+
+**One highlight per stack: the lowest needs-review PR in it.** A PR stacked on
+another open PR cannot merge until its parent does, so highlighting both spends a
+slot on work nobody can finish — and a deep enough stack would otherwise fill all
+three slots from a single chain. Skip any PR that has another **needs-review**
+PR below it in the same stack; the one at the bottom already carries the chain's
+whole weight.
+
+"Needs-review PR", not "announcement PR", and the distinction is load-bearing.
+The threshold above counts approved-and-ready and unknown-state PRs as part of
+the section, but neither is a candidate for the needs-review group, so neither
+can stand in as the bottom of a stack. A PR whose parent is open but already
+approved is therefore still the lowest needs-review PR in its stack and stands
+on its own count — the approved parent is not blocking review, only merge order.
+
+**Suppression runs before anything is counted.** A skipped PR does not qualify —
+not for the ranking below, and not for the "fewer than three qualify" test that
+decides whether Step 2 asks. The difference is not academic: in the
+[worked example](#example-output-eod-more-than-five-prs-in-announcements)
+`pull/4661` blocks one PR and would pass rule 2 read on its own, but `pull/4659`
+sits below it in the same stack, so it is out before the count is taken — three
+qualifiers if you count first, two if you suppress first, and only the second
+reading asks the user.
+
+**Ranking.** User-named PRs take the top slots, in the order the user named them,
+**capped at the first three**: `priority_prs` asks for up to three, but nothing
+caps what the user may write in `announcements` or `extra_context`, and naming
+five does not widen the group past three. Fill whatever slots they leave by rule
+2 — descending transitive blocked-count, deepest root first — and then rule 3.
+**Age breaks remaining ties and is never a qualification on its own:** a PR that
+is merely old, with no blocking or time-sensitive evidence behind it, is not a
+highlight, and promoting it buries the ones that are genuinely urgent.
+
+**Every highlight states its reason, and the reason must be licensed by a
+field** — the same discipline [Timestamp discipline](#timestamp-discipline)
+imposes on verbs. A blocking reason gives the count the chain actually supports
+("blocks the 2 PRs stacked above it"), never a vague "unblocks work"; "security
+fix" needs the label. A title that merely *sounds* urgent licenses nothing.
+
+**Fewer than three qualify → highlight fewer.** Do not pad. If nothing qualifies
+at all, render the flat list with no group header — never an empty "start with
+these" group.
+
+**Highlighting re-orders presentation only.** It never drops a PR, never changes
+a needs-review claim, and never promotes a PR into announcements that does not
+belong there under
+[Which PRs actually need review](#which-prs-actually-need-review).
 
 **Incorporating agent sessions:**
 
@@ -432,6 +629,19 @@ sentence; it does not compress what they wrote.
 - **Do not group PRs** across repos into parent bullets unless the user
   explicitly works across many repos on the same thing and grouping is clearly
   cleaner — default to separate bullets. Grouping within a single theme is fine.
+  - The two-group announcements shape below is an explicit exception: it groups
+    across repos by design, because the split it draws is "look at these first"
+    versus "the rest", not a thematic one.
+- **Highlighted announcements** render as two parent bullets when
+  [Highlighting when announcements run long](#highlighting-when-announcements-run-long)
+  applies — up to three reference-led sub-bullets each carrying its reason, then
+  every remaining PR under a second parent. Below the threshold — counting the
+  PR a Step 2 answer added, if one did — or with nothing qualifying, there are no
+  groups at all and the section stays flat. See the
+  [more-than-five example](#example-output-eod-more-than-five-prs-in-announcements).
+  PRs in announcements under a *different* claim — approved-and-ready, review
+  state unknown — keep their own top-level bullets after both groups; they count
+  toward the threshold but are not folded into a "needs review" group.
 - **Planned section** should reflect what's actually next, not a mechanical
   list of every open PR. Omit items the user is clearly done with, and include
   forward-looking caveats or goals when the user supplied them.
@@ -604,6 +814,49 @@ Tobias Macey
 - Finish fixing the Polars/Iceberg hang in Dagster
 - Test the Concourse release workflow end to end
 - Wrap up self assessment
+```
+
+## Example output (EOD, more than five PRs in announcements)
+
+Six PRs needing review plus one approved, so at most three get highlighted and
+all seven still appear. The ol-infrastructure PRs are a three-deep stack:
+`pull/4661` targets `pull/4659`'s branch and `pull/4668` targets `pull/4661`'s.
+
+Working the rules through:
+
+- `pull/4659` qualifies under rule 2 and carries the whole chain — **blocks 2**,
+  transitively, not the 1 a direct-children count would give it.
+- `pull/4661` and `pull/4668` are **suppressed**. Both are blocked by `pull/4659`,
+  which itself needs review, so neither can merge first and the chain gets one
+  slot, not three.
+- `pull/2238` qualifies under rule 3 on its `security` label.
+- That is only two qualifying on script-derived signals, so Step 2 asked
+  `priority_prs`, and the user answered `pull/3346` — an unambiguous nomination,
+  so rule 1 puts it in the top slot.
+
+```markdown
+_Tobias Macey_
+
+> Standup announcements
+
+- Needs review — please start with these:
+  - https://github.com/mitodl/mit-learn/pull/3346 — needed before Thursday's launch review
+  - https://github.com/mitodl/ol-infrastructure/pull/4659 — bottom of a 3-PR stack, blocks the 2 above it
+  - https://github.com/mitodl/ol-data-platform/pull/2238 — labelled `security`
+- Also needing review:
+  - https://github.com/mitodl/ol-infrastructure/pull/4661
+  - https://github.com/mitodl/ol-infrastructure/pull/4668
+  - https://github.com/mitodl/ol-infrastructure/pull/4702
+- https://github.com/mitodl/ol-infrastructure/pull/4640 — approved and ready to merge
+
+> What did I work on today?
+
+- https://github.com/mitodl/ol-infrastructure/pull/4659 — opened for S3 cost optimization, with 4661 and 4668 stacked on top
+- https://github.com/mitodl/ol-data-platform/pull/2238 — worked on it
+
+> What am I working on tomorrow?
+
+- Land the ol-infrastructure stack bottom-up once 4659 clears review
 ```
 
 ## Example output (EOD, hand-written narrative style)
