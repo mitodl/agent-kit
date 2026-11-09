@@ -159,11 +159,15 @@ priority = 30
 # letting biome reformat them makes that gate fail on every commit against
 # files nobody edited. The omnigraph store fixtures are excluded for the same
 # reason the fixer hooks above skip them: they are an omnigraph's own output.
+#
+# `files` pins the file types biome owns here. Upstream's hook added md, yml and
+# yaml in v2.6.3, and biome's Markdown formatter indents with tabs and rewrites
+# `*emphasis*`, which markdownlint (the Markdown owner) then rejects.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
 rev = "v2.5.15"
 hooks = [
-  { id = "biome-check", priority = 20, exclude = "^(mcp/servers/witan/ui/fixtures|packages/witan-core/tests/fixtures/omnigraph-stores)/" },
+  { id = "biome-check", priority = 20, files = '\.(jsx?|tsx?|c(js|ts)|m(js|ts)|d\.(ts|cts|mts)|jsonc?|css|svelte|vue|astro|graphql|gql)$', exclude = "^(mcp/servers/witan/ui/fixtures|packages/witan-core/tests/fixtures/omnigraph-stores)/" },
 ]
 
 # ── Skills: portability check (priority 10, parallel) ─────────────────────────
