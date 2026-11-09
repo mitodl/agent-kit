@@ -18,7 +18,8 @@
 # target version from the closest pyproject.toml that *contains* a [tool.ruff]
 # table — and none did, so it fell back to its py39 default and flagged 3.11
 # builtins (`ExceptionGroup`, `BaseExceptionGroup`) as undefined names. This
-# table is that anchor. Rule selection is ruff's default set.
+# table is that anchor. Rule selection is ruff's default set, plus the
+# [tool.ruff.lint] additions below.
 target-version = "py311"
 # The members' import roots. Without them ruff resolves first-party from the
 # repo root, finds none of the packages there, and isort (I001) folds
@@ -30,6 +31,13 @@ src = [
     "mcp/servers/witan",
     "mcp/servers/witan-code",
 ]
+
+[tool.ruff.lint]
+# ruff 0.17 dropped these flake8-datetimez rules from its default set. witan
+# parses export timestamps that are naive UTC, so a naive datetime is a real
+# bug class here, and the existing `# noqa: DTZ...` comments mark the
+# deliberate exceptions. Keep them on rather than lose the check silently.
+extend-select = ["DTZ001", "DTZ005", "DTZ006", "DTZ007", "DTZ011", "DTZ012", "DTZ901"]
 
 # prek runs the repo's hooks (prek.toml) locally and in CI. It is pinned here,
 # the single place both read it from: `uv sync --frozen --only-group prek` in
