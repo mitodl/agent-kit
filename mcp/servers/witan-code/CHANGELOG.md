@@ -8,6 +8,51 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.28.0] - 2026-11-09
+
+### Changed
+
+- Requires `witan-core>=0.51`, which pins omnigraph 0.14 (storage format 16)
+  and speaks HTTP contract 0.14 or 0.13, whichever the server stamps. A 0.14
+  data tier refuses an older client's requests. The floor also covers
+  `store_cli_args(..., binary=)`, `OmnigraphClient.commit_list`, the branched
+  HTTP transport and `OmnigraphClient(actor=)`.
+- The `schema plan` check on a local code store addresses the store with
+  `store_cli_args`, so it takes `--target` on omnigraph 0.14 (which removed
+  the positional store URI) and `--store` before it. Code and bridge store
+  `init` passes the generated operator config on 0.14 (`init_cli_args`).
+- A branch view on a deployed server reads, writes and lists its commits
+  over HTTP, with the branch as a request field, instead of through the
+  omnigraph CLI, which 0.14 refuses for a plain-http server.
+  `branch_last_write` (the reaper's idleness check) uses
+  `OmnigraphClient.commit_list`.
+- A deployment's ingest client asserts the caller's actor to the data tier
+  (`Omnigraph-If-Actor`), so on omnigraph 0.14 a token mapped to the wrong
+  actor is refused instead of writing under someone else's name. `StoreRef`
+  carries the `actor`.
+- The PostToolUse drainer indexes its whole queue as one batch
+  (`indexer.index_paths`) and waits `FLUSH_INTERVAL_SECONDS` (30s) since the
+  checkout's last flush before starting the next. An edit-heavy session now
+  runs at most one index per 30s per checkout (three commits on the branch
+  view when the batch is at most 64 changed files and fits one load chunk),
+  instead of one index run per edit back to back. The first edit after a
+  quiet spell still flushes at once, and edits made during the wait join the
+  next flush, so the last edit of a session is still indexed.
+- The Pi extension queues edits through `witan-code reindex-hook` and seeds
+  through `witan-code session-init`, the commands the Claude and Codex hooks
+  run, instead of a detached `witan-code index` per edit that bypassed the
+  drainer.
+
+### Removed
+
+- `RemoteStoreClient.change_many` no longer falls back to one
+  `code_store_mutate` per statement when the deployment's tool list lacks, or
+  fails to return, `code_store_mutate_many`. A failed listing was cached for
+  the connection's lifetime, which turned a reindex's deletes into one commit
+  per statement. A store tier without `code_store_mutate_many` (served since
+  witan-code 0.12.0) now fails the call instead. `StoreSession.has_tool` is
+  gone with it.
+
 ## [0.27.1] - 2026-10-26
 
 ### Changed
