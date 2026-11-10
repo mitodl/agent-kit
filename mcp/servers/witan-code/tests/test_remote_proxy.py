@@ -133,18 +133,26 @@ def test_unknown_tool_is_refused(proxy):
         proxy.definitely_not_a_tool()
 
 
-def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch, tmp_path):
+def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch, capsys, tmp_path):
     # WITAN_REMOTE_URL without WITAN_OIDC_ISSUER makes load_remote_config raise
-    # ValueError; _srv() must turn that into a clean SystemExit, not a traceback.
+    # ValueError; _srv() must turn that into a clean SystemExit, not a traceback,
+    # and print it to stderr so a structured stdout stays empty for its parser.
     from witan_code import cli as cli_module
+    from witan_code import output as output_module
 
     monkeypatch.setenv("WITAN_CONFIG", str(tmp_path / "unused.toml"))
     monkeypatch.delenv("WITAN_TARGET", raising=False)
     monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
     monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
     monkeypatch.setattr(cli_module, "_server", None)
-    with pytest.raises(SystemExit):
+    monkeypatch.setattr(output_module, "_output_format", "json")
+    with pytest.raises(SystemExit) as exc:
         cli_module._srv()
+
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "WITAN_OIDC_ISSUER" in captured.err
 
 
 def test_srv_returns_the_proxy_when_a_remote_is_configured(monkeypatch, tmp_path):
