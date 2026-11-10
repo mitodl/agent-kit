@@ -461,30 +461,49 @@ def add(
 
     Parameters
     ----------
-    name: Target name — the ``<name>`` in ``[targets.<name>]``.
-    remote_url: Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
-    oidc_issuer: OIDC realm issuer minting its tokens; required with --remote-url.
-    oidc_client_id: Public OIDC device-grant client id (default ``witan-cli``).
-    oidc_audience: Expected JWT audience, matching the deployment's audience.
-    server: omnigraph store URI or server URL, for a local/self-hosted target.
-    graph: omnigraph graph id addressed on ``server``.
-    code_server: omnigraph-server URL holding this target's code graphs.
+    name:
+        Target name — the ``<name>`` in ``[targets.<name>]``.
+    remote_url:
+        Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
+    oidc_issuer:
+        OIDC realm issuer minting its tokens; required with --remote-url.
+    oidc_client_id:
+        Public OIDC device-grant client id (default ``witan-cli``).
+    oidc_audience:
+        Expected JWT audience, matching the deployment's audience.
+    server:
+        omnigraph store URI or server URL, for a local/self-hosted target.
+    graph:
+        omnigraph graph id addressed on ``server``.
+    code_server:
+        omnigraph-server URL holding this target's code graphs.
         The DATA tier, reachable from inside the cluster only — distinct from
         ``--server``, which addresses the memory graph.
-    code_transport: How code-graph writes reach the cluster.
+    code_transport:
+        How code-graph writes reach the cluster.
         ``mcp`` routes them through the deployed witan endpoint and is the
         default alongside ``--remote-url``; ``direct`` addresses
         ``--code-server`` and only works from inside the cluster.
-    author: Attribution written to graph nodes under this target.
-    agent: Default agent CLI for ``witan run`` under this target.
-    match_orgs: Repo orgs that should route here (repeatable, or comma-separated).
-    match_repos: Repo URIs/paths that should route here.
-    match_hosts: Repo hosts that should route here.
-    match_paths: Local checkout path prefixes that should route here.
-    force: Replace an existing block of the same name instead of refusing.
-    verify: Check the OIDC issuer's discovery document before writing.
-    login: Run the device-grant login against the new target once written.
-    dry_run: Print the block that would be written and exit.
+    author:
+        Attribution written to graph nodes under this target.
+    agent:
+        Default agent CLI for ``witan run`` under this target.
+    match_orgs:
+        Repo orgs that should route here (repeatable, or comma-separated).
+    match_repos:
+        Repo URIs/paths that should route here.
+    match_hosts:
+        Repo hosts that should route here.
+    match_paths:
+        Local checkout path prefixes that should route here.
+    force:
+        Replace an existing block of the same name instead of refusing.
+    verify:
+        Check the OIDC issuer's discovery document before writing.
+    login:
+        Run the device-grant login against the new target once written.
+    dry_run:
+        Print the block that would be written and exit.
     """
     if not _BARE_KEY.match(name):
         console.print(
@@ -748,28 +767,45 @@ def set_(
 
     Parameters
     ----------
-    name: Target to amend — the ``<name>`` in ``[targets.<name>]``.
-    remote_url: Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
-    oidc_issuer: OIDC realm issuer minting its tokens; required with remote_url.
-    oidc_client_id: Public OIDC device-grant client id.
-    oidc_audience: Expected JWT audience, matching the deployment's audience.
-    server: omnigraph store URI or server URL, for a local/self-hosted target.
-    graph: omnigraph graph id addressed on ``server``.
-    code_server: omnigraph-server URL holding this target's code graphs.
+    name:
+        Target to amend — the ``<name>`` in ``[targets.<name>]``.
+    remote_url:
+        Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
+    oidc_issuer:
+        OIDC realm issuer minting its tokens; required with remote_url.
+    oidc_client_id:
+        Public OIDC device-grant client id.
+    oidc_audience:
+        Expected JWT audience, matching the deployment's audience.
+    server:
+        omnigraph store URI or server URL, for a local/self-hosted target.
+    graph:
+        omnigraph graph id addressed on ``server``.
+    code_server:
+        omnigraph-server URL holding this target's code graphs.
         The DATA tier, reachable from inside the cluster only — distinct from
         ``--server``, which addresses the memory graph.
-    code_transport: How code-graph writes reach the cluster.
+    code_transport:
+        How code-graph writes reach the cluster.
         ``mcp`` routes them through the deployed witan endpoint and is what a
         target with a ``remote_url`` wants; ``direct`` addresses
         ``--code-server`` and only works from inside the cluster.
-    author: Attribution written to graph nodes under this target.
-    agent: Default agent CLI for ``witan run`` under this target.
-    match_orgs: Repo orgs that should route here (repeatable, or comma-separated).
-    match_repos: Repo URIs/paths that should route here.
-    match_hosts: Repo hosts that should route here.
-    match_paths: Local checkout path prefixes that should route here.
-    verify: Check the OIDC issuer's discovery document before writing.
-    dry_run: Print the amended block without writing it.
+    author:
+        Attribution written to graph nodes under this target.
+    agent:
+        Default agent CLI for ``witan run`` under this target.
+    match_orgs:
+        Repo orgs that should route here (repeatable, or comma-separated).
+    match_repos:
+        Repo URIs/paths that should route here.
+    match_hosts:
+        Repo hosts that should route here.
+    match_paths:
+        Local checkout path prefixes that should route here.
+    verify:
+        Check the OIDC issuer's discovery document before writing.
+    dry_run:
+        Print the amended block without writing it.
     """
     updates: dict[str, object] = {
         key: value
@@ -937,8 +973,10 @@ def remove(name: str, *, dry_run: bool = False) -> None:
 
     Parameters
     ----------
-    name: Target to remove.
-    dry_run: Report what would be removed without writing.
+    name:
+        Target to remove.
+    dry_run:
+        Report what would be removed without writing.
     """
     path = cfg_module.config_path()
     if not path.exists():

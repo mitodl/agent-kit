@@ -130,10 +130,12 @@ witan — agent memory, planning, and collaboration graph.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -161,10 +163,12 @@ It is documented on the launcher rather than repeated on each command.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -181,10 +185,12 @@ Forget the cached token for the configured deployment.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -201,10 +207,12 @@ Show the identity the CLI presents to the deployed witan service.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -222,10 +230,12 @@ interactive HTML graph (vis-network) or a Graphviz DOT file.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -254,14 +264,17 @@ is not in git.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--debug, --no-debug`: and the reason for any swallowed failure) to stderr. stdout still carries
+* `--debug, --no-debug`: Print detection/read diagnostics (repo, branch, graph reads, counts,
+    and the reason for any swallowed failure) to stderr. stdout still carries
     only the injected block, so ``witan inject-context --debug`` is safe to
     run by hand to see why the block is blank. *[default: False]*
 
@@ -289,10 +302,12 @@ from the hook's stdin payload instead.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -303,10 +318,12 @@ Inspect and replay task writes queued while the deployment was unreachable.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -337,7 +354,7 @@ Remove one queued write without sending it.
 
 **Parameters**:
 
-* `ENTRY-ID, --entry-id`: **[required]**
+* `ENTRY-ID, --entry-id`: The entry's id, from ``witan journal list``. **[required]**
 
 ## witan optimize
 
@@ -358,10 +375,12 @@ cleanup to the next cleanup window.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -389,10 +408,12 @@ Stop hook and the deployed maintenance job use.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -412,10 +433,12 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -440,10 +463,12 @@ List workflow projects (default: active in the current repo).
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -474,10 +499,12 @@ Manage workflow projects.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -496,7 +523,7 @@ json|toml|yaml`` it prints the raw ``workflow_project_status`` payload.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
+* `SLUG, --slug`: Project ``wp-`` slug. **[required]**
 * `--json, --no-json`: Shorthand for ``witan --output-format json``. A structured
     ``--output-format`` wins over it, so ``--output-format yaml … --json``
     is YAML. ``txt`` does not, because an explicit ``--output-format txt``
@@ -522,9 +549,9 @@ as the tool returned them, and ``--detail`` adds each row's
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--status STR`:
-* `--detail, --no-detail`: *[default: False]*
+* `SLUG, --slug`: Project ``wp-`` slug. **[required]**
+* `--status STR`: Filter to open | in_progress | blocked | closed.
+* `--detail, --no-detail`: Expand each task's blockers and dependents. *[default: False]*
 
 ### witan project create
 
@@ -536,12 +563,12 @@ Create a new workflow project.
 
 **Parameters**:
 
-* `TITLE, --title`: **[required]**
-* `--description STR`: *[default: ""]*
-* `--phase CHOICE`: *[choices: discovery, spec, implementation, delivery]* *[default: discovery]*
-* `--repo STR`:
-* `--github-issue STR`:
-* `--tags STR..., --empty-tags`:
+* `TITLE, --title`: Short name for the project. **[required]**
+* `--description STR`: Full objective description — what will be built and why. *[default: ""]*
+* `--phase CHOICE`: Starting phase: discovery | spec | implementation | delivery. *[choices: discovery, spec, implementation, delivery]* *[default: discovery]*
+* `--repo STR`: Repo URI to associate (default: auto-detected from git remote).
+* `--github-issue STR`: URL of the tracking GitHub issue.
+* `--tags STR..., --empty-tags`: Optional tags for grouping and search.
 * `--allow STR..., --empty-allow`: An action agents may take on this project without asking. Repeat the
     flag for each item; items are not comma-split.
 * `--reserve STR..., --empty-reserve`: A decision kept for a human. Repeatable, like ``--allow``.
@@ -570,15 +597,16 @@ trace without a narrative.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--title STR`:
-* `--description STR`:
-* `--repos STR..., --empty-repos`:
-* `--add-repo STR..., --empty-add-repo`:
-* `--remove-repo STR..., --empty-remove-repo`: after additions.
-* `--tags STR..., --empty-tags`:
-* `--github-issue STR`:
-* `--status STR`:
+* `SLUG, --slug`: Project ``wp-`` slug. **[required]**
+* `--title STR`: Replacement short name.
+* `--description STR`: Replacement description.
+* `--repos STR..., --empty-repos`: Replace the repo set wholesale.
+* `--add-repo STR..., --empty-add-repo`: Repo URIs to add (repeatable, or comma-separated).
+* `--remove-repo STR..., --empty-remove-repo`: Repo URIs to drop (repeatable, or comma-separated). Applied
+    after additions.
+* `--tags STR..., --empty-tags`: Replacement tags.
+* `--github-issue STR`: Replacement tracking issue URL.
+* `--status STR`: ``active`` or ``abandoned``.
 * `--allow STR..., --empty-allow`: Replace the actions agents may take without asking. Repeat the flag
     for each item; ``--empty-allow`` clears the list.
 * `--reserve STR..., --empty-reserve`: Replace the decisions kept for a human. Repeatable;
@@ -598,9 +626,9 @@ surfaced so an unusual transition is still visible.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--phase CHOICE`: **[required]** *[choices: discovery, spec, implementation, delivery]*
-* `--github-pr STR`:
+* `SLUG, --slug`: Project ``wp-`` slug. **[required]**
+* `--phase CHOICE`: New phase: discovery | spec | implementation | delivery. **[required]** *[choices: discovery, spec, implementation, delivery]*
+* `--github-pr STR`: URL of the PR, if one has been opened (recorded on delivery).
 
 ### witan project complete
 
@@ -612,9 +640,9 @@ Complete a project and seal its immutable corpus trace.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--outcome STR`: **[required]**
-* `--github-pr STR`:
+* `SLUG, --slug`: Project ``wp-`` slug. **[required]**
+* `--outcome STR`: Narrative of what was delivered — the primary content of the trace. **[required]**
+* `--github-pr STR`: URL of the merged PR, if applicable.
 
 ### witan project block
 
@@ -626,8 +654,8 @@ Declare that ``slug`` must complete before ``blocks`` can begin.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `BLOCKS, --blocks`: **[required]**
+* `SLUG, --slug`: The blocking project's ``wp-`` slug (must finish first). **[required]**
+* `BLOCKS, --blocks`: The blocked project's ``wp-`` slug. **[required]**
 
 ### witan project unblock
 
@@ -639,8 +667,8 @@ Remove a project dependency declared with ``project block``.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `BLOCKS, --blocks`: **[required]**
+* `SLUG, --slug`: The blocking project's ``wp-`` slug to remove. **[required]**
+* `BLOCKS, --blocks`: The project to unblock. **[required]**
 
 ### witan project run
 
@@ -656,12 +684,12 @@ running each project sequentially in separate agent invocations.
 
 **Parameters**:
 
-* `SLUG, --slug`:
-* `--agent STR`:
-* `--model STR`:
-* `--dry-run, --no-dry-run`: *[default: False]*
-* `--repo STR`:
-* `--all-repos, --no-all-repos`: *[default: False]*
+* `SLUG, --slug`: Project slug to run directly (skips the picker).
+* `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
+* `--model STR`: Model flag passed to the agent.
+* `--dry-run, --no-dry-run`: Print the prompt(s) without launching. *[default: False]*
+* `--repo STR`: Scope the picker to a specific repo URI.
+* `--all-repos, --no-all-repos`: Span all repos in the picker. *[default: False]*
 
 ## witan scan
 
@@ -669,10 +697,12 @@ Introspect and dry-run write-path content scanning (ADR 0001).
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -692,9 +722,10 @@ the matched text is never printed.
 
 **Parameters**:
 
-* `TEXT, --text`: **[required]**
-* `--field STR`: e.g. skipping ``author``). *[default: content]*
-* `--node-type STR`: *[default: Memory]*
+* `TEXT, --text`: The string to scan. **[required]**
+* `--field STR`: Field name to report context for (some detectors are field-aware,
+    e.g. skipping ``author``). *[default: content]*
+* `--node-type STR`: Node type to report context for (some detectors are node-aware). *[default: Memory]*
 
 ### witan scan rules
 
@@ -710,10 +741,12 @@ Manage workflow sessions.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -728,12 +761,13 @@ Link a session to a workflow project.
 
 **Parameters**:
 
-* `PROJECT-SLUG, --project-slug`: **[required]**
-* `--phase CHOICE`: **[required]** *[choices: discovery, spec, implementation, delivery]*
-* `--session-id STR`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
+* `PROJECT-SLUG, --project-slug`: The ``wp-`` slug of the project this session belongs to. **[required]**
+* `--phase CHOICE`: The phase this session is working in. **[required]** *[choices: discovery, spec, implementation, delivery]*
+* `--session-id STR`: Unique id for the session.
+    Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
     ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
-* `--repo STR`:
-* `--tags STR..., --empty-tags`:
+* `--repo STR`: Repo URI to scope the session to (default: auto-detected).
+* `--tags STR..., --empty-tags`: Optional tags.
 
 ### witan session end
 
@@ -745,10 +779,10 @@ Close a session with a handoff summary.
 
 **Parameters**:
 
-* `SESSION-SLUG, --session-slug`: **[required]**
-* `--summary STR`: **[required]**
-* `--tools-used STR..., --empty-tools-used`:
-* `--files-changed STR..., --empty-files-changed`:
+* `SESSION-SLUG, --session-slug`: The ``ws-`` slug returned by ``session start``. **[required]**
+* `--summary STR`: What was accomplished and what remains — the resume artifact. **[required]**
+* `--tools-used STR..., --empty-tools-used`: Optional list of tool names used.
+* `--files-changed STR..., --empty-files-changed`: Optional list of file paths modified.
 
 ### witan session sweep
 
@@ -774,9 +808,10 @@ user, so a sweep cannot reach a teammate's sessions.
 
 **Parameters**:
 
-* `--older-than STR`: Guards against closing a session that is legitimately running right now. *[default: 6h]*
-* `--project STR`:
-* `--yes, --no-yes`: *[default: False]*
+* `--older-than STR`: Minimum age of a session to sweep (``30m``, ``6h``, ``2d``).
+    Guards against closing a session that is legitimately running right now. *[default: 6h]*
+* `--project STR`: Restrict to one project's sessions (``wp-`` slug).
+* `--yes, --no-yes`: Actually close them. Without this, nothing is written. *[default: False]*
 
 ### witan session list
 
@@ -791,7 +826,7 @@ Under ``--output-format json|toml|yaml`` it prints
 
 **Parameters**:
 
-* `PROJECT-SLUG, --project-slug`: **[required]**
+* `PROJECT-SLUG, --project-slug`: The ``wp-`` slug whose sessions to list. **[required]**
 
 ## witan setup
 
@@ -823,17 +858,20 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
-* `--author STR`:
-* `--dry-run, --no-dry-run`: *[default: False]*
-* `--force, --no-force`: *[default: False]*
+* `--agent CHOICE`: Target agent — claude | pi | copilot | opencode | codex | all. (Kilo Code is
+    pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
+* `--author STR`: Name written to graph nodes (default: git config user.name or $USER).
+* `--dry-run, --no-dry-run`: Print what would happen without writing anything. *[default: False]*
+* `--force, --no-force`: Replace a symlink or non-directory occupying a destination path. *[default: False]*
 
 ## witan target
 
@@ -841,10 +879,12 @@ Register and inspect named [targets.*] blocks (deployed witan endpoints).
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -884,28 +924,30 @@ reached explicitly (``--target``/``WITAN_TARGET``).
 
 **Parameters**:
 
-* `NAME, --name`: **[required]**
-* `--remote-url STR`:
-* `--oidc-issuer STR`:
-* `--oidc-client-id STR`:
-* `--oidc-audience STR`:
-* `--server STR`:
-* `--graph STR`:
-* `--code-server STR`: The DATA tier, reachable from inside the cluster only — distinct from
+* `NAME, --name`: Target name — the ``<name>`` in ``[targets.<name>]``. **[required]**
+* `--remote-url STR`: Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
+* `--oidc-issuer STR`: OIDC realm issuer minting its tokens; required with --remote-url.
+* `--oidc-client-id STR`: Public OIDC device-grant client id (default ``witan-cli``).
+* `--oidc-audience STR`: Expected JWT audience, matching the deployment's audience.
+* `--server STR`: omnigraph store URI or server URL, for a local/self-hosted target.
+* `--graph STR`: omnigraph graph id addressed on ``server``.
+* `--code-server STR`: omnigraph-server URL holding this target's code graphs.
+    The DATA tier, reachable from inside the cluster only — distinct from
     ``--server``, which addresses the memory graph.
-* `--code-transport CHOICE`: ``mcp`` routes them through the deployed witan endpoint and is the
+* `--code-transport CHOICE`: How code-graph writes reach the cluster.
+    ``mcp`` routes them through the deployed witan endpoint and is the
     default alongside ``--remote-url``; ``direct`` addresses
     ``--code-server`` and only works from inside the cluster. *[choices: direct, mcp]*
-* `--author STR`:
-* `--agent STR`:
-* `--match-orgs STR..., --empty-match-orgs`:
-* `--match-repos STR..., --empty-match-repos`:
-* `--match-hosts STR..., --empty-match-hosts`:
-* `--match-paths STR..., --empty-match-paths`:
-* `--force, --no-force`: *[default: False]*
-* `--verify, --no-verify`: *[default: True]*
-* `--login, --no-login`: *[default: False]*
-* `--dry-run, --no-dry-run`: *[default: False]*
+* `--author STR`: Attribution written to graph nodes under this target.
+* `--agent STR`: Default agent CLI for ``witan run`` under this target.
+* `--match-orgs STR..., --empty-match-orgs`: Repo orgs that should route here (repeatable, or comma-separated).
+* `--match-repos STR..., --empty-match-repos`: Repo URIs/paths that should route here.
+* `--match-hosts STR..., --empty-match-hosts`: Repo hosts that should route here.
+* `--match-paths STR..., --empty-match-paths`: Local checkout path prefixes that should route here.
+* `--force, --no-force`: Replace an existing block of the same name instead of refusing. *[default: False]*
+* `--verify, --no-verify`: Check the OIDC issuer's discovery document before writing. *[default: True]*
+* `--login, --no-login`: Run the device-grant login against the new target once written. *[default: False]*
+* `--dry-run, --no-dry-run`: Print the block that would be written and exit. *[default: False]*
 
 ### witan target set
 
@@ -934,26 +976,28 @@ the config unreadable is refused, and nothing on disk changes.
 
 **Parameters**:
 
-* `NAME, --name`: **[required]**
-* `--remote-url STR`:
-* `--oidc-issuer STR`:
-* `--oidc-client-id STR`:
-* `--oidc-audience STR`:
-* `--server STR`:
-* `--graph STR`:
-* `--code-server STR`: The DATA tier, reachable from inside the cluster only — distinct from
+* `NAME, --name`: Target to amend — the ``<name>`` in ``[targets.<name>]``. **[required]**
+* `--remote-url STR`: Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
+* `--oidc-issuer STR`: OIDC realm issuer minting its tokens; required with remote_url.
+* `--oidc-client-id STR`: Public OIDC device-grant client id.
+* `--oidc-audience STR`: Expected JWT audience, matching the deployment's audience.
+* `--server STR`: omnigraph store URI or server URL, for a local/self-hosted target.
+* `--graph STR`: omnigraph graph id addressed on ``server``.
+* `--code-server STR`: omnigraph-server URL holding this target's code graphs.
+    The DATA tier, reachable from inside the cluster only — distinct from
     ``--server``, which addresses the memory graph.
-* `--code-transport CHOICE`: ``mcp`` routes them through the deployed witan endpoint and is what a
+* `--code-transport CHOICE`: How code-graph writes reach the cluster.
+    ``mcp`` routes them through the deployed witan endpoint and is what a
     target with a ``remote_url`` wants; ``direct`` addresses
     ``--code-server`` and only works from inside the cluster. *[choices: direct, mcp]*
-* `--author STR`:
-* `--agent STR`:
-* `--match-orgs STR..., --empty-match-orgs`:
-* `--match-repos STR..., --empty-match-repos`:
-* `--match-hosts STR..., --empty-match-hosts`:
-* `--match-paths STR..., --empty-match-paths`:
-* `--verify, --no-verify`: *[default: True]*
-* `--dry-run, --no-dry-run`: *[default: False]*
+* `--author STR`: Attribution written to graph nodes under this target.
+* `--agent STR`: Default agent CLI for ``witan run`` under this target.
+* `--match-orgs STR..., --empty-match-orgs`: Repo orgs that should route here (repeatable, or comma-separated).
+* `--match-repos STR..., --empty-match-repos`: Repo URIs/paths that should route here.
+* `--match-hosts STR..., --empty-match-hosts`: Repo hosts that should route here.
+* `--match-paths STR..., --empty-match-paths`: Local checkout path prefixes that should route here.
+* `--verify, --no-verify`: Check the OIDC issuer's discovery document before writing. *[default: True]*
+* `--dry-run, --no-dry-run`: Print the amended block without writing it. *[default: False]*
 
 ### witan target list
 
@@ -973,8 +1017,8 @@ Delete a ``[targets.<name>]`` block from the config file.
 
 **Parameters**:
 
-* `NAME, --name`: **[required]**
-* `--dry-run, --no-dry-run`: *[default: False]*
+* `NAME, --name`: Target to remove. **[required]**
+* `--dry-run, --no-dry-run`: Report what would be removed without writing. *[default: False]*
 
 ## witan tasks
 
@@ -996,10 +1040,12 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -1035,10 +1081,12 @@ Manage tasks.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -1069,18 +1117,18 @@ Create a task in the work-coordination graph.
 
 **Parameters**:
 
-* `TITLE, --title`: **[required]**
-* `--description STR`: *[default: ""]*
-* `--type CHOICE`: *[choices: bug, feature, task, chore, epic]* *[default: task]*
-* `--priority CHOICE`: *[choices: p0, p1, p2, p3]* *[default: p2]*
-* `--repo STR`:
-* `--project STR`:
-* `--parent STR`:
-* `--blocked-by STR..., --empty-blocked-by`:
-* `--discovered-from STR..., --empty-discovered-from`:
-* `--external-uri STR`:
-* `--symbol-refs STR..., --empty-symbol-refs`:
-* `--tags STR..., --empty-tags`:
+* `TITLE, --title`: Short label for the work. **[required]**
+* `--description STR`: Full description of the task. *[default: ""]*
+* `--type CHOICE`: bug | feature | task | chore | epic. *[choices: bug, feature, task, chore, epic]* *[default: task]*
+* `--priority CHOICE`: p0 (highest) … p3. *[choices: p0, p1, p2, p3]* *[default: p2]*
+* `--repo STR`: Repo URI (default: auto-detected from git remote).
+* `--project STR`: wp- slug of the WorkflowProject this task rolls up to.
+* `--parent STR`: tk- slug of the parent task/epic.
+* `--blocked-by STR..., --empty-blocked-by`: tk- slugs that must close before this task is ready.
+* `--discovered-from STR..., --empty-discovered-from`: tk- slugs of tasks during which this work was discovered.
+* `--external-uri STR`: Reference URI (e.g. a GitHub issue or PR).
+* `--symbol-refs STR..., --empty-symbol-refs`: Code-graph symbol ids (repo#path::Name) this task concerns.
+* `--tags STR..., --empty-tags`: Optional free-form tags.
 
 ### witan task comment
 
@@ -1095,8 +1143,8 @@ one — without rewriting their description or filing a task that is not work.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `TEXT, --text`: **[required]**
+* `SLUG, --slug`: The ``tk-`` slug to comment on. **[required]**
+* `TEXT, --text`: The comment body. **[required]**
 
 ### witan task close
 
@@ -1110,8 +1158,8 @@ Closing a blocker unblocks its dependents.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--resolution STR`:
+* `SLUG, --slug`: The ``tk-`` slug to close. **[required]**
+* `--resolution STR`: Short note on what was done.
 
 ### witan task claim
 
@@ -1126,9 +1174,10 @@ A live claim held by someone else is refused unless ``--force`` is passed
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--assignee STR`: session so parallel sessions don't share one claim).
-* `--force, --no-force`: *[default: False]*
+* `SLUG, --slug`: The ``tk-`` slug to claim. **[required]**
+* `--assignee STR`: Holder identity (default: the author, qualified by this agent
+    session so parallel sessions don't share one claim).
+* `--force, --no-force`: Steal the task even if another holder's lease is still valid. *[default: False]*
 
 ### witan task release
 
@@ -1140,11 +1189,12 @@ Release a claim, returning the task to ``open`` (or another status).
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--assignee STR`: by this agent session — a claim taken by another of your own sessions
+* `SLUG, --slug`: The ``tk-`` slug to release. **[required]**
+* `--assignee STR`: Holder identity releasing the task (default: the author, qualified
+    by this agent session — a claim taken by another of your own sessions
     still matches, since the check is on identity, not session).
-* `--status CHOICE`: *[choices: open, in_progress, blocked, closed]* *[default: open]*
-* `--force, --no-force`: *[default: False]*
+* `--status CHOICE`: Status to return the task to (default ``open``). *[choices: open, in_progress, blocked, closed]* *[default: open]*
+* `--force, --no-force`: Release even if held by a different assignee. *[default: False]*
 
 ### witan task update
 
@@ -1159,18 +1209,18 @@ to add dependencies use ``task link``.
 
 **Parameters**:
 
-* `SLUG, --slug`: **[required]**
-* `--title STR`:
-* `--description STR`:
-* `--type CHOICE`: *[choices: bug, feature, task, chore, epic]*
-* `--priority CHOICE`: *[choices: p0, p1, p2, p3]*
-* `--status CHOICE`: *[choices: open, in_progress, blocked, closed]*
-* `--repo STR`:
-* `--project STR`:
-* `--parent STR`:
-* `--assignee STR`:
-* `--external-uri STR`:
-* `--tags STR..., --empty-tags`:
+* `SLUG, --slug`: The ``tk-`` slug to update. **[required]**
+* `--title STR`: New short label.
+* `--description STR`: New full description.
+* `--type CHOICE`: bug | feature | task | chore | epic. *[choices: bug, feature, task, chore, epic]*
+* `--priority CHOICE`: p0 (highest) … p3. *[choices: p0, p1, p2, p3]*
+* `--status CHOICE`: open | in_progress | blocked | closed. *[choices: open, in_progress, blocked, closed]*
+* `--repo STR`: Canonical repo URI to (re)assign this task to.
+* `--project STR`: ``wp-`` slug of the WorkflowProject this task rolls up to.
+* `--parent STR`: ``tk-`` slug of the parent task/epic.
+* `--assignee STR`: Owner identity.
+* `--external-uri STR`: Reference URI (e.g. a GitHub issue or PR).
+* `--tags STR..., --empty-tags`: Replacement free-form tags.
 
 ### witan task link
 
@@ -1187,9 +1237,9 @@ memory to.
 
 **Parameters**:
 
-* `FROM-SLUG, --from-slug`: **[required]**
-* `TO-SLUG, --to-slug`: **[required]**
-* `KIND, --kind`: **[required]** *[choices: blocks, parent, discovered_from, addresses]*
+* `FROM-SLUG, --from-slug`: Source ``tk-`` slug. **[required]**
+* `TO-SLUG, --to-slug`: Target ``tk-`` (or memory) slug. **[required]**
+* `KIND, --kind`: blocks | parent | discovered_from | addresses. **[required]** *[choices: blocks, parent, discovered_from, addresses]*
 
 ### witan task unlink
 
@@ -1208,9 +1258,9 @@ error, so re-running is safe.
 
 **Parameters**:
 
-* `FROM-SLUG, --from-slug`: **[required]**
-* `TO-SLUG, --to-slug`: **[required]**
-* `KIND, --kind`: **[required]** *[choices: blocks, parent, discovered_from, addresses]*
+* `FROM-SLUG, --from-slug`: Source ``tk-`` slug. **[required]**
+* `TO-SLUG, --to-slug`: Target ``tk-`` (or memory) slug. **[required]**
+* `KIND, --kind`: blocks | parent | discovered_from | addresses. **[required]** *[choices: blocks, parent, discovered_from, addresses]*
 
 ### witan task run
 
@@ -1226,17 +1276,18 @@ running each task sequentially in separate agent invocations.
 
 **Parameters**:
 
-* `SLUG, --slug`:
-* `--agent STR`:
-* `--model STR`:
-* `--claim, --no-claim`: *[default: True]*
-* `--force, --no-force`: this the command could report a task as held and offer no way past it
+* `SLUG, --slug`: Task slug to run directly (skips the picker).
+* `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
+* `--model STR`: Model flag passed to the agent.
+* `--claim, --no-claim`: Mark each task in_progress before launching. *[default: True]*
+* `--force, --no-force`: Take the claim even if someone else's lease is still live. Without
+    this the command could report a task as held and offer no way past it
     from the CLI it was reported in — the interactive steal prompt is
     server-side and unreachable through ``_fn``, which passes no ``ctx``. *[default: False]*
-* `--dry-run, --no-dry-run`: *[default: False]*
-* `--repo STR`:
-* `--all-repos, --no-all-repos`: *[default: False]*
-* `--project STR`:
+* `--dry-run, --no-dry-run`: Print the prompt(s) without launching or claiming. *[default: False]*
+* `--repo STR`: Scope the picker to a specific repo URI.
+* `--all-repos, --no-all-repos`: Span all repos in the picker. *[default: False]*
+* `--project STR`: Scope the picker to a specific wp- project slug.
 
 ## witan traces
 
@@ -1248,10 +1299,12 @@ List corpus workflow traces (default: current repo).
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -1275,10 +1328,12 @@ Inspect corpus trace records.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -1324,15 +1379,18 @@ this page and does its own login.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--port INT`: Env: ``WITAN_UI_PORT``. *[env: WITAN_UI_PORT]*
-* `--browser, --no-browser`: *[default: True]*
+* `--port INT`: Port to bind. Defaults to one the OS says is free.
+    Env: ``WITAN_UI_PORT``. *[env: WITAN_UI_PORT]*
+* `--browser, --no-browser`: Open a browser. ``--no-browser`` just prints the URL. *[default: True]*
 
 ## witan migrate
 
@@ -1340,10 +1398,12 @@ One-shot, idempotent schema and data migrations.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -1556,10 +1616,12 @@ witan-code — tree-sitter code graph + cross-repo bridge.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
@@ -1782,12 +1844,15 @@ rather than a server denial.
 
 **Parameters**:
 
-* `--store STR`: URL. Default: every store this config resolves to (cluster graphs when
+* `--store STR`: Graph to sweep — a store path, or an ``http(s)://`` omnigraph-server
+    URL. Default: every store this config resolves to (cluster graphs when
     ``code_server`` is set, else the local ones), the shared bridge
     included.
-* `--graph STR`: encode one as ``.../graphs/<id>``.
-* `--max-idle-days FLOAT`: ``WITAN_CODE_VIEW_MAX_IDLE_DAYS``). ``0`` disables reaping.
-* `--apply, --no-apply`: *[default: False]*
+* `--graph STR`: Cluster graph id, when ``--store`` is a server URL that doesn't
+    encode one as ``.../graphs/<id>``.
+* `--max-idle-days FLOAT`: Reap views idle at least this long (default: 14, or
+    ``WITAN_CODE_VIEW_MAX_IDLE_DAYS``). ``0`` disables reaping.
+* `--apply, --no-apply`: Actually delete. Without it, nothing is written. *[default: False]*
 
 ### witan code checkpoint
 
@@ -1868,10 +1933,10 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
-* `--author STR`:
-* `--dry-run, --no-dry-run`: *[default: False]*
-* `--force, --no-force`: *[default: False]*
+* `--agent CHOICE`: Target agent — claude | pi | copilot | opencode | codex | all. *[choices: claude, pi, copilot, opencode, codex, all]* *[default: claude]*
+* `--author STR`: Name written to graph nodes (default: git config user.name or $USER).
+* `--dry-run, --no-dry-run`: Print what would happen without writing anything. *[default: False]*
+* `--force, --no-force`: Replace a symlink or non-directory occupying a destination path. *[default: False]*
 
 ### witan code branches
 
@@ -1973,21 +2038,27 @@ deployment would 403 every request from the browser UI. See the call to
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--transport CHOICE`: ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``. *[choices: stdio, http, streamable-http]* *[env: WITAN_MCP_TRANSPORT]* *[default: stdio]*
-* `--host STR`: Note that the Host/Origin guard above engages only on a LOOPBACK bind:
+* `--transport CHOICE`: MCP transport. ``stdio`` for local; ``streamable-http`` (or its
+    ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``. *[choices: stdio, http, streamable-http]* *[env: WITAN_MCP_TRANSPORT]* *[default: stdio]*
+* `--host STR`: Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
+    Note that the Host/Origin guard above engages only on a LOOPBACK bind:
     serving on ``0.0.0.0`` from a workstation to reach a browser on another
     machine turns both checks off, and that endpoint has no authentication
     of its own. Env: ``WITAN_MCP_HOST``. *[env: WITAN_MCP_HOST]* *[default: 127.0.0.1]*
-* `--port INT`: *[env: WITAN_MCP_PORT]* *[default: 8000]*
-* `--path STR`: Env: ``WITAN_MCP_PATH``. *[env: WITAN_MCP_PATH]* *[default: /mcp]*
-* `--shutdown-grace-seconds FLOAT`: SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
+* `--port INT`: Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``. *[env: WITAN_MCP_PORT]* *[default: 8000]*
+* `--path STR`: URL path the MCP endpoint is served on (HTTP transports only).
+    Env: ``WITAN_MCP_PATH``. *[env: WITAN_MCP_PATH]* *[default: /mcp]*
+* `--shutdown-grace-seconds FLOAT`: How long uvicorn waits for in-flight requests after
+    SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
     which silently truncates any deployment that expects a rollout to drain
     — a witan write has been measured at 27s. Set this to the deployment's
     termination grace period. Env:
@@ -2007,15 +2078,19 @@ the task's repo checkout so the agent has the right working directory.
 
 **Parameters**:
 
-* `--output-format CHOICE`: Applies to tasks, task <slug>, projects, project status, project
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
     tasks, session list, memory, traces, scan, target list, and mounted
     witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
-* `--target STR`: Names a [targets.<name>] block, and applies to every command — `witan
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
 * `SLUG, --slug`: **[required]**
-* `--agent STR`: WITAN_AGENT env var and target/config-file default.
-* `--model STR`: var and target/config-file default.
-* `--claim, --no-claim`: *[default: True]*
-* `--dry-run, --no-dry-run`: *[default: False]*
+* `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo). Overrides
+    WITAN_AGENT env var and target/config-file default.
+* `--model STR`: Model passed to the agent's --model flag. Overrides WITAN_MODEL env
+    var and target/config-file default.
+* `--claim, --no-claim`: Mark the task in_progress and assign it to you first. *[default: True]*
+* `--dry-run, --no-dry-run`: Print the prompt and exit without launching or claiming. *[default: False]*
