@@ -303,12 +303,22 @@ def root(start: Path | None = None) -> Path | None:
     return git_config.parent.parent
 
 
+# git's messages (under LC_ALL=C) for "there is no repository here": no `.git`
+# up the tree, or a `.git` file whose gitdir is gone (a pruned worktree).
+_NO_REPOSITORY_MARKERS = (
+    "not a git repository",
+    "does not point to a valid repository",
+)
+
+
 def unignored_files(
     directory: Path, *, on_error: Callable[[OSError], None] | None = None
 ) -> list[Path] | None:
     """Every path git lists under ``directory``: tracked, plus untracked but not
-    ignored. ``None`` when git cannot answer (no git binary, or ``directory``
-    is not inside a work tree), which callers take as "walk the disk instead".
+    ignored. ``None`` when there is no repository to ask (no git binary, or
+    ``directory`` is not inside a work tree), which callers take as "walk the
+    disk instead". When git fails inside a repository, ``on_error`` gets the
+    failure and the listing is empty.
 
     ``on_error`` gets anything git wrote to stderr on a run that otherwise
     succeeded. A directory git cannot open is one such warning, and git then
@@ -342,17 +352,49 @@ def unignored_files(
             ],
             capture_output=True,
             check=False,
+            # _NO_REPOSITORY_MARKERS below reads git's message.
+            env={**os.environ, "LC_ALL": "C"},
         )
     except OSError:
         return None
+    stderr = os.fsdecode(result.stderr).strip()
     if result.returncode != 0:
-        return None
-    if result.stderr.strip() and on_error is not None:
-        on_error(OSError(f"git ls-files: {os.fsdecode(result.stderr).strip()}"))
+        # Only "no repository here" means walk. Any other failure (dubious
+        # ownership, an unreadable or corrupt index) is a repository git could
+        # not list, and walking it would index the ignored trees this listing
+        # exists to leave out. Report it, so the caller skips the purge, and
+        # list nothing.
+        if any(marker in stderr for marker in _NO_REPOSITORY_MARKERS):
+            return None
+        if on_error is not None:
+            on_error(OSError(f"git ls-files failed: {stderr}"))
+        return []
+    if stderr and on_error is not None:
+        on_error(OSError(f"git ls-files: {stderr}"))
     # -z: no quoting, and a name may hold spaces or newlines. An unmerged path
     # is listed once per conflict stage, hence the dedupe.
     names = dict.fromkeys(name for name in result.stdout.split(b"\0") if name)
-    return [directory / os.fsdecode(name) for name in names]
+    return [
+        path
+        for path in (directory / os.fsdecode(name) for name in names)
+        if not _under_symlinked_dir(directory, path)
+    ]
+
+
+def _under_symlinked_dir(directory: Path, path: Path) -> bool:
+    """Whether a directory between ``directory`` and ``path`` is a symlink.
+
+    The index can still name the children of a tracked directory that was
+    replaced by a symlink to another directory, and following it would read
+    files outside the repository as its own. A symlink to a single file is
+    kept, as the walk kept it.
+    """
+    parent = path.parent
+    while parent != directory and directory in parent.parents:
+        if parent.is_symlink():
+            return True
+        parent = parent.parent
+    return False
 
 
 def ignored(repo_root: Path, paths: list[Path]) -> frozenset[Path]:

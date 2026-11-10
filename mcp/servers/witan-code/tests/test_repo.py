@@ -149,3 +149,69 @@ def test_dirname_fallback_does_not_override_an_explicit_repo(tmp_path, monkeypat
         repo.detect(start=checkout, dirname_fallback=False)
         == "https://github.com/test/cg"
     )
+
+
+def _commit_all(checkout):
+    subprocess.run(["git", "add", "-A"], cwd=checkout, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_unignored_files_is_none_outside_a_repository(tmp_path):
+    """No repository is the one case that sends a caller back to the walk."""
+    assert repo.unignored_files(tmp_path) is None
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_a_repository_git_cannot_list_reports_and_lists_nothing(tmp_path):
+    """A corrupt index must not fall back to the walk, which would index the
+    ignored trees the listing exists to leave out."""
+    checkout = tmp_path / "proj"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    (checkout / "a.py").write_text("x = 1\n")
+    _commit_all(checkout)
+    (checkout / ".git" / "index").write_bytes(b"not an index")
+    errors = []
+
+    assert repo.unignored_files(checkout, on_error=errors.append) == []
+    assert len(errors) == 1
+    assert "git ls-files failed" in str(errors[0])
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_a_tracked_directory_replaced_by_a_symlink_is_not_followed(tmp_path):
+    """The index still names the old children; following the link would read
+    another directory's files as this repository's. A symlink to a single file
+    is kept."""
+    checkout = tmp_path / "proj"
+    (checkout / "pkg").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    (checkout / "pkg" / "a.py").write_text("x = 1\n")
+    _commit_all(checkout)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "a.py").write_text("secret = 1\n")
+    (outside / "b.py").write_text("y = 2\n")
+    shutil.rmtree(checkout / "pkg")
+    (checkout / "pkg").symlink_to(outside, target_is_directory=True)
+    (checkout / "link.py").symlink_to(outside / "b.py")
+
+    listed = repo.unignored_files(checkout)
+
+    assert checkout / "pkg" / "a.py" not in listed
+    assert checkout / "link.py" in listed
