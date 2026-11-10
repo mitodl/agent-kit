@@ -7266,9 +7266,11 @@ async def task_create(
     close.
 
     Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
-    BM25 matches on ``title`` against existing tasks (any status), a soft
-    duplicate check. It never blocks creation; review it and close this task
-    as a duplicate (``task_close``) if one of them is really the same work.
+    BM25 matches for the title and the start of the description against
+    existing tasks in every repo (any status), each with its ``slug``,
+    ``title``, ``status`` and ``repo``: a soft duplicate check. It never
+    blocks creation; review it and close this task as a duplicate
+    (``task_close``) if one of them is really the same work.
 
     Against a deployment that serves the web UI, it also carries ``ui_url``:
     the link that opens the task there. Hand a person that link rather than
@@ -7305,14 +7307,23 @@ async def task_create(
     # unscoped task (today's behavior) under automation / an unsupported client.
     repo = await elicit.repo_or_detect(ctx, repo)
     detected_repo = repo_module.detect(override=repo)
-    # Soft duplicate check (tk-phase-0-bm25-task-search-project-search):
-    # BM25-search the title against existing tasks before minting a new one.
-    # Warn-only — never blocks the create — since a lexical hit on the title
-    # is a decent duplicate signal but nowhere near certain; the caller
-    # decides whether a `similar` hit means "use that one instead."
+    # Soft duplicate check (tk-phase-0-bm25-task-search-project-search).
+    # Warn-only — never blocks the create — since a lexical hit is a decent
+    # duplicate signal but nowhere near certain; the caller decides whether a
+    # `similar` hit means "use that one instead."
+    similar_query = _similar_task_query(title, description)
     similar = [
-        {"slug": r["slug"], "title": r["title"], "status": r["status"]}
-        for r in (await _offload(_search_task_rows, title, detected_repo, None))[:3]
+        {
+            "slug": r["slug"],
+            "title": r["title"],
+            "status": r["status"],
+            "repo": r.get("repo"),
+        }
+        for r in (
+            await _offload(_search_task_rows, similar_query, "", None)
+            if similar_query
+            else []
+        )[:3]
     ]
     # Only "blocked" if a blocker is not already closed — otherwise it's ready
     # now and would never be auto-unblocked.
@@ -7731,6 +7742,36 @@ def _search_task_bm25(params: dict, name: str = "search_tasks") -> list[dict]:
     return rows
 
 
+# How much of a new task's description joins its title in the duplicate query.
+_SIMILAR_QUERY_DESCRIPTION_CHARS = 400
+
+
+def _similar_task_query(title: str, description: str) -> str:
+    """The BM25 query ``task_create``'s soft duplicate check runs.
+
+    Replayed against 42 tasks closed as duplicates in production (2026-11-10),
+    with tasks created after each duplicate filtered out, the original ranked in
+    the top 3 for 36 of them when the query was the title alone, scoped to the
+    duplicate's repo. Searching every repo with the title plus the first
+    :data:`_SIMILAR_QUERY_DESCRIPTION_CHARS` characters of the description found
+    40. Three of the recovered pairs were the same repo spelled two ways (e.g.
+    ``mitodl/ol-llm`` and ``https://github.com/mitodl/ol-llm``), which an exact
+    repo match cannot see; two moved into the top 3 from ranks 4 and 10. One
+    pair fell from 1st to 7th, and one (titles sharing only "Cohort 2", in
+    different repos) is missed either way.
+
+    Punctuation becomes whitespace so a description's markdown and paths read
+    as words.
+
+    :param title: The new task's title.
+    :param description: The new task's description.
+    :returns: The query text.
+    :rtype: str
+    """
+    text = f"{title} {description[:_SIMILAR_QUERY_DESCRIPTION_CHARS]}"
+    return re.sub(r"[^\w\s]", " ", text).strip()
+
+
 def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
     """BM25 candidate rows in score-desc order — the Task twin of
     ``_search_rows``; `description` stands in for Memory's `content` as the
@@ -7805,8 +7846,9 @@ def task_search(
     ``description`` and ``title`` (description matches are seeded ahead of
     title-only matches — see ``memory_search``'s doc for why). Run this
     before ``task_create`` to check whether the work is already tracked;
-    ``task_create`` also runs it automatically and returns the top matches
-    as ``similar`` in its response.
+    ``task_create`` also runs a search across every repo, with the title and
+    the start of the description, and returns the top matches as ``similar``
+    in its response.
 
     To find "the next task" in a project there is no query to rank by: use
     ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
