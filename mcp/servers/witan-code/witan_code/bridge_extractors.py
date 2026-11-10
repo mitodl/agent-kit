@@ -29,6 +29,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import repo as repo_module
+
 # ── Binding record ────────────────────────────────────────────────
 
 
@@ -519,8 +521,12 @@ def extract_repo_bindings(
 
 
 def _walk(base: Path):
-    for path in base.rglob("*"):
-        if path.is_dir() or any(part in _SKIP_DIRS for part in path.parts):
+    # git's listing where there is one, for the indexer's reason (see
+    # `indexer._collect_files`): a package.json or OpenAPI spec inside an
+    # ignored virtualenv or build tree is not one of this repo's providers.
+    listed = repo_module.unignored_files(base)
+    for path in base.rglob("*") if listed is None else listed:
+        if not path.is_file() or any(part in _SKIP_DIRS for part in path.parts):
             continue
         yield path
 

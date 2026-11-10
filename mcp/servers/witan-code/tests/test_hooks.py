@@ -747,3 +747,36 @@ def test_a_codex_patch_that_deletes_and_renames_leaves_neither_old_path(
     renamed = client.read("code_read.gq", "find_by_name", {"name": "renamed"})
     assert [r["file_id"].split("#", 1)[1] for r in renamed] == ["new.py"]
     assert client.read("code_read.gq", "find_by_name", {"name": "deleted"}) == []
+
+
+@requires_stack
+def test_an_edit_to_a_git_ignored_file_is_not_indexed(
+    tmp_path, monkeypatch, _state, _spawned
+):
+    """An agent editing inside a virtualenv or build tree: the drainer drops
+    the ignored file and indexes the rest of the batch."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    src = tmp_path / "repo"
+    (src / "env" / "lib").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=src, check=True)
+    (src / "env" / ".gitignore").write_text("*\n")
+    (src / "env" / "lib" / "dep.py").write_text("def dep():\n    return 1\n")
+    (src / "mine.py").write_text("def mine():\n    return 1\n")
+
+    hooks.reindex_hook(_payload(src / "env" / "lib" / "dep.py"))
+    hooks.reindex_hook(_payload(src / "mine.py"))
+    checkout = hooks.repo_module.root(src)
+    hooks.drain_pending(checkout, hooks._try_lock(checkout))
+
+    cfg = cfg_mod.load()
+    client = OmnigraphClient(
+        str(store_mod.store_for_repo("https://github.com/test/cg", cfg)),
+        cfg.queries_dir,
+    )
+    rows = client.read("code_read.gq", "all_file_hashes", {})
+    assert {r["slug"].split("#", 1)[1] for r in rows} == {"mine.py"}

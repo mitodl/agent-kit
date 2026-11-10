@@ -525,11 +525,18 @@ def index_paths(
     # "missing from the collected set" as "no longer part of the repo".
     walk_errors: list[OSError] = []
     gone = [t for t in resolved if not t.exists()]
+    # A file named directly (the edit hook's case) is held to the same ignore
+    # rule a directory's listing applies, in one git call for the whole batch.
+    ignored = (
+        repo_module.ignored(repo_root, [t for t in resolved if t.is_file()])
+        if repo_root is not None
+        else frozenset()
+    )
     collected = list(
         dict.fromkeys(
             path
             for t in resolved
-            if t.exists()
+            if t.exists() and t not in ignored
             for path in _collect_files(t, on_error=walk_errors.append)
         )
     )
@@ -838,16 +845,62 @@ def _collect_files(
 ) -> list[Path]:
     """Every indexable file under ``target``, sorted.
 
+    Inside a git work tree that is git's own listing (tracked, plus untracked
+    but not ignored), so whatever the repo or the user ignores never reaches
+    the store. Skipping only a fixed set of directory names let a virtualenv
+    under another name (``env/``, ``.direnv/``) in. A dry estimate of
+    open-edx-plugins with a ``uv sync`` into ``env/`` came to 703,408 records
+    in 108 2 MiB loads, against 14,661 in 5 with git's listing. Outside a work tree,
+    or without a git binary, the disk is walked instead.
+
     ``on_error`` is handed any directory that could not be read. ``os.walk``
-    swallows those silently by default, which is fine for indexing (skip what
-    you can't read) but NOT for the purge that consumes this list: an
-    unreadable subtree would look like a set of deleted files and take their
-    rows with it. ``index_path`` passes a collector and declines to purge when
-    anything fired.
+    and ``git ls-files`` both skip those without failing, which is fine for
+    indexing (skip what you can't read) but NOT for the purge that consumes
+    this list: an unreadable subtree would look like a set of deleted files
+    and take their rows with it. ``index_path`` passes a collector and
+    declines to purge when anything fired.
     """
     if target.is_file():
         return [target] if target.suffix in _EXT_TO_SPEC else []
+    listed = repo_module.unignored_files(target, on_error=on_error)
+    if listed is None:
+        return _walk_files(target, on_error=on_error)
+    return _filter_listed(target, listed)
 
+
+def _filter_listed(target: Path, listed: list[Path]) -> list[Path]:
+    """The indexable files among git's listing of ``target``, sorted.
+
+    The walk's exclusions still apply on top of git's ignore rules: a tracked
+    file under ``build/`` or ``dist/`` stays out, as before, and so does
+    anything below a directory with its own ``.git``. git already declines to
+    descend into a real nested repository or submodule (submodules belong to
+    their own repo's graph); the check here covers a ``.git`` entry git cannot
+    open, which it lists straight through. ``is_file`` drops what git lists
+    but the disk does not hold: tracked files deleted from the work tree,
+    submodule gitlinks, and symlinks to directories. A symlink to a file is
+    kept, as the walk kept it.
+    """
+    nested = functools.cache(_is_nested_checkout)
+    out: list[Path] = []
+    for path in listed:
+        if path.suffix not in _EXT_TO_SPEC:
+            continue
+        dirs = path.relative_to(target).parts[:-1]
+        if any(d in _SKIP_DIRS for d in dirs):
+            continue
+        if any(nested(target.joinpath(*dirs[: i + 1])) for i in range(len(dirs))):
+            continue
+        if path.is_file():
+            out.append(path)
+    return sorted(out)
+
+
+def _walk_files(
+    target: Path, *, on_error: Callable[[OSError], None] | None = None
+) -> list[Path]:
+    """Every indexable file under ``target`` found by walking the disk, for a
+    directory git cannot list (no git binary, or not a work tree)."""
     out: list[Path] = []
     for root, dirs, files in os.walk(target, onerror=on_error):
         root_path = Path(root)

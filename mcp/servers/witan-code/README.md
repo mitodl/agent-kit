@@ -724,14 +724,26 @@ scripts to symlink.
 
 ## What gets indexed
 
-The walk skips the usual noise directories (`.git`, `node_modules`, `.venv`,
-`__pycache__`, `dist`, `build`, the various caches) and — importantly — does
+Inside a git work tree the file set is git's own listing (`git ls-files
+--cached --others --exclude-standard`): tracked files plus untracked files
+that are not ignored. Anything `.gitignore`, `.git/info/exclude` or your
+`core.excludesFile` ignores stays out of the graph, including a virtualenv
+under any name (uv and `python -m venv` write a `*` `.gitignore` into the
+environment they create). The edit hooks apply the same rule: an edit to an
+ignored file is not indexed. Outside a git work tree, or without a `git`
+binary, the indexer walks the directory instead, and only the rules below
+apply.
+
+On top of either, the indexer skips the usual noise directories (`.git`,
+`node_modules`, `.venv`, `__pycache__`, `dist`, `build`, the various caches),
+even where git tracks them, and — importantly — does
 not descend into a **nested checkout**: any subdirectory containing a `.git`
 entry belongs to a different repository. That covers linked worktrees
 (`.claude/worktrees/<name>/`, where `.git` is a *file*, not a directory),
 submodules, and plain clones dropped inside the tree. Their files are that
 repo's; indexing them here would attribute them to this one and leave the
-store serving stale copies of itself under a second set of paths.
+store serving stale copies of itself under a second set of paths. A
+submodule's files belong in its own repo's graph, not this one's.
 
 Indexing *from inside* a worktree still works normally — only descending into
 one from the parent is refused — so the hooks keep indexing while an agent

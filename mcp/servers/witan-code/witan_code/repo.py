@@ -2,6 +2,7 @@ import configparser
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from witan_core.repo_key import find_git_config, normalise
@@ -300,3 +301,82 @@ def root(start: Path | None = None) -> Path | None:
     if git_config is None:
         return None
     return git_config.parent.parent
+
+
+def unignored_files(
+    directory: Path, *, on_error: Callable[[OSError], None] | None = None
+) -> list[Path] | None:
+    """Every path git lists under ``directory``: tracked, plus untracked but not
+    ignored. ``None`` when git cannot answer (no git binary, or ``directory``
+    is not inside a work tree), which callers take as "walk the disk instead".
+
+    ``on_error`` gets anything git wrote to stderr on a run that otherwise
+    succeeded. A directory git cannot open is one such warning, and git then
+    leaves its untracked files out of the listing and still exits 0, the same
+    silent shrink ``os.walk`` commits without an ``onerror``.
+
+    Ignore rules are git's own (``.gitignore`` at every level,
+    ``.git/info/exclude``, ``core.excludesFile``), so a virtualenv under any
+    name is left out: uv and ``python -m venv`` both drop a ``*`` .gitignore
+    inside the environment they create. A tracked file is listed even when a
+    pattern matches it, as git itself treats it.
+
+    The listing is what git knows, not what is on disk, so callers check
+    existence: a tracked file deleted from the work tree is still listed, and
+    so is a submodule's gitlink (a directory). git does not descend into a
+    nested repository or a submodule; a directory that only looks like one (a
+    ``.git`` entry git cannot open) is listed through, so callers keep their
+    own nested-checkout check.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(directory),
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    if result.stderr.strip() and on_error is not None:
+        on_error(OSError(f"git ls-files: {os.fsdecode(result.stderr).strip()}"))
+    # -z: no quoting, and a name may hold spaces or newlines. An unmerged path
+    # is listed once per conflict stage, hence the dedupe.
+    names = dict.fromkeys(name for name in result.stdout.split(b"\0") if name)
+    return [directory / os.fsdecode(name) for name in names]
+
+
+def ignored(repo_root: Path, paths: list[Path]) -> frozenset[Path]:
+    """The members of ``paths`` (absolute, all inside ``repo_root``) that git
+    ignores, asked in one ``git check-ignore`` call.
+
+    Empty when git cannot answer, which leaves the caller indexing them as it
+    did before this check existed. Tracked files are never reported, matching
+    :func:`unignored_files`.
+    """
+    if not paths:
+        return frozenset()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-z", "--stdin"],
+            input=b"\0".join(os.fsencode(path) for path in paths),
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return frozenset()
+    # 0: some path is ignored; 1: none is; anything else is a fatal error.
+    if result.returncode not in (0, 1):
+        return frozenset()
+    return frozenset(
+        Path(os.fsdecode(name)) for name in result.stdout.split(b"\0") if name
+    )
