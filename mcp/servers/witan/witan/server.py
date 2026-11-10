@@ -669,7 +669,10 @@ _MEMORY_LINK_MUTATIONS = {
 EdgeConfidence = Literal["asserted", "inferred"]
 
 #: What an edge property means when it is NULL: an edge written before
-#: 2026-09, when these properties did not exist. Nothing backfills them.
+#: 2026-09, when these properties did not exist. ``witan migrate topics``
+#: (:func:`migrate_topics`) stamps the Tagged ones a memory's tag explains as
+#: ``inferred``. It leaves two kinds null: a Tagged edge no tag explains (an
+#: old ``memory_link(kind="tagged")``), and every memory-to-memory edge.
 #:
 #: ★ NULL SCORES AS ``asserted``, WHICH IS THE CONSERVATIVE CHOICE AND NOT THE
 #: OBVIOUS ONE. Most null Tagged edges genuinely are tag-derived and would be
@@ -678,7 +681,8 @@ EdgeConfidence = Literal["asserted", "inferred"]
 #: day this ships, silently, for every caller of `recall` — a behaviour change
 #: nobody asked for, dressed as a bug fix. So an unstamped edge keeps exactly
 #: the weight it had before the properties existed, and the weighting takes
-#: hold as the graph is rewritten.
+#: hold on a store only when an operator runs the backfill, which is then a
+#: deliberate re-rank rather than a side effect of upgrading.
 _EDGE_CONFIDENCE_DEFAULT: EdgeConfidence = "asserted"
 
 
@@ -1401,11 +1405,34 @@ def migrate_topics() -> dict:
     skips already-linked (memory, topic) pairs. Tagged being keyed does not make
     that check redundant: re-inserting would replace an ``asserted`` link with
     this backfill's ``inferred`` row. Returns counts for reporting.
+
+    It also stamps the Tagged edges written before edge properties existed
+    (witan-council 0.33.0). Those carry a null ``confidence``, which ``recall``
+    scores as ``asserted``, so the topic-sibling hop stays unweighted on every
+    graph older than that release. An unstamped edge whose topic one of the
+    memory's tags derives is rewritten as ``inferred`` with role ``tag`` (a
+    role already set is kept), which is what the live write path would have
+    written for it. Tagged is keyed, so the rewrite replaces the row in place;
+    its ``author`` and ``created_at`` are carried over rather than invented,
+    because they record who linked the pair and when, which nobody knows. An
+    unstamped edge no tag derives was written by ``memory_link(kind="tagged")``
+    and is left null, the score it already gets. Memory-to-memory edges are not
+    touched: every one of them was named by a caller.
+
+    The converse is not knowable. A pair someone linked by hand before 0.33.0
+    whose memory also carries the tag is one keyed row, and it becomes
+    ``inferred`` here, as a re-tag through ``memory_update`` would make it.
+
+    Like the inserts, the rewrite is not fenced. Every edge is read once,
+    before the first write, so a ``memory_link`` naming the same pair at any
+    point during the run is replaced by the ``inferred`` row. The link it
+    loses only re-ranks.
     """
     # Slim read: only slug + tags, not full memory content.
     rows = client.read("read.gq", "list_memory_tags", {})
     topics_created = 0
     edges_created = 0
+    edges_stamped = 0
     seen_topics: set[str] = set()
     # This sweeps the WHOLE store, so writing per row is how a backfill leaves
     # behind the fragmented store the batching exists to avoid — a few hundred
@@ -1421,13 +1448,14 @@ def migrate_topics() -> dict:
             client.change_many(list(steps))
             steps.clear()
 
-    tagged: dict[str, set[str]] = {}
+    tagged: dict[str, dict[str, dict]] = {}
     for edge in _read_by_slugs("topics_for_memories", [row["slug"] for row in rows]):
-        tagged.setdefault(edge["memory_slug"], set()).add(edge["topic_slug"])
+        tagged.setdefault(edge["memory_slug"], {})[edge["topic_slug"]] = edge
 
     for row in rows:
         slug = row["slug"]
-        existing = tagged.get(slug, set())
+        existing = tagged.get(slug, {})
+        handled: set[str] = set()
         for tag in dict.fromkeys(t for t in (row.get("tags") or []) if t.strip()):
             topic_slug = _topic_slug("topic", tag)
             if topic_slug not in seen_topics:
@@ -1436,7 +1464,12 @@ def migrate_topics() -> dict:
                     topics_created += 1
                     steps += create_steps
                 seen_topics.add(topic_slug)
-            if topic_slug not in existing:
+            # Two tags can slugify to one topic ("UV" and "uv").
+            if topic_slug in handled:
+                continue
+            handled.add(topic_slug)
+            edge = existing.get(topic_slug)
+            if edge is None:
                 steps.append(
                     (
                         "mutations.gq",
@@ -1452,6 +1485,22 @@ def migrate_topics() -> dict:
                     )
                 )
                 edges_created += 1
+            elif edge["edge_confidence"] is None:
+                steps.append(
+                    (
+                        "mutations.gq",
+                        "link_tagged",
+                        {
+                            "from": slug,
+                            "to": topic_slug,
+                            "confidence": "inferred",
+                            "role": edge["edge_role"] or "tag",
+                            "author": edge["edge_author"],
+                            "created_at": edge["edge_created_at"],
+                        },
+                    )
+                )
+                edges_stamped += 1
         if len(steps) >= _MIGRATE_BATCH_SIZE:
             flush()
     flush()
@@ -1459,6 +1508,7 @@ def migrate_topics() -> dict:
         "memories_scanned": len(rows),
         "topics_created": topics_created,
         "edges_created": edges_created,
+        "edges_stamped": edges_stamped,
     }
 
 

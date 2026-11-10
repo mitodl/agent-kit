@@ -1521,8 +1521,10 @@ witan migrate topics
 Backfill Topic nodes from existing memory tags.
 
 For every distinct memory ``tag``, upsert a ``Topic{kind:"topic"}`` and a
-``Tagged`` edge. Safe to re-run — already-created topics and edges are
-skipped. Fails fast if the Topic schema isn't applied yet.
+``Tagged`` edge, and stamp ``inferred`` on a tag-derived ``Tagged`` edge
+written before edge properties existed. Safe to re-run — already-created
+topics and stamped edges are skipped. Fails fast if the Topic schema isn't
+applied yet.
 
 ### witan migrate repo-keys
 

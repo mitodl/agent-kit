@@ -629,16 +629,21 @@ query topics_for_memory($slug: String) {
     order { $w.created_at desc }
 }
 
-// The topic slugs every memory in `$slugs` is tagged with, for the topic
-// backfill's existing-edge check.
+// The Tagged edges of every memory in `$slugs`, for the topic backfill. Bound
+// so it can tell an edge written before edge properties existed (all four
+// null) from a stamped one, and rewrite the first kind whole.
 query topics_for_memories($slugs: [String]) {
     match {
         $m: Memory
         $tp: Topic
-        $m tagged $tp
+        $m $w:tagged $tp
         $m.slug in $slugs
     }
-    return { $m.slug as memory_slug, $tp.slug as topic_slug }
+    return {
+        $m.slug as memory_slug, $tp.slug as topic_slug,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
 }
 
 // ── Project facts ─────────────────────────────────────────────────

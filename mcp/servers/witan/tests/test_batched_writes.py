@@ -178,3 +178,111 @@ def test_migrate_topics_is_idempotent_and_writes_nothing_on_a_rerun(server, comm
     assert result["topics_created"] == 0
     assert result["edges_created"] == 0
     assert commits.count == 0
+
+
+_UNSTAMPED = {"confidence": None, "role": None, "author": None, "created_at": None}
+
+
+def _legacy_memory(slug: str, tags: list[str]) -> tuple[str, str, dict]:
+    now = "2026-08-05T00:00:00Z"
+    return (
+        "mutations.gq",
+        "insert_memory",
+        {
+            "slug": slug,
+            "kind": "pattern",
+            "title": slug,
+            "content": "c",
+            "repo": None,
+            "language": None,
+            "category": None,
+            "severity": None,
+            "author": "pytest",
+            "tags": tags,
+            "symbol_refs": None,
+            "confidence": None,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+
+
+def _tagged(server, slug: str) -> dict[str, dict]:
+    rows = server._module.client.read("read.gq", "topics_for_memory", {"slug": slug})
+    return {row["slug"]: row for row in rows}
+
+
+def test_migrate_topics_stamps_only_the_unstamped_tag_derived_edges(server, commits):
+    # The graph as witan-council < 0.33.0 left it: Tagged edges with every
+    # property null. One is derivable from the memory's tags, one was named by
+    # memory_link(kind="tagged") and is not, and one is already stamped.
+    module = server._module
+    seed = [
+        _legacy_memory("pat-old", ["Alpha"]),
+        _legacy_memory("pat-new", ["gamma"]),
+    ]
+    for name in ("Alpha", "beta", "gamma"):
+        seed += module._upsert_topic_steps(name, "topic")[1]
+    seed += [
+        (
+            "mutations.gq",
+            "link_tagged",
+            {"from": "pat-old", "to": "tp-topic-alpha", **_UNSTAMPED},
+        ),
+        (
+            "mutations.gq",
+            "link_tagged",
+            {"from": "pat-old", "to": "tp-topic-beta", **_UNSTAMPED},
+        ),
+        (
+            "mutations.gq",
+            "link_tagged",
+            {
+                "from": "pat-new",
+                "to": "tp-topic-gamma",
+                **module._edge_props("asserted", role="named"),
+            },
+        ),
+        (
+            "mutations.gq",
+            "link_related_to",
+            {"from": "pat-old", "to": "pat-new", **_UNSTAMPED},
+        ),
+    ]
+    module.client.change_many(seed)
+
+    commits.reset()
+    result = server.migrate_topics()
+    assert result == {
+        "memories_scanned": 2,
+        "topics_created": 0,
+        "edges_created": 0,
+        "edges_stamped": 1,
+    }
+    assert commits.count == 1
+
+    old = _tagged(server, "pat-old")
+    assert old["tp-topic-alpha"]["edge_confidence"] == "inferred"
+    assert old["tp-topic-alpha"]["edge_role"] == "tag"
+    # Who linked the pair, and when, is unknown. The rewrite does not claim it.
+    assert old["tp-topic-alpha"]["edge_author"] is None
+    assert old["tp-topic-alpha"]["edge_created_at"] is None
+    assert old["tp-topic-beta"]["edge_confidence"] is None
+    new = _tagged(server, "pat-new")
+    assert new["tp-topic-gamma"]["edge_confidence"] == "asserted"
+    assert new["tp-topic-gamma"]["edge_role"] == "named"
+    related = module.client.read("read.gq", "related_out", {"slug": "pat-old"})
+    assert [row["edge_confidence"] for row in related] == [None]
+
+    commits.reset()
+    rerun = server.migrate_topics()
+    assert rerun["edges_stamped"] == 0
+    assert commits.count == 0
+
+
+def test_migrate_topics_writes_one_edge_for_two_tags_with_one_slug(server, commits):
+    server._module.client.change_many([_legacy_memory("pat-cased", ["UV", "uv"])])
+    commits.reset()
+    result = server.migrate_topics()
+    assert result["edges_created"] == 1
+    assert list(_tagged(server, "pat-cased")) == ["tp-topic-uv"]
