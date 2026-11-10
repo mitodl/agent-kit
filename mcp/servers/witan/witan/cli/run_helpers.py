@@ -311,8 +311,9 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
         (
             f"A claim is a lease, not a lock: it lapses after "
             f"{CLAIM_LEASE_SECONDS // 60} minutes and nothing renews it for you, "
-            f"so call task_claim again on anything you are still working past "
-            f"that."
+            f"so call "
+            f'task_claim(slug="tk-...", session_id="<your agent session id>") '
+            f"again to renew anything you are still working past that."
         ),
         'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
         'If you claim a task and then decide not to work it: task_release(slug="tk-...").',
