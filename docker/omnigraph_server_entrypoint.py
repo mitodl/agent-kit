@@ -59,7 +59,8 @@ TWO CLI DIALECTS
 
 The image ships 0.15, but the CLI's own `version --json` still picks the
 argument shapes (`cli_speaks_targets`), so the 0.13 path keeps working for an
-image built with an overridden pin. 0.14 and later take the destination
+image built with an overridden pin (on a local root: before 0.15 the CLI
+refuses an inline `s3://` one). 0.14 and later take the destination
 as `--target <root>` and `--config` as source only, and their `cluster status`
 reports no lock operation, so a lock is read from `cluster plan`'s
 `state_observations` there. The root is `cluster.yaml`'s `storage`; the CLI

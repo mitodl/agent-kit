@@ -159,9 +159,9 @@ stub in tests). See `witan_code/github_app.py`.
   `--config <dir>` and `--cluster <root>`, or 0.14's `--config <dir> --target
   <root>` and `--target <root>`, where the root is `cluster.yaml`'s `storage`.
   0.14's `cluster status` reports no lock operation, so the 0.14 path reads
-  the lock from `cluster plan`. A stock 0.14 CLI refuses an inline `s3://`
-  target; the image needs the CLI patched with
-  [ModernRelay/omnigraph#1189](https://github.com/ModernRelay/omnigraph/pull/1189),
+  the lock from `cluster plan`; 0.15 takes the same shapes. A stock 0.14 CLI
+  refuses an inline `s3://` target, so on S3 the image needs 0.15 or later
+  ([ModernRelay/omnigraph#1189](https://github.com/ModernRelay/omnigraph/pull/1189)),
   which takes the region from `AWS_REGION` or `AWS_DEFAULT_REGION` and refuses
   `AWS_PROFILE` without an explicit endpoint. See
   [the 0.14 upgrade spec](../docs/internals/design/omnigraph-0-14-upgrade-spec.md) (D3).
@@ -207,7 +207,7 @@ ServiceAccount needs `list` on pods too.
 | `OMNIGRAPH_SERVER_DEPLOYMENT` | yes | Name of the server Deployment. The ServiceAccount needs `get` on it and `get` and `update` on its `scale`. |
 | `OMNIGRAPH_WINDOW_SECONDS` | yes | How long after the start a new command may still begin. The Job's `activeDeadlineSeconds` has to be longer by one command's timeout and the restore. |
 | `OMNIGRAPH_CLEANUP_OLDER_THAN` | one of these two | Retention passed to `cleanup --older-than`, e.g. `30d`. |
-| `OMNIGRAPH_CLEANUP_KEEP` | one of these two | Commits per live branch passed to `cleanup --keep`, e.g. `1`. With the #1188 backport it reads no manifest for an older commit it drops; `--older-than` reads one per older commit. Setting both fails the run before the server is stopped, because with both, cleanup reads the commit time of every version below the newest `N`. After a `--keep 1` run, a wider policy that still retains an older commit finds the table versions it pins deleted and refuses the table's sweep, which stops data-file reclamation for the whole graph on that run: until those commits age out of an `--older-than` window, or until `N` newer commits exist for a larger `--keep` (upstream #644, `docs/dev/versioning.md`). |
+| `OMNIGRAPH_CLEANUP_KEEP` | one of these two | Commits per live branch passed to `cleanup --keep`, e.g. `1`. Since 0.15 (upstream #1188) it reads no manifest for an older commit it drops; `--older-than` reads one per older commit. Setting both fails the run before the server is stopped, because with both, cleanup reads the commit time of every version below the newest `N`. After a `--keep 1` run, a wider policy that still retains an older commit finds the table versions it pins deleted and refuses the table's sweep, which stops data-file reclamation for the whole graph on that run: until those commits age out of an `--older-than` window, or until `N` newer commits exist for a larger `--keep` (upstream #644, `docs/dev/versioning.md`). |
 | `OMNIGRAPH_CLEANUP_ISO_WEEKDAY` | no | Comma-separated UTC days `cleanup` also runs on (1 is Monday, 7 is Sunday), e.g. `7` for Sundays or `1,2,3,4,5,6,7` for every night. Unset or empty, it never runs. A day outside 1-7 or listed twice fails the run before the server is stopped. |
 | `OMNIGRAPH_COMMAND_TIMEOUT_SECONDS` | no | Longest one `optimize` or `cleanup` may run before it is stopped (default 600). |
 | `OMNIGRAPH_SERVER_STOP_SECONDS` | no | How long to wait for the server pods to exit after the scale-down (default 90). |

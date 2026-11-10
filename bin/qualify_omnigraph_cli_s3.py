@@ -311,7 +311,7 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     optimized = _object_count(s3_root)
     # The policy the maintenance window runs: a cutoff and no --keep. With
     # #1188 that reads every version the cutoff decides (here all but HEAD)
-    # concurrently, which is the backport's new S3 read path. It runs first,
+    # concurrently, which is #1188's S3 read path. It runs first,
     # because after a --keep 1 run there would be no older version to read.
     s3.json(
         "--graph",

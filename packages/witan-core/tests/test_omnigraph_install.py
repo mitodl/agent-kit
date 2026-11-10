@@ -311,11 +311,12 @@ def _fake_version_binary(path: Path, body: str) -> Path:
 
 
 #: `omnigraph version --json` from the real v0.14.0 linux-x86_64 release
-#: (digest pinned in `_OMNIGRAPH_ASSET_SHA256`). The fields and values are as
+#: (digest in `_OMNIGRAPH_ASSET_SHA256`'s history). The fields and values are as
 #: the binary printed them; biome re-indents the file.
 _VERSION_0_14_0 = Path(__file__).parent / "fixtures" / "omnigraph-version-0.14.0.json"
-#: The same from the real v0.15.0 linux-x86_64 release, which adds a `studio`
-#: protocol and moves neither the format nor the HTTP contract.
+#: The same from the real v0.15.0 linux-x86_64 release (the pinned digest),
+#: which adds a `studio` protocol and moves neither the format nor the HTTP
+#: contract.
 _VERSION_0_15_0 = Path(__file__).parent / "fixtures" / "omnigraph-version-0.15.0.json"
 
 
