@@ -297,6 +297,22 @@ def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
     return _client_for_ref(store, _resolve_bridge_branch(store, repo))
 
 
+def _remote_caller() -> bool:
+    """Whether this request came from a token-authenticated remote caller.
+
+    The index-now fallbacks index the SERVER's working directory. A remote
+    caller's checkout is not on this machine, and a read-only token (the web
+    UI's, see ``witan.ui_access``) must not reach a write through a read tool,
+    so neither fallback offers itself to one. A local stdio server has no
+    token and keeps the offer.
+    """
+    # Imported at call time, as in ``ingest``: it is only meaningful inside a
+    # request, and this module is imported by the CLI too.
+    from fastmcp.server.dependencies import get_access_token
+
+    return get_access_token() is not None
+
+
 async def _confirm_and_reindex(
     ctx: Context | None, repo: str
 ) -> OmnigraphClient | None:
@@ -304,9 +320,10 @@ async def _confirm_and_reindex(
     we're actually sitting in (code_reindex has no way to index anything
     else). Returns a fresh client on an accepted+successful index, else None
     — callers must fall back to their existing shaped-empty return exactly as
-    before elicitation existed.
+    before elicitation existed. Never offered to a remote caller
+    (``_remote_caller``).
     """
-    if repo != _cached_detect():
+    if _remote_caller() or repo != _cached_detect():
         return None
     ok = await elicit.confirm(
         ctx,
@@ -328,8 +345,11 @@ async def _confirm_and_reindex(
 async def _confirm_and_reindex_bridge(ctx: Context | None) -> OmnigraphClient | None:
     """Offer to index the CURRENT repo when the shared cross-repo bridge store
     doesn't exist at all yet (indexing any repo creates/populates it). Same
-    additive fallback contract as ``_confirm_and_reindex``.
+    additive fallback contract as ``_confirm_and_reindex``, and likewise never
+    offered to a remote caller.
     """
+    if _remote_caller():
+        return None
     repo = _cached_detect()
     if repo is None:
         return None

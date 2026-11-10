@@ -110,7 +110,9 @@ Two distinctions in there are load-bearing and easy to collapse by accident:
 
 Task descriptions, resolutions and comments, project descriptions, session
 summaries and memory content are written by agents, so they are untrusted, and
-the page holds a token that authorizes writes. `markdown.ts` renders them as a
+a script injected into the page acts as its viewer. Deployed, the page's token
+is limited to the bound reads (`witan.ui_access`); under local `witan ui` there
+is no token and `/mcp` accepts every write to the local store. `markdown.ts` renders them as a
 fixed subset of markdown by walking markdown-it's token stream into lit-html
 templates. **It never builds or parses an HTML string**, and nothing else in
 `src/` may either: `markdown.test.ts` greps the sources for the APIs that turn

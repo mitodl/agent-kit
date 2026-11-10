@@ -322,6 +322,46 @@ def test_reindex_offer_degrades_on_indexing_failure(tmp_path, monkeypatch):
     assert _fn(srv.code_interface_consumers)("env_var", "X", ctx=_AcceptCtx(True)) == []
 
 
+@requires_stack
+def test_reindex_offer_is_never_made_to_a_remote_caller(tmp_path, monkeypatch):
+    """A token-authenticated caller never gets the index-now offer, even with an
+    accepting ctx: it would index the SERVER's checkout, and the web UI's
+    read-only token could otherwise reach a write through a bound read tool
+    (code_interface_*, code_repo_dependencies)."""
+    import fastmcp.server.dependencies as deps
+    from fastmcp.server.auth import AccessToken
+
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    repo = "https://github.com/test/cg-remote-caller"
+    monkeypatch.setenv("WITAN_REPO", repo)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "svc.py").write_text(SAMPLE)
+    monkeypatch.chdir(src)
+    srv._git_context.clear()
+
+    indexed = []
+    monkeypatch.setattr(indexer, "index_path", lambda *a, **kw: indexed.append(a))
+    ui_token = AccessToken(
+        token="t", client_id="witan-ui", scopes=[], claims={"azp": "witan-ui"}
+    )
+    monkeypatch.setattr(deps, "get_access_token", lambda: ui_token)
+
+    accept = _AcceptCtx(True)
+    assert _fn(srv.code_interface_providers)("env_var", "X", ctx=accept) == []
+    assert _fn(srv.code_interface_consumers)("env_var", "X", ctx=accept) == []
+    assert _fn(srv.code_repo_dependencies)(ctx=accept) == {"repos": [], "edges": []}
+    assert _fn(srv.code_find_references)(f"{repo}#svc.py::helper", ctx=accept) == []
+    assert indexed == []
+
+
 # ── Opportunity 3: code_find_definition disambiguates multi-repo matches ─────
 
 RA = "https://github.com/test/def-repo-a"
