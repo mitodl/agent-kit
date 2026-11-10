@@ -100,6 +100,132 @@ def test_collection_order_is_deterministic(tmp_path):
     assert indexer._collect_files(tmp_path) == sorted(indexer._collect_files(tmp_path))
 
 
+# ── _collect_files in a git work tree: git's ignore rules apply ──────────────
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _work_tree(tmp_path: Path) -> Path:
+    src = tmp_path / "repo"
+    src.mkdir()
+    _git(src, "init", "-q", "-b", "main")
+    return src
+
+
+def test_a_git_ignored_directory_is_not_collected(tmp_path):
+    """A virtualenv under a name `_SKIP_DIRS` does not know. uv and
+    `python -m venv` both write a `*` .gitignore into the environment, so git
+    ignores it under any name, with nothing in the repo's own .gitignore."""
+    src = _work_tree(tmp_path)
+    (src / "a.py").write_text("x = 1\n")
+    site = src / "env" / "lib" / "python3.12" / "site-packages" / "dep"
+    site.mkdir(parents=True)
+    (site / "mod.py").write_text("x = 1\n")
+    (src / "env" / ".gitignore").write_text("*\n")
+    (src / ".gitignore").write_text("out/\n")
+    (src / "out").mkdir()
+    (src / "out" / "gen.js").write_text("var x = 1;\n")
+
+    assert indexer._collect_files(src) == [src / "a.py"]
+
+
+def test_untracked_files_that_are_not_ignored_are_collected(tmp_path):
+    """A new file nobody has `git add`ed yet is part of the work in progress
+    and has to be indexed; so does a tracked file a pattern happens to match,
+    which git keeps tracking."""
+    src = _work_tree(tmp_path)
+    (src / ".gitignore").write_text("generated/\n")
+    (src / "tracked.py").write_text("x = 1\n")
+    (src / "generated").mkdir()
+    (src / "generated" / "kept.py").write_text("x = 1\n")
+    _git(src, "add", "-f", "tracked.py", "generated/kept.py")
+    (src / "pkg").mkdir()
+    (src / "pkg" / "new.py").write_text("x = 1\n")
+    (src / "pkg" / "with space.py").write_text("x = 1\n")
+    (src / "pkg" / "new\nline.py").write_text("x = 1\n")
+
+    assert indexer._collect_files(src) == sorted(
+        [
+            src / "generated" / "kept.py",
+            src / "pkg" / "new.py",
+            src / "pkg" / "new\nline.py",
+            src / "pkg" / "with space.py",
+            src / "tracked.py",
+        ]
+    )
+
+
+def test_git_listing_keeps_the_walk_s_exclusions(tmp_path):
+    """git's listing is narrowed, never widened: a tracked file under a
+    `_SKIP_DIRS` name, a nested repository (real or not), and a tracked file
+    deleted from the work tree all stay out."""
+    src = _work_tree(tmp_path)
+    (src / "a.py").write_text("x = 1\n")
+    (src / "build").mkdir()
+    (src / "build" / "b.py").write_text("x = 1\n")
+    (src / "gone.py").write_text("x = 1\n")
+    _git(src, "add", "build/b.py", "gone.py")
+    (src / "gone.py").unlink()
+    nested = src / "vendored"
+    nested.mkdir()
+    _git(nested, "init", "-q")
+    (nested / "dep.py").write_text("x = 1\n")
+    wt = src / ".claude" / "worktrees" / "feature-x"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: /somewhere/.git/worktrees/feature-x\n")
+    (wt / "copy.py").write_text("x = 1\n")
+
+    assert indexer._collect_files(src) == [src / "a.py"]
+
+
+def test_outside_a_work_tree_the_disk_is_walked(tmp_path):
+    """No git checkout, so no ignore rules: a .gitignore is just a file."""
+    (tmp_path / ".gitignore").write_text("env/\n")
+    (tmp_path / "env").mkdir()
+    (tmp_path / "env" / "e.py").write_text("x = 1\n")
+    (tmp_path / "a.py").write_text("x = 1\n")
+
+    assert indexer._collect_files(tmp_path) == [
+        tmp_path / "a.py",
+        tmp_path / "env" / "e.py",
+    ]
+
+
+def test_without_a_git_binary_the_disk_is_walked(tmp_path, monkeypatch):
+    src = _work_tree(tmp_path)
+    (src / ".gitignore").write_text("env/\n")
+    (src / "env").mkdir()
+    (src / "env" / "e.py").write_text("x = 1\n")
+    (src / "a.py").write_text("x = 1\n")
+    empty = tmp_path / "empty-bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+
+    assert indexer._collect_files(src) == [src / "a.py", src / "env" / "e.py"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 directory")
+def test_a_directory_git_cannot_open_is_reported(tmp_path):
+    """git warns about it and still exits 0 with the directory's untracked
+    files missing, which the purge would read as deleted."""
+    src = _work_tree(tmp_path)
+    (src / "a.py").write_text("x = 1\n")
+    locked = src / "locked"
+    locked.mkdir()
+    (locked / "b.py").write_text("x = 1\n")
+    locked.chmod(0)
+    errors: list[OSError] = []
+    try:
+        collected = indexer._collect_files(src, on_error=errors.append)
+    finally:
+        locked.chmod(0o755)
+
+    assert collected == [src / "a.py"]
+    assert errors
+
+
 # ── Purging rows that are no longer this repo's ──────────────────────────────
 
 
@@ -317,7 +443,10 @@ def test_unreadable_directory_suppresses_the_purge(tmp_path, monkeypatch):
     assert _files(store, cfg) == {"a.py", "sub/b.py"}
 
     # Simulate `sub/` becoming unreadable: os.walk yields the root only and
-    # hands the failure to onerror, exactly as a PermissionError does.
+    # hands the failure to onerror, exactly as a PermissionError does. The
+    # walk runs when git cannot list the tree; the git listing's own case is
+    # the test below.
+    monkeypatch.setattr(indexer.repo_module, "unignored_files", lambda *a, **k: None)
     real_walk = indexer.os.walk
 
     def _walk(top, *args, onerror=None, **kwargs):
@@ -335,6 +464,101 @@ def test_unreadable_directory_suppresses_the_purge(tmp_path, monkeypatch):
     assert stats.errors >= 1  # the unreadable directory is reported, not hidden
     assert stats.purged == 0
     assert _files(store, cfg) == {"a.py", "sub/b.py"}
+
+
+@requires_stack
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 directory")
+def test_a_directory_git_cannot_open_suppresses_the_purge(tmp_path, monkeypatch):
+    """The same guard as above, for the git listing: git leaves an unreadable
+    directory's untracked files out and still exits 0."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "sub").mkdir()
+    (src / "sub" / "b.py").write_text("def b():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+
+    (src / "sub").chmod(0)
+    try:
+        stats = indexer.index_path(src, config=cfg)
+    finally:
+        (src / "sub").chmod(0o755)
+
+    assert stats.errors >= 1
+    assert stats.purged == 0
+    assert _files(store, cfg) == {"a.py", "sub/b.py"}
+
+
+@requires_stack
+def test_full_index_purges_rows_for_files_that_became_ignored(tmp_path, monkeypatch):
+    """How a store indexed before this rule existed sheds its virtualenv: the
+    next full index collects without it, and the purge takes its rows."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "env").mkdir()
+    (src / "env" / "dep.py").write_text("def dep():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "env/dep.py"}
+
+    (src / "env" / ".gitignore").write_text("*\n")
+    stats = indexer.index_path(src, config=cfg)
+
+    assert stats.purged == 1
+    assert _files(store, cfg) == {"a.py"}
+
+
+@requires_stack
+def test_an_ignored_file_named_directly_is_not_indexed(tmp_path, monkeypatch):
+    """The edit hook names files, not directories, so the listing never sees
+    them; the batch is held to the same rule in one `git check-ignore`."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / ".gitignore").write_text("scratch/\n")
+    (src / "scratch").mkdir()
+    (src / "scratch" / "s.py").write_text("def s():\n    return 1\n")
+    (src / "b.py").write_text("def b():\n    return 1\n")
+    cfg = cfg_mod.load()
+
+    stats = indexer.index_paths(
+        [src / "scratch" / "s.py", src / "b.py", src / "a.py"], config=cfg
+    )
+
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert stats.indexed == 2
+    assert _files(store, cfg) == {"a.py", "b.py"}
+
+
+@requires_stack
+def test_an_ignored_file_named_directly_drops_rows_it_already_has(
+    tmp_path, monkeypatch
+):
+    """Rows written before the file was ignored go on its next edit, without
+    waiting for a full run that may never be allowed to purge the view."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "env").mkdir()
+    (src / "env" / "dep.py").write_text("def dep():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "env/dep.py"}
+
+    (src / "env" / ".gitignore").write_text("*\n")
+    stats = indexer.index_paths([src / "env" / "dep.py"], config=cfg)
+
+    assert (stats.indexed, stats.purged) == (0, 1)
+    assert _files(store, cfg) == {"a.py"}
 
 
 # ── _may_purge: the gate on the one destructive step ─────────────────────────

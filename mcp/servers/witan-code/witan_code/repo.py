@@ -2,6 +2,7 @@ import configparser
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from witan_core.repo_key import find_git_config, normalise
@@ -300,3 +301,124 @@ def root(start: Path | None = None) -> Path | None:
     if git_config is None:
         return None
     return git_config.parent.parent
+
+
+# git's messages (under LC_ALL=C) for "there is no repository here": no `.git`
+# up the tree, or a `.git` file whose gitdir is gone (a pruned worktree).
+_NO_REPOSITORY_MARKERS = (
+    "not a git repository",
+    "does not point to a valid repository",
+)
+
+
+def unignored_files(
+    directory: Path, *, on_error: Callable[[OSError], None] | None = None
+) -> list[Path] | None:
+    """Every path git lists under ``directory``: tracked, plus untracked but not
+    ignored. ``None`` when there is no repository to ask (no git binary, or
+    ``directory`` is not inside a work tree), which callers take as "walk the
+    disk instead". When git fails inside a repository, ``on_error`` gets the
+    failure and the listing is empty.
+
+    ``on_error`` gets anything git wrote to stderr on a run that otherwise
+    succeeded. A directory git cannot open is one such warning, and git then
+    leaves its untracked files out of the listing and still exits 0, the same
+    silent shrink ``os.walk`` commits without an ``onerror``.
+
+    Ignore rules are git's own (``.gitignore`` at every level,
+    ``.git/info/exclude``, ``core.excludesFile``), so a virtualenv under any
+    name is left out: uv and ``python -m venv`` both drop a ``*`` .gitignore
+    inside the environment they create. A tracked file is listed even when a
+    pattern matches it, as git itself treats it.
+
+    The listing is what git knows, not what is on disk, so callers check
+    existence: a tracked file deleted from the work tree is still listed, and
+    so is a submodule's gitlink (a directory). git does not descend into a
+    nested repository or a submodule; a directory that only looks like one (a
+    ``.git`` entry git cannot open) is listed through, so callers keep their
+    own nested-checkout check.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(directory),
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
+            capture_output=True,
+            check=False,
+            # _NO_REPOSITORY_MARKERS below reads git's message.
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except OSError:
+        return None
+    stderr = os.fsdecode(result.stderr).strip()
+    if result.returncode != 0:
+        # Only "no repository here" means walk. Any other failure (dubious
+        # ownership, an unreadable or corrupt index) is a repository git could
+        # not list, and walking it would index the ignored trees this listing
+        # exists to leave out. Report it, so the caller skips the purge, and
+        # list nothing.
+        if any(marker in stderr for marker in _NO_REPOSITORY_MARKERS):
+            return None
+        if on_error is not None:
+            on_error(OSError(f"git ls-files failed: {stderr}"))
+        return []
+    if stderr and on_error is not None:
+        on_error(OSError(f"git ls-files: {stderr}"))
+    # -z: no quoting, and a name may hold spaces or newlines. An unmerged path
+    # is listed once per conflict stage, hence the dedupe.
+    names = dict.fromkeys(name for name in result.stdout.split(b"\0") if name)
+    return [
+        path
+        for path in (directory / os.fsdecode(name) for name in names)
+        if not _under_symlinked_dir(directory, path)
+    ]
+
+
+def _under_symlinked_dir(directory: Path, path: Path) -> bool:
+    """Whether a directory between ``directory`` and ``path`` is a symlink.
+
+    The index can still name the children of a tracked directory that was
+    replaced by a symlink to another directory, and following it would read
+    files outside the repository as its own. A symlink to a single file is
+    kept, as the walk kept it.
+    """
+    parent = path.parent
+    while parent != directory and directory in parent.parents:
+        if parent.is_symlink():
+            return True
+        parent = parent.parent
+    return False
+
+
+def ignored(repo_root: Path, paths: list[Path]) -> frozenset[Path]:
+    """The members of ``paths`` (absolute, all inside ``repo_root``) that git
+    ignores, asked in one ``git check-ignore`` call.
+
+    Empty when git cannot answer, which leaves the caller indexing them as it
+    did before this check existed. Tracked files are never reported, matching
+    :func:`unignored_files`.
+    """
+    if not paths:
+        return frozenset()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-z", "--stdin"],
+            input=b"\0".join(os.fsencode(path) for path in paths),
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return frozenset()
+    # 0: some path is ignored; 1: none is; anything else is a fatal error.
+    if result.returncode not in (0, 1):
+        return frozenset()
+    return frozenset(
+        Path(os.fsdecode(name)) for name in result.stdout.split(b"\0") if name
+    )
