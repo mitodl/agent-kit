@@ -1,35 +1,31 @@
-name: omnigraph patched CLI
+name: omnigraph CLI S3 root
 
-# The omnigraph-server image can build its CLI from the release source plus
-# the backports in docker/patches/ (see OMNIGRAPH_CLI_SOURCE in the
-# Dockerfile). Since the 0.14 pin bump the Dockerfile's defaults select
-# that stage, so Concourse builds it too. This builds the image with it
-# selected and qualifies its CLI against a copy of a cluster root on S3.
+# The omnigraph-server image's entrypoint, maintenance window and force-unlock
+# address the S3 cluster root inline with the server stopped (upstream #1189,
+# in the stock CLI since 0.15). This builds the image and qualifies its CLI
+# against a copy of a cluster root on S3.
 #
 # The S3 here is RustFS in a container, not AWS: CI holds no AWS credentials,
 # so qualification against a copy of a real deployed root is left to QA.
 on:
   push:
     branches: [main]
-    paths: &patched_cli_paths
+    paths: &cli_s3_paths
       - "docker/omnigraph-server.Dockerfile"
-      - "docker/patches/**"
       - ".dockerignore"
       - "bin/qualify_omnigraph_cli_s3.py"
-      - ".github/workflows/omnigraph-cli-patch.yml"
+      - ".github/workflows/omnigraph-cli-s3.yml"
   pull_request:
-    paths: *patched_cli_paths
+    paths: *cli_s3_paths
 
 permissions:
   contents: read
 
 jobs:
   qualify:
-    name: omnigraph patched CLI (image builds, S3 root qualifies)
+    name: omnigraph CLI (image builds, S3 root qualifies)
     runs-on: ubuntu-latest
-    # A cold cargo build of the CLI is most of this; the gha cache below skips
-    # it whenever the base commit, the patch and the toolchain are unchanged.
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       AWS_ACCESS_KEY_ID: omnigraphci
       AWS_SECRET_ACCESS_KEY: omnigraphci-secret
@@ -45,28 +41,21 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Build the image with the patched CLI
+      - name: Build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/omnigraph-server.Dockerfile
-          build-args: OMNIGRAPH_CLI_SOURCE=patched
           load: true
-          tags: omnigraph-server:patched-cli
-          cache-from: type=gha,scope=omnigraph-cli-patch
-          cache-to: type=gha,scope=omnigraph-cli-patch,mode=max
+          tags: omnigraph-server:qualify
 
       - name: Run the CLI from the image
         # The qualification drives the image's own /usr/local/bin/omnigraph,
-        # so what passes is the binary the runtime stage copied in, on the
-        # glibc it was built for (trixie's, newer than the runner's). The work
+        # so what passes is the binary the runtime stage copied in. The work
         # directory is mounted at the same path so file:// roots and --config
         # paths mean the same thing on both sides.
         run: |
           set -euo pipefail
-          label=$(docker image inspect omnigraph-server:patched-cli \
-            --format '{{ index .Config.Labels "edu.mit.ol.omnigraph.cli-source" }}')
-          [[ "$label" == patched ]] || { echo "::error::cli-source label is '$label'"; exit 1; }
           mkdir -p "$RUNNER_TEMP/work"
           cat > "$RUNNER_TEMP/omnigraph" <<EOF
           #!/usr/bin/env bash
@@ -74,11 +63,11 @@ jobs:
             -e HOME="$RUNNER_TEMP/work" -v "$RUNNER_TEMP/work:$RUNNER_TEMP/work" \
             -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION -e AWS_ENDPOINT_URL \
             -e AWS_ENDPOINT_URL_S3 -e AWS_ALLOW_HTTP -e AWS_S3_FORCE_PATH_STYLE \
-            --entrypoint /usr/local/bin/omnigraph omnigraph-server:patched-cli "\$@"
+            --entrypoint /usr/local/bin/omnigraph omnigraph-server:qualify "\$@"
           EOF
           chmod +x "$RUNNER_TEMP/omnigraph"
           "$RUNNER_TEMP/omnigraph" --version
-          docker image ls omnigraph-server:patched-cli
+          docker image ls omnigraph-server:qualify
 
       - name: Start RustFS
         # The image and digest upstream's own S3 suite pins (ci.yml, job
