@@ -70,7 +70,7 @@ def _srv():
         try:
             remote = cfg_module.load_remote_config(selected_target())
         except ValueError as exc:
-            print(exc)
+            print(exc, file=sys.stderr)
             raise SystemExit(1) from None
         if remote is not None:
             from .remote.oidc import default_token_provider, default_token_refresher
@@ -478,13 +478,11 @@ def symbols(
     scheme:
         Filter to one symbol scheme (http/env/pkg/svc).
     """
-    from rich.console import Console
     from rich.markup import escape
 
     from . import repo as repo_module
     from . import store as store_module
 
-    console = Console()
     # Resolved here, not server-side: a deployment has no checkout to detect
     # from, and the table title names the repo either way. A remote dispatch
     # reads deployed graphs, none keyed by a directory name, even when this
@@ -495,8 +493,8 @@ def symbols(
         else store_module.detect_repo()
     )
     if not repo:
-        console.print("No repo detected — pass --repo <canonical URI>.")
-        return
+        print("No repo detected — pass --repo <canonical URI>.", file=sys.stderr)
+        raise SystemExit(1)
 
     rows = _fn(_srv().code_repo_symbols)(repo=repo, role=role, scheme=scheme)
     table_rows: list[dict[str, object]] = []
@@ -1172,7 +1170,8 @@ def branches(*, branch: str | None = None, prune: bool = False) -> None:
     if prune and _is_remote():
         print(
             "--prune deletes branches from the LOCAL stores, which a deployed "
-            "witan service does not share. Unset WITAN_REMOTE_URL to prune."
+            "witan service does not share. Unset WITAN_REMOTE_URL to prune.",
+            file=sys.stderr,
         )
         raise SystemExit(1)
 
@@ -1493,8 +1492,9 @@ def cli() -> None:
     ) as exc:
         # markup=False — a target block is written `[qa]`, which rich parses as
         # a style tag and swallows, taking the name of the setting to unset
-        # with it.
-        Console().print(str(exc), style="red", markup=False)
+        # with it. stderr, because stdout under a structured format holds the
+        # document a consumer parses.
+        Console(stderr=True).print(str(exc), style="red", markup=False)
         raise SystemExit(1) from None
 
 

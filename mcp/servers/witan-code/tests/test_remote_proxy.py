@@ -241,7 +241,9 @@ def test_cli_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, ca
     with pytest.raises(SystemExit) as exit_code:
         cli_module.cli()
     assert exit_code.value.code == 1
-    assert "witan-code is down at X" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "witan-code is down at X" in captured.err
+    assert captured.out == ""
 
 
 def test_cli_prints_a_rejected_credential_instead_of_a_traceback(monkeypatch, capsys):
@@ -264,4 +266,6 @@ def test_cli_prints_a_rejected_credential_instead_of_a_traceback(monkeypatch, ca
     with pytest.raises(SystemExit) as exit_code:
         cli_module.cli()
     assert exit_code.value.code == 1
-    assert "rejected the credential" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "rejected the credential" in captured.err
+    assert captured.out == ""

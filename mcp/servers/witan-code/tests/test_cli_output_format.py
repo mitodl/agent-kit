@@ -200,6 +200,42 @@ def test_a_bracketed_title_is_not_escaped_in_structured_output(capsys):
     assert json.loads(capsys.readouterr().out)["title"] == "Symbol table — [local]"
 
 
+@pytest.mark.parametrize("fmt", ["json", "toml", "yaml"])
+def test_symbols_with_no_repo_fails_on_stderr(monkeypatch, capsys, fmt):
+    """A refusal is not a document: stdout stays empty for the parser and the
+    exit status says the command did not run."""
+    output_module.set_output_format(fmt)
+    monkeypatch.setattr(cli_module, "_is_remote", lambda: True)
+    monkeypatch.setattr("witan_code.repo.detect", lambda *a, **kw: None)
+
+    with pytest.raises(SystemExit) as exc:
+        cli_module.symbols()
+
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No repo detected" in captured.err
+
+
+def test_a_misconfigured_remote_fails_on_stderr(monkeypatch, capsys):
+    from witan_code import config as cfg_module
+
+    def _raise(_target):
+        raise ValueError("WITAN_REMOTE_URL is set but WITAN_OIDC_ISSUER is not")
+
+    output_module.set_output_format("json")
+    monkeypatch.setattr(cli_module, "_server", None)
+    monkeypatch.setattr(cfg_module, "load_remote_config", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        cli_module._srv()
+
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "WITAN_OIDC_ISSUER" in captured.err
+
+
 def test_launcher_sets_output_format_and_forwards_tokens(monkeypatch):
     calls = []
     monkeypatch.setattr(cli_module, "app", lambda tokens: calls.append(tokens))
