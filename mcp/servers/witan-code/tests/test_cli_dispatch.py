@@ -109,7 +109,12 @@ def test_symbols_never_sends_a_directory_name_to_a_deployment(
 
     monkeypatch.setattr("witan_code.repo.detect", _detect)
 
-    cli_module.symbols()
+    if remote:
+        with pytest.raises(SystemExit) as exc:
+            cli_module.symbols()
+        assert exc.value.code == 1
+    else:
+        cli_module.symbols()
 
     # Last, not only: the local path loads config, whose target match detects too.
     assert seen[-1] is fallback
@@ -284,10 +289,13 @@ def test_branches_prune_is_refused_in_remote_mode(monkeypatch, capsys):
     monkeypatch.setattr(cli_module, "_srv", lambda: _stub(code_indexed_branches=[]))
     monkeypatch.setattr(cli_module, "_is_remote", lambda: True)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         cli_module.branches(prune=True)
 
-    assert "does not share" in capsys.readouterr().out
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "does not share" in captured.err
+    assert captured.out == ""
 
 
 def test_branches_prune_is_refused_against_a_shared_store(monkeypatch, capsys):
@@ -354,7 +362,9 @@ def test_rebuild_refuses_a_path_that_is_not_the_repo_root(
     with pytest.raises(SystemExit):
         cli_module._rebuild_stores(sub, yes=True, slug="https://github.com/test/cg")
 
-    out = capsys.readouterr().out
+    # Rich hard-wraps at the console width, and the wrap point moves with the
+    # length of tmp_path (i.e. TMPDIR), so compare with whitespace collapsed.
+    out = " ".join(capsys.readouterr().out.split())
     assert "not the repo root" in out
     assert str(root) in out
 
@@ -386,4 +396,4 @@ def test_rebuild_refuses_a_file_path_with_real_git(tmp_path, monkeypatch, capsys
     with pytest.raises(SystemExit):
         cli_module._rebuild_stores(target, yes=True, slug="https://github.com/test/cg")
 
-    assert "not the repo root" in capsys.readouterr().out
+    assert "not the repo root" in " ".join(capsys.readouterr().out.split())
