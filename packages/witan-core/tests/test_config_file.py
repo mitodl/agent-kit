@@ -39,6 +39,7 @@ def test_load_toml_env_var_expands_tilde(tmp_path, monkeypatch):
     (Docker/systemd Environment=, a CI env block) — a literal ~ must still
     resolve rather than fail with a not-found on the literal path."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # expanduser on Windows
     config_dir = tmp_path / ".config" / "witan"
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text('agent = "pi"\n')

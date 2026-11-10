@@ -10,12 +10,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from witan_core import _filelock
 from witan_core import omnigraph as og
 from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
@@ -145,7 +147,7 @@ def test_014_local_store_is_an_absolute_inline_target(monkeypatch, tmp_path):
     assert "--store" not in args
     assert _operator_doc(args) == {"version": 1}
 
-    uri = og.store_cli_args(f"file://{tmp_path}/g.omni", binary="/usr/bin/omnigraph")
+    uri = og.store_cli_args((tmp_path / "g.omni").as_uri(), binary="/usr/bin/omnigraph")
     assert uri[uri.index("--target") + 1] == str(tmp_path / "g.omni")
 
     # A file URI is percent-decoded; a plain path keeps its `%` literally.
@@ -238,6 +240,9 @@ def test_operator_config_is_rewritten_when_removed():
     assert path.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="checks POSIX ownership and mode bits"
+)
 def test_a_lost_operator_config_dir_is_reallocated_not_recreated_by_name():
     """Once a temp cleaner removes the directory, its name is free for another
     local user to claim and plant a config that sends the actor token to their
@@ -261,6 +266,7 @@ def _version_binary(tmp_path: Path, name: str, body: str) -> str:
     return str(script)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a #!/bin/sh script")
 def test_dialect_is_read_from_version_json(tmp_path):
     """0.14 answers `version --json` with `protocols.target`; 0.13 rejects the
     flag (exit 2), which is what keeps the legacy flags selected for it."""
@@ -280,6 +286,7 @@ def test_dialect_is_read_from_version_json(tmp_path):
         og.cli_speaks_targets(edge)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a #!/bin/sh script")
 def test_dialect_of_a_bare_command_name_is_read_from_path(tmp_path, monkeypatch):
     """The subprocess finds a bare name on PATH, so detection must too, or a
     0.14 binary named `omnigraph` would be sent the legacy flags."""
@@ -1637,7 +1644,7 @@ def test_a_write_inside_hold_write_lock_does_not_self_deadlock(monkeypatch, tmp_
 
     # And the lock is fully released afterwards, not left pinned at depth 1 —
     # a leaked depth would silently disable locking for the rest of the process.
-    assert not og._held_flocks
+    assert not _filelock._held
     fh = og.acquire_store_flock(str(store))
     assert fh is not None
     og.release_store_flock(str(store), fh)
@@ -1652,9 +1659,9 @@ def test_nested_acquisitions_unlock_only_at_depth_zero(tmp_path):
     assert inner is None  # re-entry, nothing of its own to release
 
     og.release_store_flock(store, inner)
-    assert og._held_flocks  # still held by the outer acquisition
+    assert _filelock._held  # still held by the outer acquisition
     og.release_store_flock(store, outer)
-    assert not og._held_flocks
+    assert not _filelock._held
 
 
 def test_a_second_thread_still_blocks_on_a_lock_this_thread_holds(tmp_path):
@@ -1704,7 +1711,7 @@ def test_a_second_thread_still_blocks_on_a_lock_this_thread_holds(tmp_path):
     may_release.set()
     assert released.wait(timeout=10)
     thread.join(timeout=10)
-    assert not og._held_flocks
+    assert not _filelock._held
 
 
 def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
@@ -1717,8 +1724,8 @@ def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
 
     with client.hold_write_lock():
         client._execute(["omnigraph", "query"], "query", is_write=False)
-        assert og._held_flocks  # the outer lock survived the read
-    assert not og._held_flocks
+        assert _filelock._held  # the outer lock survived the read
+    assert not _filelock._held
 
 
 # ── in-process serialisation of direct-S3 writes (agent-kit#364) ───

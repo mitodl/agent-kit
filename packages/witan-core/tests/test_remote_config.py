@@ -113,5 +113,7 @@ def test_cache_path_expands_a_tilde_override(monkeypatch):
     from pathlib import Path
 
     resolved = cache_path()
-    assert "~" not in resolved.as_posix()
+    # A component, not a substring: Windows 8.3 short names (RUNNER~1) carry
+    # a tilde in an already-expanded path.
+    assert "~" not in resolved.parts
     assert resolved == Path.home() / "somewhere" / "tokens.json"

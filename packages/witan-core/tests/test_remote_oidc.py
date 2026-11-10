@@ -13,6 +13,7 @@ import json
 import multiprocessing
 import os
 import stat
+import sys
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -113,9 +114,10 @@ def test_login_polls_until_approved_then_caches(auth, cache_path):
 
     # Cached, valid, and readable back without re-auth.
     assert auth.get_valid_token() == access
-    # Cache file is not group/world accessible.
-    mode = stat.S_IMODE(cache_path.stat().st_mode)
-    assert mode == 0o600
+    # Cache file is not group/world accessible. Windows has no mode bits to
+    # check; the per-user profile's ACL is what protects it there.
+    if sys.platform != "win32":
+        assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
 
 
 def test_login_slow_down_backs_off(auth):
@@ -500,8 +502,12 @@ def _refresh_worker(cache_path, refresh_log, index, barrier, result_path):
 
 
 def _run_fleet(target, tmp_path, *args):
-    """Start _FLEET processes, release them at one instant, collect outcomes."""
-    ctx = multiprocessing.get_context("fork")
+    """Start _FLEET processes, release them at one instant, collect outcomes.
+
+    Spawned, not forked: Windows has no fork, and the workers are module-level
+    functions taking picklable args so a fresh interpreter can import them.
+    """
+    ctx = multiprocessing.get_context("spawn")
     barrier = ctx.Barrier(_FLEET)
     procs = []
     for i in range(_FLEET):
@@ -534,7 +540,8 @@ def test_concurrent_stores_all_succeed_and_no_entry_is_lost(cache_path, tmp_path
         )
     # No temp file survives, and the cache is still owner-only.
     assert list(cache_path.parent.glob("tokens.json*.tmp")) == []
-    assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
+    if sys.platform != "win32":
+        assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
 
 
 def test_store_sweeps_a_hard_killed_writers_temp(auth, cache_path):

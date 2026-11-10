@@ -39,15 +39,13 @@ Subclass knobs:
 - ``_extra_args(subcommand)`` — extra CLI args injected into every ``_run`` (e.g.
   ``--branch``); returns ``[]`` by default.
 
-This module is stdlib-only but imports ``fcntl`` (POSIX advisory locks), so it is
-NOT re-exported from ``witan_core``'s package root — import it as
-``witan_core.omnigraph``.
+This module is NOT re-exported from ``witan_core``'s package root — import it
+as ``witan_core.omnigraph``.
 """
 
 from __future__ import annotations
 
 import atexit
-import fcntl
 import functools
 import hashlib
 import ipaddress
@@ -60,6 +58,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -68,7 +67,9 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import NamedTuple, TypeVar
+from urllib.request import url2pathname
 
+from witan_core import _filelock
 from witan_core import omnigraph_http as _http
 from witan_core.group_commit import (
     ConditionFailed,
@@ -1521,6 +1522,10 @@ def _is_private_dir(path: Path) -> bool:
         st = os.lstat(path)
     except FileNotFoundError:
         return False
+    if sys.platform == "win32":
+        # No uid or permission bits to check. mkdtemp put it under the
+        # per-user %TEMP%, whose default ACL already shuts other users out.
+        return stat.S_ISDIR(st.st_mode)
     return (
         stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077
     )
@@ -1648,8 +1653,9 @@ def store_cli_args(
         )
     if graph_uri.startswith("file://"):
         # A file URI is percent-encoded (`Path.as_uri()` writes a space as
-        # %20); a plain path is taken literally, `%` and all.
-        graph_uri = urllib.parse.unquote(urllib.parse.urlsplit(graph_uri).path)
+        # %20); a plain path is taken literally, `%` and all. url2pathname
+        # also turns Windows' `/C:/x` into `C:\x`.
+        graph_uri = url2pathname(urllib.parse.urlsplit(graph_uri).path)
     path = os.path.abspath(os.path.expanduser(graph_uri))
     return [
         "--operator-config",
@@ -1854,7 +1860,7 @@ def _in_process_write_lock(store: str) -> threading.RLock:
     """The process-wide mutex for ``store``, created on first use.
 
     An ``RLock`` because the nesting the flock tier tracks by hand in
-    ``_held_flocks`` — a write issued inside :meth:`hold_write_lock` — has to
+    ``_filelock`` — a write issued inside :meth:`hold_write_lock` — has to
     re-enter here too, and an ``RLock`` already does that per thread, which is
     the same keying.
     """
@@ -1866,59 +1872,29 @@ def _in_process_write_lock(store: str) -> threading.RLock:
     return lock
 
 
-#
-# flock is held by the OPEN FILE DESCRIPTION, not by the process, so a second
-# `open()` of the same `<store>.lock` blocks even from the thread that already
-# holds it. That makes the obvious nesting — hold the lock across a merge, and
-# have the load inside it take the lock too — a self-deadlock rather than the
-# no-op you would expect from a mutex. So re-entrancy is tracked here instead.
-#
-# Keyed by (thread, lock path), NOT by process: two threads doing unrelated
-# writes to one store still have to exclude each other, and a process-wide
-# counter would hand the second one a lock the first is holding.
-_held_flocks: dict[tuple[int, str], int] = {}
-_held_flocks_guard = threading.Lock()
+def _store_lock_path(store: str) -> Path:
+    return Path(f"{store}.lock")
 
 
-def acquire_store_flock(store: str):
+def acquire_store_flock(store: str) -> int | None:
     """Take ``<store>.lock`` exclusively, or note a re-entry if already held.
 
-    Returns the open handle to release, or ``None`` when this thread already
-    holds the lock — in which case the caller must still call
+    Re-entrant per (thread, lock path): a merge holds the lock around a load
+    that takes it again, and a second open of the lock file would otherwise
+    deadlock against the first (see :mod:`witan_core._filelock`).
+
+    Returns the handle to release, or ``None`` when this thread already holds
+    the lock — in which case the caller must still call
     :func:`release_store_flock`, which decrements the depth rather than
     unlocking. The ``None`` return is deliberately the same "nothing to
     release" signal the remote/no-lock case already uses.
     """
-    key = (threading.get_ident(), str(Path(f"{store}.lock")))
-    with _held_flocks_guard:
-        if _held_flocks.get(key):
-            _held_flocks[key] += 1
-            return None
-    lock_path = Path(key[1])
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "w")  # noqa: SIM115 — released by release_store_flock
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-    except BaseException:
-        fh.close()
-        raise
-    with _held_flocks_guard:
-        _held_flocks[key] = 1
-    return fh
+    return _filelock.acquire_reentrant(_store_lock_path(store))
 
 
-def release_store_flock(store: str, fh) -> None:
+def release_store_flock(store: str, fh: int | None) -> None:
     """Undo one :func:`acquire_store_flock`, unlocking at depth zero."""
-    key = (threading.get_ident(), str(Path(f"{store}.lock")))
-    with _held_flocks_guard:
-        depth = _held_flocks.get(key, 0)
-        if depth > 1:
-            _held_flocks[key] = depth - 1
-            return
-        _held_flocks.pop(key, None)
-    if fh is not None:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-        fh.close()
+    _filelock.release_reentrant(_store_lock_path(store), fh)
 
 
 @contextmanager

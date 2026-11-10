@@ -22,7 +22,6 @@ waiting, so no entry is sent twice.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +32,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import _filelock
 from ..timeutil import now_iso
 
 __all__ = ["JournalEntry", "WriteJournal", "journal_dir", "journal_path"]
@@ -95,12 +95,8 @@ class WriteJournal:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         self._ensure_dir()
-        with open(self._file_lock, "w") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        with _filelock.locked(self._file_lock):
+            yield
 
     def _read(self) -> list[JournalEntry]:
         if not self.path.exists():
@@ -168,13 +164,11 @@ class WriteJournal:
     def replaying(self) -> Iterator[bool]:
         """Hold the replay lock if nobody else does. Yields whether it was taken."""
         self._ensure_dir()
-        with open(self._replay_lock, "w") as fh:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fd = _filelock.acquire(self._replay_lock, blocking=False)
+        if fd is None:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            _filelock.release(fd)

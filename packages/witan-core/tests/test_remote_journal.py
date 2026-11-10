@@ -13,6 +13,7 @@ import asyncio
 import base64
 import dataclasses
 import json
+import sys
 from types import SimpleNamespace
 
 import httpx2
@@ -317,6 +318,7 @@ def test_buffering_can_be_turned_off_for_a_caller_that_needs_the_error():
     assert not proxy.journal.has_pending()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no POSIX mode bits")
 def test_the_journal_is_private_to_its_owner():
     deployment = _Deployment()
     _down(deployment)
