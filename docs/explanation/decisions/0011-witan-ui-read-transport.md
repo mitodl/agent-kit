@@ -418,10 +418,19 @@ is not gated (its exposure is the unauthenticated loopback `/mcp`, which §1's
 fastmcp's `AuthMiddleware` resolves the tool before the check, so a call to a
 tool that does not exist now fails as "not found or not authorized".
 
-The gate holds only while no other client can be used to mint a token from the
-witan origin. Today none can: `witan-cli` has the standard flow disabled
-(device grant only) and `witan-desktop` redirects only to Claude's and
-ChatGPT's backends.
+The gate holds only while a script on the page cannot get a token from another
+client. `witan-desktop` redirects only to Claude's and ChatGPT's backends, and
+`witan-cli` has the standard flow disabled. `witan-cli`'s device grant is not
+closed, though: it needs no witan origin, and the client's definition in
+ol-infrastructure does not set `consent_required`. A script that opens an
+attacker's `verification_uri_complete` in the viewer's browser may therefore
+get a device code approved from the viewer's existing session. Whether
+Keycloak approves it without a prompt is unverified, and
+`tk-witan-cli-s-device-grant-has-no-consent-screen-s-531262` tracks checking
+it and requiring consent on `witan-cli`. The gate also keys on fastmcp's
+`AccessToken.client_id`, which prefers a `client_id` claim over `azp`, so a
+realm mapper that adds a `client_id` claim with any value other than
+`witan-ui` to the page's tokens would turn the gate off.
 
 `witan.ui_access.READ_TOOLS` is now the one definition of the bound set (not
 to be confused with `witan.ui_widgets.BOUND_TOOLS`, the four tools that have an
