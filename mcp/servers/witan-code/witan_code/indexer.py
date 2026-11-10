@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from witan_core import now_iso
+from witan_core import chunking, now_iso
 from witan_core.observability import get_logger
 
 from . import bridge as bridge_module
@@ -82,6 +82,12 @@ _DELETE_BATCH_SIZE = 128
 # Any non-sha256 string does; this one is obvious in a store dump. See
 # `_defer_content_hashes`.
 _PENDING_CONTENT_HASH = "pending"
+
+# A load whose records fit one batch at this budget is one commit through an
+# in-process client, which chunks at the 8 MiB omnigraph budget. Set to the
+# smaller MCP one so the check stays true if a transport's default drops to
+# it. See `_hashes_need_deferring`.
+_ONE_LOAD_MAX_BYTES = chunking.MCP_LOAD_MAX_BYTES
 
 
 @dataclass(frozen=True)
@@ -446,7 +452,9 @@ def index_paths(
 
     :func:`index_path` for a batch. Every phase below commits once for the
     whole batch rather than once per target, so N edited files cost the same
-    three commits on the branch view (one delete, two loads) as one file does.
+    commits on the branch view as one file does: one delete, one load while
+    the records fit one load batch, and a content-hash load unless
+    :func:`_hashes_need_deferring` says the load is one atomic commit.
     The PostToolUse drainer hands its accumulated queue here for that reason.
 
     :param targets: files or directories, all under the same git root. Without
@@ -632,15 +640,20 @@ def index_paths(
         purged_files=stats.purged,
     ):
         client.change_many(delete_steps, chunk_size=_DELETE_BATCH_SIZE)
-    # Two loads, not one: the second commits the content hashes the first held
-    # back, so a load that dies part-way is re-done rather than skipped forever.
-    # See `_defer_content_hashes`.
+    # A load that may commit in parts is followed by a second one that commits
+    # the content hashes the first held back, so a load that dies part-way is
+    # re-done rather than skipped forever (see `_defer_content_hashes`).
     deduped = _dedupe(records)
-    real_hash_rows = _defer_content_hashes(deduped)
+    real_hash_rows = (
+        _defer_content_hashes(deduped)
+        if _hashes_need_deferring(client, deduped)
+        else []
+    )
     with _write_phase("load of nodes and edges", stats, records=len(deduped)):
         client.load(deduped, mode="merge")
-    with _write_phase("load of content hashes", stats, records=len(real_hash_rows)):
-        client.load(real_hash_rows, mode="merge")
+    if real_hash_rows:
+        with _write_phase("load of content hashes", stats, records=len(real_hash_rows)):
+            client.load(real_hash_rows, mode="merge")
 
     # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
     # two stores' write locks never nest. A full-repo index (target is the repo
@@ -726,6 +739,31 @@ def _defer_content_hashes(records: list[dict]) -> list[dict]:
         real_rows.append({"type": "CodeFile", "data": dict(data)})
         data["content_hash"] = _PENDING_CONTENT_HASH
     return real_rows
+
+
+def _hashes_need_deferring(client: object, records: list[dict]) -> bool:
+    """Whether loading ``records`` through ``client`` can commit in parts.
+
+    One batch through an ``OmnigraphClient`` (a local store, or omnigraph
+    over HTTP) is one atomic commit: a failed load writes no CodeFile row, so
+    the files are re-indexed without the sentinel's help and the hash load
+    would only add a commit.
+
+    A ``RemoteStoreClient`` cannot vouch for that. The store tier re-chunks
+    what it receives (``ingest.load_records``), and one whose witan-core
+    batches nodes and edges apart commits the nodes, real hashes included,
+    before the edges. Nothing on the wire says which chunking it runs.
+
+    Stops at the second batch rather than chunking the whole list: a
+    repo-scale index is hundreds of batches, and only "more than one" matters.
+    """
+    from .remote.store import RemoteStoreClient
+
+    if isinstance(client, RemoteStoreClient):
+        return True
+    batches = chunking.chunk_records(records, _ONE_LOAD_MAX_BYTES)
+    next(batches, None)
+    return next(batches, None) is not None
 
 
 def _dedupe(records: list[dict]) -> list[dict]:

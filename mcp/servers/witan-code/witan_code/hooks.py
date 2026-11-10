@@ -50,9 +50,11 @@ _LOG_MAX_BYTES = 1024 * 1024
 # The least time between two flushes of one checkout's queue, which bounds how
 # often an edit session writes its branch view: at most one batched index per
 # interval, and a batch under `indexer._DELETE_BATCH_SIZE` statements of
-# deletes and `chunking.MCP_LOAD_MAX_BYTES` of records is three commits (one
-# delete, two loads). Before this an edit-heavy session indexed each edit as
-# its own run, back to back, about three commits every 10-20s. The first edit
+# deletes and `chunking.MCP_LOAD_MAX_BYTES` of records is three commits on a
+# deployed graph's branch view (one delete, one load, one content-hash load;
+# see `indexer._hashes_need_deferring`), plus the bridge view's own write.
+# Before this an edit-heavy session indexed each edit as its own run, back
+# to back, about three commits every 10-20s. The first edit
 # after a quiet spell still flushes at once; the cost is that an edit landing
 # inside the interval reaches the graph up to this much later.
 FLUSH_INTERVAL_SECONDS = 30.0
