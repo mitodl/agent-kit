@@ -176,21 +176,26 @@ def serve(
 
     Parameters
     ----------
-    transport: MCP transport. ``stdio`` for local; ``streamable-http`` (or its
+    transport:
+        MCP transport. ``stdio`` for local; ``streamable-http`` (or its
         ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``.
-    host: Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
+    host:
+        Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
         Note that the Host/Origin guard above engages only on a LOOPBACK bind:
         serving on ``0.0.0.0`` from a workstation to reach a browser on another
         machine turns both checks off, and that endpoint has no authentication
         of its own. Env: ``WITAN_MCP_HOST``.
-    port: Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``.
-    shutdown_grace_seconds: How long uvicorn waits for in-flight requests after
+    port:
+        Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``.
+    shutdown_grace_seconds:
+        How long uvicorn waits for in-flight requests after
         SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
         which silently truncates any deployment that expects a rollout to drain
         — a witan write has been measured at 27s. Set this to the deployment's
         termination grace period. Env:
         ``WITAN_MCP_SHUTDOWN_GRACE_SECONDS``.
-    path: URL path the MCP endpoint is served on (HTTP transports only).
+    path:
+        URL path the MCP endpoint is served on (HTTP transports only).
         Env: ``WITAN_MCP_PATH``.
     """
     # Before the server import, so anything logged while the module initialises
@@ -297,12 +302,16 @@ def run(
 
     Parameters
     ----------
-    agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo). Overrides
+    agent:
+        Agent CLI to launch (claude, pi, copilot, opencode, kilo). Overrides
         WITAN_AGENT env var and target/config-file default.
-    model: Model passed to the agent's --model flag. Overrides WITAN_MODEL env
+    model:
+        Model passed to the agent's --model flag. Overrides WITAN_MODEL env
         var and target/config-file default.
-    claim: Mark the task in_progress and assign it to you first.
-    dry_run: Print the prompt and exit without launching or claiming.
+    claim:
+        Mark the task in_progress and assign it to you first.
+    dry_run:
+        Print the prompt and exit without launching or claiming.
     """
     try:
         cfg = cfg_module.load(target=selected_target())
@@ -330,11 +339,13 @@ def _launcher(
 
     Parameters
     ----------
-    output_format: txt | json | toml | yaml.
+    output_format:
+        txt | json | toml | yaml.
         Applies to tasks, task <slug>, projects, project status, project
         tasks, session list, memory, traces, scan, target list, and mounted
         witan-code tables. Env: WITAN_OUTPUT_FORMAT.
-    target: Which deployment to talk to.
+    target:
+        Which deployment to talk to.
         Names a [targets.<name>] block, and applies to every command — `witan
         tasks`, `witan memory` and `witan code index` included, none of which
         could be pointed at one before. Overrides auto-detection by checkout

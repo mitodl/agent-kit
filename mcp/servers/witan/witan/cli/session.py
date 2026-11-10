@@ -49,13 +49,18 @@ def session_start(
 
     Parameters
     ----------
-    project_slug: The ``wp-`` slug of the project this session belongs to.
-    phase: The phase this session is working in.
-    session_id: Unique id for the session.
+    project_slug:
+        The ``wp-`` slug of the project this session belongs to.
+    phase:
+        The phase this session is working in.
+    session_id:
+        Unique id for the session.
         Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
         ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
-    repo: Repo URI to scope the session to (default: auto-detected).
-    tags: Optional tags.
+    repo:
+        Repo URI to scope the session to (default: auto-detected).
+    tags:
+        Optional tags.
     """
     sid = session_state.current_session_id(session_id) or f"cli-{uuid.uuid4().hex}"
     s = _srv()
@@ -90,10 +95,14 @@ def session_end(
 
     Parameters
     ----------
-    session_slug: The ``ws-`` slug returned by ``session start``.
-    summary: What was accomplished and what remains — the resume artifact.
-    tools_used: Optional list of tool names used.
-    files_changed: Optional list of file paths modified.
+    session_slug:
+        The ``ws-`` slug returned by ``session start``.
+    summary:
+        What was accomplished and what remains — the resume artifact.
+    tools_used:
+        Optional list of tool names used.
+    files_changed:
+        Optional list of file paths modified.
     """
     s = _srv()
     result = _fn(s.workflow_session_end)(
@@ -158,10 +167,13 @@ def session_sweep(
 
     Parameters
     ----------
-    older_than: Minimum age of a session to sweep (``30m``, ``6h``, ``2d``).
+    older_than:
+        Minimum age of a session to sweep (``30m``, ``6h``, ``2d``).
         Guards against closing a session that is legitimately running right now.
-    project: Restrict to one project's sessions (``wp-`` slug).
-    yes: Actually close them. Without this, nothing is written.
+    project:
+        Restrict to one project's sessions (``wp-`` slug).
+    yes:
+        Actually close them. Without this, nothing is written.
     """
     from datetime import datetime, timedelta
 
@@ -241,7 +253,8 @@ def session_list(project_slug: str) -> None:
 
     Parameters
     ----------
-    project_slug: The ``wp-`` slug whose sessions to list.
+    project_slug:
+        The ``wp-`` slug whose sessions to list.
     """
     s = _srv()
     sessions = _fn(s.workflow_session_list)(

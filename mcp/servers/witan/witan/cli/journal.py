@@ -87,7 +87,8 @@ def journal_drop(entry_id: str) -> None:
 
     Parameters
     ----------
-    entry_id: The entry's id, from ``witan journal list``.
+    entry_id:
+        The entry's id, from ``witan journal list``.
     """
     journal = WriteJournal(journal_path(_remote().url))
     # Under the replay lock, so an entry an in-flight replay already read is

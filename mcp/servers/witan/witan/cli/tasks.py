@@ -348,18 +348,30 @@ def task_create_cmd(
 
     Parameters
     ----------
-    title: Short label for the work.
-    description: Full description of the task.
-    type: bug | feature | task | chore | epic.
-    priority: p0 (highest) … p3.
-    repo: Repo URI (default: auto-detected from git remote).
-    project: wp- slug of the WorkflowProject this task rolls up to.
-    parent: tk- slug of the parent task/epic.
-    blocked_by: tk- slugs that must close before this task is ready.
-    discovered_from: tk- slugs of tasks during which this work was discovered.
-    external_uri: Reference URI (e.g. a GitHub issue or PR).
-    symbol_refs: Code-graph symbol ids (repo#path::Name) this task concerns.
-    tags: Optional free-form tags.
+    title:
+        Short label for the work.
+    description:
+        Full description of the task.
+    type:
+        bug | feature | task | chore | epic.
+    priority:
+        p0 (highest) … p3.
+    repo:
+        Repo URI (default: auto-detected from git remote).
+    project:
+        wp- slug of the WorkflowProject this task rolls up to.
+    parent:
+        tk- slug of the parent task/epic.
+    blocked_by:
+        tk- slugs that must close before this task is ready.
+    discovered_from:
+        tk- slugs of tasks during which this work was discovered.
+    external_uri:
+        Reference URI (e.g. a GitHub issue or PR).
+    symbol_refs:
+        Code-graph symbol ids (repo#path::Name) this task concerns.
+    tags:
+        Optional free-form tags.
     """
     s = _srv()
     result = _fn(s.task_create)(
@@ -398,8 +410,10 @@ def task_comment_cmd(slug: str, text: str) -> None:
 
     Parameters
     ----------
-    slug: The ``tk-`` slug to comment on.
-    text: The comment body.
+    slug:
+        The ``tk-`` slug to comment on.
+    text:
+        The comment body.
     """
     result = _fn(_srv().task_comment)(slug=slug, text=text)
     if _queued(result):
@@ -421,8 +435,10 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
 
     Parameters
     ----------
-    slug: The ``tk-`` slug to close.
-    resolution: Short note on what was done.
+    slug:
+        The ``tk-`` slug to close.
+    resolution:
+        Short note on what was done.
     """
     s = _srv()
     result = _fn(s.task_close)(slug=slug, resolution=resolution)
@@ -450,10 +466,13 @@ def task_claim_cmd(
 
     Parameters
     ----------
-    slug: The ``tk-`` slug to claim.
-    assignee: Holder identity (default: the author, qualified by this agent
+    slug:
+        The ``tk-`` slug to claim.
+    assignee:
+        Holder identity (default: the author, qualified by this agent
         session so parallel sessions don't share one claim).
-    force: Steal the task even if another holder's lease is still valid.
+    force:
+        Steal the task even if another holder's lease is still valid.
     """
     s = _srv()
     result = _fn(s.task_claim)(slug=slug, assignee=assignee, force=force)
@@ -485,12 +504,16 @@ def task_release_cmd(
 
     Parameters
     ----------
-    slug: The ``tk-`` slug to release.
-    assignee: Holder identity releasing the task (default: the author, qualified
+    slug:
+        The ``tk-`` slug to release.
+    assignee:
+        Holder identity releasing the task (default: the author, qualified
         by this agent session — a claim taken by another of your own sessions
         still matches, since the check is on identity, not session).
-    status: Status to return the task to (default ``open``).
-    force: Release even if held by a different assignee.
+    status:
+        Status to return the task to (default ``open``).
+    force:
+        Release even if held by a different assignee.
     """
     s = _srv()
     result = _fn(s.task_release)(
@@ -539,18 +562,30 @@ def task_update_cmd(
 
     Parameters
     ----------
-    slug: The ``tk-`` slug to update.
-    title: New short label.
-    description: New full description.
-    type: bug | feature | task | chore | epic.
-    priority: p0 (highest) … p3.
-    status: open | in_progress | blocked | closed.
-    repo: Canonical repo URI to (re)assign this task to.
-    project: ``wp-`` slug of the WorkflowProject this task rolls up to.
-    parent: ``tk-`` slug of the parent task/epic.
-    assignee: Owner identity.
-    external_uri: Reference URI (e.g. a GitHub issue or PR).
-    tags: Replacement free-form tags.
+    slug:
+        The ``tk-`` slug to update.
+    title:
+        New short label.
+    description:
+        New full description.
+    type:
+        bug | feature | task | chore | epic.
+    priority:
+        p0 (highest) … p3.
+    status:
+        open | in_progress | blocked | closed.
+    repo:
+        Canonical repo URI to (re)assign this task to.
+    project:
+        ``wp-`` slug of the WorkflowProject this task rolls up to.
+    parent:
+        ``tk-`` slug of the parent task/epic.
+    assignee:
+        Owner identity.
+    external_uri:
+        Reference URI (e.g. a GitHub issue or PR).
+    tags:
+        Replacement free-form tags.
     """
     s = _srv()
     result = _fn(s.task_update)(
@@ -590,9 +625,12 @@ def task_link_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
 
     Parameters
     ----------
-    from_slug: Source ``tk-`` slug.
-    to_slug: Target ``tk-`` (or memory) slug.
-    kind: blocks | parent | discovered_from | addresses.
+    from_slug:
+        Source ``tk-`` slug.
+    to_slug:
+        Target ``tk-`` (or memory) slug.
+    kind:
+        blocks | parent | discovered_from | addresses.
     """
     s = _srv()
     _fn(s.task_link)(from_slug=from_slug, to_slug=to_slug, kind=kind)
@@ -612,9 +650,12 @@ def task_unlink_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
 
     Parameters
     ----------
-    from_slug: Source ``tk-`` slug.
-    to_slug: Target ``tk-`` (or memory) slug.
-    kind: blocks | parent | discovered_from | addresses.
+    from_slug:
+        Source ``tk-`` slug.
+    to_slug:
+        Target ``tk-`` (or memory) slug.
+    kind:
+        blocks | parent | discovered_from | addresses.
     """
     s = _srv()
     result = _fn(s.task_unlink)(from_slug=from_slug, to_slug=to_slug, kind=kind)
@@ -647,18 +688,27 @@ def task_run(
 
     Parameters
     ----------
-    slug: Task slug to run directly (skips the picker).
-    agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
-    model: Model flag passed to the agent.
-    claim: Mark each task in_progress before launching.
-    force: Take the claim even if someone else's lease is still live. Without
+    slug:
+        Task slug to run directly (skips the picker).
+    agent:
+        Agent CLI to launch (claude, pi, copilot, opencode, kilo).
+    model:
+        Model flag passed to the agent.
+    claim:
+        Mark each task in_progress before launching.
+    force:
+        Take the claim even if someone else's lease is still live. Without
         this the command could report a task as held and offer no way past it
         from the CLI it was reported in — the interactive steal prompt is
         server-side and unreachable through ``_fn``, which passes no ``ctx``.
-    dry_run: Print the prompt(s) without launching or claiming.
-    repo: Scope the picker to a specific repo URI.
-    all_repos: Span all repos in the picker.
-    project: Scope the picker to a specific wp- project slug.
+    dry_run:
+        Print the prompt(s) without launching or claiming.
+    repo:
+        Scope the picker to a specific repo URI.
+    all_repos:
+        Span all repos in the picker.
+    project:
+        Scope the picker to a specific wp- project slug.
     """
     try:
         cfg = cfg_module.load(target=selected_target())

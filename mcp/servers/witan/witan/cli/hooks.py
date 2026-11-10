@@ -28,7 +28,8 @@ def inject_context(*, debug: bool = False) -> None:
 
     Parameters
     ----------
-    debug: Print detection/read diagnostics (repo, branch, graph reads, counts,
+    debug:
+        Print detection/read diagnostics (repo, branch, graph reads, counts,
         and the reason for any swallowed failure) to stderr. stdout still carries
         only the injected block, so ``witan inject-context --debug`` is safe to
         run by hand to see why the block is blank.

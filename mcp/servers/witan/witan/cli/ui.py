@@ -55,9 +55,11 @@ def ui(
 
     Parameters
     ----------
-    port: Port to bind. Defaults to one the OS says is free.
+    port:
+        Port to bind. Defaults to one the OS says is free.
         Env: ``WITAN_UI_PORT``.
-    browser: Open a browser. ``--no-browser`` just prints the URL.
+    browser:
+        Open a browser. ``--no-browser`` just prints the URL.
     """
     from witan_core.observability import configure_observability
 

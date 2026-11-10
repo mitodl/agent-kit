@@ -851,15 +851,19 @@ def reap_views(
 
     Parameters
     ----------
-    store: Graph to sweep — a store path, or an ``http(s)://`` omnigraph-server
+    store:
+        Graph to sweep — a store path, or an ``http(s)://`` omnigraph-server
         URL. Default: every store this config resolves to (cluster graphs when
         ``code_server`` is set, else the local ones), the shared bridge
         included.
-    graph: Cluster graph id, when ``--store`` is a server URL that doesn't
+    graph:
+        Cluster graph id, when ``--store`` is a server URL that doesn't
         encode one as ``.../graphs/<id>``.
-    max_idle_days: Reap views idle at least this long (default: 14, or
+    max_idle_days:
+        Reap views idle at least this long (default: 14, or
         ``WITAN_CODE_VIEW_MAX_IDLE_DAYS``). ``0`` disables reaping.
-    apply: Actually delete. Without it, nothing is written.
+    apply:
+        Actually delete. Without it, nothing is written.
     """
     from . import config as cfg_module
     from . import reaper as reaper_module
@@ -1061,10 +1065,14 @@ def setup(
 
     Parameters
     ----------
-    agent: Target agent — claude | pi | copilot | opencode | codex | all.
-    author: Name written to graph nodes (default: git config user.name or $USER).
-    dry_run: Print what would happen without writing anything.
-    force: Replace a symlink or non-directory occupying a destination path.
+    agent:
+        Target agent — claude | pi | copilot | opencode | codex | all.
+    author:
+        Name written to graph nodes (default: git config user.name or $USER).
+    dry_run:
+        Print what would happen without writing anything.
+    force:
+        Replace a symlink or non-directory occupying a destination path.
     """
     from agent_config_kit import (
         apply,
@@ -1438,7 +1446,8 @@ def _launcher(
 
     Parameters
     ----------
-    output_format: Output format for table commands. Commands: repos, symbols,
+    output_format:
+        Output format for table commands. Commands: repos, symbols,
         stitch. Values: txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
     """
     set_output_format(output_format)

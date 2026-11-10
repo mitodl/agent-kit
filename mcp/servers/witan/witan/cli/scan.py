@@ -42,10 +42,13 @@ def test(
 
     Parameters
     ----------
-    text: The string to scan.
-    field: Field name to report context for (some detectors are field-aware,
+    text:
+        The string to scan.
+    field:
+        Field name to report context for (some detectors are field-aware,
         e.g. skipping ``author``).
-    node_type: Node type to report context for (some detectors are node-aware).
+    node_type:
+        Node type to report context for (some detectors are node-aware).
     """
     cfg = cfg_module.load_scan_config()
     if not cfg.enabled:

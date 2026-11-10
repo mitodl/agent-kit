@@ -201,7 +201,8 @@ def project_status(
 
     Parameters
     ----------
-    slug: Project ``wp-`` slug.
+    slug:
+        Project ``wp-`` slug.
     json:
         Shorthand for ``witan --output-format json``. A structured
         ``--output-format`` wins over it, so ``--output-format yaml … --json``
@@ -292,9 +293,12 @@ def project_tasks(
 
     Parameters
     ----------
-    slug: Project ``wp-`` slug.
-    status: Filter to open | in_progress | blocked | closed.
-    detail: Expand each task's blockers and dependents.
+    slug:
+        Project ``wp-`` slug.
+    status:
+        Filter to open | in_progress | blocked | closed.
+    detail:
+        Expand each task's blockers and dependents.
     """
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
@@ -387,12 +391,18 @@ def project_create(
 
     Parameters
     ----------
-    title: Short name for the project.
-    description: Full objective description — what will be built and why.
-    phase: Starting phase: discovery | spec | implementation | delivery.
-    repo: Repo URI to associate (default: auto-detected from git remote).
-    github_issue: URL of the tracking GitHub issue.
-    tags: Optional tags for grouping and search.
+    title:
+        Short name for the project.
+    description:
+        Full objective description — what will be built and why.
+    phase:
+        Starting phase: discovery | spec | implementation | delivery.
+    repo:
+        Repo URI to associate (default: auto-detected from git remote).
+    github_issue:
+        URL of the tracking GitHub issue.
+    tags:
+        Optional tags for grouping and search.
     allow:
         An action agents may take on this project without asking. Repeat the
         flag for each item; items are not comma-split.
@@ -455,16 +465,25 @@ def project_update(
 
     Parameters
     ----------
-    slug: Project ``wp-`` slug.
-    title: Replacement short name.
-    description: Replacement description.
-    repos: Replace the repo set wholesale.
-    add_repo: Repo URIs to add (repeatable, or comma-separated).
-    remove_repo: Repo URIs to drop (repeatable, or comma-separated). Applied
+    slug:
+        Project ``wp-`` slug.
+    title:
+        Replacement short name.
+    description:
+        Replacement description.
+    repos:
+        Replace the repo set wholesale.
+    add_repo:
+        Repo URIs to add (repeatable, or comma-separated).
+    remove_repo:
+        Repo URIs to drop (repeatable, or comma-separated). Applied
         after additions.
-    tags: Replacement tags.
-    github_issue: Replacement tracking issue URL.
-    status: ``active`` or ``abandoned``.
+    tags:
+        Replacement tags.
+    github_issue:
+        Replacement tracking issue URL.
+    status:
+        ``active`` or ``abandoned``.
     allow:
         Replace the actions agents may take without asking. Repeat the flag
         for each item; ``--empty-allow`` clears the list.
@@ -525,9 +544,12 @@ def project_advance(
 
     Parameters
     ----------
-    slug: Project ``wp-`` slug.
-    phase: New phase: discovery | spec | implementation | delivery.
-    github_pr: URL of the PR, if one has been opened (recorded on delivery).
+    slug:
+        Project ``wp-`` slug.
+    phase:
+        New phase: discovery | spec | implementation | delivery.
+    github_pr:
+        URL of the PR, if one has been opened (recorded on delivery).
     """
     s = _srv()
     result = _fn(s.workflow_project_advance)(
@@ -558,9 +580,12 @@ def project_complete(
 
     Parameters
     ----------
-    slug: Project ``wp-`` slug.
-    outcome: Narrative of what was delivered — the primary content of the trace.
-    github_pr: URL of the merged PR, if applicable.
+    slug:
+        Project ``wp-`` slug.
+    outcome:
+        Narrative of what was delivered — the primary content of the trace.
+    github_pr:
+        URL of the merged PR, if applicable.
     """
     s = _srv()
     result = _fn(s.workflow_project_complete)(
@@ -582,8 +607,10 @@ def project_block(slug: str, blocks: str) -> None:
 
     Parameters
     ----------
-    slug: The blocking project's ``wp-`` slug (must finish first).
-    blocks: The blocked project's ``wp-`` slug.
+    slug:
+        The blocking project's ``wp-`` slug (must finish first).
+    blocks:
+        The blocked project's ``wp-`` slug.
     """
     s = _srv()
     result = _fn(s.workflow_project_block)(slug=slug, blocks_slug=blocks)
@@ -600,8 +627,10 @@ def project_unblock(slug: str, blocks: str) -> None:
 
     Parameters
     ----------
-    slug: The blocking project's ``wp-`` slug to remove.
-    blocks: The project to unblock.
+    slug:
+        The blocking project's ``wp-`` slug to remove.
+    blocks:
+        The project to unblock.
     """
     s = _srv()
     result = _fn(s.workflow_project_unblock)(slug=slug, blocks_slug=blocks)
@@ -629,12 +658,18 @@ def project_run(
 
     Parameters
     ----------
-    slug: Project slug to run directly (skips the picker).
-    agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
-    model: Model flag passed to the agent.
-    dry_run: Print the prompt(s) without launching.
-    repo: Scope the picker to a specific repo URI.
-    all_repos: Span all repos in the picker.
+    slug:
+        Project slug to run directly (skips the picker).
+    agent:
+        Agent CLI to launch (claude, pi, copilot, opencode, kilo).
+    model:
+        Model flag passed to the agent.
+    dry_run:
+        Print the prompt(s) without launching.
+    repo:
+        Scope the picker to a specific repo URI.
+    all_repos:
+        Span all repos in the picker.
     """
     try:
         cfg = cfg_module.load(target=selected_target())
