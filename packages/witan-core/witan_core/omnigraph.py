@@ -1505,6 +1505,33 @@ def _is_loopback(server_url: str) -> bool:
         return False
 
 
+def _cluster_internal_hint(server_url: str) -> str:
+    """Why a Kubernetes Service address may be unreachable, or ``""``.
+
+    A deployed store's omnigraph-server is a ClusterIP Service, so its
+    ``*.svc`` / ``*.svc.cluster.local`` name resolves only inside the cluster.
+    From a laptop, a connect failure to it reads like an outage, when the
+    address was never reachable from there and waiting will not help.
+
+    Inside a pod (the deployed server, the CI indexer) the failure is a real
+    outage, so there is no hint. ``KUBERNETES_SERVICE_HOST`` is what the
+    kubernetes client's in-cluster config reads to decide the same thing.
+    """
+    host = urllib.parse.urlsplit(server_url).hostname or ""
+    if not host.endswith((".svc", ".svc.cluster.local")):
+        return ""
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return ""
+    return (
+        f" ({host} is a Kubernetes Service name, which resolves only inside "
+        "its cluster. From outside it, reach the deployment through its MCP "
+        "endpoint instead of naming the store: `witan target add <name> "
+        "--remote-url <endpoint> --oidc-issuer <issuer> --login`, then select "
+        "it with `--target <name>` or WITAN_TARGET=<name>, which routes both "
+        "the memory and code graphs there)"
+    )
+
+
 def _remote_token(token: str | None) -> str | None:
     """The token a remote call presents: the configured one, else the ambient
     ``OMNIGRAPH_BEARER_TOKEN``. One rule for both transports and every binary."""
@@ -3474,6 +3501,7 @@ class OmnigraphClient:
                     "the network"
                     if _server_answered(result)
                     else f"could not connect to {self.server_url}"
+                    + _cluster_internal_hint(self.server_url)
                 )
                 raise StoreUnavailable(
                     f"omnigraph {label} failed after {unavailable_attempt} "
