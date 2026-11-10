@@ -983,7 +983,10 @@ def test_the_task_prompt_says_the_task_is_already_claimed():
     # work" was false for any task worked longer than that — the prompt has to
     # say how to renew instead of promising exclusion.
     assert "60 minutes" in prompt
-    assert 'task_claim(slug="tk-a") again' in prompt
+    # With the session id, as the witan-task skill says: a renewal without it
+    # is refused once an earlier one has recorded the session on the claim.
+    assert 'task_claim(slug="tk-a", session_id=' in prompt
+    assert "again to renew" in prompt
 
 
 def test_the_task_prompt_says_to_claim_when_run_did_not():
