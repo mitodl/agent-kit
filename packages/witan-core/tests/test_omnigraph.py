@@ -3124,7 +3124,10 @@ def test_an_exhausted_connect_failure_to_a_service_name_says_it_is_cluster_inter
     with pytest.raises(og.StoreUnavailable) as raised:
         client._execute(["omnigraph", "query"], "query", is_write=False)
     assert f"{host} is a Kubernetes Service name" in str(raised.value)
-    assert "--remote-url" in str(raised.value)
+    # `witan target add` rejects --remote-url without --oidc-issuer, and
+    # registering a target does not select it.
+    assert "--remote-url <endpoint> --oidc-issuer <issuer>" in str(raised.value)
+    assert "--target <name>" in str(raised.value)
 
 
 def test_an_exhausted_connect_failure_inside_a_pod_gets_no_cluster_hint(monkeypatch):

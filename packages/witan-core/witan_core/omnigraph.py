@@ -1519,8 +1519,9 @@ def _cluster_internal_hint(server_url: str) -> str:
         f" ({host} is a Kubernetes Service name, which resolves only inside "
         "its cluster. From outside it, reach the deployment through its MCP "
         "endpoint instead of naming the store: `witan target add <name> "
-        "--remote-url <endpoint>` routes both the memory and code graphs "
-        "there)"
+        "--remote-url <endpoint> --oidc-issuer <issuer> --login`, then select "
+        "it with `--target <name>` or WITAN_TARGET=<name>, which routes both "
+        "the memory and code graphs there)"
     )
 
 
