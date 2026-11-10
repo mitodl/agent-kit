@@ -115,7 +115,10 @@ ACTOR_MISMATCH = "actor_mismatch"
 #: do not return a partial indexed result." Only full-text queries are refused,
 #: and the fix is one explicit command per branch:
 #:
-#:     omnigraph rebuild-full-text-indexes <URI> --branch <branch>
+#:     omnigraph index rebuild --kind full-text --target <target> --branch <branch>
+#:
+#: (``rebuild-full-text-indexes <URI> --branch <branch>`` before 0.15, which
+#: deprecated that name in upstream #1150.)
 #:
 #: Running ``omnigraph repair`` here would be a much heavier hammer aimed at
 #: the wrong thing.
@@ -519,6 +522,7 @@ def classify_status(
         for marker in (
             "full_text_index_rebuild_required",
             "rebuild-full-text-indexes",
+            "index rebuild --kind full-text",
         )
     ):
         return FULL_TEXT_REBUILD_REQUIRED

@@ -175,10 +175,16 @@ _RECOVERY_REQUIRED = ("recovery required", "recovery_required")
 #   rebuild-full-text-indexes <URI> --branch <branch> on the live branch
 #   (historical snapshots are unchanged)
 #
+# 0.15 renamed the command (upstream #1150) and names the new one in the same
+# sentence: "run omnigraph index rebuild --kind full-text --target <target>
+# --branch <branch> on the live branch". Both spellings stay, because a 0.14
+# server still answers with the old one.
+#
 # The command name is the marker rather than "requires rebuild" alone, which is
 # generic enough to collide with a future unrelated message.
 _FULL_TEXT_REBUILD_REQUIRED = (
     "rebuild-full-text-indexes",
+    "index rebuild --kind full-text",
     "full_text_index_rebuild_required",
 )
 _MAX_ATTEMPTS = 8

@@ -369,6 +369,19 @@ def test_full_text_rebuild_required_is_terminal_not_a_retryable_conflict():
     )
 
 
+def test_full_text_rebuild_prose_from_0_15_is_terminal():
+    """0.15 names `index rebuild --kind full-text` in the remedy (upstream
+    #1150, crates/omnigraph-core/src/error.rs at v0.15.0). The prose alone,
+    without the detail key, still classifies as the rebuild it is."""
+    message = (
+        "full-text index 'memory_content' requires rebuild: analyzer "
+        "generation cannot be proven compatible; run omnigraph index rebuild "
+        "--kind full-text --target <target> --branch <branch> on the live "
+        "branch (historical snapshots are unchanged)"
+    )
+    assert ogh.classify_status(409, message) == ogh.FULL_TEXT_REBUILD_REQUIRED
+
+
 def test_a_plain_conflict_is_still_retryable():
     """The guard above must not swallow the ordinary lost-race 409 that
     `task_claim` depends on."""
