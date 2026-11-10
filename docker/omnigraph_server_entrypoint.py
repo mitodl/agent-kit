@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entrypoint for the omnigraph-server data-tier image (omnigraph 0.13 and 0.14).
+"""Entrypoint for the omnigraph-server data-tier image (omnigraph 0.13 to 0.15).
 
 omnigraph-server serves the graphs that `omnigraph cluster apply` has created
 under the storage root and never creates them itself, so this converges the
@@ -57,14 +57,20 @@ docs/internals/design/omnigraph-0-14-upgrade-spec.md (D3).
 
 TWO CLI DIALECTS
 
-The image ships 0.14, but the CLI's own `version --json` still picks the
+The image ships 0.15, but the CLI's own `version --json` still picks the
 argument shapes (`cli_speaks_targets`), so the 0.13 path keeps working for an
-image built with an overridden pin. 0.14 takes the destination
-as `--target <root>` and `--config` as source only, and its `cluster status`
+image built with an overridden pin (on a local root: before 0.15 the CLI
+refuses an inline `s3://` one). 0.14 and later take the destination
+as `--target <root>` and `--config` as source only, and their `cluster status`
 reports no lock operation, so a lock is read from `cluster plan`'s
-`state_observations` there. The root is `cluster.yaml`'s `storage`; an inline
-`s3://` target needs the patched CLI (ModernRelay/omnigraph#1189), which reads
-the region from `AWS_REGION` or `AWS_DEFAULT_REGION`.
+`state_observations` there. The root is `cluster.yaml`'s `storage`; the CLI
+accepts it as an inline `s3://` target from 0.15 on (ModernRelay/omnigraph#1189),
+and reads the region from `AWS_REGION` or `AWS_DEFAULT_REGION`.
+
+A 0.15 server that loses the S3 cluster lock's lease stops writing and exits
+with code 2 (upstream #1221). Nothing here handles that specially: the server
+is exec'd, so the code is the container's, and the restart boots through the
+Lease and the pod check above like any other.
 
 Outside Kubernetes (a local `docker run`) there is no API to ask, so the Lease
 and the pod check are skipped. Nothing then shows that a lock's owner has

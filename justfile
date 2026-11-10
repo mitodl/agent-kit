@@ -203,10 +203,6 @@ check-omnigraph-pins:
         exit 1
     fi
     echo "omnigraph pins agree: $installer (tag $installer_tag, sha ${installer_sha:0:12}…, format $installer_schema, serves from $installer_min_schema)"
-    # The data tier's CLI may be built from patched source instead of taken
-    # from the tarball, so it has no digest for the checks above to compare.
-    # This holds that build's inputs to the release pin instead.
-    uv run --package witan-core --extra cli python bin/check_omnigraph_cli_patch.py
     # The HTTP contracts each image labels, which ol-infrastructure's preview
     # compares so a contract bump can't deploy ahead of the witan that speaks it.
     uv run --package witan-core --extra cli python bin/check_omnigraph_contract_labels.py

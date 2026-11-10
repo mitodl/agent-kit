@@ -1,0 +1,16 @@
+{
+	"version": "0.15.0",
+	"channel": "stable",
+	"commit": "373834b4c1c4b29cf0ddd64bee9565f98c60cc26",
+	"http_contract": "0.14",
+	"protocols": {
+		"studio": 1,
+		"target": 2,
+		"credential": 2,
+		"access": 2
+	},
+	"internal_schema": {
+		"writes": 16,
+		"serves": [14, 16]
+	}
+}

@@ -2795,25 +2795,38 @@ _FTS_REBUILD_STDERR = (
     "<URI> --branch <branch> on the live branch (historical snapshots are "
     "unchanged)"
 )
+# The same error at v0.15.0 (crates/omnigraph-core/src/error.rs), which names
+# `index rebuild --kind full-text` instead (upstream #1150).
+_FTS_REBUILD_STDERR_015 = (
+    "omnigraph query failed:\n"
+    "full-text index 'memory_content' requires rebuild: analyzer generation "
+    "cannot be proven compatible; run omnigraph index rebuild --kind full-text "
+    "--target <target> --branch <branch> on the live branch (historical "
+    "snapshots are unchanged)"
+)
 
 
-def test_full_text_rebuild_required_is_terminal_on_the_cli_path():
+@pytest.mark.parametrize(
+    "stderr", [_FTS_REBUILD_STDERR, _FTS_REBUILD_STDERR_015], ids=["0.10", "0.15"]
+)
+def test_full_text_rebuild_required_is_terminal_on_the_cli_path(stderr):
     """Lance 11 changed the analyzer, so an index built by Lance 10 cannot serve
     a 0.10.0 `search()`/`bm25()` query. Retrying never clears it — upstream says
     so outright — so classifying it RETRYABLE would burn the whole attempt
     budget and then report a timeout-shaped failure for a permanent condition
     whose remedy is printed right there in the message.
     """
-    assert (
-        og._classify_cli_error(_FTS_REBUILD_STDERR) == _http.FULL_TEXT_REBUILD_REQUIRED
-    )
+    assert og._classify_cli_error(stderr) == _http.FULL_TEXT_REBUILD_REQUIRED
 
 
-def test_full_text_rebuild_is_not_confused_with_a_repair():
+@pytest.mark.parametrize(
+    "stderr", [_FTS_REBUILD_STDERR, _FTS_REBUILD_STDERR_015], ids=["0.10", "0.15"]
+)
+def test_full_text_rebuild_is_not_confused_with_a_repair(stderr):
     """NEEDS_REPAIR would send an operator to `omnigraph repair` for a graph
     that is not damaged. Upstream is explicit that ordinary reads stay
     available and only the full-text index is refused."""
-    assert og._classify_cli_error(_FTS_REBUILD_STDERR) != _http.NEEDS_REPAIR
+    assert og._classify_cli_error(stderr) != _http.NEEDS_REPAIR
 
 
 # ── omnigraph 0.14: the target line on stderr, and the new exits ──

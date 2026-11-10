@@ -1,16 +1,14 @@
 #!/usr/bin/env -S uv run --quiet --package witan-core python
-"""Qualify the patched omnigraph CLI against a copy of a cluster root on S3.
+"""Qualify the omnigraph-server image's CLI against a copy of a cluster root on S3.
 
-The omnigraph-server image's CLI is built from a backport of upstream PR #1189
-(docker/patches/omnigraph-cli-inline-s3-root.patch) so the data tier can
-address its S3 cluster root with the server stopped. Upstream showed apply,
-status and force-unlock against an S3 root; this drives the full set the image
-relies on (boot converge, maintenance, unlock) against a root that already
-holds data, the way a deployed root does. The image also carries a backport of
-upstream PR #1188 (docker/patches/omnigraph-cleanup-keep-from-listing.patch),
-so cleanup takes version numbers from the S3 ``_versions/`` listing and reads
-the manifests a cutoff decides concurrently; the cleanup step below runs both
-policies:
+The data tier addresses its S3 cluster root inline with the server stopped,
+which the stock CLI accepts from 0.15 on (upstream PR #1189). Upstream showed
+apply, status and force-unlock against an S3 root; this drives the full set
+the image relies on (boot converge, maintenance, unlock) against a root that
+already holds data, the way a deployed root does. Since upstream PR #1188
+(also 0.15) cleanup takes version numbers from the S3 ``_versions/`` listing
+and reads the manifests a cutoff decides concurrently; the cleanup step below
+runs both policies:
 
 1. Deploy a small cluster to a LOCAL root and load several batches into it,
    so its datasets carry multiple versions and fragments.
@@ -26,11 +24,11 @@ policies:
 4. Copy the root back and query it locally: every loaded row must survive
    maintenance.
 
-It also checks the patch's boundary: a data command (``query``) against the S3
+It also checks the boundary: a data command (``query``) against the S3
 root still refuses.
 
 The AWS destination comes from the environment (``AWS_REGION``,
-``AWS_ENDPOINT_URL_S3``, credentials), which the patched CLI captures once
+``AWS_ENDPOINT_URL_S3``, credentials), which the CLI captures once
 per call and the ``aws`` CLI reads the same way.
 """
 
@@ -46,7 +44,7 @@ import cyclopts
 
 app = cyclopts.App(
     name="qualify-omnigraph-cli-s3",
-    help="Drive the patched omnigraph CLI against a copy of a cluster root on S3.",
+    help="Drive the omnigraph CLI against a copy of a cluster root on S3.",
 )
 
 ACTOR = "act-qualify"
@@ -313,7 +311,7 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     optimized = _object_count(s3_root)
     # The policy the maintenance window runs: a cutoff and no --keep. With
     # #1188 that reads every version the cutoff decides (here all but HEAD)
-    # concurrently, which is the backport's new S3 read path. It runs first,
+    # concurrently, which is #1188's S3 read path. It runs first,
     # because after a --keep 1 run there would be no older version to read.
     s3.json(
         "--graph",
@@ -368,7 +366,7 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
 def qualify(binary: Path, bucket: str, prefix: str = "qualify-omnigraph-cli") -> None:
     """Run the qualification and exit non-zero on the first failure.
 
-    :param binary: the patched omnigraph CLI.
+    :param binary: the omnigraph CLI under test.
     :param bucket: an existing S3 bucket the environment's credentials can write.
     :param prefix: key prefix under ``bucket``; each run adds a unique suffix.
     """

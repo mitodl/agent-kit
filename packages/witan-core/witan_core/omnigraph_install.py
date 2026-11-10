@@ -58,7 +58,9 @@ from pathlib import Path
 #:
 #: 0.14.0 (2026-10-22) writes 16. See
 #: docs/internals/design/omnigraph-0-14-upgrade-spec.md.
-_OMNIGRAPH_VERSION = "0.14.0"
+#:
+#: 0.15.0 (2026-11-09) still writes 16 and serves 14 to 16.
+_OMNIGRAPH_VERSION = "0.15.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
@@ -90,14 +92,14 @@ _OMNIGRAPH_VERSION = "0.14.0"
 #: a real ``v<version>``, a Renovate bump here IS meaningful — it must move this
 #: tag, the three digests, and both Dockerfiles together, which is what
 #: ``just check-omnigraph-pins`` enforces.
-_OMNIGRAPH_RELEASE_TAG = "v0.14.0"
+_OMNIGRAPH_RELEASE_TAG = "v0.15.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version --json``'s ``internal_schema.writes`` (the
 #: number on the text output's ``internal-schema`` line). 0.8.x reads 4;
 #: 0.9.x and 0.10.x read 6; 0.11.x reads 9 (and opens 8, which we never wrote);
-#: 0.13.x reads 14 and nothing else ("serves v14 to v14"); 0.14.x writes 16
-#: and reads 14 to 16 ("serves v14 to v16").
+#: 0.13.x reads 14 and nothing else ("serves v14 to v14"); 0.14.x and 0.15.x
+#: write 16 and read 14 to 16 ("serves v14 to v16").
 #:
 #: 6 -> 9 is planned: every deployed graph is exported with 0.10 and rebuilt
 #: under a keyed schema (``omnigraph upgrade`` refuses cluster-managed roots),
@@ -473,7 +475,8 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: search and the Task/WorkflowProject BM25 search both — so on any graph
 #: written before this binary, those queries are refused until:
 #:     omnigraph rebuild-full-text-indexes <URI> --branch <branch>
-#: Upstream calls it a controlled cutover, not a rolling upgrade: stop old
+#: (0.15 deprecates that command for `omnigraph index rebuild --kind
+#: full-text`, upstream #1150.) Upstream calls it a controlled cutover, not a rolling upgrade: stop old
 #: readers/writers and keep a recoverable backup first. A local store is one
 #: command; the DEPLOYED graph needs scheduling, which is
 #: tk-rebuild-full-text-indexes-on-the-deployed-witan--076eb6. Nothing here
@@ -582,15 +585,33 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     linux-x86_64  0123daa64f0f2db9860284200bd71c79a22a6ad2c6f5501b6fca24cac86a7a30
 #:     linux-arm64   e61e7379131a05056bfeace206c8c5bcdf185d169d1ce86bc192d52f13693f96
 #:     macos-arm64   0a1c7f013e18465254fb925dc177f3089bf6e0cfe4a0ecfc9908a180ab84cc72
+#:
+#: 2026-11-10, v0.14.0 -> v0.15.0 (tag commit 373834b4c1c4). `omnigraph version
+#: --json` on this binary reads 0.15.0, internal_schema writes 16 and serves 14
+#: to 16, and http_contract 0.14, so neither declaration moves and no graph is
+#: rebuilt. It carries upstream #1188 and #1189, which the omnigraph-server
+#: image's patched CLI backported onto 0.14, so that image takes the release
+#: CLI again.
+#:
+#: CHECKS RUN:
+#:   * Digests: all three tarballs downloaded, `gzip -t` clean, hashed locally
+#:     and matched against each published `.sha256` and the release API digest.
+#:   * Format: `omnigraph version --json` and `bin/check_omnigraph_format.py`
+#:     against the 0.15.0 binary.
+#:
+#: The v0.14.0 triple this supersedes:
+#:     linux-x86_64  02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9
+#:     linux-arm64   f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff
+#:     macos-arm64   91c8af54b859f023c42e2d3db37a2f3a361def0d6bb093530d53d3357986db83
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "02bde3e3a2c6c8cf50dc9739a8b1041df87cfeaa6ab59f620e1d8e32acffd4d9"
+        "d7312ce49abca47a6bb47956b6987d32f650fa91678be1abd10e02824937bb15"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "f7e731cbd1d6c1e13548d5995c0abff74a86b0efdd4367b457ada9a884b855ff"
+        "fa1082636bb3927d61dcf9d22bb4e08eb0fb446d08e746738869e40c363b4755"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "91c8af54b859f023c42e2d3db37a2f3a361def0d6bb093530d53d3357986db83"
+        "c783dc9d0e3660b74a9c2e6c5591bf1e4df9a763ce322958526c0872e9ca1aec"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
