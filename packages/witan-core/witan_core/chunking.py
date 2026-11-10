@@ -142,6 +142,12 @@ def chunk_records(
     every node first instead makes the resolvable set identical to the
     single-call load this replaces.
 
+    The nodes and edges are packed as ONE sequence, not batched separately:
+    the batch holding the last nodes fills up with the first edges. Batching
+    the two groups apart always cost a commit at the boundary, so a load that
+    fit one batch (every PostToolUse flush) went out as two. An edge sharing a
+    batch with its endpoint still resolves, per the measurement above.
+
     A record larger than ``max_bytes`` on its own is still yielded, alone: it
     cannot be split, and refusing it here would only trade a server-side 413 for
     a client-side error.
@@ -159,8 +165,8 @@ def chunk_records(
     edges: list[dict] = []
     for record in records:
         (nodes if "type" in record else edges).append(record)
-    for group in (nodes, edges):
-        yield from _batches(group, max_bytes, max_rows)
+    nodes.extend(edges)
+    yield from _batches(nodes, max_bytes, max_rows)
 
 
 def _table_of(record: dict) -> str:

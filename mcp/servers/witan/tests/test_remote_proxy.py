@@ -1241,7 +1241,9 @@ def test_merge_store_sends_no_more_task_rows_a_call_than_one_fenced_commit(
         r["data"]["slug"] for r in [*small, memory, *large]
     ]
     assert "edge" in sent[-1]
-    assert len(calls) == 5
+    # The edge rides in the last Task batch rather than a call of its own:
+    # `chunk_records` packs nodes and edges into one sequence of batches.
+    assert len(calls) == 4
 
 
 def test_a_deployment_that_reports_no_watermark_yields_none(

@@ -148,3 +148,31 @@ def test_nodes_still_precede_edges_when_the_row_cap_splits():
             else:
                 assert not seen_edge, "a node followed an edge across batches"
     assert seen_edge
+
+
+def test_a_small_load_of_nodes_and_edges_is_one_batch():
+    """Each batch is one commit. A load that fits the budget used to go out as
+    two (every node, then every edge), which doubled the commits of each
+    witan-code edit flush."""
+    records = [
+        {"type": "Symbol", "data": {"slug": "a"}},
+        {"edge": "Calls", "from": "a", "to": "b"},
+        {"type": "Symbol", "data": {"slug": "b"}},
+    ]
+
+    assert list(chunk_records(records, MCP_LOAD_MAX_BYTES)) == [
+        [records[0], records[2], records[1]]
+    ]
+
+
+def test_edges_fill_the_batch_holding_the_last_nodes():
+    """The boundary batch is shared, so the batch count is set by the budget
+    alone and not by the node/edge split."""
+    records = [{"type": "Memory", "data": {"slug": f"m-{i}"}} for i in range(3)]
+    records += [{"edge": "RelatesTo", "from": "m-0", "to": f"m-{i}"} for i in range(3)]
+    per_record = max(len(json.dumps(r).encode()) + 1 for r in records)
+
+    batches = list(chunk_records(records, 4 * per_record))
+
+    assert [len(batch) for batch in batches] == [4, 2]
+    assert "type" in batches[0][2] and "edge" in batches[0][3]
