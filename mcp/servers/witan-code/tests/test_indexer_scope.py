@@ -315,10 +315,12 @@ def test_purge_survives_a_forced_reindex(tmp_path, monkeypatch):
 
 
 @requires_stack
-def test_a_batch_of_edits_is_one_delete_and_two_loads(tmp_path, monkeypatch):
+def test_a_batch_of_edits_is_one_delete_and_one_load(tmp_path, monkeypatch):
     """What the PostToolUse drainer relies on to bound its writes: edited,
-    created and deleted files land together, in the same three commits on
-    the repo's store that one edited file costs."""
+    created and deleted files land together, in the same two commits on the
+    repo's store that one edited file costs. Counted at `load_batch`, the
+    call that commits, so a load split into node and edge batches (or
+    followed by a content-hash load) shows up as the extra commit it is."""
     from witan_code import config as cfg_mod
     from witan_code import store as store_mod
     from witan_code.graph import OmnigraphClient
@@ -331,7 +333,7 @@ def test_a_batch_of_edits_is_one_delete_and_two_loads(tmp_path, monkeypatch):
     store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
 
     writes: list[str] = []
-    for method in ("change_many", "load"):
+    for method in ("change_many", "load_batch"):
         real = getattr(OmnigraphClient, method)
 
         def _counted(self, *args, _real=real, _method=method, **kwargs):
@@ -349,7 +351,7 @@ def test_a_batch_of_edits_is_one_delete_and_two_loads(tmp_path, monkeypatch):
         [src / "a.py", src / "b.py", src / "gone.py", src / "new.py"], config=cfg
     )
 
-    assert writes == ["change_many", "load", "load"]
+    assert writes == ["change_many", "load_batch"]
     assert (stats.indexed, stats.purged) == (3, 1)
     assert _files(store, cfg) == {"a.py", "b.py", "c.py", "new.py"}
 
