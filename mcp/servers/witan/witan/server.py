@@ -661,7 +661,10 @@ _MEMORY_LINK_MUTATIONS = {
 EdgeConfidence = Literal["asserted", "inferred"]
 
 #: What an edge property means when it is NULL: an edge written before
-#: 2026-09, when these properties did not exist. Nothing backfills them.
+#: 2026-09, when these properties did not exist. ``witan migrate topics``
+#: (:func:`migrate_topics`) stamps the Tagged ones a memory's tag explains as
+#: ``inferred``. It leaves two kinds null: a Tagged edge no tag explains (an
+#: old ``memory_link(kind="tagged")``), and every memory-to-memory edge.
 #:
 #: ★ NULL SCORES AS ``asserted``, WHICH IS THE CONSERVATIVE CHOICE AND NOT THE
 #: OBVIOUS ONE. Most null Tagged edges genuinely are tag-derived and would be
@@ -670,7 +673,8 @@ EdgeConfidence = Literal["asserted", "inferred"]
 #: day this ships, silently, for every caller of `recall` — a behaviour change
 #: nobody asked for, dressed as a bug fix. So an unstamped edge keeps exactly
 #: the weight it had before the properties existed, and the weighting takes
-#: hold as the graph is rewritten.
+#: hold on a store only when an operator runs the backfill, which is then a
+#: deliberate re-rank rather than a side effect of upgrading.
 _EDGE_CONFIDENCE_DEFAULT: EdgeConfidence = "asserted"
 
 
