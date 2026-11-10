@@ -61,13 +61,23 @@ def test_apply_schema_local_is_addressed_like_every_other_command(
     assert "--store" not in cmd
 
 
-def test_apply_schema_remote_uses_server_and_graph(monkeypatch):
-    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: False)
-    client = _client(monkeypatch, "http://host:8080", graph_id="council")
-    cmd = _capture_schema_apply(monkeypatch, client)
-    assert cmd[cmd.index("--server") + 1] == "http://host:8080"
-    assert cmd[cmd.index("--graph") + 1] == "council"
-    assert "--store" not in cmd
+@pytest.mark.parametrize("speaks_targets", [False, True])
+@pytest.mark.parametrize("uri", ["http://host:8080", "https://host"])
+def test_apply_schema_refuses_a_served_graph(monkeypatch, uri, speaks_targets):
+    """`schema apply` cannot change a served graph: since 0.13 the CLI refuses a
+    server target, and the schema changes through `cluster apply`. A 0.14+ CLI
+    used to fail first on plain HTTP instead, which pointed at the wrong fix."""
+    monkeypatch.setattr(og, "cli_speaks_targets", lambda binary: speaks_targets)
+    client = _client(monkeypatch, uri, graph_id="council")
+    monkeypatch.setattr(
+        og.subprocess,
+        "run",
+        lambda *a, **kw: pytest.fail("a served graph must not reach the CLI"),
+    )
+    with pytest.raises(RuntimeError, match="cluster apply") as excinfo:
+        client.apply_schema("/schema/schema.pg")
+    assert "restart omnigraph-server" in str(excinfo.value)
+    assert "reaches a server only over HTTPS" not in str(excinfo.value)
 
 
 # ── _ensure_graph: schema currency on an EXISTING store ────────────

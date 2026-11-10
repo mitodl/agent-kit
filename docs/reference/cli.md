@@ -1420,6 +1420,9 @@ Reconciles an existing store with the current schema (new nodes/edges/fields).
 Startup now does this on its own when ``schema.pg`` changes; this forces the
 apply regardless of the mtime stamp.
 
+Local stores only: a served graph's schema changes through omnigraph's
+``cluster apply``, which omnigraph-server runs on every start.
+
 ### witan migrate storage
 
 ```console
