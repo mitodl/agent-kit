@@ -1001,6 +1001,29 @@ def _same_person(a: str | None, b: str | None) -> bool:
     return _holder_identity(a) == _holder_identity(b)
 
 
+def _own_claim(current: str | None, holder: str, identity: str | None) -> bool:
+    """Whether a claim recorded as ``current`` is ``holder``'s to renew.
+
+    Either the same holder string, or ``current`` is ``identity``: the caller's
+    own bare identity, which ``task_claim`` passes only when it defaulted the
+    holder from it. A claim with no session on it was made without a session
+    id, most often by ``witan task run`` before it launched the agent that
+    works the task. That agent renews with its own session id, as the
+    witan-task skill tells it to, and used to be refused as if the claim were
+    someone else's. Accepting it exposes nothing new: any of the person's
+    sessions that omit the id already renew the bare claim unseen. The renewal
+    records the qualified holder, so from then on the claim is told apart like
+    any other.
+
+    The identity is the caller's, not one recovered by stripping ``holder``'s
+    qualifier, because an identity can itself end in ``#...`` (see
+    ``context._is_holder``): stripping would let ``alice#ops`` renew a claim
+    held by ``alice``. An explicit ``assignee`` passes ``None`` and stays an
+    exact match.
+    """
+    return current == holder or (bool(current) and current == identity)
+
+
 def _lease_expiry(lease_started_at: str | None) -> str | None:
     """When an advisory lease lapses, ISO-8601, or ``None`` if unknowable."""
     if not lease_started_at:
@@ -1075,7 +1098,9 @@ def _claim_contention(slug: str, holder: str, what: str) -> dict:
     }
 
 
-def _claim_refusal(slug: str, row: dict, holder: str, force: bool) -> dict | None:
+def _claim_refusal(
+    slug: str, row: dict, holder: str, identity: str | None, force: bool
+) -> dict | None:
     """``task_claim``'s refusal for ``row``, or ``None`` if ``holder`` may take it.
 
     A rival is reported as ``lost_race`` rather than ``held``: ``task_claim``
@@ -1089,7 +1114,7 @@ def _claim_refusal(slug: str, row: dict, holder: str, force: bool) -> dict | Non
     lease_started_at = row.get("claimed_at") or row.get("updated_at")
     if (
         status == "in_progress"
-        and rival != holder
+        and not _own_claim(rival, holder, identity)
         and not _lease_expired(lease_started_at)
         and not force
     ):
@@ -8218,6 +8243,9 @@ async def task_claim(
     # on (see docs/adr/0003). The claim also upserts a CodeBranch for the
     # caller's repo+branch and links it WorksOn this task, in the same commit.
     holder = _claim_holder(assignee, session_id)
+    # Same blank-is-missing test as `_claim_holder`: only a defaulted holder
+    # may adopt the caller's own bare claim (`_own_claim`).
+    identity = None if assignee else _current_author()
     rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -8254,7 +8282,8 @@ async def task_claim(
     # (falling back to updated_at, same as readiness.status_pickable) lapses.
     lease_started_at = claimed_at or task.get("updated_at")
     held = status == "in_progress" and not _lease_expired(lease_started_at)
-    if held and current_holder != holder and not force:
+    own = _own_claim(current_holder, holder, identity)
+    if held and not own and not force:
         # Offer to steal instead of a flat refusal. Headless/unsupported clients
         # get the historical behavior (no steal); an explicit confirm proceeds as
         # if ``force`` had been passed.
@@ -8293,7 +8322,9 @@ async def task_claim(
     # the whole branch head) is retried inside `_update_task`, and each attempt
     # re-runs `require` on its own read.
     def require_claimable(current: dict) -> None:
-        if (refusal := _claim_refusal(slug, current, holder, force)) is not None:
+        if (
+            refusal := _claim_refusal(slug, current, holder, identity, force)
+        ) is not None:
             raise _TaskWriteRefused(refusal)
 
     # The CodeBranch upsert and WorksOn edge ride in the claim's own commit.
@@ -8327,7 +8358,9 @@ async def task_claim(
         rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
         if not rows:
             return None
-        if (refusal := _claim_refusal(slug, rows[0], holder, force)) is not None:
+        if (
+            refusal := _claim_refusal(slug, rows[0], holder, identity, force)
+        ) is not None:
             return refusal
         return _claim_contention(
             slug,
@@ -8345,12 +8378,12 @@ async def task_claim(
         "assignee": holder,
         "claimed_at": now,
         "qualified": _is_qualified(holder),
-        "stole": bool(held and current_holder != holder),
+        "stole": bool(held and not own),
     }
     # The moment an agent starts a task is the one call every agent makes, so
     # relevant memories arrive here without anyone deciding to look. A renewal
     # is the same holder carrying on, which already had them.
-    if not (held and current_holder == holder):
+    if not (held and own):
         result["memories"] = await _offload(_surfaced_for_claim, claimed)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the

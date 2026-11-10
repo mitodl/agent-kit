@@ -1083,6 +1083,72 @@ def test_parallel_sessions_of_one_person_do_not_share_a_claim(server, monkeypatc
 
 
 @requires_omnigraph
+def test_a_session_renews_a_bare_claim_its_person_made(server, monkeypatch):
+    """``witan task run`` claims before launch, with no session id to give.
+
+    The launched agent then renews with its own session id, as the witan-task
+    skill says to, and was refused with ``held`` by its own claim. A bare
+    holder is the same person's, so the renewal goes through, takes the
+    qualified holder, and is neither a steal nor a first claim.
+    """
+    from witan import server as srv
+
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    t = server.task_create(title="launched by task run", description="x")
+    bare = server.task_claim(t["slug"])
+    assert bare["assignee"] == srv._current_author()
+
+    renewed = server.task_claim(t["slug"], session_id="launched-session")
+
+    assert renewed["claimed"] is True
+    assert renewed["stole"] is False
+    assert "memories" not in renewed
+    assert renewed["assignee"] == srv._claim_holder(session_id="launched-session")
+    assert server.task_get(t["slug"])["assignee"] == renewed["assignee"]
+
+    # Once qualified, another session of the same person is refused again.
+    other = server.task_claim(t["slug"], session_id="another-session")
+    assert other["claimed"] is False
+    assert other["held_by"] == renewed["assignee"]
+
+
+@pytest.mark.parametrize(
+    ("current", "holder", "identity", "own"),
+    [
+        ("alice", "alice#aaaaaaaa", "alice", True),  # task run's bare claim
+        ("alice#aaaaaaaa", "alice#aaaaaaaa", "alice", True),  # plain renewal
+        ("alice#aaaaaaaa", "alice#bbbbbbbb", "alice", False),  # another session
+        ("alice#aaaaaaaa", "alice", "alice", False),  # bare caller, qualified claim
+        ("bob", "alice#aaaaaaaa", "alice", False),  # another person
+        (None, "alice#aaaaaaaa", "alice", False),  # holder unknown
+        # An identity that itself ends in `#...` must not read as a session:
+        # `alice#ops` is not `alice`, and its own bare claim is still its own.
+        ("alice", "alice#ops", "alice#ops", False),
+        ("alice#ops", "alice#ops#aaaaaaaa", "alice#ops", True),
+        # An explicit assignee passes no identity and stays an exact match.
+        ("ci-runner", "ci-runner#7", None, False),
+        ("ci-runner", "ci-runner", None, True),
+    ],
+)
+def test_own_claim_holder_shapes(current, holder, identity, own):
+    from witan import server as srv
+
+    assert srv._own_claim(current, holder, identity) is own
+
+
+@requires_omnigraph
+def test_a_bare_claim_by_another_person_is_still_held(server, monkeypatch):
+    """Only the person's own bare claim gives way, not anyone's."""
+    t = server.task_create(title="someone else's bare claim", description="x")
+    server.task_claim(t["slug"], assignee="someone-else")
+
+    result = server.task_claim(t["slug"], session_id="my-session")
+
+    assert result["claimed"] is False
+    assert result["held_by"] == "someone-else"
+
+
+@requires_omnigraph
 def test_caller_supplied_session_id_beats_the_server_environment(server, monkeypatch):
     """The deployed case: the server's own environment has no session id.
 

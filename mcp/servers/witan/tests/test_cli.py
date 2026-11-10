@@ -1010,6 +1010,11 @@ def test_the_project_prompt_tells_the_agent_to_claim_before_starting():
     # nothing, so the prompt must not read as "close it, and claim some time".
     assert prompt.index("task_claim") < prompt.index("task_close")
     assert "task_release" in prompt
+    # The renewal carries the session id for the same reason the task-run
+    # prompt's does: once a renewal has recorded the session on the claim, a
+    # bare one is refused as held.
+    assert 'task_claim(slug="tk-...", session_id=' in prompt
+    assert "again to renew" in prompt
 
 
 def test_the_task_prompt_says_the_task_is_already_claimed():
@@ -1023,7 +1028,10 @@ def test_the_task_prompt_says_the_task_is_already_claimed():
     # work" was false for any task worked longer than that — the prompt has to
     # say how to renew instead of promising exclusion.
     assert "60 minutes" in prompt
-    assert 'task_claim(slug="tk-a") again' in prompt
+    # With the session id, as the witan-task skill says: a renewal without it
+    # is refused once an earlier one has recorded the session on the claim.
+    assert 'task_claim(slug="tk-a", session_id=' in prompt
+    assert "again to renew" in prompt
 
 
 def test_the_task_prompt_says_to_claim_when_run_did_not():

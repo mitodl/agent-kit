@@ -169,8 +169,10 @@ def _run_prompt(t: dict, *, claimed: bool, memories: list[dict] | None = None) -
         f"This task is claimed for you. The claim is a lease, not a lock: it "
         f"lapses after {lease_minutes} minutes and nothing renews it for you, "
         f"so if the work runs longer, call "
-        f'task_claim(slug="{t["slug"]}") again to renew — otherwise the task '
-        f"returns to ready work while you are still on it."
+        f'task_claim(slug="{t["slug"]}", session_id="<your agent session id>") '
+        f"again to renew — otherwise the task returns to ready work while you "
+        f"are still on it. The claim was taken before your session existed, so "
+        f"it may name no session; the renewal records yours."
         if claimed
         else f'This task is NOT claimed. Claim it before you start: task_claim(slug="{t["slug"]}").'
     )
@@ -309,8 +311,9 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
         (
             f"A claim is a lease, not a lock: it lapses after "
             f"{CLAIM_LEASE_SECONDS // 60} minutes and nothing renews it for you, "
-            f"so call task_claim again on anything you are still working past "
-            f"that."
+            f"so call "
+            f'task_claim(slug="tk-...", session_id="<your agent session id>") '
+            f"again to renew anything you are still working past that."
         ),
         'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
         'If you claim a task and then decide not to work it: task_release(slug="tk-...").',

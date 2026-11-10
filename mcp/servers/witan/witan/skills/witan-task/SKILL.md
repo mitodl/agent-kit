@@ -74,7 +74,9 @@ So:
   start, which is the same lie in the other direction.
 
 `witan task run` already claims before it launches the agent, so a session
-started that way arrives holding its task; its prompt says so.
+started that way arrives holding its task; its prompt says so. Run from a
+terminal, that claim names you but no session, so renew it like any other, with
+your `session_id`: the renewal records your session on it.
 
 **Read the comments when you claim.** `task_get(slug=...)` returns a `comments`
 list alongside the description. A comment is how another agent tells you the
