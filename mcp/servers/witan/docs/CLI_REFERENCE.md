@@ -513,6 +513,11 @@ Apply the bundled schema to the configured store (idempotent). Reconciles an
 existing store with the current schema — new nodes/edges/fields added since
 it was first created. No flags.
 
+Local stores only. A served graph (`http://`/`https://`) is refused: omnigraph
+changes a served graph's schema only through `cluster apply`, which
+omnigraph-server runs against the schema baked into its image every time it
+starts.
+
 ```bash
 witan migrate schema
 ```

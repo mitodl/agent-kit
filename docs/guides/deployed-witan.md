@@ -357,8 +357,11 @@ Reads are unaffected by all of this and stay fast under the same load.
   code graph's protected `main` — that one is CI's, and the refusal is
   deliberate.
 - **`witan migrate schema`/`topics`/`repo-keys` are refused.** Correct: those
-  have no per-user identity to scope, so they run in-cluster as
-  `svc-witan-admin` (ADR-0005 path b). **`witan migrate merge` is the
+  have no per-user identity to scope, so `topics` and `repo-keys` run
+  in-cluster as `svc-witan-admin` (ADR-0005 path b). `schema` does not run
+  anywhere against a deployed graph: omnigraph changes a served graph's schema
+  only through `cluster apply`, which omnigraph-server runs against its baked-in
+  schema on every start. Deploy or restart omnigraph-server instead. **`witan migrate merge` is the
   exception** — it has a per-actor form and is how you bring your own history
   across. See the
   [migration runbook](migration-runbook.md#local-shared-the-cutover).
