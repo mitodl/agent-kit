@@ -262,6 +262,43 @@ def test_task_create_returns_similar_tasks(server):
 
 
 @requires_omnigraph
+def test_task_create_similar_spans_repo_spellings(server):
+    """A duplicate filed under another spelling of the repo is still surfaced.
+
+    The shorthand ``mitodl/x`` is stored verbatim while auto-detection writes
+    the HTTPS form, so an exact repo match never compares the two.
+    """
+    existing = server.task_create(
+        title="quokka pricing table is five times high",
+        description="x",
+        repo="test/quokka",
+    )
+
+    created = server.task_create(
+        title="quokka pricing table five times high again",
+        description="x",
+        repo="https://github.com/test/quokka",
+    )
+    hit = next(s for s in created["similar"] if s["slug"] == existing["slug"])
+    assert hit["repo"] == "test/quokka"
+
+
+@requires_omnigraph
+def test_task_create_similar_matches_on_description(server):
+    """Titles that share no words still match when the descriptions do."""
+    existing = server.task_create(
+        title="wombat cutover plan",
+        description="retire the narwhal ingestion cluster after the quokka migration",
+    )
+
+    created = server.task_create(
+        title="decommission old infrastructure",
+        description="retire the narwhal ingestion cluster once the quokka migration lands",
+    )
+    assert existing["slug"] in [s["slug"] for s in created["similar"]]
+
+
+@requires_omnigraph
 def test_blocking_and_ready(server):
     proj = server.workflow_project_create(title="P", description="d", phase="spec")
     a = server.task_create(

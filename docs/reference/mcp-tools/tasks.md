@@ -18,9 +18,11 @@ dependencies so ``task_ready`` can withhold the task until its blockers
 close.
 
 Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
-BM25 matches on ``title`` against existing tasks (any status), a soft
-duplicate check. It never blocks creation; review it and close this task
-as a duplicate (``task_close``) if one of them is really the same work.
+BM25 matches for the title and the start of the description against
+existing tasks in every repo (any status), each with its ``slug``,
+``title``, ``status`` and ``repo``: a soft duplicate check. It never
+blocks creation; review it and close this task as a duplicate
+(``task_close``) if one of them is really the same work.
 
 Against a deployment that serves the web UI, it also carries ``ui_url``:
 the link that opens the task there. Hand a person that link rather than
@@ -116,8 +118,9 @@ Returns up to 20 tasks ranked by BM25 relevance, matched against
 ``description`` and ``title`` (description matches are seeded ahead of
 title-only matches — see ``memory_search``'s doc for why). Run this
 before ``task_create`` to check whether the work is already tracked;
-``task_create`` also runs it automatically and returns the top matches
-as ``similar`` in its response.
+``task_create`` also runs a search across every repo, with the title and
+the start of the description, and returns the top matches as ``similar``
+in its response.
 
 To find "the next task" in a project there is no query to rank by: use
 ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for

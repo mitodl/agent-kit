@@ -383,9 +383,10 @@ def task_create_cmd(
     if result.get("repo"):
         console.print(f"  repo: {_short_repo(result['repo'])}")
     for hit in result.get("similar") or []:
+        repo_s = f" [dim]{_short_repo(hit['repo'])}[/dim]" if hit.get("repo") else ""
         console.print(
             f"  [yellow]similar:[/yellow] {hit['slug']} "
-            f"[{_styled(hit['status'], _STATUS_STYLE)}] {esc(hit['title'])}"
+            f"[{_styled(hit['status'], _STATUS_STYLE)}]{repo_s} {esc(hit['title'])}"
         )
 
 
