@@ -261,7 +261,13 @@ dependencies = [
   # 0.51.0 in the same change (Omnigraph-If-Actor). 0.50 imports fine, then
   # the first deployed request raises TypeError, so `just check-core-floor`
   # cannot see it.
-  "witan-core[cli,remote,observability,sentry]>=0.51,<1",
+  #
+  # ★ >=0.51.1 IS A BEHAVIOUR FLOOR: 0.51.1's `chunking.chunk_records` packs
+  # nodes and edges into shared batches. The merge paths in server.py and
+  # remote/proxy.py chunk through it, so on 0.51.0 a merge whose rows fit one
+  # batch still commits nodes and edges separately: one extra commit, no
+  # wrong result.
+  "witan-core[cli,remote,observability,sentry]>=0.51.1,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
