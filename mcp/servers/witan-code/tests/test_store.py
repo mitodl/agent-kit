@@ -275,10 +275,13 @@ def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
     every apply. Recreating it is the recovery, since the bridge is derived
     from the indexed checkouts.
 
-    The old store's `file` is optional, and omnigraph refuses that type change
-    in place (OG-MF-106 on 0.14.0). The change that first needed this, the
-    drop of InterfaceBinding.repo_file, was refused by 0.13 but is a supported
-    `drop_property` on 0.14, so it no longer reaches the recreate path.
+    The old store's `file` is an I32, and omnigraph refuses that type change
+    in place (`schema plan` reports `supported: false` on 0.15.0). The change
+    that first needed this, the drop of InterfaceBinding.repo_file, was
+    refused by 0.13 but is a supported `drop_property` on 0.14. The next one,
+    an optional `file` made required, was refused by 0.14 (OG-MF-106) but is
+    supported on 0.15 (upstream #1271). Neither reaches the recreate path any
+    more.
 
     Several callers at once is the state right after an upgrade, when every
     reindex hook finds the old store. Without the write lock one of them
@@ -291,8 +294,8 @@ def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
     current = cfg.bridge_schema_file.read_text()
     field = "    file: String @index"
     assert field in current
-    old_schema = tmp_path / "bridge-with-optional-file.pg"
-    old_schema.write_text(current.replace(field, "    file: String? @index", 1))
+    old_schema = tmp_path / "bridge-with-integer-file.pg"
+    old_schema.write_text(current.replace(field, "    file: I32 @index", 1))
     store = cfg_mod.bridge_store_path(cfg.code_dir)
     store.parent.mkdir(parents=True)
     subprocess.run(
