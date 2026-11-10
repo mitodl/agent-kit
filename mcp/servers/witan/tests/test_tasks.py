@@ -1938,6 +1938,14 @@ def test_comment_refuses_rather_than_reporting_a_write_that_did_not_happen(
     assert res["commented"] is False
     assert "witan migrate schema" in res["reason"]
 
+    # Against a deployment the same refusal must not name a command the remote
+    # CLI refuses (apply_schema is admin-only there).
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    res = server.task_comment(slug=t["slug"], text="still not lost")
+    assert res["commented"] is False
+    assert "run `witan migrate schema`" not in res["reason"]
+    assert "omnigraph-server image" in res["reason"]
+
 
 @requires_omnigraph
 def test_a_real_read_failure_is_not_mistaken_for_a_missing_comment_type(

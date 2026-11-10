@@ -459,6 +459,21 @@ def test_missing_edge_properties_name_the_fix(server):
 
 
 @requires_omnigraph
+def test_a_deployment_does_not_name_a_command_the_client_refuses(server, monkeypatch):
+    """`witan migrate schema` raises RemoteToolUnavailable against a deployed
+    target, and a deployed graph is the one place this error is expected to
+    fire, so the local hint would send the user to a dead end."""
+    monkeypatch.setattr(server._module, "_is_local_stdio", lambda: False)
+    with pytest.raises(RuntimeError) as excinfo, server._module._edge_property_errors():
+        raise RuntimeError(
+            "type error: T6: edge `RelatedTo` has no property `confidence`"
+        )
+    message = str(excinfo.value)
+    assert "run `witan migrate schema`" not in message
+    assert "omnigraph-server image" in message
+
+
+@requires_omnigraph
 def test_unrelated_errors_pass_through_untouched(server):
     boom = RuntimeError("connection refused")
     with (
