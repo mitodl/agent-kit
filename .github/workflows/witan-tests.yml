@@ -182,6 +182,28 @@ jobs:
         # the wall time.
         run: uv run pytest -v -n auto --dist worksteal
 
+  cli-import-windows:
+    # Both CLIs import witan_core at entry, so a POSIX-only import anywhere on
+    # that path fails every command on Windows before it does anything. The
+    # remote client (`witan login`, the token cache, the MCP proxy) is the
+    # supported Windows surface; the local omnigraph store is not, since
+    # omnigraph publishes no Windows binary.
+    name: witan + witan-code (windows CLI import)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: witan --help
+        run: uv run --frozen --isolated --package witan-council witan --help
+
+      - name: witan-code --help
+        run: uv run --frozen --isolated --package witan-code witan-code --help
+
   witan-policy:
     name: witan (Cedar policy bundle)
     runs-on: ubuntu-latest

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from witan_core import _filelock
 from witan_core import omnigraph as og
 from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
@@ -1637,7 +1638,7 @@ def test_a_write_inside_hold_write_lock_does_not_self_deadlock(monkeypatch, tmp_
 
     # And the lock is fully released afterwards, not left pinned at depth 1 —
     # a leaked depth would silently disable locking for the rest of the process.
-    assert not og._held_flocks
+    assert not _filelock._held
     fh = og.acquire_store_flock(str(store))
     assert fh is not None
     og.release_store_flock(str(store), fh)
@@ -1652,9 +1653,9 @@ def test_nested_acquisitions_unlock_only_at_depth_zero(tmp_path):
     assert inner is None  # re-entry, nothing of its own to release
 
     og.release_store_flock(store, inner)
-    assert og._held_flocks  # still held by the outer acquisition
+    assert _filelock._held  # still held by the outer acquisition
     og.release_store_flock(store, outer)
-    assert not og._held_flocks
+    assert not _filelock._held
 
 
 def test_a_second_thread_still_blocks_on_a_lock_this_thread_holds(tmp_path):
@@ -1704,7 +1705,7 @@ def test_a_second_thread_still_blocks_on_a_lock_this_thread_holds(tmp_path):
     may_release.set()
     assert released.wait(timeout=10)
     thread.join(timeout=10)
-    assert not og._held_flocks
+    assert not _filelock._held
 
 
 def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
@@ -1717,8 +1718,8 @@ def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
 
     with client.hold_write_lock():
         client._execute(["omnigraph", "query"], "query", is_write=False)
-        assert og._held_flocks  # the outer lock survived the read
-    assert not og._held_flocks
+        assert _filelock._held  # the outer lock survived the read
+    assert not _filelock._held
 
 
 # ── in-process serialisation of direct-S3 writes (agent-kit#364) ───

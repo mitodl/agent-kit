@@ -500,8 +500,12 @@ def _refresh_worker(cache_path, refresh_log, index, barrier, result_path):
 
 
 def _run_fleet(target, tmp_path, *args):
-    """Start _FLEET processes, release them at one instant, collect outcomes."""
-    ctx = multiprocessing.get_context("fork")
+    """Start _FLEET processes, release them at one instant, collect outcomes.
+
+    Spawned, not forked: Windows has no fork, and the workers are module-level
+    functions taking picklable args so a fresh interpreter can import them.
+    """
+    ctx = multiprocessing.get_context("spawn")
     barrier = ctx.Barrier(_FLEET)
     procs = []
     for i in range(_FLEET):

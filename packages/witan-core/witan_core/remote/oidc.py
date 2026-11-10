@@ -20,22 +20,22 @@ module is server-agnostic. Requires the ``remote`` extra (``httpx2``).
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import logging
 import math
 import os
 import secrets
-import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import NamedTuple, Protocol
 
 import httpx2
+
+from witan_core import _filelock
 
 _log = logging.getLogger(__name__)
 
@@ -102,52 +102,19 @@ pointing at the same deployment under the same client id.
 """
 
 
-_cache_lock_depth: dict[tuple[int, str], int] = {}
-_cache_lock_guard = threading.Lock()
-
-
-@contextmanager
-def _cache_lock(cache_path: Path) -> Iterator[None]:
+def _cache_lock(cache_path: Path) -> AbstractContextManager[None]:
     """Hold ``<cache>.lock`` exclusively for the block, re-entrant per thread.
 
-    The token cache is a *local* file, so an advisory ``flock`` genuinely
-    coordinates every process that shares it — unlike the graph store, where
-    the same pattern is skipped for remote stores because it cannot span hosts.
+    The token cache is a *local* file, so a file lock genuinely coordinates
+    every process that shares it — unlike the graph store, where the same
+    pattern is skipped for remote stores because it cannot span hosts.
 
-    Re-entrancy is not optional: ``flock`` conflicts between two file
-    descriptors even within one process, so the nested
+    Re-entrancy is not optional: the lock conflicts between two descriptors
+    even within one process, so the nested
     ``get_valid_token`` → ``_refresh`` → ``_store_token`` path would deadlock
-    against itself without the depth count. Same shape as
-    ``witan_core.omnigraph.acquire_store_flock``.
+    against itself without the depth count :mod:`witan_core._filelock` keeps.
     """
-    lock_path = cache_path.with_name(cache_path.name + ".lock")
-    key = (threading.get_ident(), str(lock_path))
-    with _cache_lock_guard:
-        depth = _cache_lock_depth.get(key, 0)
-        if depth:
-            _cache_lock_depth[key] = depth + 1
-    if depth:
-        try:
-            yield
-        finally:
-            with _cache_lock_guard:
-                _cache_lock_depth[key] -= 1
-        return
-
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "w")  # noqa: SIM115 — closed in the finally below
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        with _cache_lock_guard:
-            _cache_lock_depth[key] = 1
-        try:
-            yield
-        finally:
-            with _cache_lock_guard:
-                _cache_lock_depth.pop(key, None)
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-    finally:
-        fh.close()
+    return _filelock.locked(cache_path.with_name(cache_path.name + ".lock"))
 
 
 class OidcEndpoint(Protocol):

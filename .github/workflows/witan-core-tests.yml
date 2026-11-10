@@ -80,3 +80,29 @@ jobs:
 
       - name: Lint (ruff format)
         run: uvx ruff@0.17.2 format --check .
+
+  test-witan-core-windows:
+    # A bare `import fcntl` in a base module once made both CLIs fail at import
+    # on Windows for a minor release, because nothing ran there. This job is
+    # what keeps that from recurring. omnigraph publishes no Windows binary, so
+    # test_binary_contract.py skips here (WITAN_REQUIRE_OMNIGRAPH stays unset);
+    # the Linux job above still enforces it.
+    name: witan-core (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/witan-core
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: Run tests
+        run: uv run pytest
