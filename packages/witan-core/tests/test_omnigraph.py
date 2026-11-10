@@ -3103,6 +3103,46 @@ def test_an_exhausted_connect_failure_says_it_could_not_connect(monkeypatch):
         client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
     assert "could not connect to https://graph.example" in str(raised.value)
     assert "answered" not in str(raised.value)
+    assert "Kubernetes" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["omnigraph-server.witan.svc.cluster.local", "omnigraph-server.witan.svc"],
+)
+def test_an_exhausted_connect_failure_to_a_service_name_says_it_is_cluster_internal(
+    monkeypatch, host
+):
+    """From outside the cluster the name never resolves, which should not read
+    as an outage."""
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient(f"http://{host}:8080", Path("/queries"), graph_id="g")
+    _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+    _fake_clock(monkeypatch)
+
+    with pytest.raises(og.StoreUnavailable) as raised:
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert f"{host} is a Kubernetes Service name" in str(raised.value)
+    assert "--remote-url" in str(raised.value)
+
+
+def test_an_exhausted_connect_failure_inside_a_pod_gets_no_cluster_hint(monkeypatch):
+    """In the cluster the name resolves, so a failure there is a real outage."""
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient(
+        "http://omnigraph-server.witan.svc.cluster.local:8080",
+        Path("/queries"),
+        graph_id="g",
+    )
+    _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+    _fake_clock(monkeypatch)
+
+    with pytest.raises(og.StoreUnavailable) as raised:
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert "could not connect to" in str(raised.value)
+    assert "Kubernetes" not in str(raised.value)
 
 
 def test_an_exhausted_http_503_says_the_server_answered(monkeypatch):
