@@ -8,6 +8,51 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.29.0] - 2026-11-10
+
+### Changed
+
+- With witan-core's packed `chunk_records`, an index whose records fit one
+  load batch sends its nodes and edges as one `code_store_load` instead of
+  two, so a paced PostToolUse flush to a deployed graph is three commits on
+  the branch view (delete, load, content-hash load) instead of four.
+- Through an `OmnigraphClient` (a local store, omnigraph over HTTP, or an
+  in-cluster index), a load that fits one batch carries the files' content
+  hashes in the same commit instead of a second load, so the flush is two
+  commits. One batch commits atomically, so a failed load still leaves the
+  files without a hash and the next run re-indexes them. A
+  `RemoteStoreClient` keeps the content-hash load, because the store tier
+  re-chunks what it receives, and one running an older witan-core splits
+  nodes from edges into separate commits.
+- Requires `witan-core>=0.51.1`, the release with the packed
+  `chunk_records`. 0.51.0 still works, but adds a commit per flush.
+
+### Fixed
+
+- `--help` for `reap-views`, `setup` and the global options shows each
+  parameter's description. They were documented as `name: text` on one
+  line, which cyclopts' numpydoc parser reads as a parameter type.
+- Indexing inside a git work tree collects git's listing (`git ls-files
+  --cached --others --exclude-standard`) instead of walking the disk, so
+  files git ignores no longer reach the code graph. The fixed skip list
+  only caught a virtualenv named `.venv` or `venv`: a dry estimate of
+  open-edx-plugins with `uv sync` into `env/` came to 703,408 records in
+  108 2 MiB loads, against 14,661 records in 5 loads now. The skip list,
+  nested-checkout exclusion and extension filter still apply on top. The
+  PostToolUse hook holds the files it names to the same rule with one
+  `git check-ignore` per batch, and the repo-level bridge extractors read
+  the same listing. Outside a work tree, or without a `git` binary, the
+  disk is walked as before. A full-repo index purges rows already stored
+  for files that are now ignored, wherever the run is allowed to purge, and
+  an edit to an ignored file drops that file's existing rows. A repository
+  git cannot list (a corrupt index, dubious ownership) is reported and
+  indexes nothing rather than falling back to the walk, and a listed path
+  under a symlinked directory is skipped.
+
+### Security
+
+- The "no code graph yet, index it now?" offer is no longer made to a token-authenticated remote caller. It indexed the server's own checkout, so a remote caller (including the web UI, whose token is limited to read tools) could turn a read such as `code_interface_consumers` into a write by accepting the prompt. A local stdio server still makes the offer.
+
 ## [0.28.0] - 2026-11-09
 
 ### Changed
