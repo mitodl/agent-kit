@@ -410,6 +410,15 @@ def test_rank_config_defaults(monkeypatch):
     assert rc.half_life_days == 90.0
 
 
+def test_every_rank_env_var_is_cleared_by_the_hermetic_guard():
+    """`rank_cfg` reads these at import, before any test can unset them."""
+    from testsupport import hermetic
+
+    from witan.config import _RANK_FIELDS
+
+    assert set(_RANK_FIELDS.values()) <= set(hermetic._CLEARED)
+
+
 def test_rank_config_env_override(monkeypatch):
     from witan.config import load_rank_config
 
