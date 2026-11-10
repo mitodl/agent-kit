@@ -98,7 +98,18 @@ _CLEARED = (
     "WITAN_CONTEXT_TTL",
     "WITAN_CONTEXT_DEADLINE",
     # Read into the module-level `rank_cfg` at import, so a developer's tuning
-    # decides what a claim surfaces, and a bad value fails the import.
+    # decides ranking results and what a claim surfaces, and a bad value fails
+    # the import. The full set is `_RANK_FIELDS` in witan/config.py.
+    "WITAN_RANK_W_BM25",
+    "WITAN_RANK_W_RECENCY",
+    "WITAN_RANK_W_CORROB",
+    "WITAN_RANK_W_CONF",
+    "WITAN_RANK_HALFLIFE_DAYS",
+    "WITAN_RANK_DEFAULT_CONF",
+    "WITAN_RANK_PEN_SUPERSEDED",
+    "WITAN_RANK_PEN_CONTRADICTED",
+    "WITAN_RANK_W_HOP",
+    "WITAN_RANK_W_INFERRED_EDGE",
     "WITAN_RANK_SURFACE_MIN_CONTENT",
     "WITAN_RANK_SURFACE_MIN_TITLE",
     "WITAN_OPTIMIZE_INTERVAL",
