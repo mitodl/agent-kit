@@ -136,6 +136,23 @@ def test_task_create_prints_a_bracketed_similar_repo_verbatim(
 
 
 @requires_omnigraph
+def test_task_create_prints_its_own_bracketed_repo_verbatim(
+    server, monkeypatch, capsys
+):
+    """The new task's own ``repo:`` line escapes the same way as a similar hit's."""
+    from witan.cli import _common
+    from witan.cli.tasks import task_create_cmd
+
+    monkeypatch.setattr(_common, "_server", server)
+
+    task_create_cmd(
+        title="wombat queue stalls", description="x", repo="local[/tmp/repo]"
+    )
+
+    assert "  repo: local[/tmp/repo]" in capsys.readouterr().out
+
+
+@requires_omnigraph
 def test_task_create_no_similar_hint_when_no_matches(server, monkeypatch):
     from witan.cli.tasks import task_create_cmd
 
