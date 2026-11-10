@@ -26,6 +26,7 @@ import logging
 import math
 import os
 import secrets
+import sys
 import time
 import uuid
 from collections.abc import Callable
@@ -100,6 +101,29 @@ Shared on purpose, next to the shared ``~/.config/witan/config.toml``: entries
 are keyed by ``(issuer, client_id)``, so one ``witan login`` covers every CLI
 pointing at the same deployment under the same client id.
 """
+
+
+# Windows refuses to replace a file another process has open, and the
+# lockless readers (``get_valid_token``'s fast path, ``cached_claims``) hold
+# tokens.json open briefly on every call. Retrying for a bounded time keeps a
+# refresh from failing on that.
+_REPLACE_RETRY_SECONDS = 2.0
+_REPLACE_POLL_SECONDS = 0.01
+
+
+def _replace(src: Path, dst: Path) -> None:
+    if sys.platform != "win32":
+        os.replace(src, dst)
+        return
+    deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_REPLACE_POLL_SECONDS)
 
 
 def _cache_lock(cache_path: Path) -> AbstractContextManager[None]:
@@ -380,7 +404,7 @@ class DeviceAuth:
         except BaseException:
             os.unlink(tmp)
             raise
-        os.replace(tmp, path)
+        _replace(tmp, path)
 
     def _store_token(self, token: dict) -> dict:
         if not token.get("access_token"):

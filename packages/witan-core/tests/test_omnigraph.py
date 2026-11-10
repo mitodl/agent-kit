@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -239,6 +240,9 @@ def test_operator_config_is_rewritten_when_removed():
     assert path.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="checks POSIX ownership and mode bits"
+)
 def test_a_lost_operator_config_dir_is_reallocated_not_recreated_by_name():
     """Once a temp cleaner removes the directory, its name is free for another
     local user to claim and plant a config that sends the actor token to their
@@ -262,6 +266,7 @@ def _version_binary(tmp_path: Path, name: str, body: str) -> str:
     return str(script)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a #!/bin/sh script")
 def test_dialect_is_read_from_version_json(tmp_path):
     """0.14 answers `version --json` with `protocols.target`; 0.13 rejects the
     flag (exit 2), which is what keeps the legacy flags selected for it."""
@@ -281,6 +286,7 @@ def test_dialect_is_read_from_version_json(tmp_path):
         og.cli_speaks_targets(edge)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a #!/bin/sh script")
 def test_dialect_of_a_bare_command_name_is_read_from_path(tmp_path, monkeypatch):
     """The subprocess finds a bare name on PATH, so detection must too, or a
     0.14 binary named `omnigraph` would be sent the legacy flags."""

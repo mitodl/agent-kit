@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from typing import Self
@@ -16,6 +17,12 @@ from typing import Self
 import pytest
 
 from witan_core import omnigraph_install as oi
+
+# The fake binaries here are #!/bin/sh scripts, and omnigraph publishes no
+# Windows build for the installer to fetch.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="fake binaries are #!/bin/sh scripts"
+)
 
 
 def _fake_release_tarball(binary_content: bytes) -> bytes:
