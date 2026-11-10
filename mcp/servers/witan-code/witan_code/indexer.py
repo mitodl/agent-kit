@@ -84,9 +84,10 @@ _DELETE_BATCH_SIZE = 128
 _PENDING_CONTENT_HASH = "pending"
 
 # A load whose records fit one batch at this budget is one commit through an
-# in-process client, which chunks at the 8 MiB omnigraph budget. Set to the
-# smaller MCP one so the check stays true if a transport's default drops to
-# it. See `_hashes_need_deferring`.
+# in-process client, which chunks at the 8 MiB omnigraph budget. This is the
+# smaller MCP budget, a conservative margin: a load between 2 and 8 MiB still
+# takes the deferred two-load path, which is correct, only one commit more.
+# See `_hashes_need_deferring`.
 _ONE_LOAD_MAX_BYTES = chunking.MCP_LOAD_MAX_BYTES
 
 
