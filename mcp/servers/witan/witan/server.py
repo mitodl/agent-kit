@@ -732,6 +732,24 @@ _EDGE_PROPS_HINT = (
     "their rows with the new properties null)"
 )
 
+#: What a deployment says instead of a local fix. ``witan migrate schema``
+#: calls ``apply_schema``, which the remote CLI refuses (it is admin-only and
+#: off the MCP tool surface), so naming it here sends the user to a command
+#: that raises ``RemoteToolUnavailable``. A deployed graph's schema ships in
+#: the omnigraph-server image and is applied by that deploy.
+_DEPLOYED_SCHEMA_HINT = (
+    "this deployment's graph is behind the schema this witan release expects. "
+    "A client cannot apply it (`witan migrate schema` is refused against a "
+    "deployed target): the schema ships in the omnigraph-server image and is "
+    "applied when that image is deployed. Report it to whoever operates this "
+    "deployment"
+)
+
+
+def _schema_hint(local_hint: str) -> str:
+    """``local_hint`` for the user's own store, the deployment hint otherwise."""
+    return local_hint if _is_local_stdio() else _DEPLOYED_SCHEMA_HINT
+
 
 @contextmanager
 def _edge_property_errors() -> Iterator[None]:
@@ -753,7 +771,7 @@ def _edge_property_errors() -> Iterator[None]:
     except RuntimeError as exc:
         if not _NO_EDGE_PROPS.search(str(exc)):
             raise
-        raise RuntimeError(f"{exc}\n\n{_EDGE_PROPS_HINT}") from exc
+        raise RuntimeError(f"{exc}\n\n{_schema_hint(_EDGE_PROPS_HINT)}") from exc
 
 
 #: The engine refusing an edge whose endpoint does not exist. Over HTTP:
@@ -7432,7 +7450,9 @@ def _task_branches(slug: str) -> list[dict]:
         if not _no_such_type(exc, "CodeBranch"):
             raise
         logger.warning(
-            "witan.task_branches.unavailable", task_slug=slug, hint=_MIGRATE_HINT
+            "witan.task_branches.unavailable",
+            task_slug=slug,
+            hint=_schema_hint(_MIGRATE_HINT),
         )
         return []
 
@@ -7483,7 +7503,9 @@ def _task_comments(slug: str) -> list[dict]:
         if not _no_comment_type(exc):
             raise
         logger.warning(
-            "witan.task_comments.unavailable", task_slug=slug, hint=_MIGRATE_HINT
+            "witan.task_comments.unavailable",
+            task_slug=slug,
+            hint=_schema_hint(_MIGRATE_HINT),
         )
         return []
 
@@ -7562,7 +7584,7 @@ def task_comment(slug: str, text: str) -> dict:
         # correction gets lost. Say what is wrong and what fixes it.
         if not _no_comment_type(exc):
             raise
-        return {"commented": False, "reason": _MIGRATE_HINT}
+        return {"commented": False, "reason": _schema_hint(_MIGRATE_HINT)}
     return {
         "commented": True,
         "slug": comment_slug,
