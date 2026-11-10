@@ -147,7 +147,7 @@ def test_014_local_store_is_an_absolute_inline_target(monkeypatch, tmp_path):
     assert "--store" not in args
     assert _operator_doc(args) == {"version": 1}
 
-    uri = og.store_cli_args(f"file://{tmp_path}/g.omni", binary="/usr/bin/omnigraph")
+    uri = og.store_cli_args((tmp_path / "g.omni").as_uri(), binary="/usr/bin/omnigraph")
     assert uri[uri.index("--target") + 1] == str(tmp_path / "g.omni")
 
     # A file URI is percent-decoded; a plain path keeps its `%` literally.

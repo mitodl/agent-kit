@@ -195,6 +195,7 @@ def test_match_path_runs_even_without_repo_uri(tmp_path):
 
 def test_match_path_expands_tilde(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # expanduser on Windows
     checkout = tmp_path / "code" / "personal" / "dotfiles"
     checkout.mkdir(parents=True)
     t = _Target(name="personal", match_paths=["~/code/personal"])

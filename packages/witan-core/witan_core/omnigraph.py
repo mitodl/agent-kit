@@ -67,6 +67,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import NamedTuple, TypeVar
+from urllib.request import url2pathname
 
 from witan_core import _filelock
 from witan_core import omnigraph_http as _http
@@ -1646,8 +1647,9 @@ def store_cli_args(
         )
     if graph_uri.startswith("file://"):
         # A file URI is percent-encoded (`Path.as_uri()` writes a space as
-        # %20); a plain path is taken literally, `%` and all.
-        graph_uri = urllib.parse.unquote(urllib.parse.urlsplit(graph_uri).path)
+        # %20); a plain path is taken literally, `%` and all. url2pathname
+        # also turns Windows' `/C:/x` into `C:\x`.
+        graph_uri = url2pathname(urllib.parse.urlsplit(graph_uri).path)
     path = os.path.abspath(os.path.expanduser(graph_uri))
     return [
         "--operator-config",
