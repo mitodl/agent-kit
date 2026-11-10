@@ -113,6 +113,29 @@ def test_task_create_prints_similar_hint(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_task_create_prints_a_bracketed_similar_repo_verbatim(
+    server, monkeypatch, capsys
+):
+    """A stored repo is data, not Rich markup: ``local[/tmp/repo]`` parses as a
+    closing tag, which raised MarkupError after the new task was created."""
+    from witan.cli import _common
+    from witan.cli.tasks import task_create_cmd
+
+    monkeypatch.setattr(_common, "_server", server)
+    server.task_create(
+        title="quokka ledger drifts nightly", description="x", repo="local[/tmp/repo]"
+    )
+
+    task_create_cmd(
+        title="quokka ledger drifts nightly again",
+        description="x",
+        repo="https://github.com/test/quokka",
+    )
+
+    assert "local[/tmp/repo]" in capsys.readouterr().out
+
+
+@requires_omnigraph
 def test_task_create_no_similar_hint_when_no_matches(server, monkeypatch):
     from witan.cli.tasks import task_create_cmd
 
