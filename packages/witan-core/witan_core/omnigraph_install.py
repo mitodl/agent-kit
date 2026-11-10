@@ -475,7 +475,8 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: search and the Task/WorkflowProject BM25 search both — so on any graph
 #: written before this binary, those queries are refused until:
 #:     omnigraph rebuild-full-text-indexes <URI> --branch <branch>
-#: Upstream calls it a controlled cutover, not a rolling upgrade: stop old
+#: (0.15 deprecates that command for `omnigraph index rebuild --kind
+#: full-text`, upstream #1150.) Upstream calls it a controlled cutover, not a rolling upgrade: stop old
 #: readers/writers and keep a recoverable backup first. A local store is one
 #: command; the DEPLOYED graph needs scheduling, which is
 #: tk-rebuild-full-text-indexes-on-the-deployed-witan--076eb6. Nothing here

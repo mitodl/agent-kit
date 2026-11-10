@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nightly maintenance window for the omnigraph data tier (omnigraph 0.13, 0.14).
+"""Nightly maintenance window for the omnigraph data tier (omnigraph 0.13 to 0.15).
 
 `omnigraph optimize` and `cleanup` are direct writers of the storage root.
 From 0.12 on a direct writer is refused with `state_lock_held` while the
@@ -390,7 +390,8 @@ class Window:
         first = night % len(self._graphs)
         for graph in self._graphs[first:] + self._graphs[:first]:
             # `--yes` because an s3:// root is a non-local scope, and a
-            # destructive write there refuses without a TTY (0.13 and 0.14).
+            # destructive write there refuses without a TTY (seen on 0.13 and
+            # 0.14; 0.15's S3 qualification passes with it).
             self._maintain(
                 graph,
                 "cleanup",

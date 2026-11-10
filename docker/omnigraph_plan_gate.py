@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-deploy gate for the omnigraph data tier (omnigraph 0.13 and 0.14).
+"""Pre-deploy gate for the omnigraph data tier (omnigraph 0.13 to 0.15).
 
 The server entrypoint applies the baked configuration on every boot, after
 `Recreate` has already stopped the old pod. A schema or policy change the
