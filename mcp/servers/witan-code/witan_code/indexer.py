@@ -621,7 +621,12 @@ def index_paths(
     # relative to it can name a different file that is still in the repo.
     # Skipped under `can_purge`: a batch holding the repo root as well already
     # purged every stored file missing from disk above.
-    for vanished in gone:
+    #
+    # An ignored file named directly is treated the same way: it is on disk,
+    # but its rows (written before ignored files were left out) are no more
+    # the repo's than a deleted file's, and an edit is the cheapest place to
+    # drop them on a view no full run purges.
+    for vanished in [*gone, *sorted(ignored)]:
         if repo_root is None or not indexable(vanished):
             continue
         rel = _relative_path(vanished, base)

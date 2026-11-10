@@ -11,4 +11,5 @@
   `git check-ignore` per batch, and the repo-level bridge extractors read
   the same listing. Outside a work tree, or without a `git` binary, the
   disk is walked as before. A full-repo index purges rows already stored
-  for files that are now ignored, wherever the run is allowed to purge.
+  for files that are now ignored, wherever the run is allowed to purge, and
+  an edit to an ignored file drops that file's existing rows.

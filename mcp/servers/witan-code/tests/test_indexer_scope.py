@@ -537,6 +537,30 @@ def test_an_ignored_file_named_directly_is_not_indexed(tmp_path, monkeypatch):
     assert _files(store, cfg) == {"a.py", "b.py"}
 
 
+@requires_stack
+def test_an_ignored_file_named_directly_drops_rows_it_already_has(
+    tmp_path, monkeypatch
+):
+    """Rows written before the file was ignored go on its next edit, without
+    waiting for a full run that may never be allowed to purge the view."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "env").mkdir()
+    (src / "env" / "dep.py").write_text("def dep():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "env/dep.py"}
+
+    (src / "env" / ".gitignore").write_text("*\n")
+    stats = indexer.index_paths([src / "env" / "dep.py"], config=cfg)
+
+    assert (stats.indexed, stats.purged) == (0, 1)
+    assert _files(store, cfg) == {"a.py"}
+
+
 # ── _may_purge: the gate on the one destructive step ─────────────────────────
 
 
