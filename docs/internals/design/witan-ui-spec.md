@@ -754,11 +754,13 @@ client's OAuth flow is built around the RFC 8707 `resource` parameter that
 Keycloak does not implement. The MCP client still carries the token: oidc-spa
 only supplies it, through the transport's `authProvider`.
 
-The `witan`-audience token authorizes every tool, writes included, not only the
-read set the page binds. So an XSS in the page is a write exposure, not a read
-one. The CSP in §5.2 (`default-src 'self'`, no inline script, no third-party
-origins) is the control, and nothing in the bundle builds HTML from graph
-content: prose renders through the token walk in §6.9, never as a string.
+The `witan`-audience token authorized every tool, writes included, not only the
+read set the page binds, so an XSS in the page was a write exposure. Since ADR
+0011's 2026-11-10 amendment, witan limits a token whose `azp` is the UI's client
+to the bound set (`witan.ui_access`), so an XSS is a read exposure only. The CSP
+in §5.2 (`default-src 'self'`, no inline script, no third-party origins) is the
+control for that, and nothing in the bundle builds HTML from graph content:
+prose renders through the token walk in §6.9, never as a string.
 
 A reader gets exactly what their agents get: per-actor scoping in
 `_resolve_client()` (`server.py:210-275`) and the Cedar bundle apply unchanged,

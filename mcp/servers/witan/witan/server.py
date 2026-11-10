@@ -26,6 +26,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.middleware import AuthMiddleware
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -61,6 +62,7 @@ from . import (
     readiness,
     scan,
     session_state,
+    ui_access,
     ui_routes,
     ui_widgets,
 )
@@ -459,6 +461,12 @@ mcp = FastMCP(
 # raised InputRequired into a *successful* result: from inside, every ordinary
 # elicitation would be recorded as a failed tool call.
 mcp.add_middleware(ObservabilityMiddleware())
+
+# The web UI's token may call only the UI's bound reads (`ui_access`). Inside
+# Observability so a refusal is recorded against the caller it refused.
+mcp.add_middleware(
+    AuthMiddleware(auth=ui_access.reads_only_for(cfg_module.ui_oidc_client_id()))
+)
 
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.

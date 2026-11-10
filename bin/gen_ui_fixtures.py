@@ -45,38 +45,6 @@ REPO = Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "mcp" / "servers" / "witan" / "ui" / "fixtures"
 SCHEMA = REPO / "mcp" / "servers" / "witan" / "schema" / "schema.pg"
 
-# ADR 0011 §3's bound set, which is the whole read surface the UI may call.
-# Adding anything here means amending the ADR first, as its 2026-09-22
-# amendment did for `memory_contradictions`.
-BOUND_TOOLS = (
-    "task_ready",
-    "task_get",
-    "task_list",
-    "task_search",
-    "workflow_project_get",
-    "workflow_project_status",
-    "workflow_project_list",
-    "workflow_session_list",
-    "recall",
-    "memory_get",
-    "memory_list",
-    "memory_search",
-    "memory_neighbors",
-    "memory_contradictions",
-    "topic_get",
-    "code_repo_dependencies",
-    "code_interface_providers",
-    "code_interface_consumers",
-)
-
-# Bound tools a server may legitimately lack: witan-code is a separate package,
-# mounted only when installed (ADR 0011, 2026-09-23 amendment). Recorded as
-# optional so the page tolerates their absence instead of failing its
-# once-per-load check against `tools/list`.
-OPTIONAL_TOOLS = frozenset(
-    {"code_repo_dependencies", "code_interface_providers", "code_interface_consumers"}
-)
-
 REPO_URI = "https://github.com/mitodl/agent-kit"
 
 # The bridge seed's repos. Fictional, so the fixtures carry nobody's code.
@@ -476,6 +444,7 @@ async def _collect(store: Path) -> dict[str, str]:
     from witan import config as cfg_mod
     from witan import graph as graph_mod
     from witan import server as srv
+    from witan.ui_access import OPTIONAL_READ_TOOLS, READ_TOOLS
 
     srv.client = graph_mod.OmnigraphClient(str(store), cfg_mod.load().queries_dir)
 
@@ -492,7 +461,9 @@ async def _collect(store: Path) -> dict[str, str]:
     async with Client(srv.mcp) as client:
         listed = await client.list_tools()
         by_name = {t.name: t for t in listed}
-        missing = [name for name in BOUND_TOOLS if name not in by_name]
+        # ADR 0011 §3's bound set, the same one that limits the deployed
+        # page's token (`witan.ui_access`).
+        missing = sorted(name for name in READ_TOOLS if name not in by_name)
         if missing:
             msg = f"bound tools are not registered on the server: {missing}"
             raise SystemExit(msg)
@@ -510,10 +481,12 @@ async def _collect(store: Path) -> dict[str, str]:
                         )
                     ),
                     "output_schema": by_name[name].output_schema,
-                    # Whether a server may lack it. See OPTIONAL_TOOLS.
-                    "optional": name in OPTIONAL_TOOLS,
+                    # Whether a server may lack it (witan-code is mounted only
+                    # when installed), so the page tolerates its absence from
+                    # `tools/list` instead of failing its once-per-load check.
+                    "optional": name in OPTIONAL_READ_TOOLS,
                 }
-                for name in BOUND_TOOLS
+                for name in READ_TOOLS
             },
             indent=2,
             sort_keys=True,
@@ -706,7 +679,7 @@ def main() -> int:
             or (FIXTURES / name).read_text() != body + "\n"
         ]
         # A fixture on disk that nothing generated any more: a tool dropped
-        # from BOUND_TOOLS leaves its recording behind, and comparing only
+        # from READ_TOOLS leaves its recording behind, and comparing only
         # what was generated would keep the gate green over a stale file.
         orphaned = {
             path.name for path in FIXTURES.glob("*.json") if path.name not in written

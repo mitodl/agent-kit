@@ -11,7 +11,8 @@
 # 11. Witan UI read transport: the UI is an MCP client, same-origin, in both modes
 
 - Status: Accepted, amended 2026-09-22 (`memory_contradictions` joins the
-  bound set)
+  bound set), 2026-09-23 (three optional code-graph reads) and 2026-11-10 (the
+  UI's token is limited to the bound set)
 - Date: 2026-09-17
 - Deciders: witan platform owners
 - Tracking: task `tk-decide-the-witan-ui-read-transport-cli-subproces-3b691b`,
@@ -394,3 +395,42 @@ Three rules keep that out:
 Jumping from a binding to its symbol's source is not in this set. The
 explorer shows the enclosing `symbol_id` and the Stage-2 `symbol` string as
 text; a symbol view is its own scope change and amends this ADR again.
+
+## Amendment (2026-11-10): the UI's token is limited to the bound set
+
+§2 said per-actor scoping and the Cedar bundle apply to a UI reader exactly as
+to an agent, with no new authorization plane. That held for _whose_ data a
+token reaches, and missed _what_ it can do with it. The page's token is an
+ordinary `aud: witan` token, and `JWTVerifier` checks only issuer, audience and
+expiry, so the credential the page holds authorized every tool, writes
+included. A script injected into the page could write to or delete from the
+shared graph as the person viewing it, even though the page itself never calls
+a write.
+
+The token already says which client it was issued to: Keycloak stamps `azp`,
+and the deployed page's tokens carry `azp: witan-ui` (spec §8 records this from
+a live login). `witan.ui_access` adds an `AuthMiddleware` check that limits a
+token whose client is `WITAN_UI_OIDC_CLIENT_ID` to §3's bound set, on
+`tools/call` and in `tools/list`. Every other client (`witan-cli`,
+`witan-desktop`) keeps every tool, and local `witan ui`, which sends no token,
+is not gated (its exposure is the unauthenticated loopback `/mcp`, which §1's
+`Origin`/`Host` validation covers). One side effect for all HTTP callers:
+fastmcp's `AuthMiddleware` resolves the tool before the check, so a call to a
+tool that does not exist now fails as "not found or not authorized".
+
+The gate holds only while no other client can be used to mint a token from the
+witan origin. Today none can: `witan-cli` has the standard flow disabled
+(device grant only) and `witan-desktop` redirects only to Claude's and
+ChatGPT's backends.
+
+`witan.ui_access.READ_TOOLS` is now the one definition of the bound set (not
+to be confused with `witan.ui_widgets.BOUND_TOOLS`, the four tools that have an
+MCP Apps widget).
+`bin/gen_ui_fixtures.py` records the page's fixtures from it, and the page
+derives its own list from those fixtures, so amending the set still means
+amending this ADR and regenerating the fixtures, and the gate moves with it.
+
+A Keycloak scope (a `witan:write` default scope on every client but the UI's)
+would also work. It was not chosen because it needs a realm change deployed
+ahead of the witan release that requires it, and a second list of which tools
+count as writes.
