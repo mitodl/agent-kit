@@ -12,15 +12,16 @@ import pytest
 
 
 def _capture(monkeypatch):
-    """Collect what the merge prints, in order."""
+    """Collect what the merge prints to either stream, in order."""
     from witan.cli import _common
 
     printed: list[str] = []
-    monkeypatch.setattr(
-        _common.console,
-        "print",
-        lambda *a, **kw: printed.append(str(a[0]) if a else ""),
-    )
+    for stream in (_common.console, _common.stderr_console):
+        monkeypatch.setattr(
+            stream,
+            "print",
+            lambda *a, **kw: printed.append(str(a[0]) if a else ""),
+        )
     return printed
 
 

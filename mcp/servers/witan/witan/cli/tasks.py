@@ -238,7 +238,7 @@ def _task_show(slug: str) -> None:
     s = _srv()
     t = _fn(s.task_get)(slug=slug)
     if not t:
-        print_error(f"No task {slug!r}.", stderr=True)
+        print_error(f"No task {slug!r}.")
         raise SystemExit(1)
     t = live_pr.annotate(t, live_pr.LINKED_FIELDS["task_get"])
 

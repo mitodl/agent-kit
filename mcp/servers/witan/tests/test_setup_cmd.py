@@ -300,7 +300,7 @@ def test_setup_exits_with_force_hint_on_a_symlinked_pi_extension(
         setup_cmd.setup(agent="pi", author="tester")
 
     assert exc.value.code == 2
-    assert "--force" in capsys.readouterr().out
+    assert "--force" in capsys.readouterr().err
     assert dest.is_symlink()
 
 
