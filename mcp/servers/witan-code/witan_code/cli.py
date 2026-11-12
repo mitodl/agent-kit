@@ -118,6 +118,24 @@ def _is_remote() -> bool:
     return _srv() is not server_module
 
 
+def print_error(message: object, *, stderr: bool = False) -> None:
+    """Print ``message`` in red, as plain text, soft-wrapped.
+
+    ``markup=False`` because a target block is written ``[qa]`` and an
+    omnigraph error quotes the query it choked on, both of which Rich would
+    read as style tags and delete. Soft-wrapped because Rich otherwise
+    hard-wraps at the console width, which is 80 when no standard stream is a
+    terminal and ``COLUMNS`` is unset (an agent's shell, a CI job): a path
+    longer than that is folded with a literal newline inside it, so the path
+    copied out of the error is not the path on disk.
+    """
+    from rich.console import Console
+
+    Console(stderr=stderr).print(
+        str(message), style="red", markup=False, soft_wrap=True
+    )
+
+
 def _render_table(
     *,
     title: str,
@@ -263,9 +281,9 @@ def _rebuild_stores(path: Path, *, yes: bool, slug: str) -> None:
     # the one argument shape most likely to be typed by accident.
     root = repo_module.git_toplevel(path if path.is_dir() else path.parent)
     if root is not None and path.resolve() != root.resolve():
-        console.print(
-            f"[red]--rebuild deletes the whole store, so it has to reindex the "
-            f"whole repo — but {path} is not the repo root.[/red] Re-run it as "
+        print_error(
+            f"--rebuild deletes the whole store, so it has to reindex the "
+            f"whole repo — but {path} is not the repo root. Re-run it as "
             f"`witan-code reindex {root} --rebuild`."
         )
         raise SystemExit(1)
@@ -302,9 +320,7 @@ def _rebuild_stores(path: Path, *, yes: bool, slug: str) -> None:
         try:
             answer = input("Continue? [y/N] ").strip().lower()
         except EOFError:
-            console.print(
-                "[red]Aborted (non-interactive; pass --yes to skip the prompt).[/red]"
-            )
+            print_error("Aborted (non-interactive; pass --yes to skip the prompt).")
             raise SystemExit(1) from None
         if answer not in ("y", "yes"):
             console.print("Aborted.")
@@ -366,8 +382,9 @@ def doctor() -> None:
     broken = [s for s in report["stores"] if not s["ok"]]
     # One error body, not one per store: they are the same failure repeated,
     # and printing 53 identical omnigraph errors is what made this invisible.
-    console.print(
-        f"\n[red]{len(broken)} of {len(report['stores'])} stores cannot be read.[/red]"
+    print_error(
+        f"\n{len(broken)} of {len(report['stores'])} stores cannot be read.",
+        stderr=get_output_format() != "txt",
     )
     # Drop the remediation paragraph the client appends to a stale-schema error
     # (`_friendly_storage_error` joins message and hint with a blank line): it
@@ -377,7 +394,7 @@ def doctor() -> None:
     # markup=False, not just escaped: an omnigraph error is arbitrary text and
     # a bracketed fragment in it must render as itself, not vanish into Rich's
     # markup parser.
-    console.print(body, markup=False)
+    console.print(body, markup=False, soft_wrap=True)
     if report["stale_schema"]:
         console.print(
             "\nRebuild each affected repo with `witan-code reindex --rebuild` "
@@ -1264,8 +1281,6 @@ def _branch_client(repo_uri: str):
 @app.command
 def repos() -> None:
     """List the repositories that have a code graph indexed."""
-    from rich.console import Console
-
     rows = _fn(_srv().code_indexed_repos)()
     table_rows: list[dict[str, object]] = [
         {
@@ -1295,9 +1310,10 @@ def repos() -> None:
     )
     if any(r.get("unreadable") for r in rows):
         # stderr under a structured format: stdout holds one parseable document.
-        Console(stderr=get_output_format() != "txt").print(
-            "[red]Some stores could not be read — `witan-code doctor` for "
-            "why.[/red] Their `code_*` tools do not return empty, they fail."
+        print_error(
+            "Some stores could not be read — `witan-code doctor` for "
+            "why. Their `code_*` tools do not return empty, they fail.",
+            stderr=get_output_format() != "txt",
         )
 
 
@@ -1356,7 +1372,7 @@ def login() -> None:
     try:
         claims = oidc.login(remote, on_prompt=_prompt)
     except oidc.RemoteAuthError as exc:
-        console.print(f"[red]Login failed:[/red] {exc}")
+        print_error(f"Login failed: {exc}")
         raise SystemExit(1) from None
     who = claims.get("preferred_username") or claims.get("sub", "?")
     console.print(f"[green]Logged in[/green] as [bold]{who}[/bold] → {remote.url}")
@@ -1470,8 +1486,6 @@ def _launcher(
 
 
 def cli() -> None:
-    from rich.console import Console
-
     from .remote.oidc import RemoteAuthError
     from .remote.proxy import (
         RemoteCredentialRejected,
@@ -1499,11 +1513,9 @@ def cli() -> None:
         RemoteToolUnavailable,
         RemoteUnreachable,
     ) as exc:
-        # markup=False — a target block is written `[qa]`, which rich parses as
-        # a style tag and swallows, taking the name of the setting to unset
-        # with it. stderr, because stdout under a structured format holds the
-        # document a consumer parses.
-        Console(stderr=True).print(str(exc), style="red", markup=False)
+        # stderr, because stdout under a structured format holds the document
+        # a consumer parses.
+        print_error(exc, stderr=True)
         raise SystemExit(1) from None
 
 

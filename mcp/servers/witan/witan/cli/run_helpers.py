@@ -11,6 +11,7 @@ from ._common import (
     _srv,
     console,
     esc,
+    print_error,
 )
 
 # The size of a claim's list, for a prompt with no claim to take one from.
@@ -78,7 +79,7 @@ def _launch_agent(
     try:
         subprocess.run(cmd, check=False)
     except FileNotFoundError:
-        console.print(f"[red]Agent {resolved_agent!r} not found on PATH.[/red]")
+        print_error(f"Agent {resolved_agent!r} not found on PATH.")
         raise SystemExit(1) from None
 
 
@@ -207,7 +208,7 @@ def _run_task_slug(
     s = _srv()
     t = _fn(s.task_get)(slug=slug)
     if not t:
-        console.print(f"[red]No task {slug!r}.[/red]")
+        print_error(f"No task {slug!r}.")
         raise SystemExit(1)
 
     open_blockers = [
@@ -234,7 +235,7 @@ def _run_task_slug(
         res = _fn(s.task_claim)(slug=slug, force=force) or {}
         if not res.get("claimed"):
             reason = res.get("held_by") or res.get("reason") or "unavailable"
-            console.print(f"[red]Could not claim {slug} ({esc(reason)}).[/red]")
+            print_error(f"Could not claim {slug} ({reason}).")
             if res.get("remedy"):
                 console.print(f"  [yellow]{esc(res['remedy'])}[/yellow]")
             raise SystemExit(1)
@@ -336,7 +337,7 @@ def _run_project_slug(
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
-        console.print(f"[red]No project {slug!r}.[/red]")
+        print_error(f"No project {slug!r}.")
         raise SystemExit(1)
 
     tasks = _fn(s.task_ready)(project_slug=slug, limit=20)

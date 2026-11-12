@@ -41,8 +41,8 @@ from ._common import (
     _split_csv,
     app,
     console,
-    notice_console,
     print_error,
+    print_notice,
     render_table,
 )
 
@@ -404,7 +404,8 @@ def _verify_issuer(issuer: str) -> None:
         console.print(
             f"[red]Could not verify OIDC issuer[/red] {issuer}\n  {exc}\n"
             "  Nothing was written. Fix the issuer, or pass [bold]--no-verify[/bold] "
-            "to register it anyway (e.g. when offline)."
+            "to register it anyway (e.g. when offline).",
+            soft_wrap=True,
         )
         raise SystemExit(1) from None
 
@@ -508,14 +509,16 @@ def add(
     if not _BARE_KEY.match(name):
         console.print(
             f"[red]Invalid target name[/red] {name!r} — use letters, digits, "
-            "underscores, and dashes only."
+            "underscores, and dashes only.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
     if not remote_url and not server:
         console.print(
             "[red]Nothing to register.[/red] Pass [bold]--remote-url[/bold] for a "
-            "deployed witan, or [bold]--server[/bold] for a local/self-hosted store."
+            "deployed witan, or [bold]--server[/bold] for a local/self-hosted store.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -525,7 +528,8 @@ def add(
         console.print(
             "[red]--remote-url needs --oidc-issuer.[/red] The CLI authenticates to a "
             "deployed witan with a per-user OIDC token; without an issuer it has "
-            "nowhere to get one."
+            "nowhere to get one.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -535,7 +539,8 @@ def add(
     if login and not remote_url:
         console.print(
             "[red]--login needs --remote-url.[/red] There is no device grant to run "
-            "against a local/self-hosted [bold]--server[/bold] target."
+            "against a local/self-hosted [bold]--server[/bold] target.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -572,14 +577,16 @@ def add(
             "[bold]--code-transport mcp[/bold] instead. "
             "[bold]--server[/bold] does not count here — that is the memory "
             "graph's store, and the code tier is resolved from "
-            "[bold]--code-server[/bold] only."
+            "[bold]--code-server[/bold] only.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
     if code_transport == "mcp" and not remote_url:
         console.print(
             "[red]--code-transport mcp needs --remote-url.[/red] mcp routes code-graph "
-            "writes through the deployed witan endpoint, so there has to be one."
+            "writes through the deployed witan endpoint, so there has to be one.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -587,7 +594,8 @@ def add(
     if name in existing and not force:
         console.print(
             f"[red]Target {name!r} already exists[/red] in {cfg_module.config_path()}. "
-            "Pass [bold]--force[/bold] to replace it, or pick another name."
+            "Pass [bold]--force[/bold] to replace it, or pick another name.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -639,7 +647,8 @@ def add(
                 # style tag and swallow it.
                 f"[red]Could not locate the \\[targets.{name}] block[/red] in {path} "
                 "to replace it — its header is written in a form this command cannot "
-                "rewrite safely. Edit or delete it by hand, then re-run."
+                "rewrite safely. Edit or delete it by hand, then re-run.",
+                soft_wrap=True,
             )
             raise SystemExit(1)
     else:
@@ -830,7 +839,8 @@ def set_(
     if not updates:
         console.print(
             "[red]Nothing to set.[/red] Name at least one key, e.g. "
-            f"[bold]witan target set {name} --code-transport mcp[/bold]."
+            f"[bold]witan target set {name} --code-transport mcp[/bold].",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -844,12 +854,13 @@ def set_(
         console.print(
             f"[red]No target {name!r}[/red] in {cfg_module.config_path()}. "
             f"Available: {available}\n"
-            "  Register it first with [bold]witan target add[/bold]."
+            "  Register it first with [bold]witan target add[/bold].",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
     if error := _merged_invariant_error({**tables[name], **updates}, set(updates)):
-        console.print(error)
+        console.print(error, soft_wrap=True)
         raise SystemExit(1)
 
     path = cfg_module.config_path()
@@ -860,7 +871,8 @@ def set_(
         console.print(
             f"[red]{exc.args[0]} is written across several lines[/red] in {path}, "
             "which this command cannot rewrite safely. Collapse it onto one line "
-            "(or edit it by hand), then re-run."
+            "(or edit it by hand), then re-run.",
+            soft_wrap=True,
         )
         raise SystemExit(1) from None
     if not found:
@@ -870,7 +882,8 @@ def set_(
         console.print(
             f"[red]Could not locate the \\[targets.{name}] block[/red] in {path} "
             "to amend it — its header is written in a form this command cannot "
-            "rewrite safely. Edit it by hand, then re-run."
+            "rewrite safely. Edit it by hand, then re-run.",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
@@ -883,7 +896,8 @@ def set_(
     except (ValueError, tomllib.TOMLDecodeError) as exc:
         console.print(
             f"[red]Refusing to write — the result would not parse:[/red] {exc}\n"
-            f"  {path} is unchanged."
+            f"  {path} is unchanged.",
+            soft_wrap=True,
         )
         raise SystemExit(1) from None
 
@@ -932,7 +946,7 @@ def list_targets() -> None:
     if pinned := os.environ.get("WITAN_TARGET"):
         selected = next((t for t in targets if t.name == pinned), None)
         if selected is None:
-            notice_console().print(
+            print_notice(
                 f"[yellow]WITAN_TARGET={pinned!r} is not a configured target[/yellow] "
                 "— no target is in effect."
             )
@@ -988,7 +1002,8 @@ def remove(name: str, *, dry_run: bool = False) -> None:
     if not removed:
         available = ", ".join(_existing_names()) or "(none defined)"
         console.print(
-            f"[red]No target {name!r}[/red] in {path}. Available: {available}"
+            f"[red]No target {name!r}[/red] in {path}. Available: {available}",
+            soft_wrap=True,
         )
         raise SystemExit(1)
 
