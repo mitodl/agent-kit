@@ -42,30 +42,6 @@ gh pr view --json url,title,state 2>/dev/null
   Don't create a duplicate.
 - If there are no commits ahead of the base, warn the user before proceeding.
 
-Then collect the branch's impact context if witan-code is installed. It
-takes about a minute against a deployment, so start it now (in the
-background where the platform allows) and read it before Step 2:
-
-```bash
-if command -v witan >/dev/null 2>&1 && witan code diff-impact --help >/dev/null 2>&1; then
-  witan code diff-impact --base origin/<base> --head HEAD
-elif command -v witan-code >/dev/null 2>&1 && witan-code diff-impact --help >/dev/null 2>&1; then
-  witan-code diff-impact --base origin/<base> --head HEAD
-else
-  echo "witan-code diff-impact not available; skipping impact context"
-fi
-```
-
-It lists the symbols the branch changes and, for each, its callers, the
-bindings in other repos that share its env vars, endpoints and packages,
-the test files that name it ("tests to run (stand-in)"), and the witan
-tasks and memories that cite it, plus the tasks claimed on this branch.
-Every list carries its total, and its notes say what it cannot see
-(callers are same-file only, an unindexed repo, symbols missing from the
-index). Read those before treating an empty list as "no impact". When
-the command is missing, say so once and carry on; nothing below depends
-on it.
-
 ## Step 2 — Gather PR metadata
 
 Ask the user for each field in a **single batched question**, rather than
@@ -77,7 +53,7 @@ inferring the body and asking them to correct it:
 | **Linked tickets** | Ask for issue numbers (Closes #, Fixes #, or N/A) |
 | **Description** | Ask what the PR does; summarise from commits only if the user says "summarise"; summary should be short and high level; put detailed technical explanation of the PR in the `<details>` block |
 | **Screenshots** | Ask only when the diff touches UI code. Check `gh --version`: on 2.99 or later, get the image files (a `screenshot-pr` run in this session already gives them) and draft alt text for each for the user to correct; they upload with the PR in Step 5. On an older gh, leave images out of the body and tell the user to drag them in after the PR is created |
-| **Testing notes** | Ask how the changes were tested and how a reviewer can validate. If Step 1's impact context listed tests to run or cross-repo consumers, show those with the question as a prompt, not as an answer |
+| **Testing notes** | Ask how the changes were tested and how a reviewer can validate |
 | **Additional context** | Ask for reviewer notes, caveats, or checklist items |
 | **Draft?** | Ask if this should be a draft PR (default: no; suggest yes if the user calls it a work in progress) |
 
@@ -207,10 +183,7 @@ inherits the whole conversation, and `Explore` reads excerpts to locate
 code rather than tracing a finding end to end. Give it only the repo path,
 branch, base branch, and goals, and tell it not to edit files. Don't pass
 the implementation reasoning, the drafted body, or a summary of what the
-diff does. Do pass Step 1's impact context output verbatim when there is
-one: it is computed from the diff and the code graph rather than written
-by this session, and it tells the reviewer which callers and other-repo
-consumers sit one hop out. Tell it to review adversarially: for each goal, find the case
+diff does. Tell it to review adversarially: for each goal, find the case
 the diff fails; for each new input path, find the attacker who reaches it.
 Adversarial means where to look, not a lower bar; the skill's default
 depth and verification pass still decide what gets reported.
