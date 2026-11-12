@@ -173,7 +173,7 @@ def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
         repo="https://github.com/test/a",
     )
     unscoped = server.task_create(
-        title="quokka narwhal unscoped", description="x", repo=""
+        title="quokka narwhal unscoped", description="x", all_repos=True
     )
 
     hits = {
@@ -209,13 +209,17 @@ def test_task_search_project_slug_spans_repos(server):
 
 @requires_omnigraph
 def test_task_search_assignee_at_me(server):
-    mine = server.task_create(title="quokka narwhal mine", description="x", repo="")
-    theirs = server.task_create(title="quokka narwhal theirs", description="x", repo="")
-    server.task_create(title="quokka narwhal nobody", description="x", repo="")
+    mine = server.task_create(
+        title="quokka narwhal mine", description="x", all_repos=True
+    )
+    theirs = server.task_create(
+        title="quokka narwhal theirs", description="x", all_repos=True
+    )
+    server.task_create(title="quokka narwhal nobody", description="x", all_repos=True)
     server.task_claim(mine["slug"])
     server.task_claim(theirs["slug"], assignee="someone-else")
 
-    hits = server.task_search("quokka narwhal", repo="", assignee="@me")
+    hits = server.task_search("quokka narwhal", all_repos=True, assignee="@me")
     assert [h["slug"] for h in hits] == [mine["slug"]]
 
 
@@ -226,24 +230,26 @@ def test_task_search_filters_reach_past_the_unfiltered_cap(server):
     proj = server.workflow_project_create(title="P", description="d", phase="spec")
     for i in range(22):
         server.task_create(
-            title=f"quokka narwhal {i}", description="quokka narwhal quokka", repo=""
+            title=f"quokka narwhal {i}",
+            description="quokka narwhal quokka",
+            all_repos=True,
         )
     buried = server.task_create(
         title="unrelated title",
         description="a long description that mentions a quokka only once, "
         "somewhere among a great many other words about compaction",
-        repo="",
+        all_repos=True,
         project_slug=proj["slug"],
     )
     server.task_claim(buried["slug"], assignee="agentA")
 
-    unfiltered = [h["slug"] for h in server.task_search("quokka", repo="")]
+    unfiltered = [h["slug"] for h in server.task_search("quokka", all_repos=True)]
     assert len(unfiltered) == 20
     assert buried["slug"] not in unfiltered
 
     by_project = server.task_search("quokka", project_slug=proj["slug"])
     assert [h["slug"] for h in by_project] == [buried["slug"]]
-    by_assignee = server.task_search("quokka", repo="", assignee="agentA")
+    by_assignee = server.task_search("quokka", all_repos=True, assignee="agentA")
     assert [h["slug"] for h in by_assignee] == [buried["slug"]]
 
 

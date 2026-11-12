@@ -357,7 +357,7 @@ nodes, not on the aggregate trace.
 ```text
 workflow_project_list()                       # active projects in this repo
 workflow_project_list(status="completed")     # completed projects in this repo
-workflow_project_list(repo="")                # active projects across all repos
+workflow_project_list(all_repos=True)         # active projects across all repos
 ```
 
 ## Parallel Sessions

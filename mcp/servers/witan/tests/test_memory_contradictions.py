@@ -7,8 +7,10 @@ ELSEWHERE = "https://github.com/test/other"
 
 
 def _memory(server, title, repo=HERE):
+    """Store a pattern under ``repo``, or under no repo when it is ``None``."""
+    scope = {"repo": repo} if repo else {"all_repos": True}
     return server.memory_store(
-        kind="pattern", title=title, content=f"{title} content", repo=repo
+        kind="pattern", title=title, content=f"{title} content", **scope
     )["slug"]
 
 
@@ -18,7 +20,7 @@ def _pairs(rows):
 
 @requires_omnigraph
 def test_empty_graph_is_an_empty_list(server):
-    assert server.memory_contradictions(repo="") == []
+    assert server.memory_contradictions(all_repos=True) == []
 
 
 @requires_omnigraph
@@ -60,7 +62,7 @@ def test_other_edge_kinds_are_not_contradictions(server):
     b = _memory(server, "beta")
     server.memory_link(a, b, "related_to")
 
-    assert server.memory_contradictions(repo="") == []
+    assert server.memory_contradictions(all_repos=True) == []
 
 
 @requires_omnigraph
@@ -118,7 +120,7 @@ def test_repo_scoping_keeps_a_pair_that_touches_the_repo(server):
     assert sorted(_pairs(server.memory_contradictions(repo=ELSEWHERE)), key=sorted) == (
         sorted([{here, there}, {there, there_too}], key=sorted)
     )
-    assert len(server.memory_contradictions(repo="")) == 2
+    assert len(server.memory_contradictions(all_repos=True)) == 2
 
 
 @requires_omnigraph
@@ -139,7 +141,7 @@ def test_no_repo_detected_keeps_only_pairs_touching_an_unscoped_memory(
 ):
     """Nothing detected is not the same as all repos: a caller with no repo
     context sees only what nobody scoped, as with `memory_list`."""
-    unscoped = _memory(server, "unscoped", repo="")
+    unscoped = _memory(server, "unscoped", repo=None)
     here = _memory(server, "here")
     there = _memory(server, "there", repo=ELSEWHERE)
     server.memory_link(unscoped, here, "contradicts")
@@ -162,12 +164,12 @@ def test_superseding_either_side_resolves_the_pair(server):
     replacement = _memory(server, "alpha, corrected")
     server.memory_link(replacement, a, "supersedes")
 
-    assert _pairs(server.memory_contradictions(repo="")) == [{c, d}]
+    assert _pairs(server.memory_contradictions(all_repos=True)) == [{c, d}]
     assert {c, d} in _pairs(
-        server.memory_contradictions(repo="", include_superseded=True)
+        server.memory_contradictions(all_repos=True, include_superseded=True)
     )
     assert {a, b} in _pairs(
-        server.memory_contradictions(repo="", include_superseded=True)
+        server.memory_contradictions(all_repos=True, include_superseded=True)
     )
 
 
@@ -178,8 +180,8 @@ def test_agrees_with_recall_on_a_superseded_pair(server):
     server.memory_link(a, b, "contradicts")
     server.memory_link(_memory(server, "shared words gamma"), a, "supersedes")
 
-    assert server.recall(query="shared words", repo="")["contradictions"] == []
-    assert server.memory_contradictions(repo="") == []
+    assert server.recall(query="shared words", all_repos=True)["contradictions"] == []
+    assert server.memory_contradictions(all_repos=True) == []
 
 
 @requires_omnigraph
@@ -222,9 +224,9 @@ def test_agrees_with_recall_on_pairs_expansion_pulls_in_from_another_repo(server
 @requires_omnigraph
 def test_recall_with_no_repo_detected_reports_every_returned_pair(server, monkeypatch):
     """With nothing detected, recall's query seed spans every repo, so it reports
-    every pair among its result, as with repo="". The inbox keeps only pairs
+    every pair among its result, as with all_repos. The inbox keeps only pairs
     touching an unscoped memory: the one mode where the two disagree."""
-    unscoped = _memory(server, "wombat unscoped", repo="")
+    unscoped = _memory(server, "wombat unscoped", repo=None)
     here = _memory(server, "wombat here")
     there = _memory(server, "wombat there", repo=ELSEWHERE)
     server.memory_link(unscoped, here, "contradicts")

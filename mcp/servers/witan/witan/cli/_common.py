@@ -144,13 +144,13 @@ def _fn(tool):
     return fn
 
 
-def _repo_arg(repo: str | None, all_repos: bool) -> str | None:
-    """Map --repo/--all-repos to the server tools' ``repo`` parameter.
+def _repo_arg(repo: str | None, all_repos: bool) -> dict:
+    """Map --repo/--all-repos to the server tools' ``repo``/``all_repos`` keywords.
 
-    ``""`` means all repos; ``None`` means detect the current repo; a string
-    scopes to that repo.
+    ``--all-repos`` wins over ``--repo``; ``repo=None`` means detect the current
+    repo.
     """
-    return "" if all_repos else repo
+    return {"all_repos": True} if all_repos else {"repo": repo}
 
 
 def _split_csv(items: list[str] | None) -> list[str] | None:

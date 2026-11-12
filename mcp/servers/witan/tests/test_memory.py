@@ -182,9 +182,8 @@ def test_title_search_on_the_unscoped_query_paths(server):
     """Cover `search_memories_title` with a null `$repo`.
 
     The `server` fixture sets `WITAN_REPO`, so every other test here passes a
-    repo and the `$repo is null` arm would never run. `repo=""` is the
-    documented way to ask for no repo scope, and must reach the query as
-    null: as `""` it would match no memory at all.
+    repo and the `$repo is null` arm would never run. `all_repos=True` is the
+    way to ask for no repo scope, and must reach the query as null.
     """
     lesson = server.memory_store(
         kind="lesson", title="zebrafish quokka", content="unrelated prose"
@@ -194,11 +193,11 @@ def test_title_search_on_the_unscoped_query_paths(server):
     )
 
     # No repo, no kind.
-    found = {h["slug"] for h in server.memory_search("zebrafish", repo="")}
+    found = {h["slug"] for h in server.memory_search("zebrafish", all_repos=True)}
     assert {lesson["slug"], pattern["slug"]} <= found
 
     # No repo, with kind.
-    hits = server.memory_search("zebrafish", repo="", kind="lesson")
+    hits = server.memory_search("zebrafish", all_repos=True, kind="lesson")
     assert [h["slug"] for h in hits] == [lesson["slug"]]
 
 
@@ -324,7 +323,7 @@ def test_supersedes_hides_old_from_list(server):
     for listed in (
         server.memory_list(),
         server.memory_list(kind="pattern"),
-        server.memory_list(repo=""),
+        server.memory_list(all_repos=True),
     ):
         slugs = {m["slug"] for m in listed}
         assert old["slug"] not in slugs
@@ -338,8 +337,8 @@ def test_supersedes_hides_old_from_list(server):
 @pytest.mark.parametrize("kind", [None, "pattern"])
 def test_supersedes_hides_old_from_the_slim_listing(server, monkeypatch, kind):
     """The slim path reads the unbounded listings, which prune in the query."""
-    old = server.memory_store(kind="pattern", title="old", content="a", repo="")
-    new = server.memory_store(kind="pattern", title="new", content="b", repo="")
+    old = server.memory_store(kind="pattern", title="old", content="a", all_repos=True)
+    new = server.memory_store(kind="pattern", title="new", content="b", all_repos=True)
     server.memory_link(new["slug"], old["slug"], "supersedes")
     monkeypatch.setenv("WITAN_REPO", "")
 
@@ -355,7 +354,12 @@ def test_supersedes_hides_old_from_the_slim_listing(server, monkeypatch, kind):
 @requires_omnigraph
 @pytest.mark.parametrize(
     ("kwargs"),
-    [{}, {"kind": "pattern"}, {"repo": ""}, {"repo": "", "kind": "pattern"}],
+    [
+        {},
+        {"kind": "pattern"},
+        {"all_repos": True},
+        {"all_repos": True, "kind": "pattern"},
+    ],
 )
 def test_superseded_rows_do_not_shorten_a_full_list(server, kwargs):
     """Pruning after the 100-row cap handed back fewer than 100 rows while

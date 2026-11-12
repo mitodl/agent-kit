@@ -106,10 +106,11 @@ context into new sessions.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted.<br>Pass an empty string to list projects across all repos. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted. |
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active``. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery`? | `null` | Optional phase filter applied after fetching. |
 | `ready` | bool | `False` | When ``True``, only return active projects whose blockers are all<br>completed (i.e. projects that are unblocked and actionable). |
+| `all_repos` | bool | `False` | List projects across all repos instead of filtering to one. |
 
 ## `workflow_project_search`
 
@@ -124,8 +125,9 @@ its response.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Free-text search query. |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted;<br>pass ``""`` to search across all repos. Applied in Python after the<br>BM25 fetch (``repos`` is a list, not match-filterable) — the<br>underlying query is unbounded so this filter sees every match, not<br>just a small top-N, then the real ``limit 20`` is applied after. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted.<br>Applied in Python after the BM25 fetch (``repos`` is a list, not match-filterable) — the<br>underlying query is unbounded so this filter sees every match, not<br>just a small top-N, then the real ``limit 20`` is applied after. |
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active`` — the useful default for a dedup check is<br>"is someone already working on this." |
+| `all_repos` | bool | `False` | Search projects across all repos instead of filtering to one. |
 
 ## `workflow_project_update`
 
@@ -331,6 +333,7 @@ read them from.
 | `repo` | str? | `null` | Repo scoping — see instructions. |
 | `branch` | str? | `null` | The git branch the caller is on, for the ``CodeBranch`` above. Filled<br>in client-side by the remote proxy; omitted, the server falls back to<br>its own working directory, which is right under local stdio and empty<br>under a deployment. |
 | `tags` | list[str]? | `null` | Optional tags. |
+| `all_repos` | bool | `False` | Record the session under no repo — see instructions. |
 
 ## `workflow_session_end`
 
@@ -384,10 +387,11 @@ went end to end).
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each trace's<br>repo set). Auto-detected from ``.git/config`` if omitted. Pass an<br>empty string to list traces across all repos. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each trace's<br>repo set). Auto-detected from ``.git/config`` if omitted. |
 | `tags` | list[str]? | `null` | Only return traces that carry ALL of these tags. |
 | `author` | str? | `null` | Only return traces created by this author. |
 | `limit` | int | `50` | Max rows to return (applied after filtering). |
+| `all_repos` | bool | `False` | List traces across all repos instead of filtering to one. |
 
 ## `workflow_trace_get`
 

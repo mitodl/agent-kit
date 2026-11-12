@@ -37,7 +37,7 @@ def traces(
     """List corpus workflow traces (default: current repo)."""
     s = _srv()
     rows = _fn(s.workflow_trace_list)(
-        repo=_repo_arg(repo, all_repos), tags=tags, author=author, limit=limit
+        tags=tags, author=author, limit=limit, **_repo_arg(repo, all_repos)
     )
     detected_repo = (
         _detect_repo_for_display() if not all_repos and repo is None else repo

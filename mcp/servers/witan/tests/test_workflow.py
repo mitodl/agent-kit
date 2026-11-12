@@ -208,7 +208,7 @@ def test_list_across_all_repos_with_empty_repo(server):
     p2 = server.workflow_project_create(
         title="B", description="d", repos=["https://github.com/x/two"]
     )
-    all_active = {p["slug"] for p in server.workflow_project_list(repo="")}
+    all_active = {p["slug"] for p in server.workflow_project_list(all_repos=True)}
     assert {p1["slug"], p2["slug"]} <= all_active
 
 
@@ -466,14 +466,18 @@ def test_blocked_project_not_ready(server):
 
     server.workflow_project_block(upstream["slug"], downstream["slug"])
 
-    ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    ready = {
+        p["slug"] for p in server.workflow_project_list(ready=True, all_repos=True)
+    }
     # upstream is ready (no blockers), downstream is not
     assert upstream["slug"] in ready
     assert downstream["slug"] not in ready
 
     # complete the upstream; now downstream becomes ready
     server.workflow_project_complete(upstream["slug"], outcome="shipped")
-    ready_after = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    ready_after = {
+        p["slug"] for p in server.workflow_project_list(ready=True, all_repos=True)
+    }
     assert downstream["slug"] in ready_after
 
 
@@ -486,7 +490,9 @@ def test_blocking_completed_project_does_not_block(server):
     server.workflow_project_complete(upstream["slug"], outcome="done")
     server.workflow_project_block(upstream["slug"], downstream["slug"])
 
-    ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    ready = {
+        p["slug"] for p in server.workflow_project_list(ready=True, all_repos=True)
+    }
     assert downstream["slug"] in ready
 
 
@@ -498,7 +504,7 @@ def test_list_blocked_projects_includes_blocked_by(server):
 
     server.workflow_project_block(blocker["slug"], blocked["slug"])
 
-    rows = server.workflow_project_list(status="active", repo="")
+    rows = server.workflow_project_list(status="active", all_repos=True)
     blocked_row = next((r for r in rows if r["slug"] == blocked["slug"]), None)
     assert blocked_row is not None
     assert blocker["slug"] in (blocked_row.get("blocked_by") or [])
@@ -522,10 +528,10 @@ def test_trace_list_filters_by_repo_tags_author(server):
     by_repo = server.workflow_trace_list(repo="https://github.com/x/one")
     assert {t["slug"] for t in by_repo} == {f"wt-{proj['slug']}"}
 
-    by_tag = server.workflow_trace_list(repo="", tags=["alpha"])
+    by_tag = server.workflow_trace_list(all_repos=True, tags=["alpha"])
     assert {t["slug"] for t in by_tag} == {f"wt-{proj['slug']}"}
 
-    by_author = server.workflow_trace_list(repo="", author="nobody")
+    by_author = server.workflow_trace_list(all_repos=True, author="nobody")
     assert by_author == []
 
 
@@ -537,7 +543,7 @@ def test_trace_list_tags_as_bare_string_is_coerced(server):
     )
     server.workflow_project_complete(proj["slug"], outcome="done")
 
-    rows = server.workflow_trace_list(repo="", tags="alpha")
+    rows = server.workflow_trace_list(all_repos=True, tags="alpha")
     assert {t["slug"] for t in rows} == {f"wt-{proj['slug']}"}
 
 
@@ -598,7 +604,7 @@ def test_mine_trace_with_proposals_creates_memories_and_links_project(server):
     assert len(created["created_patterns"]) == 1
     assert len(created["created_lessons"]) == 1
 
-    trace = server.workflow_trace_list(repo="")
+    trace = server.workflow_trace_list(all_repos=True)
     tr = next(t for t in trace if t["slug"] == trace_slug)
     assert tr["patterns_slug"] == created["created_patterns"]
     assert tr["lessons_slug"] == created["created_lessons"]

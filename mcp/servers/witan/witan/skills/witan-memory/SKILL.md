@@ -97,7 +97,8 @@ memory_list(kind="project_fact")  # structural facts, this repo
 memory_list(kind="pattern", language="python")  # conventions before coding
 ```
 
-Scoping: auto-detects the current repo; pass `repo=""` for all repos. With no
+Scoping: auto-detects the current repo; pass `all_repos=True` for all repos
+(never an empty `repo`, which is refused). With no
 repo detected and none passed it returns slim records (slug, kind, title, tags —
 no content); `memory_get` a slug for its full content.
 
