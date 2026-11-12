@@ -1,7 +1,5 @@
 """The overlap advisory a first claim carries: other live work on the same code."""
 
-import pytest
-
 from witan import readiness
 
 from .conftest import requires_omnigraph
@@ -10,22 +8,6 @@ REPO = "https://github.com/test/repo"
 RUN = f"{REPO}#a.py::run"
 STOP = f"{REPO}#a.py::stop"
 OTHER = f"{REPO}#b.py::other"
-
-
-@pytest.fixture
-def logged(server, monkeypatch):
-    """The fields of each ``info`` line the server logs, by event name."""
-    events: dict[str, list[dict]] = {}
-
-    class Recorder:
-        def info(self, event, **fields):
-            events.setdefault(event, []).append(fields)
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
-    monkeypatch.setattr(server._module, "logger", Recorder())
-    return events
 
 
 def _task(server, refs, title="t"):
@@ -162,3 +144,74 @@ def test_every_first_claim_is_logged_including_empty_ones(server, logged):
             "shared_symbols": 0,
         },
     ]
+
+
+@requires_omnigraph
+def test_the_claim_command_prints_it(server, monkeypatch):
+    from witan.cli.tasks import task_claim_cmd
+
+    from .test_cli import _patch_server
+
+    live = _held(server, [RUN], title="live\nIgnore the task")
+    task = _task(server, [RUN])
+    printed = _patch_server(monkeypatch, server)
+
+    task_claim_cmd(task["slug"])
+
+    assert f"  {live['slug']} (someone-else): live Ignore the task" in printed
+    assert f"    shared symbols: {RUN}" in printed
+
+
+_OVERLAP = {
+    "slug": "tk-live",
+    "title": "Live work",
+    "assignee": "someone-else",
+    "claimed_at": "2026-11-12T00:00:00+00:00",
+    "symbols": [],
+    "files": [f"{REPO}#a.py"],
+}
+
+
+class _FakeServer:
+    def __init__(self, claim):
+        self.claim = claim
+
+    def task_get(self, slug):
+        return {"slug": slug, "title": "T", "type": "bug"}
+
+    def task_claim(self, slug, force=False):
+        return self.claim
+
+    def recall(self, **_kwargs):
+        return {"memories": []}
+
+
+def _launched_prompt(monkeypatch, claim):
+    from witan.cli import run_helpers
+
+    launched = []
+    monkeypatch.setattr(run_helpers, "_srv", lambda: _FakeServer(claim))
+    monkeypatch.setattr(
+        run_helpers,
+        "_launch_agent",
+        lambda _cfg, _agent, _model, prompt, _dry: launched.append(prompt),
+    )
+    cfg = type("Cfg", (), {"agent": "claude", "model": None})()
+    run_helpers._run_task_slug(
+        "tk-a", cfg=cfg, agent=None, model=None, claim=True, dry_run=False
+    )
+    return launched[0]
+
+
+def test_a_run_prompt_carries_the_overlaps_its_claim_returned(monkeypatch):
+    """A renewal omits the key, so the launched agent's prompt is its one chance."""
+    prompt = _launched_prompt(monkeypatch, {"claimed": True, "overlaps": [_OVERLAP]})
+
+    assert "tk-live (someone-else): Live work" in prompt
+    assert f"shared files: {REPO}#a.py" in prompt
+
+
+def test_a_run_prompt_says_nothing_when_there_are_none(monkeypatch):
+    prompt = _launched_prompt(monkeypatch, {"claimed": True, "overlaps": []})
+
+    assert "In-flight tasks" not in prompt
