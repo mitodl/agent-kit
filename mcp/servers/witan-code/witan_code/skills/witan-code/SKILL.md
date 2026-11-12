@@ -32,6 +32,10 @@ Reach for `code_*` tools when the question is **structural**, not textual:
 - "Where is `Service.run` defined?" → `code_find_definition` / `code_search_symbol`
 - "What calls this function, anywhere in the repo?" → `code_callers` / `code_find_references`
 - "If I change this, what breaks?" (transitive blast radius) → `code_impact`
+- "What does this whole branch affect?" → `witan code diff-impact --base origin/main`
+  (a CLI command, not a tool: maps the diff to changed symbols, then lists
+  each one's callers, cross-repo bindings, test files naming it, and the
+  witan tasks and memories citing it)
 - "What symbols does this file define?" → `code_symbols_in_file`
 - "Which other repo reads this env var / calls this endpoint / imports this package?" → `code_interface_consumers` / `code_interface_providers` / `code_cross_repo_impact`
 

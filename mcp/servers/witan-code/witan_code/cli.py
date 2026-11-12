@@ -32,7 +32,13 @@ from witan_core.cli import (
 from witan_core.elicit import with_console_ctx
 
 from . import indexer
-from .output import OutputFormat, dump_structured, get_output_format, set_output_format
+from .output import (
+    OutputFormat,
+    dump_payload,
+    dump_structured,
+    get_output_format,
+    set_output_format,
+)
 
 app = make_app(
     name="witan-code",
@@ -498,22 +504,7 @@ def symbols(
     """
     from rich.markup import escape
 
-    from . import repo as repo_module
-    from . import store as store_module
-
-    # Resolved here, not server-side: a deployment has no checkout to detect
-    # from, and the table title names the repo either way. A remote dispatch
-    # reads deployed graphs, none keyed by a directory name, even when this
-    # machine's own code store is local (a target with only `remote_url`).
-    repo = repo or (
-        repo_module.detect(dirname_fallback=False)
-        if _is_remote()
-        else store_module.detect_repo()
-    )
-    if not repo:
-        print("No repo detected — pass --repo <canonical URI>.", file=sys.stderr)
-        raise SystemExit(1)
-
+    repo = _current_repo(repo)
     rows = _fn(_srv().code_repo_symbols)(repo=repo, role=role, scheme=scheme)
     table_rows: list[dict[str, object]] = []
     for r in rows:
@@ -539,6 +530,123 @@ def symbols(
         rows=table_rows,
         empty=f"[dim]No symbol table rows for {escape(repo)}.[/dim]",
     )
+
+
+def _current_repo(repo: str | None) -> str:
+    """``repo`` if given, else the checkout's canonical URI; exit if neither."""
+    from . import repo as repo_module
+    from . import store as store_module
+
+    # Resolved here, not server-side: a deployment has no checkout to detect
+    # from. A remote dispatch reads deployed graphs, none keyed by a directory
+    # name, even when this machine's own code store is local (a target with
+    # only `remote_url`).
+    repo = repo or (
+        repo_module.detect(dirname_fallback=False)
+        if _is_remote()
+        else store_module.detect_repo()
+    )
+    if not repo:
+        print("No repo detected — pass --repo <canonical URI>.", file=sys.stderr)
+        raise SystemExit(1)
+    return repo
+
+
+def _work_tool():
+    """witan (council)'s tool lookup, or ``None`` when witan is not installed.
+
+    witan-code does not depend on witan; under ``witan code …`` both are
+    installed and witan's launcher has already bound its target, so this
+    dispatches to the same deployment as ``witan tasks``.
+    """
+    try:
+        from witan.cli._common import _fn as work_fn
+        from witan.cli._common import _srv as work_srv
+    except ImportError:
+        return None
+    srv = work_srv()
+    if hasattr(srv, "prime_tool_schema"):  # a deployment, not the local module
+        srv.prime_tool_schema()
+    return lambda name: work_fn(getattr(srv, name))
+
+
+@app.command(name="diff-impact")
+def diff_impact(
+    base: str = "origin/main",
+    head: str = "HEAD",
+    *,
+    repo: str | None = None,
+    limit: int = 25,
+    max_items: int = 10,
+) -> None:
+    """What a branch's diff touches: changed symbols, callers, consumers, work.
+
+    Maps the diff between ``head`` and its merge base with ``base`` to the
+    symbols it changes, by parsing both sides of each changed file with the
+    indexer's parser. For each changed symbol it lists callers (two levels,
+    from the default branch's index), the test files that call or name it
+    as a stand-in for tests to run, bindings in other repos that share its
+    env vars, endpoints and packages, and the witan tasks and memories that
+    cite it, plus the tasks claimed on the head branch. Changed test files
+    are listed by file, not looked up. Every list carries its total, and
+    the notes say what the answer cannot see (an unindexed repo, symbols
+    missing from the index, callers in other files or only on this branch).
+    Tasks and memories need witan (council) installed alongside.
+
+    Parameters
+    ----------
+    base:
+        The ref the branch merges into.
+    head:
+        The ref under review.
+    repo:
+        Canonical repo URI. Defaults to the repo detected from the CWD.
+    limit:
+        Most changed symbols to look up; the rest are counted, not listed.
+    max_items:
+        Most callers, tests, consumers, tasks or memories listed per symbol.
+    """
+    import subprocess
+
+    from . import diff_impact as diff_module
+
+    repo = _current_repo(repo)
+    cwd = Path.cwd()
+    try:
+        merge_base, files = diff_module.git_diff_files(base, head, cwd)
+    except subprocess.CalledProcessError as exc:
+        print_error(f"git {' '.join(exc.cmd[1:])} failed: {exc.stderr.strip()}")
+        raise SystemExit(1) from None
+    symbols, unparsed = diff_module.changed_symbols(
+        files,
+        repo=repo,
+        read_blob=diff_module.git_blob_reader(cwd, merge_base, head),
+    )
+    if _is_remote():
+        # Lookups fan out across threads; list the deployment's tools once
+        # first rather than once per thread.
+        _srv().prime_tool_schema()
+    report = diff_module.build_report(
+        symbols,
+        unparsed,
+        repo=repo,
+        branch=diff_module.branch_name(head, cwd),
+        code=lambda name: _fn(getattr(_srv(), name)),
+        work=_work_tool(),
+        test_mentions=diff_module.git_test_mentions(cwd, head),
+        limit=limit,
+        max_items=max_items,
+    )
+    report["base"], report["head"], report["merge_base"] = base, head, merge_base
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_payload(report, fmt)
+        return
+    header = (
+        f"diff-impact {base}...{head} (merge base {merge_base[:12]}, "
+        f"{len(files)} files changed)"
+    )
+    print(diff_module.render_text(report, header=header), end="")
 
 
 @app.command

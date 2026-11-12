@@ -78,6 +78,38 @@ State which of these applied before reporting findings — "reviewing the
 diff between `main` and `feature-x`" — so the reader isn't guessing what
 was actually in scope.
 
+## Impact context (optional)
+
+When the review target is a commit range (rule 2, or rule 4 after `git
+fetch origin pull/<n>/head`) and witan-code is installed, run it once
+before reading the diff:
+
+```bash
+if command -v witan >/dev/null 2>&1 && witan code diff-impact --help >/dev/null 2>&1; then
+  witan code diff-impact --base <base-ref> --head <head-ref>
+elif command -v witan-code >/dev/null 2>&1 && witan-code diff-impact --help >/dev/null 2>&1; then
+  witan-code diff-impact --base <base-ref> --head <head-ref>
+else
+  echo "witan-code diff-impact not available; skipping impact context"
+fi
+```
+
+`<head-ref>` is the branch, or `FETCH_HEAD` for a PR. It lists the
+symbols the diff changes and, for each, its callers, the cross-repo
+bindings that share its env vars, endpoints and packages, the test files
+that name it ("tests to run (stand-in)"), and the witan tasks and
+memories that cite it. Use it to pick where "one hop out" goes: a changed
+signature's callers, a removed symbol's callers, a consumer in another
+repo. Read its notes before relying on an empty list. Callers are
+same-file only and come from the default branch's index, so an empty
+caller list is not evidence that nothing calls the symbol; grep before
+dropping a finding on that basis. Against a deployment it takes about a
+minute for a 20-symbol diff, so start it first. Its output is context
+for where to look, not a finding: everything it points at still goes
+through the [verification pass](#verification-pass). Skip this section
+for working-tree and path targets, and say in the report when it was
+skipped because the command was missing.
+
 ## Stated goals
 
 The goal-alignment dimension needs something to align against. Goals
@@ -345,7 +377,8 @@ pass are never applied.
 Needs `git` (always) and, for PR-number targets or fetching goals from
 linked issues, `gh` authenticated against those repos. No MCP server, no witan dependency, no repo-specific
 tooling beyond that — the scope-resolution rules above work from any
-checkout.
+checkout. [Impact context](#impact-context-optional) uses witan-code's
+CLI when it is installed and is skipped when it is not.
 
 A subagent tool is optional. The skeptic pass uses one where the platform
 provides it and otherwise runs inline, as described under [Skeptic
