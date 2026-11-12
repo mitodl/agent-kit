@@ -17,6 +17,22 @@ def no_floor(server, monkeypatch):
     )
 
 
+@pytest.fixture
+def logged(server, monkeypatch):
+    """The fields of each ``info`` line the server logs, by event name."""
+    events: dict[str, list[dict]] = {}
+
+    class Recorder:
+        def info(self, event, **fields):
+            events.setdefault(event, []).append(fields)
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_fields: None
+
+    monkeypatch.setattr(server._module, "logger", Recorder())
+    return events
+
+
 def _task(server, title="frobnicate the widget cache"):
     return server.task_create(title=title, description="d")
 
@@ -226,56 +242,74 @@ def test_a_failed_lookup_does_not_fail_a_claim_that_won(server, monkeypatch):
 
 
 @requires_omnigraph
-def test_every_first_claim_is_logged_including_empty_ones(server, monkeypatch):
+def test_every_first_claim_is_logged_including_empty_ones(server, logged):
     """The number that says whether this works is the share of claims that
     carried a memory, which needs the claims that carried none."""
-
-    class Recorder:
-        def __init__(self):
-            self.events = []
-
-        def info(self, event, **fields):
-            self.events.append((event, fields))
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
-    recorder = Recorder()
-    monkeypatch.setattr(server._module, "logger", recorder)
     task = _task(server)
 
     server.task_claim(task["slug"])
     server.task_claim(task["slug"])
 
-    assert [f for e, f in recorder.events if e == "witan.memory.surfaced"] == [
-        {"surface": "task_claim", "task": task["slug"], "count": 0, "slugs": []}
+    assert logged["witan.memory.surfaced"] == [
+        {
+            "surface": "task_claim",
+            "task": task["slug"],
+            "count": 0,
+            "slugs": [],
+            "content_scores": [],
+            "title_scores": [],
+        }
     ]
 
 
+def _raw_scores(server, query, run):
+    params = {"query": query, "repo": None, "kind": None}
+    return {r["slug"]: r["score"] for r in server.client.read("read.gq", run, params)}
+
+
 @requires_omnigraph
-def test_a_failed_lookup_still_counts_as_a_claim_with_nothing(server, monkeypatch):
+def test_the_log_carries_the_scores_the_floors_were_applied_to(
+    server, no_floor, logged
+):
+    """Without them a production line says a memory was off-topic but not what
+    floor would have dropped it. A linked memory was never scored."""
+    linked = _memory(server, "unrelated heading", "nothing in common")
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+    server.task_link(task["slug"], linked["slug"], "addresses")
+    title_text = server.task_get(task["slug"])["title"]
+    content = _raw_scores(server, title_text, "search_memories")[match["slug"]]
+    title = _raw_scores(server, title_text, "search_memories_title")[match["slug"]]
+
+    claimed = server.task_claim(task["slug"])
+
+    (line,) = logged["witan.memory.surfaced"]
+    assert line["slugs"] == [linked["slug"], match["slug"]]
+    assert line["content_scores"] == [None, content]
+    assert line["title_scores"] == [None, title]
+    assert content > 0 and title > 0
+    assert all(
+        set(m) == {"slug", "kind", "title", "author", "excerpt"}
+        for m in claimed["memories"]
+    )
+
+
+@requires_omnigraph
+def test_a_failed_lookup_still_counts_as_a_claim_with_nothing(
+    server, monkeypatch, logged
+):
     """Otherwise a degraded graph would drop out of the denominator and the share
     of claims carrying a memory would look better than it was."""
 
     def broken(_task):
         raise RuntimeError("omnigraph down")
 
-    events = []
-
-    class Recorder:
-        def info(self, event, **fields):
-            events.append((event, fields))
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
     monkeypatch.setattr(server._module, "_task_memories", broken)
-    monkeypatch.setattr(server._module, "logger", Recorder())
     task = _task(server)
 
     server.task_claim(task["slug"])
 
-    assert [f["count"] for e, f in events if e == "witan.memory.surfaced"] == [0]
+    assert [f["count"] for f in logged["witan.memory.surfaced"]] == [0]
 
 
 @requires_omnigraph

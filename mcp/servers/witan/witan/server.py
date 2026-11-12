@@ -3854,6 +3854,10 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
 # agent context it did not ask to spend.
 _SURFACED_MEMORY_LIMIT = 3
 
+#: Where :func:`_title_matches` keeps a row's raw ``title`` BM25 score beside
+#: the ``content`` one already in :data:`_SCORE_COLUMN`, for the surfaced log line.
+_TITLE_SCORE_KEY = "_title_score"
+
 
 def _title_matches(text: str) -> list[dict]:
     """Memories ``text`` matches closely enough to show unasked, best first.
@@ -3884,7 +3888,8 @@ def _title_matches(text: str) -> list[dict]:
     the real hits on Granian, ToolHive and the omnigraph pin.
 
     :param text: The text to match, e.g. a task's title.
-    :returns: Rows as ``search_memories`` returns them, best content score first.
+    :returns: Rows as ``search_memories`` returns them, best content score first,
+        each also carrying its raw title score under :data:`_TITLE_SCORE_KEY`.
     :rtype: list[dict]
     """
     params = {"query": text, "repo": None, "kind": None}
@@ -3893,7 +3898,7 @@ def _title_matches(text: str) -> list[dict]:
         for row in client.read("read.gq", "search_memories_title", params)
     }
     return [
-        row
+        {**row, _TITLE_SCORE_KEY: title_scores[row["slug"]]}
         for row in client.read("read.gq", "search_memories", params)
         if row["slug"] in title_scores
         and (row[_SCORE_COLUMN] or 0.0) >= rank_cfg.surface_min_content_score
@@ -3901,7 +3906,7 @@ def _title_matches(text: str) -> list[dict]:
     ]
 
 
-def _task_memories(task: dict) -> list[dict]:
+def _task_memories(task: dict) -> tuple[list[dict], dict[str, tuple]]:
     """Memories for whoever starts ``task``, as excerpts, the most certain first.
 
     Memories someone tied to the task come first, whether by ``Addresses`` or a
@@ -3910,8 +3915,10 @@ def _task_memories(task: dict) -> list[dict]:
 
     :param task: The task row.
     :returns: Up to :data:`_SURFACED_MEMORY_LIMIT` of ``slug``, ``kind``,
-        ``title``, ``author`` and ``excerpt``.
-    :rtype: list[dict]
+        ``title``, ``author`` and ``excerpt``; and, by slug, the raw
+        ``(content, title)`` BM25 scores of every memory the title matched. A
+        linked memory the title did not match has no entry.
+    :rtype: tuple[list[dict], dict[str, tuple]]
     """
     linked = [
         row["slug"]
@@ -3925,14 +3932,16 @@ def _task_memories(task: dict) -> list[dict]:
         row["slug"]: row for row in _read_by_slugs("get_memories_by_slugs", linked)
     }
     rows = {slug: by_slug[slug] for slug in linked if slug in by_slug}
+    scores = {}
     for row in _title_matches(task["title"]):
         rows.setdefault(row["slug"], row)
+        scores[row["slug"]] = (row[_SCORE_COLUMN], row[_TITLE_SCORE_KEY])
     if not rows:
-        return []
+        return [], scores
     superseded = {
         row["slug"] for row in client.read("read.gq", "all_superseded_slugs", {})
     }
-    return [
+    memories = [
         {
             "slug": row["slug"],
             "kind": row["kind"],
@@ -3943,6 +3952,7 @@ def _task_memories(task: dict) -> list[dict]:
         for row in rows.values()
         if row["slug"] not in superseded
     ][:_SURFACED_MEMORY_LIMIT]
+    return memories, scores
 
 
 def _surfaced_for_claim(task: dict) -> list[dict]:
@@ -3954,18 +3964,27 @@ def _surfaced_for_claim(task: dict) -> list[dict]:
     Logs every first claim, including the ones with nothing to show and the ones
     whose lookup failed, because the share of claims that carried a memory is the
     number that says whether this works, and it needs the denominator.
+
+    ``content_scores`` and ``title_scores`` run parallel to ``slugs``: the raw
+    BM25 scores the floors in :func:`_title_matches` were applied to, ``None``
+    for a linked memory the title did not match. Without them a reader of the
+    production lines can judge a surfaced memory off-topic but not what floor
+    would have dropped it.
     """
     try:
-        memories = _task_memories(task)
+        memories, scores = _task_memories(task)
     except Exception:
         logger.warning("witan.memory.surface_failed", task=task["slug"], exc_info=True)
-        memories = []
+        memories, scores = [], {}
+    slugs = [m["slug"] for m in memories]
     logger.info(
         "witan.memory.surfaced",
         surface="task_claim",
         task=task["slug"],
         count=len(memories),
-        slugs=[m["slug"] for m in memories],
+        slugs=slugs,
+        content_scores=[scores[s][0] if s in scores else None for s in slugs],
+        title_scores=[scores[s][1] if s in scores else None for s in slugs],
     )
     return memories
 
