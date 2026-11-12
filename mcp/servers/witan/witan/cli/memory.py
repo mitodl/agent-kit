@@ -97,6 +97,9 @@ def _same(stored: object, local_text: str) -> bool:
     parts = _REDACTED.split(_norm(stored))
     if len(parts) == 1:
         return parts[0] == _norm(local_text)
+    if not "".join(parts).strip():
+        # Nothing but redaction left: it would match any text at all.
+        return False
     pattern = ".+?".join(re.escape(part) for part in parts)
     return re.fullmatch(pattern, _norm(local_text), re.DOTALL) is not None
 

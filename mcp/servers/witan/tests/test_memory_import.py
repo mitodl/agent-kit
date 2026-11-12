@@ -160,6 +160,23 @@ def test_discover_skips_the_index(tmp_path):
     assert [m.path for m in local.discover(tmp_path)] == [path]
 
 
+@pytest.mark.parametrize(
+    ("stored", "local_text", "same"),
+    [
+        ("Alerts go to «redacted:email» now", "Alerts go to ops@example.org now", True),
+        ("Alerts go to «redacted:email» now", "Alerts go to ops@example.org", False),
+        ("«redacted:email»", "anything at all", False),
+        ("plain title", "Plain  Title", True),
+    ],
+)
+def test_a_redacted_span_stands_for_some_text_but_not_all_of_it(
+    stored, local_text, same
+):
+    from witan.cli.memory import _same
+
+    assert _same(stored, local_text) is same
+
+
 # ── the command, against a real store ────────────────────────────────────────
 
 
