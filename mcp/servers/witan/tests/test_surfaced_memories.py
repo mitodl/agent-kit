@@ -17,6 +17,22 @@ def no_floor(server, monkeypatch):
     )
 
 
+@pytest.fixture
+def logged(server, monkeypatch):
+    """The fields of each ``info`` line the server logs, by event name."""
+    events: dict[str, list[dict]] = {}
+
+    class Recorder:
+        def info(self, event, **fields):
+            events.setdefault(event, []).append(fields)
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_fields: None
+
+    monkeypatch.setattr(server._module, "logger", Recorder())
+    return events
+
+
 def _task(server, title="frobnicate the widget cache"):
     return server.task_create(title=title, description="d")
 
@@ -226,56 +242,207 @@ def test_a_failed_lookup_does_not_fail_a_claim_that_won(server, monkeypatch):
 
 
 @requires_omnigraph
-def test_every_first_claim_is_logged_including_empty_ones(server, monkeypatch):
+def test_every_first_claim_is_logged_including_empty_ones(server, logged):
     """The number that says whether this works is the share of claims that
     carried a memory, which needs the claims that carried none."""
-
-    class Recorder:
-        def __init__(self):
-            self.events = []
-
-        def info(self, event, **fields):
-            self.events.append((event, fields))
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
-    recorder = Recorder()
-    monkeypatch.setattr(server._module, "logger", recorder)
     task = _task(server)
 
     server.task_claim(task["slug"])
     server.task_claim(task["slug"])
 
-    assert [f for e, f in recorder.events if e == "witan.memory.surfaced"] == [
-        {"surface": "task_claim", "task": task["slug"], "count": 0, "slugs": []}
+    assert logged["witan.memory.surfaced"] == [
+        {
+            "surface": "task_claim",
+            "task": task["slug"],
+            "session": None,
+            "count": 0,
+            "slugs": [],
+            "content_scores": [],
+            "title_scores": [],
+        }
     ]
 
 
+def _raw_scores(server, query, run):
+    params = {"query": query, "repo": None, "kind": None}
+    return {r["slug"]: r["score"] for r in server.client.read("read.gq", run, params)}
+
+
 @requires_omnigraph
-def test_a_failed_lookup_still_counts_as_a_claim_with_nothing(server, monkeypatch):
+def test_the_log_carries_the_scores_the_floors_were_applied_to(
+    server, no_floor, logged
+):
+    """Without them a production line says a memory was off-topic but not what
+    floor would have dropped it. A linked memory was never scored."""
+    linked = _memory(server, "unrelated heading", "nothing in common")
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+    server.task_link(task["slug"], linked["slug"], "addresses")
+    title_text = server.task_get(task["slug"])["title"]
+    content = _raw_scores(server, title_text, "search_memories")[match["slug"]]
+    title = _raw_scores(server, title_text, "search_memories_title")[match["slug"]]
+
+    claimed = server.task_claim(task["slug"])
+
+    (line,) = logged["witan.memory.surfaced"]
+    assert line["slugs"] == [linked["slug"], match["slug"]]
+    assert line["content_scores"] == [None, content]
+    assert line["title_scores"] == [None, title]
+    assert content > 0 and title > 0
+    assert all(
+        set(m) == {"slug", "kind", "title", "author", "excerpt"}
+        for m in claimed["memories"]
+    )
+
+
+@requires_omnigraph
+def test_an_omitted_score_logs_zero_not_null(server, monkeypatch, no_floor, logged):
+    """The floors read a score the engine omitted as 0.0, so the log says 0.0
+    too; null would claim the title did not match a memory it matched."""
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+    real = server._module._title_matches
+
+    def unscored(text):
+        return [
+            {
+                **row,
+                server._module._SCORE_COLUMN: None,
+                server._module._TITLE_SCORE_KEY: None,
+            }
+            for row in real(text)
+        ]
+
+    monkeypatch.setattr(server._module, "_title_matches", unscored)
+
+    server.task_claim(task["slug"])
+
+    (line,) = logged["witan.memory.surfaced"]
+    assert line["slugs"] == [match["slug"]]
+    assert line["content_scores"] == [0.0]
+    assert line["title_scores"] == [0.0]
+
+
+@requires_omnigraph
+def test_a_failed_lookup_still_counts_as_a_claim_with_nothing(
+    server, monkeypatch, logged
+):
     """Otherwise a degraded graph would drop out of the denominator and the share
     of claims carrying a memory would look better than it was."""
 
     def broken(_task):
         raise RuntimeError("omnigraph down")
 
-    events = []
-
-    class Recorder:
-        def info(self, event, **fields):
-            events.append((event, fields))
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
     monkeypatch.setattr(server._module, "_task_memories", broken)
-    monkeypatch.setattr(server._module, "logger", Recorder())
     task = _task(server)
 
     server.task_claim(task["slug"])
 
-    assert [f["count"] for e, f in events if e == "witan.memory.surfaced"] == [0]
+    assert [f["count"] for f in logged["witan.memory.surfaced"]] == [0]
+
+
+@requires_omnigraph
+def test_a_read_joins_to_the_claim_that_surfaced_it(server, no_floor, logged):
+    """Both lines and the claim holder name the session by one digest, so a
+    Loki join on session and slug says whether a surfaced memory got read."""
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+
+    claimed = server.task_claim(task["slug"], session_id="sess-1")
+    server.memory_get(match["slug"], session_id="sess-1")
+
+    (surfaced,) = logged["witan.memory.surfaced"]
+    (read,) = logged["witan.memory.read"]
+    assert read == {
+        "surface": "memory_get",
+        "task": None,
+        "session": surfaced["session"],
+        "count": 1,
+        "slugs": [match["slug"]],
+    }
+    assert surfaced["slugs"] == [match["slug"]]
+    assert claimed["assignee"].endswith("#" + surfaced["session"])
+    assert "sess-1" not in str(logged)
+
+
+@requires_omnigraph
+def test_a_read_with_no_session_still_logs_the_slug(server, logged):
+    """A caller that sends no id is still joinable by actor and slug."""
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+
+    server.memory_get(match["slug"])
+    server.memory_get("pat-missing")
+
+    assert [(f["session"], f["slugs"]) for f in logged["witan.memory.read"]] == [
+        (None, [match["slug"]]),
+        (None, []),
+    ]
+
+
+@requires_omnigraph
+def test_recall_logs_the_slugs_it_returned(server, no_floor, logged):
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+
+    out = server.recall(task=task["slug"], hops=0, session_id="sess-1")
+    server.recall(query="nothing matches this", session_id="sess-1")
+
+    first, empty = logged["witan.memory.read"]
+    assert first["surface"] == "recall"
+    assert first["task"] == task["slug"]
+    assert first["slugs"] == [m["slug"] for m in out["memories"]] == [match["slug"]]
+    assert first["session"] and empty["session"] == first["session"]
+    assert (empty["count"], empty["slugs"], empty["task"]) == (0, [], None)
+
+
+@requires_omnigraph
+def test_a_linked_memory_the_title_also_matches_keeps_its_scores(
+    server, no_floor, logged
+):
+    both = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+    server.task_link(task["slug"], both["slug"], "addresses")
+
+    server.task_claim(task["slug"])
+
+    (line,) = logged["witan.memory.surfaced"]
+    assert line["slugs"] == [both["slug"]]
+    assert line["content_scores"][0] > 0 and line["title_scores"][0] > 0
+
+
+@requires_omnigraph
+def test_under_stdio_the_session_comes_from_the_agents_environment(
+    server, no_floor, logged, monkeypatch
+):
+    """The local server is the agent's child, so it inherits the id."""
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-env")
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+
+    claimed = server.task_claim(task["slug"])
+    server.memory_get(match["slug"])
+
+    session = logged["witan.memory.surfaced"][0]["session"]
+    assert session and logged["witan.memory.read"][0]["session"] == session
+    assert claimed["assignee"].endswith("#" + session)
+
+
+@requires_omnigraph
+def test_recall_logs_only_a_task_slug_that_resolved(server, logged):
+    """``task`` is caller text until the graph says it names a task."""
+    server.recall(task="not a slug at all", hops=0)
+
+    assert logged["witan.memory.read"][0]["task"] is None
+
+
+@requires_omnigraph
+def test_resolving_a_memorys_symbols_is_not_logged_as_a_read(server, logged):
+    """It reads the row internally; counting that would inflate the reads."""
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+
+    server.memory_symbols(match["slug"])
+
+    assert "witan.memory.read" not in logged
 
 
 @requires_omnigraph
