@@ -143,9 +143,16 @@ def test_non_self_providing_consumer_links_to_provider():
 
 
 def test_service_kind_excluded_from_heuristic_edges():
+    """Deploy edges are drawn by visualize.build_graph, not as typed edges."""
     bindings = [
-        _binding_row("a", "provider", "service", "repo:https://github.com/x/y"),
-        _binding_row("b", "consumer", "service", "repo:https://github.com/x/y"),
+        {
+            **_binding_row("a", "provider", "service", "https://github.com/x/y"),
+            "sub_kind": "repo",
+        },
+        {
+            **_binding_row("b", "consumer", "service", "https://github.com/x/y"),
+            "sub_kind": "repo",
+        },
     ]
     assert cross_repo_edges([], bindings) == []
 

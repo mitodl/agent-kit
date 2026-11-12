@@ -41,17 +41,21 @@ ROWS = [
         "repo": B,
         "confidence": 1.0,
     },
-    # ol-infrastructure deploys repo-a (service anchor).
+    # ol-infrastructure deploys repo-a (service anchor). The shape
+    # bridge_extractors._service_anchors writes: the bare URI as key_norm, the
+    # anchor type in sub_kind.
     {
         "kind": "service",
-        "key_norm": f"repo:{A}",
+        "sub_kind": "repo",
+        "key_norm": A,
         "role": "provider",
         "repo": INFRA,
         "confidence": 1.0,
     },
     {
         "kind": "service",
-        "key_norm": "name:repo-a",
+        "sub_kind": "name",
+        "key_norm": "repo-a",
         "role": "provider",
         "repo": INFRA,
         "confidence": 1.0,
@@ -77,6 +81,36 @@ def test_build_graph_edges_and_weights():
     # ol-infra depends on repo-a via the service anchor; name: anchor is ignored.
     assert g.edges[(INFRA, A)].weight == 1
     assert set(g.edges[(INFRA, A)].kinds) == {"service"}
+
+
+def test_deploy_edge_from_real_extractor_output(tmp_path):
+    """The anchors an ol-infrastructure application file actually produces make
+    a deploy edge for the repo anchor and none for the image or name anchors.
+
+    The fixtures above once used a ``repo:`` key prefix the extractor had
+    stopped writing, so they passed while no deployed graph ever had a
+    service edge. Driving the real extractor keeps the two in step.
+    """
+    from witan_code import bridge
+    from witan_code.bridge_extractors import _service_anchors
+
+    main = tmp_path / "__main__.py"
+    main.write_text(
+        'repo = github.get_repository(full_name="mitodl/ocw-hugo-projects")\n'
+        'application_image_repository = "mitodl/ocw-studio-app"\n'
+        'application_name = "ocw-studio"\n'
+    )
+    rows = [
+        bridge._record(b, INFRA)["data"]
+        for b in _service_anchors(main, "src/applications/ocw_studio/__main__.py")
+    ]
+    assert {r["sub_kind"] for r in rows} == {"repo", "image", "name"}
+
+    g = visualize.build_graph(rows)
+
+    target = "https://github.com/mitodl/ocw-hugo-projects"
+    assert list(g.edges) == [(INFRA, target)]
+    assert set(g.edges[(INFRA, target)].kinds) == {"service"}
 
 
 def test_kind_filter():

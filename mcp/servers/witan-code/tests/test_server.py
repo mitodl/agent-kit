@@ -147,6 +147,37 @@ def test_repo_symbols_and_dependencies_read_the_bridge(sample_repo, monkeypatch)
 
 
 @requires_stack
+def test_repo_dependencies_draws_the_deploy_edge_from_the_store(
+    sample_repo, monkeypatch
+):
+    """A repo service anchor survives the round trip through the bridge store.
+
+    ``build_graph`` needs ``sub_kind`` to tell a repo anchor from an image or
+    name anchor, so ``all_bindings`` has to return it. Without the field every
+    deploy edge silently disappears, which is how no deployed graph had one.
+    """
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    app = sample_repo / "applications" / "ocw_studio"
+    app.mkdir(parents=True)
+    (app / "__main__.py").write_text(
+        'repo = github.get_repository(full_name="mitodl/ocw-hugo-projects")\n'
+        'application_image_repository = "mitodl/ocw-studio-app"\n'
+    )
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    srv._git_context.clear()
+    _fn(srv.code_reindex)(path=str(sample_repo))
+
+    deps = _fn(srv.code_repo_dependencies)(kind="service")
+
+    assert [(e["consumer"], e["provider"]) for e in deps["edges"]] == [
+        ("https://github.com/test/cg", "https://github.com/mitodl/ocw-hugo-projects")
+    ]
+
+
+@requires_stack
 def test_repo_symbols_without_a_repo_is_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("WITAN_REPO", "")
     monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "empty"))
