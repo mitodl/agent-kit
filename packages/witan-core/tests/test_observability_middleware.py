@@ -479,6 +479,24 @@ def test_the_client_s_self_reported_release_is_logged(capsys):
     assert payload["client_version"] == "9.9.9"
 
 
+def test_a_client_supplied_version_is_capped(capsys):
+    from fastmcp import Client
+    from mcp.types import Implementation
+
+    mcp = _server_with_tools()
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        info = Implementation(name="n" * 10_000, version="v" * 10_000)
+        async with Client(mcp, client_info=info) as client:
+            await client.call_tool("takes_a_string", {"content": "x"})
+
+    asyncio.run(drive())
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert len(payload["client_name"]) == middleware_module._MAX_CLIENT_FIELD_CHARS
+    assert len(payload["client_version"]) == middleware_module._MAX_CLIENT_FIELD_CHARS
+
+
 def test_a_call_with_no_session_logs_no_client_fields(capsys):
     async def call_next(_ctx):
         return "result"

@@ -199,9 +199,10 @@ def _client_fields(context: Any) -> dict[str, str]:
     handshake on the older protocol eras and from each request's ``_meta`` on
     2026-07-28. Self-reported, so it attributes a release, not an identity
     (that is :func:`_caller_identity`'s job). A client that never set its own
-    reports the SDK default, ``mcp 0.1.0``, and is logged as such: for
-    witan-code that marks a release from before it named itself. Omitted only
-    when the connection carries no ``clientInfo`` at all.
+    reports the SDK default, ``mcp 0.1.0``, and is logged as such. witan-code's
+    store session and witan-core's remote proxy both name themselves, so from
+    those that marks a release from before they did. Omitted only when the
+    connection carries no ``clientInfo`` at all.
 
     Never raises, for the same reason :func:`_caller_identity` does not.
     """
@@ -212,7 +213,18 @@ def _client_fields(context: Any) -> dict[str, str]:
         return {}
     if info is None:
         return {}
-    return {"client_name": info.name, "client_version": info.version}
+    return {
+        "client_name": info.name[:_MAX_CLIENT_FIELD_CHARS],
+        "client_version": info.version[:_MAX_CLIENT_FIELD_CHARS],
+    }
+
+
+_MAX_CLIENT_FIELD_CHARS = 128
+"""Cap on each client-supplied ``clientInfo`` string on the log line.
+
+The client writes these, so an authenticated caller could otherwise make every
+one of its ``mcp.tool_call`` lines as large as the request body allows.
+"""
 
 
 _MAX_ERROR_CHARS = 500
