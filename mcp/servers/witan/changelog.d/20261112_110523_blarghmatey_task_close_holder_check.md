@@ -13,3 +13,10 @@
 - A task write queued in the journal with `force` (e.g. `witan task close
   --force` during an outage) now replays over another person's claim instead
   of being turned into a comment.
+- A queued `task_close` or `task_update(status="closed")` that the server
+  refuses on replay, because someone claimed the task after replay checked its
+  holder, now becomes a comment on the task naming the new holder, as a
+  conflict found before the write does. Replay used to report it applied and
+  drop it.
+- `witan task close` and `witan task update` send `force` only with
+  `--force`, so they keep working against a deployment older than it.

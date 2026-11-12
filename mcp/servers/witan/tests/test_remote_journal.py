@@ -139,6 +139,45 @@ def test_a_queued_forced_close_applies_over_someone_elses_claim(proxy):
     assert task["comments"] == []
 
 
+@pytest.mark.parametrize(
+    "queued",
+    [
+        ("task_close", {"resolution": "done"}),
+        ("task_update", {"status": "closed"}),
+    ],
+    ids=["close", "update"],
+)
+@requires_omnigraph
+def test_a_claim_landing_after_the_replay_check_turns_the_close_into_a_comment(
+    proxy, monkeypatch, queued
+):
+    # The holder check passes on replay's read, then someone claims the task
+    # before the write. The tool refuses with an answer, not an error, so the
+    # close has to come back as a comment rather than be reported applied.
+    rival = "bob@example.org#11112222"
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee=HOLDER)
+    plan_after_read = proxy._replay_plan
+
+    async def rival_claims_after_the_read(entry, call):
+        plan = await plan_after_read(entry, call)
+        await call("task_claim", {"slug": slug, "assignee": rival, "force": True})
+        return plan
+
+    monkeypatch.setattr(proxy, "_replay_plan", rival_claims_after_the_read)
+    tool, args = queued
+    _queue(proxy, tool, {"slug": slug, **args})
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["status"] == "in_progress"
+    assert task["assignee"] == rival
+    [comment] = task["comments"]
+    assert f"buffered {tool}" in comment["body"]
+    assert f"held by {rival}" in comment["body"]
+    assert not proxy.journal.has_pending()
+
+
 @requires_omnigraph
 def test_a_queued_update_on_a_task_closed_since_becomes_a_comment(proxy, server):
     slug = server.task_create(title="closed since", description="d")["slug"]

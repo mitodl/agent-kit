@@ -398,6 +398,20 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     return None
 
 
+def _conflict_comment(entry: JournalEntry, reason: str) -> JournalEntry:
+    """The comment a queued task write that no longer applies is replayed as."""
+    text = (
+        f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
+        f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
+    )
+    return dataclasses.replace(
+        entry,
+        tool="task_comment",
+        args={"slug": entry.args["slug"], "text": text},
+        context=None,
+    )
+
+
 # Rows per page of the exact-title scan, growing to the tool's own maximum.
 _TITLE_SCAN_LIMITS = (100, 1000, 10000)
 
@@ -472,16 +486,7 @@ class RemoteServerProxy(RemoteMCPProxy):
             task = await call("task_get", {"slug": entry.args["slug"]})
             reason = _replay_conflict(task, entry) if task else None
             if reason is not None:
-                text = (
-                    f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
-                    f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
-                )
-                return dataclasses.replace(
-                    entry,
-                    tool="task_comment",
-                    args={"slug": entry.args["slug"], "text": text},
-                    context=None,
-                )
+                return _conflict_comment(entry, reason)
         elif entry.tool == "task_create":
             title = entry.args["title"]
             duplicate = await _created_since(call, title, entry.ts)
@@ -496,6 +501,24 @@ class RemoteServerProxy(RemoteMCPProxy):
                 )
                 return None
         return entry
+
+    def _replay_result(
+        self, entry: JournalEntry, plan: JournalEntry, result: Any
+    ) -> JournalEntry | None:
+        # `_replay_plan` checked the holder on its own read, so a claim that
+        # lands between that read and the write is refused by the tool itself,
+        # as `{"closed": false}` rather than an error. Without this the replay
+        # reports it applied and the queued close is gone.
+        if (
+            plan is entry
+            and entry.tool in _HOLDER_CHECKED
+            and isinstance(result, dict)
+            and result.get("closed") is False
+        ):
+            return _conflict_comment(
+                entry, f"the task is now held by {result['held_by']}"
+            )
+        return None
 
     @property
     def remote_url(self) -> str:
