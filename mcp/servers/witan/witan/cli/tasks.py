@@ -213,13 +213,10 @@ def tasks(
         "assignee",
         "blocked_by",
     ]
-    # Search rows don't carry blocked_by, and a blank value would read as "no
-    # blockers". The status column still flags a blocked task. Drop the key
-    # from the rows too: structured output dumps rows, not columns.
+    # Search rows don't carry blocked_by, and a blank cell would read as "no
+    # blockers". The status column still flags a blocked task.
     if query is not None:
         columns.remove("blocked_by")
-        for row in rows_data:
-            del row["blocked_by"]
     render_table(
         title=f"{base_title} — {scope}",
         columns=columns,
@@ -228,6 +225,7 @@ def tasks(
         no_wrap={"priority", "status", "type"},
         styles={"priority": _PRIORITY_STYLE, "status": _STATUS_STYLE},
         placeholders={"repo": "(unscoped)"},
+        records=rows,
     )
 
 

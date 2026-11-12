@@ -158,3 +158,28 @@ def test_rules_under_json_keeps_the_status_line_off_stdout(
     captured = capsys.readouterr()
     assert json.loads(captured.out)["rows"]
     assert "Scanning:" in captured.err
+
+
+def test_test_under_json_prints_each_finding_record(monkeypatch, tmp_path, capsys):
+    """Structured rows are the finding, not the table's `span`/`suppressed` cells."""
+    import json
+
+    from witan.cli import output
+    from witan.cli.scan import test
+
+    _isolate_config(monkeypatch, tmp_path)
+    fake_key = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret gitleaks:allow
+    output.set_output_format("json")
+    try:
+        test(f"key {fake_key} here")
+    finally:
+        output.set_output_format("txt")
+
+    out = capsys.readouterr().out
+    (row,) = json.loads(out)["rows"]
+    assert row["detector"] == "aws_access_key"
+    assert (row["start"], row["end"]) == (4, 4 + len(fake_key))
+    assert "span" not in row
+    assert row["suppressed"] is None
+    assert row["action"] == "block"
+    assert fake_key not in out

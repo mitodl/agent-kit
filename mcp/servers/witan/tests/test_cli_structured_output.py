@@ -274,6 +274,133 @@ def test_project_tasks_detail_adds_dependents(cli, capsys):
     assert rows[blocked["slug"]]["blocked_by"] == [blocker["slug"]]
 
 
+REPO = "https://github.com/test/repo"
+
+
+def test_tasks_prints_the_task_records(cli, capsys):
+    from witan.cli.tasks import tasks
+
+    blocker = _fn(cli.task_create)(title="first", description="d", repo=REPO)
+    blocked = _fn(cli.task_create)(
+        title="second", description="d", repo=REPO, blocked_by=[blocker["slug"]]
+    )
+    _as("json")
+
+    tasks(all_repos=True)
+
+    rows = {r["slug"]: r for r in json.loads(capsys.readouterr().out)["rows"]}
+    assert rows[blocker["slug"]]["blocked_by"] is None
+    assert rows[blocker["slug"]]["assignee"] is None
+    assert rows[blocked["slug"]]["blocked_by"] == [blocker["slug"]]
+    assert rows[blocked["slug"]]["repo"] == REPO
+
+
+def test_tasks_under_toml_omits_nulls(cli, capsys):
+    from witan.cli.tasks import tasks
+
+    task = _fn(cli.task_create)(title="first", description="d", repo=REPO)
+    _as("toml")
+
+    tasks(all_repos=True)
+
+    (row,) = tomllib.loads(capsys.readouterr().out)["rows"]
+    assert row["slug"] == task["slug"]
+    assert "blocked_by" not in row
+    assert "assignee" not in row
+
+
+def test_projects_prints_the_project_records(cli, capsys):
+    from witan.cli.projects import projects
+
+    slug = _fn(cli.workflow_project_create)(
+        title="p", description="d", repos=[REPO, "https://github.com/test/other"]
+    )["slug"]
+    _as("json")
+
+    projects(all_repos=True)
+
+    (row,) = json.loads(capsys.readouterr().out)["rows"]
+    assert row["slug"] == slug
+    assert row["repos"] == [REPO, "https://github.com/test/other"]
+    assert row["blocked_by"] is None
+
+
+def test_memory_prints_the_memory_records(cli, capsys):
+    from witan.cli.memory import memory
+
+    scoped = _fn(cli.memory_store)(
+        title="scoped", content="c", kind="project_fact", repo=REPO, tags=["a", "b"]
+    )
+    _as("json")
+
+    memory(all_repos=True)
+
+    (row,) = json.loads(capsys.readouterr().out)["rows"]
+    assert row["slug"] == scoped["slug"]
+    assert row["repo"] == REPO
+    assert row["tags"] == ["a", "b"]
+    assert row["language"] is None
+
+
+def test_memory_prints_an_unscoped_repo_as_null(cli, capsys):
+    from witan.cli.memory import memory
+
+    unscoped = _fn(cli.memory_store)(
+        title="unscoped", content="c", kind="pattern", repo=""
+    )
+    _as("json")
+
+    memory(all_repos=True)
+
+    (row,) = json.loads(capsys.readouterr().out)["rows"]
+    assert row["slug"] == unscoped["slug"]
+    assert row["repo"] is None
+
+
+def _trace(cli) -> str:
+    slug = _fn(cli.workflow_project_create)(title="p", description="d", repos=[REPO])[
+        "slug"
+    ]
+    return _fn(cli.workflow_project_complete)(slug, outcome="shipped")["trace_slug"]
+
+
+def test_traces_prints_the_trace_records(cli, capsys):
+    from witan.cli.traces import traces
+
+    trace = _trace(cli)
+    _as("json")
+
+    traces(all_repos=True)
+
+    (row,) = json.loads(capsys.readouterr().out)["rows"]
+    assert row["slug"] == trace
+    assert row["repos"] == [REPO]
+    assert row["session_count"] == 0
+    assert row["lessons_slug"] is None
+    assert "mined" not in row
+
+
+@pytest.mark.parametrize(
+    ("fmt", "load"), [("toml", tomllib.loads), ("yaml", yaml.safe_load)]
+)
+def test_traces_records_survive_toml_and_yaml(cli, capsys, fmt, load):
+    from witan.cli.traces import traces
+
+    trace = _trace(cli)
+    _as(fmt)
+
+    traces(all_repos=True)
+
+    (row,) = load(capsys.readouterr().out)["rows"]
+    assert row["slug"] == trace
+    assert row["repos"] == [REPO]
+    assert row["phases"] == []
+    if fmt == "toml":
+        assert "lessons_slug" not in row
+    else:
+        assert row["lessons_slug"] is None
+
+
 def test_project_show_of_a_missing_project_exits_nonzero_with_nothing_on_stdout(
     cli, capsys
 ):

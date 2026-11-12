@@ -57,6 +57,11 @@ app.command(targets_app, name="target")
 # textual add/remove below from having to reason about quoting.
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# Left out of `target list`'s structured records: they belong in the config
+# file, not in output that gets pasted into issues and logs. `code_token` is
+# here although `_Target` ignores it today, so adding the field cannot leak it.
+_CREDENTIAL_FIELDS = frozenset({"token", "code_token"})
+
 # Ordered so a rendered block reads the way the docs introduce these: what to
 # talk to, how to authenticate, then which repos should route here.
 _FIELD_ORDER = (
@@ -921,7 +926,9 @@ def list_targets() -> None:
     from .. import repo as repo_module
 
     try:
-        targets = cfg_module._parse_targets(cfg_module._load_toml())
+        raw = cfg_module._load_toml()
+        targets = cfg_module._parse_targets(raw)
+        tables = cfg_module.parse_target_tables(raw)
     except ValueError as exc:
         print_error(exc, stderr=True)
         raise SystemExit(1) from None
@@ -964,6 +971,21 @@ def list_targets() -> None:
         ),
         no_wrap={"cur", "name"},
         placeholders={"matches": "explicit only"},
+        records=[
+            {
+                "current": selected is not None and t.name == selected.name,
+                # The table is shared with witan-code, whose keys (code_server,
+                # code_transport, index_role, ...) witan's _Target ignores, so
+                # lay the raw table under the normalized fields.
+                **{
+                    k: v
+                    for k, v in tables[t.name].items()
+                    if k not in _CREDENTIAL_FIELDS
+                },
+                **t.model_dump(exclude=_CREDENTIAL_FIELDS),
+            }
+            for t in targets
+        ],
     )
 
 

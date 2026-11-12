@@ -120,6 +120,41 @@ def test_render_table_structured_formats_ignore_styling(capsys):
     assert payload["rows"] == [{"slug": "tk-a", "status": ""}]
 
 
+def test_render_table_structured_formats_dump_records_not_rows(capsys):
+    output_module.set_output_format("json")
+
+    render_table(
+        title="Tasks",
+        columns=["slug", "blocked_by"],
+        rows=[{"slug": "tk-a", "blocked_by": "tk-b, tk-c"}],
+        empty="",
+        records=[{"slug": "tk-a", "blocked_by": ["tk-b", "tk-c"], "assignee": None}],
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rows"] == [
+        {"slug": "tk-a", "blocked_by": ["tk-b", "tk-c"], "assignee": None}
+    ]
+
+
+def test_render_table_txt_prints_a_null_cell_empty(monkeypatch):
+    from rich.console import Console
+
+    from witan.cli import _common
+
+    recorder = Console(record=True, width=120)
+    monkeypatch.setattr(_common, "console", recorder)
+
+    render_table(
+        title="Tasks",
+        columns=["slug", "assignee"],
+        rows=[{"slug": "tk-a", "assignee": None}],
+        empty="",
+    )
+
+    assert "None" not in recorder.export_text()
+
+
 def test_launcher_sets_output_format_and_forwards_tokens(monkeypatch):
     import witan.cli as cli_module
 
