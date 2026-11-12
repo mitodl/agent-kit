@@ -48,6 +48,18 @@ def edge_rows(client, edge, src, dst) -> list[dict]:
     ]
 
 
+def topic_of(server, topic: str) -> dict | None:
+    """A Topic and every memory tagged to it, through ``recall(topic=...)``.
+
+    ``None`` when no such Topic exists. ``hops=0`` and ``include_superseded``
+    turn off expansion and pruning, so the memories are exactly the tagged ones.
+    """
+    out = server.recall(topic=topic, hops=0, include_superseded=True, limit=1000)
+    if out["topic"] is None:
+        return None
+    return {"topic": out["topic"], "memories": out["memories"]}
+
+
 def _unwrap(tool):
     """Return the underlying function for a FastMCP-decorated tool."""
     return getattr(tool, "fn", tool)

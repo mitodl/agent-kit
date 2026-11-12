@@ -16,3 +16,31 @@
   `workflow_project_get` gains a `blockers` list with each blocker's `slug`,
   `title`, `status` and `phase`, the fields `witan project show` read from
   `get_blockers`. `witan project block`/`unblock` keep their names.
+- Breaking: `topic_get`, `symbol_context`, `memory_neighbors`,
+  `memory_symbols` and `memory_for_contract` are gone; each is now a `recall`
+  seed. A seed that has something to say about itself adds a section to the
+  result, present only when its argument was passed:
+  - `topic_get(topic)` is `recall(topic=…)`. Its `topic` section is the Topic
+    node, or `null` for none.
+  - `symbol_context(symbol_id)` is `recall(symbol_id=…)`. Its `symbol`
+    section lists the tasks.
+  - `memory_neighbors(slug)` and `memory_symbols(slug)` are
+    `recall(memory=slug)`. Its `memory` section holds `neighbors` (every edge
+    kind, each with its `edge` properties) and `symbols`. The `kinds` filter
+    is gone; read the kinds you want from the result.
+  - `memory_for_contract(key_norm, kind)` is
+    `recall(contract=key_norm, contract_kind=kind)`. Its `contract` section
+    holds the Topic and the witan-code `bindings`.
+
+  The memories come back in recall's ranked list. Pass `hops=0`,
+  `include_superseded=True` and a high `limit` to get exactly the set the old
+  tool returned, with nothing expanded in or pruned out (it is still ranked
+  rather than in store order). The web UI's memory panel
+  and topic page read through `recall` now.
+
+### Fixed
+
+- `recall(memory=…)`'s symbol definitions and `recall(contract=…)`'s code
+  bindings are awaited. witan-code's read tools are `async`, so
+  `memory_symbols` stored an un-awaited coroutine as each `definition` and
+  `memory_for_contract` returned coroutines as its `bindings`.

@@ -1,3 +1,4 @@
+import asyncio
 import contextvars
 import functools
 import hashlib
@@ -406,18 +407,21 @@ mcp = FastMCP(
         "Loading context: call recall(query=…) — it composes every memory read "
         "(BM25 + graph expansion + superseded-pruning + re-ranking) and degrades "
         "to a plain search when the graph has no edges. Seed it with symbol_id, "
-        "task, or topic instead of/along with query. Reach for a narrower read "
-        "only for a specific need:\n"
+        "task, topic, contract, or memory instead of/along with query; those "
+        "seeds also return a section about the seed itself:\n"
+        "  symbol_id=… — also the tasks attached to a code symbol\n"
+        "  topic=…     — also the Topic node (everything tagged to it, cross-repo)\n"
+        "  contract=…, contract_kind=… — also the code providing/consuming the key\n"
+        "  memory=…    — also its neighbours by edge kind and the code symbols it "
+        "names\n"
+        "Pass hops=0, include_superseded=True and a high limit to list exactly "
+        "what a seed resolves to. Reach for a narrower read only for a specific "
+        "need:\n"
         '  recall           — default; contextual load / "what do we know about X"\n'
         "  memory_get       — one memory by slug\n"
         "  memory_list      — browse all of one kind (no query); optional language\n"
         "  memory_search    — plain BM25, no graph expansion\n"
-        "  memory_neighbors — a known memory's neighbours, by edge kind\n"
         "  memory_contradictions — every contradicting pair, no seed needed\n"
-        "  topic_get        — everything tagged to a topic (cross-repo)\n"
-        "  memory_for_contract — memories + code for a contract key\n"
-        "  symbol_context   — memories/tasks for a code symbol\n"
-        "  memory_symbols   — the code symbols a memory concerns\n"
         "  workflow_project_memories — memories a project produced\n\n"
         "Repo scoping: every tool auto-detects the current repo from .git/config. "
         "Pass repo (a canonical URI like https://github.com/mitodl/ol-django) to "
@@ -644,11 +648,6 @@ MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 MemoryLinkKind = Literal[
     "supersedes", "refines", "applies_to", "contradicts", "related_to", "tagged"
 ]
-
-#: What ``memory_neighbors`` can group by: every link kind, plus
-#: ``superseded_by``, the inbound side of ``supersedes``. It is a read-only
-#: direction, not a kind ``memory_link`` can write.
-MemoryNeighborKind = Literal[MemoryLinkKind, "superseded_by"]
 
 TopicKind = Literal["topic", "contract", "symbol", "entity"]
 
@@ -1383,17 +1382,27 @@ def _resolve_topic_steps(ref: str) -> tuple[str | None, list[tuple[str, str, dic
     return None, []
 
 
-def _lookup_topic_slug(topic: str) -> str | None:
-    """Resolve a topic ref (slug or ``name:kind``) to a slug WITHOUT creating it."""
-    if client.read("read.gq", "get_topic", {"slug": topic}):
-        return topic
+def _resolve_topic(topic: str) -> dict | None:
+    """The Topic a ref (``tp-`` slug or ``name:kind`` spec) names, WITHOUT creating it.
+
+    A spec resolves through the same deterministic ``_topic_slug`` used on
+    write, so a tag stored as ``UV`` is found by ``uv:topic``, and falls back to
+    an exact name and kind match.
+    """
+    if topic.startswith("tp-"):
+        rows = client.read("read.gq", "get_topic", {"slug": topic})
+        return rows[0] if rows else None
     name, sep, kind = topic.rpartition(":")
-    if sep and kind in ("topic", "contract", "symbol", "entity") and name:
-        rows = client.read(
-            "read.gq", "topic_by_name_kind", {"name": name, "kind": kind}
-        )
-        return rows[0]["slug"] if rows else None
-    return None
+    if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
+        return None
+    rows = client.read("read.gq", "get_topic", {"slug": _topic_slug(kind, name)})
+    if rows:
+        return rows[0]
+    named = client.read("read.gq", "topic_by_name_kind", {"name": name, "kind": kind})
+    if not named:
+        return None
+    rows = client.read("read.gq", "get_topic", {"slug": named[0]["slug"]})
+    return rows[0] if rows else None
 
 
 def _tag_memory_steps(
@@ -4611,7 +4620,7 @@ def memory_get(
         return None
     node = rows[0]
     if include_topics:
-        # Same de-duplication as memory_neighbors, and for the same reason: the
+        # Same de-duplication as _memory_neighbors, and for the same reason: the
         # traversal is bound now, so a memory tagged to one Topic twice arrives
         # on two rows. read.gq orders newest-first, so `setdefault` keeps the
         # most recent link's provenance.
@@ -4855,7 +4864,7 @@ async def memory_link(
         return.
     role:
         Free text saying WHY these two are linked, stored on the edge and
-        returned by ``memory_neighbors``. The edge kind says what KIND of
+        returned by ``recall(memory=...)``. The edge kind says what KIND of
         relation it is; this says what the relation is ABOUT ("both configure
         the Vault sidecar", "same incident"). Worth a sentence on a
         ``related_to``, where the kind alone tells a later reader nothing.
@@ -4863,7 +4872,7 @@ async def memory_link(
         Scanned on the way in like any other free text, so it can be redacted
         before it lands. The returned ``edge`` therefore reports the three
         machine-set properties and NOT ``role`` — read it back with
-        ``memory_neighbors`` to see what was actually stored.
+        ``recall(memory=...)`` to see what was actually stored.
     confidence:
         ``asserted`` (default) when you are naming both endpoints because you
         know they belong together; ``inferred`` when the link is a guess worth
@@ -4972,47 +4981,25 @@ async def memory_link(
     }
 
 
-@_tool
-def memory_neighbors(slug: str, kinds: list[MemoryNeighborKind] | None = None) -> dict:
+def _memory_neighbors(slug: str) -> dict[str, list[dict]]:
+    """The memories directly linked to ``slug``, grouped by edge kind.
+
+    For ``recall(memory=...)``. For symmetric kinds (``contradicts``,
+    ``related_to``) both directions are unioned and de-duplicated.
+    ``superseded_by`` is the inbound side of ``supersedes``. Every kind is a
+    key, each possibly empty. Each neighbour carries an ``edge`` dict
+    (``{confidence, role, author, created_at}``) describing the link.
     """
-    Return the memories directly linked to ``slug``, grouped by edge kind.
-
-    For symmetric kinds (``contradicts``, ``related_to``) both directions are
-    unioned and de-duplicated. ``superseded_by`` is the inbound side of
-    ``supersedes``: the memories that replaced this one, which is what a reader
-    who landed on a superseded memory needs next. Use after ``memory_get`` to
-    see what a memory connects to.
-
-    Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
-    created_at}`` — describing the LINK rather than either endpoint. ``role``
-    is what answers "why are these two connected", which the edge kind alone
-    does not; ``created_at`` is when the link was made, which neither node's
-    timestamps record. All four are ``null`` on edges written before the
-    properties existed, and nothing backfills them.
-
-    Parameters
-    ----------
-    slug:
-        The memory whose neighbours to fetch.
-    kinds:
-        Optional subset of edge kinds to include. Omit (``None``) for all kinds;
-        an explicit empty list returns no kinds.
-    """
-    wanted = list(_MEMORY_NEIGHBOR_QUERIES) if kinds is None else kinds
     neighbors: dict[str, list[dict]] = {}
-    for kind in wanted:
-        if (
-            kind not in _MEMORY_NEIGHBOR_QUERIES
-        ):  # e.g. "tagged" → use memory_get/topic_get
-            continue
+    for kind, query_names in _MEMORY_NEIGHBOR_QUERIES.items():
         merged: dict[str, dict] = {}
-        for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
+        for query_name in query_names:
             for row in client.read("read.gq", query_name, {"slug": slug}):
                 # ONE ROW PER EDGE now that the traversal is bound. Keyed edges
                 # hold at most one row per direction, but a symmetric kind
                 # unions both directions and a→b, b→a are different keys, so a
                 # neighbour can still arrive twice. One entry per neighbour is
-                # this tool's documented contract: the survivor is the NEWEST
+                # recall's documented contract: the survivor is the NEWEST
                 # link, so re-linking a pair the other way reads as an update
                 # rather than as a second neighbour.
                 #
@@ -5033,7 +5020,7 @@ def memory_neighbors(slug: str, kinds: list[MemoryNeighborKind] | None = None) -
                 ):
                     merged[row["slug"]] = {**row, "edge": edge}
         neighbors[kind] = list(merged.values())
-    return {"slug": slug, "neighbors": neighbors}
+    return neighbors
 
 
 # `content` and `confidence` because reviewing a conflict means reading both
@@ -5080,8 +5067,8 @@ def memory_contradictions(
 
     An unranked enumeration of the ``contradicts`` edges, for reviewing
     conflicts rather than loading context. ``recall`` reports a contradiction
-    only when both memories land in its result, and ``memory_neighbors`` needs a
-    slug to start from; this needs neither. Both apply the same ``repo`` rule
+    only when both memories land in its result, and ``recall(memory=...)`` needs
+    a slug to start from; this needs neither. Both apply the same ``repo`` rule
     (below), so every pair ``recall`` reports is one this lists for the same
     ``repo`` and ``include_superseded``. The exception is no repo detected and
     none passed: ``recall``'s ``query`` seed then spans every repo, so it
@@ -5095,7 +5082,7 @@ def memory_contradictions(
 
     One row per unordered pair. ``contradicts`` is symmetric but can be stored
     in both directions; when it is, the newer link is the one reported, the same
-    newest-wins rule as ``memory_neighbors``.
+    newest-wins rule as ``recall(memory=...)``.
 
     Superseding either side is how a contradiction gets resolved, so a pair
     with a superseded memory in it is dropped by default. That is also what
@@ -5124,7 +5111,7 @@ def memory_contradictions(
             continue
         edge = _edge_meta(row)
         key = frozenset((a["slug"], b["slug"]))
-        # Compared explicitly for the reason memory_neighbors gives: an
+        # Compared explicitly for the reason _memory_neighbors gives: an
         # unstamped edge sorts oldest, so any stamped one beats it.
         previous = pairs.get(key)
         if previous is None or (edge["created_at"] or "") > (
@@ -5134,44 +5121,6 @@ def memory_contradictions(
     return sorted(
         pairs.values(), key=lambda p: p["edge"]["created_at"] or "", reverse=True
     )
-
-
-@_tool
-def topic_get(topic: str) -> dict | None:
-    """
-    Resolve a Topic and return it with the memories tagged to it.
-
-    ``topic`` is either a Topic slug (``tp-...``) or a ``name:kind`` spec
-    (e.g. ``uv:topic``). Because topics are a cross-repo join surface, the
-    returned memories may span repositories — this is the traversal-based
-    retrieval primitive: two memories in different repos sharing a topic are
-    one hop apart.
-
-    Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
-
-    Parameters
-    ----------
-    topic:
-        Either a Topic slug (``tp-...``) or a ``name:kind`` spec (``uv:topic``,
-        ``DATABASE_URL:contract``). A spec resolves through the same
-        deterministic slugify used on write rather than an exact name match, so
-        a tag stored as ``UV`` is still found by ``uv:topic``.
-    """
-    # A tp- slug hits get_topic directly. A name:kind spec resolves through the
-    # deterministic _topic_slug (NOT an exact name match) so that casing/whitespace
-    # differences — stored tag "UV" queried as "uv:topic" — still find tp-topic-uv.
-    if topic.startswith("tp-"):
-        slug = topic
-    else:
-        name, sep, kind = topic.rpartition(":")
-        if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
-            return None
-        slug = _topic_slug(kind, name)
-    topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
-    if not topic_rows:
-        return None
-    memories = client.read("read.gq", "memories_for_topic", {"topic_slug": slug})
-    return {"topic": topic_rows[0], "memories": memories}
 
 
 # ── Code Branch Tracking ───────────────────────────────────────────
@@ -8958,28 +8907,6 @@ def _task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     return {"from": from_slug, "to": to_slug, "kind": kind, "removed": removed}
 
 
-@_tool
-def symbol_context(symbol_id: str) -> dict:
-    """
-    Memories and tasks attached to a code symbol (direction: symbol → work).
-
-    The reverse of ``memory_symbols``: given a symbol id, returns the memories and
-    tasks whose ``symbol_refs`` include it — "what lessons and open tasks concern
-    this function?". Call it after locating a symbol with the witan-code ``code_*``
-    tools, before editing.
-
-    ``symbol_id`` has the form ``<repo>#<path/to/file.py>::<QualifiedName>``; the
-    repo prefix scopes the lookup, or the current repo when the id has no ``#``.
-
-    Parameters
-    ----------
-    symbol_id:
-        The symbol to look up, as returned in the ``symbol_id`` field of the
-        witan-code ``code_*`` tools.
-    """
-    return _context_for_symbol(symbol_id)
-
-
 def _symbol_repo(symbol_id: str) -> str | None:
     """The repo a ``repo#path::Name`` id names, else the detected one."""
     return symbol_id.split("#", 1)[0] if "#" in symbol_id else repo_module.detect()
@@ -9058,49 +8985,34 @@ def _code_server():
     return _code_server._cached
 
 
-@_tool
-def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
+def _code_result(result):
+    """The value of a witan-code tool call, awaited when the tool is async.
+
+    witan-code's read tools became ``async def`` when they gained elicitation,
+    and calling one from here returns a coroutine. Every caller is a sync tool,
+    which FastMCP runs in a worker thread with no event loop, so
+    ``asyncio.run`` is safe here.
     """
-    What do we know about a contract (env_var / endpoint / package / service)?
+    return asyncio.run(result) if inspect.isawaitable(result) else result
 
-    Resolves the ``Topic{kind:"contract", name:key_norm}`` anchor and walks
-    ``Tagged`` to the memories about it (a single Layer-1 traversal, cross-repo by
-    nature), then — best-effort — asks witan-code for the bridge bindings that
-    share the same ``key_norm`` so callers can pivot to the code that produces or
-    consumes it. The two halves are joined in Python on the shared key, never an
-    edge across stores.
 
-    Tag a memory to a contract first with
-    ``memory_link(memory_slug, "<key_norm>:contract", "tagged")`` (``from`` is the
-    memory's slug).
+def _contract_bindings(key_norm: str, kind: ContractKind) -> dict:
+    """witan-code's providers and consumers of a contract, best-effort.
 
-    Parameters
-    ----------
-    key_norm:
-        The normalised contract key (e.g. ``DATABASE_URL`` or
-        ``GET /api/v1/courses/``).
-    kind:
-        The bridge binding kind (``env_var`` / ``endpoint`` / ``package`` /
-        ``service``) used to look up bindings. Omit to skip the bridge lookup.
-
-    Returns ``{"key_norm", "kind", "memories": [...], "bindings": {...}}``.
+    The two stores are joined in Python on the shared ``key_norm``, never by an
+    edge across them. Empty when witan-code is absent or the lookup fails.
     """
-    rows = client.read(
-        "read.gq", "topic_by_name_kind", {"name": key_norm, "kind": "contract"}
-    )
-    memories = (
-        client.read("read.gq", "memories_for_topic", {"topic_slug": rows[0]["slug"]})
-        if rows
-        else []
-    )
-
     bindings: dict = {"providers": [], "consumers": []}
     code = _code_server()
-    if code is not None and kind is not None:
+    if code is not None:
         try:
             bindings = {
-                "providers": code.code_interface_providers(kind, key_norm),
-                "consumers": code.code_interface_consumers(kind, key_norm),
+                "providers": _code_result(
+                    code.code_interface_providers(kind, key_norm)
+                ),
+                "consumers": _code_result(
+                    code.code_interface_consumers(kind, key_norm)
+                ),
             }
         except Exception:  # cross-store lookup is best-effort
             # Info: the contract answer is still returned, just without its
@@ -9113,34 +9025,18 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
                 exc_info=True,
             )
 
-    return {
-        "key_norm": key_norm,
-        "kind": kind,
-        "memories": memories,
-        "bindings": bindings,
-    }
+    return bindings
 
 
-@_tool
-def memory_symbols(slug: str) -> dict:
+def _memory_symbols(node: dict | None) -> list[dict]:
+    """Each of a memory's ``symbol_refs``, with its live definition when found.
+
+    For ``recall(memory=...)``. The definition comes from witan-code when it is
+    reachable; otherwise, or for a ref that is not a ``repo#path::Name`` id,
+    the entry is the raw ref alone.
     """
-    Code symbols a memory concerns (direction: memory → symbols).
-
-    The reverse of ``symbol_context``: returns each of the memory's ``symbol_refs``,
-    enriched with the live definition when witan-code is reachable, or the raw ref
-    strings otherwise.
-
-    Parameters
-    ----------
-    slug:
-        The memory whose ``symbol_refs`` to resolve. An unknown slug returns an
-        empty ``symbols`` list rather than raising.
-    """
-    rows = client.read("read.gq", "get_memory", {"slug": slug})
-    if not rows:
-        return {"slug": slug, "symbols": []}
-    node = rows[0]
-
+    if node is None:
+        return []
     code = _code_server()
     symbols: list[dict] = []
     for ref in node.get("symbol_refs") or []:
@@ -9151,7 +9047,7 @@ def memory_symbols(slug: str) -> dict:
             try:
                 name = ref.split("::")[-1]
                 repo = ref.split("#", 1)[0] if "#" in ref else None
-                defs = code.code_find_definition(name, repo)
+                defs = _code_result(code.code_find_definition(name, repo))
                 if defs:
                     entry["definition"] = defs
             except Exception:  # best-effort enrichment
@@ -9162,7 +9058,7 @@ def memory_symbols(slug: str) -> dict:
                     "witan.symbol.definition_lookup_failed", ref=ref, exc_info=True
                 )
         symbols.append(entry)
-    return {"slug": slug, "symbols": symbols}
+    return symbols
 
 
 # ── Graph-aware recall (spec §8) ──────────────────────────────────
@@ -9275,14 +9171,18 @@ def recall(
     limit: int = 20,
     include_superseded: bool = False,
     session_id: str | None = None,
+    memory: str | None = None,
+    contract: str | None = None,
+    contract_kind: ContractKind | None = None,
 ) -> dict:
     """
     Graph-aware contextual recall — the composition of every other memory tool.
 
-    Seeds from any combination of ``query`` (BM25), ``symbol_id``
-    (``symbol_context``), ``task`` (memories it Addresses, those sharing its
-    symbol_refs, and those its title closely matches), and ``topic`` (memories
-    tagged to it). Expands ``hops``
+    Seeds from any combination of ``query`` (BM25), ``symbol_id`` (memories
+    whose symbol_refs include it), ``task`` (memories it Addresses, those
+    sharing its symbol_refs, and those its title closely matches), ``topic``
+    and ``contract`` (memories tagged to it), and ``memory`` (that memory).
+    Expands ``hops``
     (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
     provenance siblings; prunes superseded memories (unless
     ``include_superseded``); flags Contradicts pairs; and re-ranks with the
@@ -9320,6 +9220,31 @@ def recall(
     ``content_truncated`` and ``content_chars``; ``memory_get`` returns the full
     text.
 
+    Some seeds also add a section about the seed itself, which the ranked list
+    has no room for. Each key is present only when its argument was passed:
+
+    - ``topic``: the resolved Topic node, or ``null`` when there is none.
+    - ``symbol``: ``{"symbol_id", "tasks"}``, the tasks whose ``symbol_refs``
+      include it (direction: symbol -> work).
+    - ``memory``: ``{"slug", "neighbors", "symbols"}``. ``neighbors`` holds the
+      memories directly linked to it, grouped by edge kind (``supersedes``,
+      ``superseded_by``, ``refines``, ``applies_to``, ``related_to``,
+      ``contradicts``; every kind present, each possibly empty, symmetric kinds
+      unioned over both directions), each carrying an ``edge`` dict
+      (``{confidence, role, author, created_at}``, all ``null`` on links made
+      before edge properties existed). ``symbols`` is each of its
+      ``symbol_refs`` as ``{"symbol_ref", "definition"?}`` (direction: memory
+      -> symbols), the definition looked up in witan-code when it is reachable.
+    - ``contract``: ``{"key_norm", "kind", "topic", "bindings"}``, where
+      ``bindings`` is ``{"providers", "consumers"}`` from witan-code's bridge
+      store when ``contract_kind`` is given and witan-code is reachable, and
+      empty lists otherwise.
+
+    To list exactly what a seed resolves to, with nothing ranked out or pruned,
+    pass ``hops=0``, ``include_superseded=True`` and a ``limit`` above the
+    expected count: e.g. every memory tagged to a topic, or every memory citing
+    a symbol.
+
     Parameters
     ----------
     query:
@@ -9337,7 +9262,9 @@ def recall(
     topic:
         A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,
         ``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join
-        surface, so this seed in particular can pull in other repositories.
+        surface, so this seed in particular can pull in other repositories. A
+        spec resolves through the same slugify used on write, so a tag stored
+        as ``UV`` is found by ``uv:topic``.
     repo:
         Repo scoping — see instructions. Applies to the ``query`` seed and to
         which contradiction pairs are reported (see above); symbol, task, and
@@ -9362,6 +9289,21 @@ def recall(
     session_id:
         The calling agent session's id. Only logged, never changes the result;
         see ``memory_get``.
+    memory:
+        A memory slug to seed from, which adds the ``memory`` section: its
+        links by kind and the code symbols it names. Use after ``memory_get``
+        to see what a memory connects to.
+    contract:
+        A normalised contract key (e.g. ``DATABASE_URL`` or
+        ``GET /api/v1/courses/``) to seed from: the memories tagged to its
+        ``<key>:contract`` Topic, cross-repo by nature. Adds the ``contract``
+        section. Tag a memory to a contract with
+        ``memory_link(<memory slug>, "<key_norm>:contract", "tagged")``.
+    contract_kind:
+        ``env_var`` | ``endpoint`` | ``package`` | ``service``. With
+        ``contract``, also asks witan-code for the code that provides or
+        consumes the key, so you can pivot from what we know to where it lives.
+        Omit to skip that lookup.
     """
     hops = max(0, min(hops, 2))
     now = datetime.now(UTC)
@@ -9373,7 +9315,16 @@ def recall(
     # dedupes by slug, so a slug reaches it once. The task seed comes later and
     # can meet a slug again, so it says what happens then.
     seed_relevance: dict[str, float] = {}
-    seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
+    seeds: dict[str, list[str]] = {
+        "query": [],
+        "symbol": [],
+        "task": [],
+        "topic": [],
+        "memory": [],
+        "contract": [],
+    }
+    # The sections a seed adds about itself; see the docstring.
+    sections: dict = {}
     # slug → cheapest distance from a seed. FRACTIONAL, not the hop count: an
     # inferred edge costs `w_inferred_edge` extra, so a neighbour reached only
     # by a guessed link sits further out than one reached by an asserted link
@@ -9392,8 +9343,10 @@ def recall(
             seed_relevance[r["slug"]] = r[_RELEVANCE_KEY]
             add_seed(r["slug"], "query")
     if symbol_id:
-        for m in _context_for_symbol(symbol_id)["memories"]:
+        found = _context_for_symbol(symbol_id)
+        for m in found["memories"]:
             add_seed(m["slug"], "symbol")
+        sections["symbol"] = {"symbol_id": symbol_id, "tasks": found["tasks"]}
     if task:
         # A link someone chose gets the top of the content band and a title
         # match the band below it. That leads rather than guarantees: recency,
@@ -9414,12 +9367,40 @@ def recall(
                 seed_relevance.setdefault(m["slug"], m[_RELEVANCE_KEY])
                 add_seed(m["slug"], "task")
     if topic:
-        topic_slug = _lookup_topic_slug(topic)
-        if topic_slug:
+        sections["topic"] = _resolve_topic(topic)
+        if sections["topic"]:
             for m in client.read(
-                "read.gq", "memories_for_topic", {"topic_slug": topic_slug}
+                "read.gq",
+                "memories_for_topic",
+                {"topic_slug": sections["topic"]["slug"]},
             ):
                 add_seed(m["slug"], "topic")
+    if contract:
+        contract_topic = _resolve_topic(f"{contract}:contract")
+        if contract_topic:
+            for m in client.read(
+                "read.gq", "memories_for_topic", {"topic_slug": contract_topic["slug"]}
+            ):
+                add_seed(m["slug"], "contract")
+        sections["contract"] = {
+            "key_norm": contract,
+            "kind": contract_kind,
+            "topic": contract_topic,
+            "bindings": (
+                _contract_bindings(contract, contract_kind)
+                if contract_kind
+                else {"providers": [], "consumers": []}
+            ),
+        }
+    if memory:
+        rows = client.read("read.gq", "get_memory", {"slug": memory})
+        if rows:
+            add_seed(memory, "memory")
+        sections["memory"] = {
+            "slug": memory,
+            "neighbors": _memory_neighbors(memory),
+            "symbols": _memory_symbols(rows[0] if rows else None),
+        }
 
     # ── Expand ────────────────────────────────────────────────────
     _expand_from_seeds(candidates, hops)
@@ -9427,7 +9408,7 @@ def recall(
     # No seeds matched (and nothing to expand from) — skip the global edge scan.
     if not candidates:
         _log_memory_read("recall", [], session_id, logged_task)
-        return {"memories": [], "contradictions": [], "seeds": {}}
+        return {"memories": [], "contradictions": [], "seeds": {}, **sections}
 
     # ── Prune + score ─────────────────────────────────────────────
     edge_index = _edge_index()
@@ -9507,4 +9488,5 @@ def recall(
         "memories": returned,
         "contradictions": contradictions,
         "seeds": {k: v for k, v in seeds.items() if v},
+        **sections,
     }

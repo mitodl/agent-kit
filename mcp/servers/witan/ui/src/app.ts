@@ -1180,16 +1180,18 @@ type MemoryScope = Pick<
  * plain toggle asks for `memory_search`; neither is the landing state, which
  * is the contradictions inbox over a browse list.
  *
- * ★ `topic_get` TAKES NO REPO, KIND OR SUPERSEDED FLAG. A topic is the
+ * ★ THE TOPIC READ TAKES NO REPO, KIND OR SUPERSEDED FLAG. A topic is the
  * cross-repo join surface by design, so its list ignores the repo filter; the
- * kind is applied here, and the view hides the superseded toggle.
+ * kind is applied here, and the view hides the superseded toggle (`topicGet`
+ * always includes superseded memories).
  */
 async function readMemoryPage(scope: MemoryScope): Promise<MemoryPage> {
 	const { repo, q, plain, superseded } = scope;
 	const kind = scope.kind ?? undefined;
 	if (scope.topic) {
 		const result = await topicGet(scope.topic);
-		// `topic_get` takes no kind either, so the Kind select narrows here.
+		// `recall`'s `kind` narrows only a query seed, so the Kind select
+		// narrows here.
 		const memories = (result?.memories ?? []).filter(
 			(memory) => !kind || memory.kind === kind,
 		);

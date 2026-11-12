@@ -193,7 +193,7 @@ async def _seed(srv) -> dict[str, str]:
         to_slug=other["slug"],
         kind="contradicts",
     )
-    # A memory the pattern replaced, so `memory_neighbors` records both sides
+    # A memory the pattern replaced, so `recall(memory=...)` records both sides
     # of `supersedes` and the default reads have something to prune.
     replaced = await call(
         "memory_store",
@@ -417,11 +417,7 @@ def _calls(slugs: dict[str, str]) -> dict[str, dict]:
         "memory_get": {"slug": slugs["memory"], "include_topics": True},
         "memory_list": {"kind": "pattern", "repo": ""},
         "memory_search": {"query": "wrap flag", "repo": ""},
-        "memory_neighbors": {"slug": slugs["memory"]},
         "memory_contradictions": {"repo": ""},
-        # `name:kind`, not a bare tag: a plain name resolves nothing and the
-        # fixture would record the null case twice over.
-        "topic_get": {"topic": "witan-ui:topic"},
         # `repo` explicit, as for every other tool: "" is every repo.
         "code_repo_dependencies": {"repo": ""},
         # `kind` and `key` explicit: the ADR 0011 amendment's rule, and what
@@ -515,17 +511,35 @@ async def _collect(store: Path) -> dict[str, str]:
             default=str,
         )
 
-        # The superseded side, whose `superseded_by` is the only non-empty
-        # inbound group, and the reason a reader landing here needs the view.
-        replaced_result = await client.call_tool(
-            "memory_neighbors", {"slug": slugs["replaced"]}
-        )
-        written["memory_neighbors.superseded.json"] = json.dumps(
-            _normalize(_jsonable(replaced_result.structured_content), seen),
-            indent=2,
-            sort_keys=True,
-            default=str,
-        )
+        # `recall`'s seed sections, called the way `mcp.ts` calls them: the
+        # detail panel's links by kind, and a topic page. The superseded side
+        # is recorded too, because its `superseded_by` is the only non-empty
+        # inbound group, and the reason a reader landing there needs the view.
+        # The topic is a `name:kind` spec, not a bare tag: a plain name
+        # resolves nothing and would record only the null case.
+        memory_panel = {"repo": "", "hops": 0, "limit": 1}
+        sections = {
+            "recall.memory.json": {"memory": slugs["memory"], **memory_panel},
+            "recall.memory.superseded.json": {
+                "memory": slugs["replaced"],
+                **memory_panel,
+            },
+            "recall.topic.json": {
+                "topic": "witan-ui:topic",
+                "repo": "",
+                "hops": 0,
+                "limit": 500,
+                "include_superseded": True,
+            },
+        }
+        for filename, args in sections.items():
+            section_result = await client.call_tool("recall", args)
+            written[filename] = json.dumps(
+                _normalize(_jsonable(section_result.structured_content), seen),
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
 
         empty_result = await client.call_tool(
             "task_list", {"repo": "https://github.com/example/nothing-here"}

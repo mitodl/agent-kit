@@ -241,21 +241,16 @@ _ADMIN_ONLY = frozenset(
 # be: it reads sessions but writes the Memory nodes it mines out of them.
 _READ_ONLY = frozenset(
     {
-        "memory_for_contract",
         "memory_contradictions",
         "memory_get",
         "memory_list",
-        "memory_neighbors",
         "memory_search",
-        "memory_symbols",
         "recall",
-        "symbol_context",
         "task_for_branch",
         "task_get",
         "task_list",
         "task_ready",
         "task_search",
-        "topic_get",
         "workflow_project_get",
         "workflow_project_list",
         "workflow_project_memories",

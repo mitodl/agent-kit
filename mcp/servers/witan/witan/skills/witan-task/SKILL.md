@@ -380,5 +380,6 @@ task_create(
 )
 ```
 
-`symbol_context(symbol_id)` lists the tasks and memories attached to a
-symbol — call it before editing that code to surface related open work.
+`recall(symbol_id=…)` lists the memories attached to a symbol, and its
+`symbol` section the tasks. Call it before editing that code to surface related
+open work.

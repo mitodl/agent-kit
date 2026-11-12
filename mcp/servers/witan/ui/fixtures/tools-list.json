@@ -111,14 +111,6 @@
     },
     "wrapped": true
   },
-  "memory_neighbors": {
-    "optional": false,
-    "output_schema": {
-      "additionalProperties": true,
-      "type": "object"
-    },
-    "wrapped": false
-  },
   "memory_search": {
     "optional": false,
     "output_schema": {
@@ -221,30 +213,6 @@
             "type": "object"
           },
           "type": "array"
-        }
-      },
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "x-fastmcp-wrap-result": true
-    },
-    "wrapped": true
-  },
-  "topic_get": {
-    "optional": false,
-    "output_schema": {
-      "properties": {
-        "result": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [

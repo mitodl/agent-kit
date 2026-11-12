@@ -436,13 +436,14 @@ def test_recall_logs_only_a_task_slug_that_resolved(server, logged):
 
 
 @requires_omnigraph
-def test_resolving_a_memorys_symbols_is_not_logged_as_a_read(server, logged):
-    """It reads the row internally; counting that would inflate the reads."""
+def test_a_memory_seed_is_logged_as_one_read(server, logged):
+    """Resolving its symbols reads the row again; that is not a second read."""
     match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
 
-    server.memory_symbols(match["slug"])
+    server.recall(memory=match["slug"], hops=0)
 
-    assert "witan.memory.read" not in logged
+    (line,) = logged["witan.memory.read"]
+    assert line["slugs"] == [match["slug"]]
 
 
 @requires_omnigraph

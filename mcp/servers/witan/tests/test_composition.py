@@ -22,15 +22,16 @@ def test_context_for_symbol_finds_memory_and_task(server):
         symbol_refs=[SID],
     )
 
-    ctx = server.symbol_context(SID)
-    assert ctx["symbol_id"] == SID
+    ctx = server.recall(symbol_id=SID, hops=0, include_superseded=True)
+    assert ctx["symbol"]["symbol_id"] == SID
+    assert ctx["seeds"]["symbol"] == [mem["slug"]]
     assert mem["slug"] in {m["slug"] for m in ctx["memories"]}
-    assert tk["slug"] in {t["slug"] for t in ctx["tasks"]}
+    assert tk["slug"] in {t["slug"] for t in ctx["symbol"]["tasks"]}
 
 
 @requires_omnigraph
 def test_context_for_unrelated_symbol_is_empty(server):
     server.memory_store(kind="lesson", title="x", content="y", symbol_refs=[SID])
-    ctx = server.symbol_context(SID + "::other")
+    ctx = server.recall(symbol_id=SID + "::other", hops=0)
     assert ctx["memories"] == []
-    assert ctx["tasks"] == []
+    assert ctx["symbol"]["tasks"] == []

@@ -196,7 +196,7 @@ function toolbar(
 				event.preventDefault();
 				const form = event.currentTarget as HTMLFormElement;
 				const q = new FormData(form).get("q");
-				// A search replaces a topic rather than narrowing it: topic_get takes
+				// A search replaces a topic rather than narrowing it: `topicGet` takes
 				// no query, so keeping both would show a search box that does nothing.
 				onNavigate({ q: typeof q === "string" ? q.trim() : "", topic: null });
 			}}
@@ -241,8 +241,8 @@ function toolbar(
         Plain search
       </label>
       ${
-				// `topic_get` takes no superseded flag, so in a topic the toggle
-				// would be a control that changes nothing.
+				// `topicGet` always includes superseded memories, so in a topic the
+				// toggle would be a control that changes nothing.
 				route.topic
 					? nothing
 					: html`<label>
@@ -483,8 +483,10 @@ function memoryTable(
 			? page.pairs.flatMap((pair) => [pair.a, pair.b])
 			: [],
 	);
-	// `topic_get` returns slim rows with no author and no tags, and a column of
-	// dashes reads as "nobody wrote these" rather than "not in this read".
+	// A topic page keeps the columns it had when its read was `topic_get`,
+	// whose slim rows had no author and no tags (a column of dashes would have
+	// read as "nobody wrote these"). `recall` sends both now, so showing them
+	// is open as a follow-up.
 	const full = page.mode !== "topic";
 	return html`
     <section>
@@ -679,8 +681,8 @@ function topics(
 									topic: topic.slug,
 									q: "",
 									slug: null,
-									// `topic_get` rows are slim, with none of the facet fields,
-									// so a facet carried over would filter every row out.
+									// Facets reset on entering a topic, as they did when its rows
+									// were `topic_get`'s slim ones with none of the facet fields.
 									facets: DEFAULT_ROUTE.facets,
 								})}
                 >${topic.name}</a

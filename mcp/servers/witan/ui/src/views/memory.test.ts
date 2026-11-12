@@ -9,13 +9,13 @@ import memoryGetFixture from "../../fixtures/memory_get.json" with {
 import memoryListFixture from "../../fixtures/memory_list.json" with {
 	type: "json",
 };
-import neighborsFixture from "../../fixtures/memory_neighbors.json" with {
-	type: "json",
-};
-import supersededFixture from "../../fixtures/memory_neighbors.superseded.json" with {
-	type: "json",
-};
 import recallFixture from "../../fixtures/recall.json" with { type: "json" };
+import neighborsFixture from "../../fixtures/recall.memory.json" with {
+	type: "json",
+};
+import supersededFixture from "../../fixtures/recall.memory.superseded.json" with {
+	type: "json",
+};
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import type {
 	Memory,
@@ -37,11 +37,10 @@ import {
 
 const memory = unwrap<Memory>("memory_get", memoryGetFixture);
 const listed = unwrap<Memory[]>("memory_list", memoryListFixture);
-const neighbors = unwrap<MemoryNeighbors>("memory_neighbors", neighborsFixture);
-const superseded = unwrap<MemoryNeighbors>(
-	"memory_neighbors",
-	supersededFixture,
-);
+const neighbors = unwrap<RecallResult>("recall", neighborsFixture)
+	.memory as MemoryNeighbors;
+const superseded = unwrap<RecallResult>("recall", supersededFixture)
+	.memory as MemoryNeighbors;
 const pairs = unwrap<MemoryContradiction[]>(
 	"memory_contradictions",
 	contradictionsFixture,
@@ -287,7 +286,7 @@ describe("the topic list", () => {
 		expect(root.querySelector("table")).toBeNull();
 	});
 
-	it("offers no control topic_get cannot honour, and no column it does not send", () => {
+	it("offers no control the topic read cannot honour, and no column it does not send", () => {
 		draw(
 			{
 				mode: "topic",
@@ -386,6 +385,7 @@ describe("memoryDetail", () => {
 			neighbors: Object.fromEntries(
 				Object.keys(neighbors.neighbors).map((kind) => [kind, []]),
 			),
+			symbols: [],
 		};
 		panel(none, bare);
 

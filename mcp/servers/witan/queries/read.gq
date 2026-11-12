@@ -201,7 +201,7 @@ query memory_score_columns($slugs: [String]) {
 // schema.pg's edge properties become projectable columns — which is the only
 // way to read them at all. It also drops set semantics: the unbound form yields
 // one row per matched (src, dst) pair, the bound form one row PER EDGE, so two
-// parallel edges between the same pair are two rows. `memory_neighbors`
+// parallel edges between the same pair are two rows. `recall(memory=...)`
 // de-duplicates on the neighbour slug to hold its documented contract; the
 // `order { $w.created_at desc }` below is what makes the survivor the newest
 // link rather than an arbitrary one.

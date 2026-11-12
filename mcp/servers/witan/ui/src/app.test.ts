@@ -17,10 +17,13 @@ import memoryGetFixture from "../fixtures/memory_get.json" with {
 import memoryListFixture from "../fixtures/memory_list.json" with {
 	type: "json",
 };
-import neighborsFixture from "../fixtures/memory_neighbors.json" with {
+import recallFixture from "../fixtures/recall.json" with { type: "json" };
+import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 	type: "json",
 };
-import recallFixture from "../fixtures/recall.json" with { type: "json" };
+import recallTopicFixture from "../fixtures/recall.topic.json" with {
+	type: "json",
+};
 import taskGetFixture from "../fixtures/task_get.json" with { type: "json" };
 import taskListFixture from "../fixtures/task_list.json" with { type: "json" };
 import taskReadyFixture from "../fixtures/task_ready.json" with {
@@ -29,7 +32,6 @@ import taskReadyFixture from "../fixtures/task_ready.json" with {
 import taskSearchFixture from "../fixtures/task_search.json" with {
 	type: "json",
 };
-import topicGetFixture from "../fixtures/topic_get.json" with { type: "json" };
 import projectGetFixture from "../fixtures/workflow_project_get.json" with {
 	type: "json",
 };
@@ -53,7 +55,7 @@ import type {
 	TaskDetail,
 	TaskRow,
 	TaskSearchRow,
-	TopicResult,
+	Topic,
 	WorkflowProjectDetail,
 	WorkflowProjectSummary,
 	WorkflowSession,
@@ -195,7 +197,8 @@ beforeEach(() => {
 		unwrap<Memory[]>("memory_list", memoryListFixture),
 	);
 	vi.mocked(mcp.memoryNeighbors).mockResolvedValue(
-		unwrap<MemoryNeighbors>("memory_neighbors", neighborsFixture),
+		unwrap<RecallResult>("recall", recallMemoryFixture)
+			.memory as MemoryNeighbors,
 	);
 	vi.mocked(mcp.memorySearch).mockResolvedValue(
 		unwrap<Memory[]>("memory_list", memoryListFixture),
@@ -203,9 +206,11 @@ beforeEach(() => {
 	vi.mocked(mcp.recall).mockResolvedValue(
 		unwrap<RecallResult>("recall", recallFixture),
 	);
-	vi.mocked(mcp.topicGet).mockResolvedValue(
-		unwrap<TopicResult>("topic_get", topicGetFixture),
-	);
+	const topicPage = unwrap<RecallResult>("recall", recallTopicFixture);
+	vi.mocked(mcp.topicGet).mockResolvedValue({
+		topic: topicPage.topic as Topic,
+		memories: topicPage.memories,
+	});
 
 	window.location.hash = "";
 	root = document.createElement("div");
@@ -1041,7 +1046,7 @@ describe("App", () => {
 		expect(mcp.memoryList).not.toHaveBeenCalled();
 	});
 
-	it("narrows a topic by kind in the browser, since topic_get takes none", async () => {
+	it("narrows a topic by kind in the browser, since the topic read takes none", async () => {
 		await open("#memory?topic=tp-topic-witan-ui&kind=lesson");
 		await vi.waitFor(() =>
 			expect(root.querySelector(".topic-heading")).not.toBeNull(),

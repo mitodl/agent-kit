@@ -237,8 +237,8 @@ def clean_desc(text: str | None) -> str:
 
 # Which page each tool lands on, and the order the pages are listed in. Grouped
 # by the concept a reader is holding in their head ("I want to record something"
-# / "I want to coordinate work"), not by module or prefix — `recall` and
-# `topic_get` belong with memory even though they share no prefix with it.
+# / "I want to coordinate work"), not by module or prefix: `recall` belongs with
+# memory even though it shares no prefix with it.
 TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
     (
         "memory",
@@ -258,12 +258,7 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "memory_list",
             "memory_search",
             "memory_link",
-            "memory_neighbors",
             "memory_contradictions",
-            "memory_symbols",
-            "memory_for_contract",
-            "symbol_context",
-            "topic_get",
             "store_merge",
             # The repair half of `store_merge`: it restamps rows a migration
             # already landed under a local identity, which `store_merge`'s own

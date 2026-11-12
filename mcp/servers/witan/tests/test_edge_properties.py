@@ -14,7 +14,7 @@ import pytest
 from witan.config import RankConfig
 from witan.scan import WriteBlocked
 
-from .conftest import edge_rows, requires_omnigraph
+from .conftest import edge_rows, requires_omnigraph, topic_of
 
 
 def _only(neighbors, kind):
@@ -46,7 +46,9 @@ def test_link_stamps_provenance_on_the_edge(server):
     # `role` is deliberately absent from the response — see
     # test_link_does_not_report_the_role_it_was_given. Read it back instead.
 
-    edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
+    edge = _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")[
+        "edge"
+    ]
     assert edge["confidence"] == "asserted"
     assert edge["role"] == "both configure the sidecar"
     assert edge["author"]
@@ -61,7 +63,7 @@ def test_edge_timestamp_is_the_links_not_the_nodes(server):
     b = server.memory_store(kind="pattern", title="b", content="beta content")
     server.memory_link(a["slug"], b["slug"], "related_to")
 
-    row = _only(server.memory_neighbors(a["slug"]), "related_to")
+    row = _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")
     assert row["created_at"] == server.memory_get(b["slug"])["created_at"]
     assert row["edge"]["created_at"] >= row["created_at"]
 
@@ -72,7 +74,7 @@ def test_role_is_optional(server):
     b = server.memory_store(kind="pattern", title="b", content="beta content")
     server.memory_link(a["slug"], b["slug"], "refines")
 
-    edge = _only(server.memory_neighbors(a["slug"]), "refines")["edge"]
+    edge = _only(server.recall(memory=a["slug"], hops=0)["memory"], "refines")["edge"]
     assert edge["role"] is None
     assert edge["confidence"] == "asserted"
 
@@ -83,7 +85,9 @@ def test_caller_can_mark_a_link_inferred(server):
     b = server.memory_store(kind="pattern", title="b", content="beta content")
     server.memory_link(a["slug"], b["slug"], "related_to", confidence="inferred")
 
-    edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
+    edge = _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")[
+        "edge"
+    ]
     assert edge["confidence"] == "inferred"
 
 
@@ -96,7 +100,7 @@ def test_every_memory_edge_kind_carries_properties(server, kind):
     b = server.memory_store(kind="pattern", title="b", content="beta content")
     server.memory_link(a["slug"], b["slug"], kind, role="why")
 
-    edge = _only(server.memory_neighbors(a["slug"]), kind)["edge"]
+    edge = _only(server.recall(memory=a["slug"], hops=0)["memory"], kind)["edge"]
     assert edge["role"] == "why"
     assert edge["confidence"] == "asserted"
 
@@ -111,7 +115,7 @@ def test_tag_derived_edges_are_inferred(server):
     m = server.memory_store(
         kind="pattern", title="a", content="alpha content", tags=["vault"]
     )
-    topic = server.topic_get("vault:topic")
+    topic = topic_of(server, "vault:topic")
     assert [t["slug"] for t in topic["memories"]] == [m["slug"]]
     edge = _topic_edge(server, m["slug"], topic["topic"]["slug"])
     assert edge["confidence"] == "inferred"
@@ -140,7 +144,9 @@ def test_relinking_does_not_duplicate_a_neighbour(server):
 
     assert len(edge_rows(server.client, "RelatedTo", a["slug"], b["slug"])) == 1
     assert (
-        _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]["role"]
+        _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")["edge"][
+            "role"
+        ]
         == "second"
     )
 
@@ -154,7 +160,10 @@ def test_symmetric_union_still_dedupes_across_directions(server):
     server.memory_link(a["slug"], b["slug"], "contradicts")
     server.memory_link(b["slug"], a["slug"], "contradicts")
 
-    assert _only(server.memory_neighbors(a["slug"]), "contradicts")["slug"] == b["slug"]
+    assert (
+        _only(server.recall(memory=a["slug"], hops=0)["memory"], "contradicts")["slug"]
+        == b["slug"]
+    )
 
 
 @requires_omnigraph
@@ -167,7 +176,7 @@ def test_newest_edge_wins_across_the_symmetric_union(server):
     server.memory_link(a["slug"], b["slug"], "related_to", role="out-older")
     server.memory_link(b["slug"], a["slug"], "related_to", role="in-newer")
 
-    row = _only(server.memory_neighbors(a["slug"]), "related_to")
+    row = _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")
     assert row["edge"]["role"] == "in-newer"
 
 
@@ -192,7 +201,9 @@ def test_an_unstamped_edge_never_beats_a_stamped_one(server):
     )
     server.memory_link(a["slug"], b["slug"], "related_to", role="stamped")
 
-    edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
+    edge = _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")[
+        "edge"
+    ]
     assert edge["role"] == "stamped"
 
 
@@ -211,7 +222,9 @@ def test_link_does_not_report_the_role_it_was_given(server):
     res = server.memory_link(a["slug"], b["slug"], "related_to", role="why these two")
     assert set(res["edge"]) == {"confidence", "author", "created_at"}
     # …and the stored role is still readable, from the graph.
-    edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
+    edge = _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")[
+        "edge"
+    ]
     assert edge["role"] == "why these two"
 
 
@@ -229,7 +242,7 @@ def test_updating_a_memory_does_not_relink_tags_it_already_has(server):
     for i in range(3):
         server.memory_update(m["slug"], content=f"alpha {i}", tags=["shared"])
 
-    topic = server.topic_get("shared:topic")["topic"]["slug"]
+    topic = topic_of(server, "shared:topic")["topic"]["slug"]
     assert len(edge_rows(server.client, "Tagged", m["slug"], topic)) == 1
 
 
@@ -286,7 +299,7 @@ def test_topic_siblings_does_not_multiply_by_repeated_links(server):
     b = server.memory_store(
         kind="pattern", title="b", content="beta content", tags=["shared"]
     )
-    topic = server.topic_get("shared:topic")["topic"]["slug"]
+    topic = topic_of(server, "shared:topic")["topic"]["slug"]
     # Repeat the links an older witan accumulated as parallel edges, on BOTH
     # sides; keyed, each repeat upserts the one existing edge.
     for slug in (a["slug"], b["slug"]):
@@ -433,7 +446,9 @@ def test_unstamped_edges_score_as_asserted(server):
         },
     )
     assert server._expand_neighbors([a["slug"]]) == {a["slug"]: {b["slug"]: True}}
-    assert _only(server.memory_neighbors(a["slug"]), "related_to")["edge"] == {
+    assert _only(server.recall(memory=a["slug"], hops=0)["memory"], "related_to")[
+        "edge"
+    ] == {
         "confidence": None,
         "role": None,
         "author": None,
