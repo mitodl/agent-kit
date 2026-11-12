@@ -515,6 +515,19 @@ def test_blocked_project_not_ready(server):
 
 
 @requires_omnigraph
+def test_project_search_applies_the_ready_filter(server):
+    """The search rows carry `blocked_by`, so `ready` sees the blocker."""
+    upstream = server.workflow_project_create(title="zorblat up", description="d")
+    downstream = server.workflow_project_create(title="zorblat down", description="d")
+    server.workflow_project_update(
+        downstream["slug"], add_blocked_by=[upstream["slug"]]
+    )
+
+    ready = server.workflow_project_list(query="zorblat", ready=True, repo="")
+    assert {p["slug"] for p in ready} == {upstream["slug"]}
+
+
+@requires_omnigraph
 def test_blocking_completed_project_does_not_block(server):
     """If the blocker is already completed the downstream project is still ready."""
     upstream = server.workflow_project_create(title="already done", description="d")

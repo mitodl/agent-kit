@@ -5893,10 +5893,13 @@ def workflow_project_update(
         "updated_at": now,
     }
     # The envelope lists and `blocked_by` are written only when passed, each by
-    # its own mutation, never copied forward from `current`: a stale copy would
-    # restore a grant another session just revoked, or drop a reservation it
-    # just added. The general fields are skipped on a call that touches only
-    # those lists for the same reason.
+    # its own mutation, so a call that changes one of them never rewrites the
+    # others from a stale `current`: that would restore a grant another session
+    # just revoked, or drop a reservation it just added. The general fields are
+    # skipped on a call that touches only those lists for the same reason.
+    # `blocked_by` itself is still read-modify-write from `current`, so two
+    # concurrent `add_blocked_by` calls can drop one entry (the edge survives);
+    # the removed `workflow_project_block` had the same race.
     lists_only = any(
         v is not None
         for v in (preauthorized, reserved_decisions, add_blocked_by, remove_blocked_by)
