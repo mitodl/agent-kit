@@ -823,3 +823,93 @@ def test_a_branch_name_with_a_slash_is_not_read_as_a_view_name(tmp_path, monkeyp
         "slashed_branch_symbol", repo=REPO, branch="feature/new-api"
     )
     assert found, "a raw git branch with a slash must map through sanitization"
+
+
+# ── `branch` on the id- and file-routed tools ─────────────────────
+#
+# Locally, these tools follow the checkout's branch view once it is indexed.
+# A symbol that branch removed is gone from that view, so a caller asking
+# "what did this removal break" needs to read main: `branch="main"`.
+
+MAIN_SVC = SAMPLE + (
+    '\n\ndef retired():\n    return os.environ["SHARED_URL"] or helper()\n'
+)
+BRANCH_SVC = SAMPLE + "\n\ndef fresh():\n    return helper()\n"
+PROVIDER = "https://github.com/test/infra"
+
+
+@pytest.fixture
+def removal_on_an_indexed_branch(tmp_path, monkeypatch):
+    """`retired` on main, gone on `feature/x` (indexed), `fresh` added there.
+
+    `retired` reads SHARED_URL, which a second repo provides, so it has a
+    cross-repo surface on main and none in the branch's overlay.
+    """
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+
+    infra = tmp_path / "infra"
+    infra.mkdir()
+    (infra / "Pulumi.QA.yaml").write_text(
+        'config:\n  app:env_vars:\n    SHARED_URL: "https://x.example.com"\n'
+    )
+    indexer.index_path(infra, repo_override=PROVIDER, config=srv.cfg)
+
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    base = _git_repo(tmp_path / "r")
+    (base / "svc.py").write_text("import os\n" + MAIN_SVC)
+    indexer.index_path(base, config=srv.cfg)
+    _git(base, "checkout", "-q", "-b", "feature/x")
+    (base / "svc.py").write_text("import os\n" + BRANCH_SVC)
+    indexer.index_path(base, config=srv.cfg)
+
+    monkeypatch.chdir(base)
+    srv._clients.clear()
+    srv._store_branches.clear()
+    srv._git_context.clear()
+    return srv
+
+
+@requires_stack
+def test_symbols_in_file_reads_the_named_branchs_view(removal_on_an_indexed_branch):
+    srv = removal_on_an_indexed_branch
+
+    def names(**kwargs):
+        rows = _fn(srv.code_symbols_in_file)("svc.py", repo=REPO, **kwargs)
+        return {r["qualified_name"] for r in rows}
+
+    on_branch, on_main = names(), names(branch="main")
+    assert "fresh" in on_branch and "retired" not in on_branch
+    assert "retired" in on_main and "fresh" not in on_main
+
+
+@requires_stack
+def test_impact_walks_the_named_branchs_view(removal_on_an_indexed_branch):
+    srv = removal_on_an_indexed_branch
+    helper = f"{REPO}#svc.py::helper"
+
+    def callers(**kwargs):
+        impact = _fn(srv.code_impact)(helper, max_depth=1, **kwargs)
+        return {c["qualified_name"] for c in impact["impacted"]}
+
+    on_branch, on_main = callers(), callers(branch="main")
+    assert "fresh" in on_branch and "retired" not in on_branch
+    assert "retired" in on_main and "fresh" not in on_main
+
+
+@requires_stack
+def test_cross_repo_impact_reads_the_named_branchs_overlay(
+    removal_on_an_indexed_branch,
+):
+    srv = removal_on_an_indexed_branch
+    retired = f"{REPO}#svc.py::retired"
+
+    on_branch = _fn(srv.code_cross_repo_impact)(retired)
+    assert on_branch["cross_repo"] == [], "the branch's overlay no longer has it"
+
+    on_main = _fn(srv.code_cross_repo_impact)(retired, branch="main")
+    assert {b["repo"] for b in on_main["cross_repo"]} == {PROVIDER}

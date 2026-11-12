@@ -82,6 +82,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`doctor`](#witan-code-doctor)
     - [`deps`](#witan-code-deps)
     - [`symbols`](#witan-code-symbols)
+    - [`diff-impact`](#witan-code-diff-impact)
     - [`stitch`](#witan-code-stitch)
     - [`inject-context`](#witan-code-inject-context)
     - [`serve`](#witan-code-serve)
@@ -1160,12 +1161,17 @@ witan task close [OPTIONS] SLUG
 
 Close a task, recording an optional resolution.
 
-Closing a blocker unblocks its dependents.
+Closing a blocker unblocks its dependents. A live claim held by someone
+else is refused unless ``--force`` is passed.
 
 **Parameters**:
 
 * `SLUG, --slug`: The ``tk-`` slug to close. **[required]**
 * `--resolution STR`: Short note on what was done.
+* `--assignee STR`: Holder identity closing the task (default: the author). A claim taken
+    by another of your own sessions still matches, since the check is on
+    identity, not session.
+* `--force, --no-force`: Close even while another person's claim is live. *[default: False]*
 
 ### witan task claim
 
@@ -1227,6 +1233,8 @@ to add dependencies use ``task link``.
 * `--assignee STR`: Owner identity.
 * `--external-uri STR`: Reference URI (e.g. a GitHub issue or PR).
 * `--tags STR..., --empty-tags`: Replacement free-form tags.
+* `--force, --no-force`: With ``--status closed``, close even while another person's claim
+    is live. *[default: False]*
 
 ### witan task link
 
@@ -1722,6 +1730,34 @@ other repos' exports.
 * `REPO, --repo`: Canonical repo URI. Defaults to the repo detected from the CWD.
 * `ROLE, --role`: Filter to exported or external rows. *[choices: exported, external]*
 * `SCHEME, --scheme`: Filter to one symbol scheme (http/env/pkg/svc).
+
+### witan code diff-impact
+
+```console
+witan code diff-impact [OPTIONS] [ARGS]
+```
+
+What a branch's diff touches: changed symbols, callers, consumers, work.
+
+Maps the diff between ``head`` and its merge base with ``base`` to the
+symbols it changes, by parsing both sides of each changed file with the
+indexer's parser. For each changed symbol it lists callers (two levels,
+from the default branch's index), the test files that call or name it
+as a stand-in for tests to run, bindings in other repos that share its
+env vars, endpoints and packages, and the witan tasks and memories that
+cite it, plus the tasks claimed on the head branch. Changed test files
+are listed by file, not looked up. Every list carries its total, and
+the notes say what the answer cannot see (an unindexed repo, symbols
+missing from the index, callers in other files or only on this branch).
+Tasks and memories need witan (council) installed alongside.
+
+**Parameters**:
+
+* `BASE, --base`: The ref the branch merges into. *[default: origin/main]*
+* `HEAD, --head`: The ref under review. *[default: HEAD]*
+* `--repo STR`: Canonical repo URI. Defaults to the repo detected from the CWD.
+* `--limit INT`: Most changed symbols to look up; the rest are counted, not listed. *[default: 25]*
+* `--max-items INT`: Most callers, tests, consumers, tasks or memories listed per symbol. *[default: 10]*
 
 ### witan code stitch
 

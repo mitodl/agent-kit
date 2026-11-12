@@ -339,6 +339,12 @@ task_close(slug="<slug>", resolution="<what was done / outcome>")
 Closing a blocker automatically makes its dependents eligible for `task_ready`.
 Confirm and, if useful, run `task_ready()` again to show what just unblocked.
 
+A close comes back `{"closed": false, "reason": "held", ...}` with nothing
+written when another person holds a live claim on the task (any session of
+your own identity, or an expired lease, closes normally). That holder took the
+task over, so leave it to them; pass `force=True` only once you have confirmed
+their work is done or abandoned. The `remedy` says the same.
+
 ## Linking after the fact
 
 To add a dependency, hierarchy, or provenance link to existing tasks, use

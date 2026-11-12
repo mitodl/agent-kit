@@ -72,6 +72,37 @@ query search_symbols_by_kind($query: String, $kind: String) {
     limit 50
 }
 
+// ── Full-text symbol search (BM25 on docstring) ───────────────────
+// A second run rather than an `or` in the queries above, because the engine
+// will not `or` two `search` predicates in one match. server.py unions it
+// after the name run, so a docstring-only match never outranks a name match.
+
+query search_symbols_docstring($query: String) {
+    match {
+        $s: Symbol
+        search($s.docstring, $query)
+    }
+    return {
+        $s.slug, $s.repo, $s.file_id, $s.name, $s.qualified_name,
+        $s.kind, $s.start_line, $s.end_line, $s.signature
+    }
+    order { bm25($s.docstring, $query) desc }
+    limit 50
+}
+
+query search_symbols_docstring_by_kind($query: String, $kind: String) {
+    match {
+        $s: Symbol { kind: $kind }
+        search($s.docstring, $query)
+    }
+    return {
+        $s.slug, $s.repo, $s.file_id, $s.name, $s.qualified_name,
+        $s.kind, $s.start_line, $s.end_line, $s.signature
+    }
+    order { bm25($s.docstring, $query) desc }
+    limit 50
+}
+
 // ── File symbols ──────────────────────────────────────────────────
 
 query symbols_in_file($file_id: String) {

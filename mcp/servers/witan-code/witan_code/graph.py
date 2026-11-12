@@ -240,6 +240,10 @@ class OmnigraphClient(_BaseOmnigraphClient):
         "in each affected checkout."
     )
 
+    def __str__(self) -> str:
+        # The store a log line names, matching RemoteStoreClient's __str__.
+        return self.graph_uri
+
     def __init__(
         self,
         graph_uri: str,

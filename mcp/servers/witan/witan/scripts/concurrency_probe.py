@@ -1170,8 +1170,12 @@ def _cleanup(
     print("-" * 72)
     if task_slug:
         try:
+            # The racers claimed it as `probe-worker-N`, so the close is not
+            # the holder's own.
             srv.task_close(
-                slug=task_slug, resolution=f"concurrency probe {run_id} complete"
+                slug=task_slug,
+                resolution=f"concurrency probe {run_id} complete",
+                force=True,
             )
         except BaseException as exc:  # noqa: BLE001
             print(f"  cleanup: task {task_slug} left open ({type(exc).__name__})")

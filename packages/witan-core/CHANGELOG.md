@@ -12,11 +12,12 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
-- `witan_core.timeutil.parse_timestamp` parses an ISO-8601 timestamp into an
-  aware datetime, reading a naive one (what omnigraph returns for a
-  `DateTime`) as UTC and keeping an offset that is present. It raises on a
-  value that won't parse, so each caller decides what that means. witan
-  had eight copies of this parse; they now all call this one.
+- `RemoteMCPProxy._replay_result(entry, plan, result)`, called with a replayed
+  write's result before the replay reports it applied. A binding whose tool
+  refuses by returning an answer rather than raising returns a substitute
+  entry, which is sent in the write's place and reported `substituted`. A
+  retryable write whose substitute cannot be sent stays queued. The default
+  returns `None`, so replay behaves as before.
 
 ## [0.53.0] - 2026-11-12
 

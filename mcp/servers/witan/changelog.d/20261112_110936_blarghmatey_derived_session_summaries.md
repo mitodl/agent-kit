@@ -24,5 +24,5 @@
 
 ### Changed
 
-- Requires witan-core 0.54.0, for `witan_core.timeutil.parse_timestamp`, which
+- Requires witan-core 0.55.0, for `witan_core.timeutil.parse_timestamp`, which
   replaces eight local copies of the same naive-as-UTC timestamp parse.

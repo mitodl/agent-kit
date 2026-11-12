@@ -428,11 +428,40 @@ def task_comment_cmd(slug: str, text: str) -> None:
     )
 
 
+def _close_override(force: bool) -> dict:
+    """``task_close``/``task_update``'s ``force``, sent only when set.
+
+    A deployment older than that parameter rejects it as an unexpected
+    argument, and the remote proxy keeps a ``False`` (it drops only ``None``),
+    so an unforced close or update would fail there.
+    """
+    return {"force": True} if force else {}
+
+
+def _exit_if_close_refused(slug: str, result: dict) -> None:
+    """Print ``task_close``'s holder refusal and exit 1, if that is the answer."""
+    if result.get("closed") is not False:
+        return
+    console.print(
+        f"[yellow]Not closed[/yellow] ({esc(slug)} is held by "
+        f"{esc(result['held_by'])})."
+    )
+    console.print(f"  {esc(result['remedy'])}")
+    raise SystemExit(1)
+
+
 @task_app.command(name="close")
-def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
+def task_close_cmd(
+    slug: str,
+    *,
+    resolution: str | None = None,
+    assignee: str | None = None,
+    force: bool = False,
+) -> None:
     """Close a task, recording an optional resolution.
 
-    Closing a blocker unblocks its dependents.
+    Closing a blocker unblocks its dependents. A live claim held by someone
+    else is refused unless ``--force`` is passed.
 
     Parameters
     ----------
@@ -440,14 +469,23 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
         The ``tk-`` slug to close.
     resolution:
         Short note on what was done.
+    assignee:
+        Holder identity closing the task (default: the author). A claim taken
+        by another of your own sessions still matches, since the check is on
+        identity, not session.
+    force:
+        Close even while another person's claim is live.
     """
     s = _srv()
-    result = _fn(s.task_close)(slug=slug, resolution=resolution)
+    result = _fn(s.task_close)(
+        slug=slug, resolution=resolution, assignee=assignee, **_close_override(force)
+    )
     if _queued(result):
         return
     if not result:
         print_error(f"No task {slug!r}.")
         raise SystemExit(1)
+    _exit_if_close_refused(slug, result)
     console.print(f"[green]Closed[/green] [bold]{slug}[/bold]")
     if resolution:
         console.print(f"  resolution: {esc(resolution)}")
@@ -555,6 +593,7 @@ def task_update_cmd(
     assignee: str | None = None,
     external_uri: str | None = None,
     tags: list[str] | None = None,
+    force: bool = False,
 ) -> None:
     """Update a task's mutable fields (only provided fields change).
 
@@ -587,6 +626,9 @@ def task_update_cmd(
         Reference URI (e.g. a GitHub issue or PR).
     tags:
         Replacement free-form tags.
+    force:
+        With ``--status closed``, close even while another person's claim
+        is live.
     """
     s = _srv()
     result = _fn(s.task_update)(
@@ -602,12 +644,14 @@ def task_update_cmd(
         assignee=assignee,
         external_uri=external_uri,
         tags=_split_csv(tags),
+        **_close_override(force),
     )
     if _queued(result):
         return
     if not result:
         print_error(f"No task {slug!r}.")
         raise SystemExit(1)
+    _exit_if_close_refused(slug, result)
     console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
     console.print(
         f"  status={_styled(result.get('status', ''), _STATUS_STYLE)}  "

@@ -31,7 +31,15 @@ def dump_structured(
     has no bare top-level array. Callers normalize ``None`` before reaching this
     helper so TOML never receives unsupported null values.
     """
-    payload = {"title": title, "rows": rows}
+    dump_payload({"title": title, "rows": rows}, fmt)
+
+
+def dump_payload(payload: dict[str, object], fmt: OutputFormat) -> None:
+    """Print one structured document as JSON, TOML, or YAML.
+
+    TOML has no null, so a caller passing ``None`` anywhere in ``payload``
+    gets a ``tomli_w`` error under ``--output-format toml``.
+    """
     if fmt == "json":
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     elif fmt == "yaml":

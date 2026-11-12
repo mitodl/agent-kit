@@ -366,23 +366,44 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     same rule ``task_release`` applies: a close queued from a plain shell on a
     task one of your agent sessions claimed is still yours to close.
 
-    A ``task_release`` that named its ``assignee`` is compared as that holder,
-    because the tool releases as it (``server._claim_holder`` lets an explicit
-    assignee override the caller's identity): a worker that claimed as
-    ``ci-worker`` releases as ``ci-worker``, not as its token's user.
+    A ``task_release`` or ``task_close`` that named its ``assignee`` is
+    compared as that holder, because the tool acts as it
+    (``server._claim_holder`` lets an explicit assignee override the caller's
+    identity): a worker that claimed as ``ci-worker`` releases and closes as
+    ``ci-worker``, not as its token's user. ``task_update``'s ``assignee`` is
+    the task's new holder, not the caller, so it is not read this way.
+
+    A write queued with ``force`` skips the holder comparison: the caller
+    already said to override another person's claim, and the tool will.
     """
     holder = entry.holder
-    if entry.tool == "task_release" and "assignee" in entry.args:
+    if entry.tool in ("task_release", "task_close") and "assignee" in entry.args:
         holder = entry.args["assignee"]
     assignee = task.get("assignee")
-    if assignee and readiness.holder_identity(assignee) != readiness.holder_identity(
-        holder
+    if (
+        assignee
+        and not entry.args.get("force")
+        and readiness.holder_identity(assignee) != readiness.holder_identity(holder)
     ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")
     if closed_at and parse_timestamp(closed_at) >= parse_timestamp(entry.ts):
         return f"the task was closed at {closed_at}"
     return None
+
+
+def _conflict_comment(entry: JournalEntry, reason: str) -> JournalEntry:
+    """The comment a queued task write that no longer applies is replayed as."""
+    text = (
+        f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
+        f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
+    )
+    return dataclasses.replace(
+        entry,
+        tool="task_comment",
+        args={"slug": entry.args["slug"], "text": text},
+        context=None,
+    )
 
 
 # Rows per page of the exact-title scan, growing to the tool's own maximum.
@@ -461,16 +482,7 @@ class RemoteServerProxy(RemoteMCPProxy):
             task = await call("task_get", {"slug": entry.args["slug"]})
             reason = _replay_conflict(task, entry) if task else None
             if reason is not None:
-                text = (
-                    f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
-                    f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
-                )
-                return dataclasses.replace(
-                    entry,
-                    tool="task_comment",
-                    args={"slug": entry.args["slug"], "text": text},
-                    context=None,
-                )
+                return _conflict_comment(entry, reason)
         elif entry.tool == "task_create":
             title = entry.args["title"]
             duplicate = await _created_since(call, title, entry.ts)
@@ -485,6 +497,24 @@ class RemoteServerProxy(RemoteMCPProxy):
                 )
                 return None
         return entry
+
+    def _replay_result(
+        self, entry: JournalEntry, plan: JournalEntry, result: Any
+    ) -> JournalEntry | None:
+        # `_replay_plan` checked the holder on its own read, so a claim that
+        # lands between that read and the write is refused by the tool itself,
+        # as `{"closed": false}` rather than an error. Without this the replay
+        # reports it applied and the queued close is gone.
+        if (
+            plan is entry
+            and entry.tool in _HOLDER_CHECKED
+            and isinstance(result, dict)
+            and result.get("closed") is False
+        ):
+            return _conflict_comment(
+                entry, f"the task is now held by {result['held_by']}"
+            )
+        return None
 
     @property
     def remote_url(self) -> str:
