@@ -181,6 +181,35 @@ def test_changed_symbols_resolves_both_sides_by_qualified_name():
     assert all(s.symbol_id == f"{REPO}#svc.py::{s.qualified_name}" for s in symbols)
 
 
+DECORATED = """\
+import functools
+
+
+@functools.cache
+def cached():
+    return 1
+
+
+class View:
+    @property
+    def name(self):
+        return "v"
+"""
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"), [(4, "cached"), (10, "View.name")], ids=["function", "method"]
+)
+def test_a_decorator_only_edit_maps_to_the_decorated_symbol(line, expected):
+    # The parser starts a definition at `def`, after its decorators, so the
+    # decorator line alone would otherwise land on <module> or the class.
+    files = [diff_impact.FileDiff("d.py", "d.py", {line}, {line})]
+    symbols, _ = diff_impact.changed_symbols(
+        files, repo=REPO, read_blob=lambda *_: DECORATED.encode()
+    )
+    assert [s.qualified_name for s in symbols] == [expected]
+
+
 def test_changed_symbols_reports_files_the_indexer_does_not_parse():
     files = [diff_impact.FileDiff("README.md", "README.md", {1}, {1})]
     symbols, unparsed = diff_impact.changed_symbols(
@@ -304,6 +333,55 @@ def test_unindexed_repo_does_not_read_as_no_impact():
     text = diff_impact.render_text(report, header="h")
     assert f"repo: {REPO} (NOT INDEXED)" in text
     assert "callers and cross-repo consumers were not looked up" in text
+
+
+def test_a_removed_symbol_the_index_lacks_is_flagged():
+    # Added after the last indexing run, then removed by this branch: its empty
+    # impact is "not seen", so it carries the same flag as any other symbol.
+    removed = diff_impact.ChangedSymbol(
+        f"{REPO}#old.py::gone", "old.py", "gone", "function", 1, "removed"
+    )
+    asked: list[str] = []
+
+    def symbols_in_file(path, repo):
+        asked.append(path)
+        return []
+
+    tools = {
+        "code_indexed_repos": lambda: [{"repo": REPO}],
+        "code_symbols_in_file": symbols_in_file,
+        "code_impact": lambda **_: {"impacted": [], "truncated": False},
+        "code_cross_repo_impact": lambda **_: {"cross_repo": []},
+    }
+    report = diff_impact.build_report(
+        [removed],
+        [],
+        renamed=[],
+        repo=REPO,
+        branch=None,
+        code=tools.__getitem__,
+        work=None,
+        test_mentions=lambda name: [],
+        limit=10,
+        max_items=10,
+    )
+    assert asked == ["old.py"]
+    assert report["changed_symbols"]["shown"][0]["in_index"] is False
+
+
+def test_a_git_failure_keeps_stdout_for_the_document(tmp_path, monkeypatch, capsys):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "_current_repo", lambda repo: REPO)
+    output_module.set_output_format("json")
+    try:
+        with pytest.raises(SystemExit):
+            cli_module.diff_impact(base="no-such-ref", head="HEAD")
+    finally:
+        output_module.set_output_format("txt")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "git merge-base no-such-ref HEAD failed" in captured.err
 
 
 # ── end to end, on a fixture graph ────────────────────────────────
@@ -449,3 +527,27 @@ def test_diff_impact_without_witan_says_what_it_skipped(
     assert "tests to run (stand-in) (1): tests/test_svc.py" in out
     assert "tasks (" not in out
     assert "witan (council) is not installed" in out
+
+
+@requires_stack
+def test_a_removal_read_through_an_indexed_branch_view_is_flagged(
+    fixture_graph, monkeypatch, capsys
+):
+    """Locally, the code tools follow the checkout's branch view once it is
+    indexed, and that view no longer has the removed symbol. Its empty callers
+    must come back flagged, not as "nothing calls this"."""
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    indexer.index_path(fixture_graph, repo_override=REPO, config=srv.cfg)
+    srv._clients.clear()
+    srv._store_branches.clear()
+    monkeypatch.setattr(cli_module, "_work_tool", lambda: None)
+
+    cli_module.diff_impact(base="main", head="feature")
+    rows = {
+        r["qualified_name"]: r
+        for r in json.loads(capsys.readouterr().out)["changed_symbols"]["shown"]
+    }
+    assert rows["retired"]["status"] == "removed"
+    assert rows["retired"]["in_index"] is False

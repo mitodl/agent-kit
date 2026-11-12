@@ -622,7 +622,7 @@ def diff_impact(
     except subprocess.CalledProcessError as exc:
         # `git show` runs in bytes mode (blobs are not text); the rest in text.
         err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
-        print_error(f"git {' '.join(exc.cmd[1:])} failed: {err.strip()}")
+        print_error(f"git {' '.join(exc.cmd[1:])} failed: {err.strip()}", stderr=True)
         raise SystemExit(1) from None
     if _is_remote():
         # Lookups fan out across threads; list the deployment's tools once

@@ -147,9 +147,44 @@ def parse_diff(text: str) -> list[FileDiff]:
 
 def _parse(repo: str, path: str, raw: bytes) -> indexer.ParsedFile | None:
     spec = indexer._EXT_TO_SPEC[Path(path).suffix]
-    return indexer._parse_file(
+    parsed = indexer._parse_file(
         raw, Path(path), spec, repo, f"{repo}#{path}", path, content_hash=""
     )
+    if parsed is not None:
+        # The indexer starts a definition at `def`/`class`, after its
+        # decorators, so a decorator-only edit (a route, an auth check) would
+        # land on the enclosing class or <module>. Widen each decorated
+        # symbol's range to its first decorator. A local parse, never stored.
+        starts = _decorator_starts(raw, spec)
+        for sym in parsed.symbols:
+            sym.start_line = starts.get(sym.start_line, sym.start_line)
+    return parsed
+
+
+def _decorator_starts(raw: bytes, spec: indexer.LanguageSpec) -> dict[int, int]:
+    """``definition start line -> its first decorator's line``.
+
+    Decorators are siblings that precede the definition they apply to: under
+    Python's ``decorated_definition`` and before a TypeScript method alike.
+    """
+    from tree_sitter import Parser
+
+    tree = Parser(indexer._ts_language(spec.grammar)).parse(raw)
+    starts: dict[int, int] = {}
+    stack = [indexer._root(tree)]
+    while stack:
+        node = stack.pop()
+        children = indexer._children(node)
+        stack.extend(children)
+        first: int | None = None
+        for child in children:
+            if indexer._kind(child) == "decorator":
+                first = indexer._start_line(child) if first is None else first
+            elif first is not None:
+                line = indexer._start_line(child)
+                starts[line] = min(first, starts.get(line, first))
+                first = None
+    return starts
 
 
 def _innermost(
@@ -404,8 +439,10 @@ def build_report(
     else:
         notes.append(
             "Callers are same-file only (the indexer resolves calls by name within "
-            "a file) and come from the default branch's index, so callers in "
-            "other files and callers this branch adds are not listed."
+            "a file) and come from the view the code tools route to: the default "
+            "branch's, or locally the checkout's own branch view once it is "
+            "indexed. Callers in other files are not listed, and a symbol that "
+            "view lacks is marked [not in index]."
         )
         notes.append(
             f"Cross-repo consumers cover the {len(indexed_repos)} repos indexed "
@@ -417,10 +454,11 @@ def build_report(
         "without naming it is not listed."
     )
 
-    # A removed symbol is gone from a branch view of the file but still in the
-    # default view its callers are read from, so only surviving symbols are
-    # checked against their file's index.
-    checked_paths = sorted({s.path for s in shown if s.status != "removed"})
+    # Every symbol, removed ones included, is checked against the same view its
+    # callers are read from, so an empty answer from a view that lacks the
+    # symbol (a stale index, or a local view of a branch that removed it) is
+    # flagged rather than read as "nothing depends on this".
+    checked_paths = sorted({s.path for s in shown})
 
     def file_ids(path: str) -> set[str]:
         rows = code("code_symbols_in_file")(path=path, repo=repo)
@@ -446,8 +484,7 @@ def build_report(
                 if p != sym.path and _language_family(p) == family
             )
         if indexed:
-            if sym.status != "removed":
-                row["in_index"] = sym.symbol_id in in_index[sym.path]
+            row["in_index"] = sym.symbol_id in in_index[sym.path]
             # A module is never a Calls target, so it has no callers to walk.
             if not is_module:
                 impact = code("code_impact")(
