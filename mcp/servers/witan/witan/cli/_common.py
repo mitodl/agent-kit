@@ -189,13 +189,21 @@ def esc(value: object) -> str:
 
 
 def print_error(message: object, *, stderr: bool = False) -> None:
-    """Print ``message`` in red, escaped.
+    """Print ``message`` in red, escaped and soft-wrapped.
 
     Error text is the worst place to drop a bracketed substring: witan's own
     refusals name the config section to fix (``[targets.production]``), and an
     omnigraph error quotes the query it choked on. Both are markup to Rich.
+
+    Soft-wrapped because Rich otherwise hard-wraps at the console width, which
+    is 80 when no standard stream is a terminal and ``COLUMNS`` is unset (an
+    agent's shell, a CI job). A path longer than that is folded with a literal
+    newline inside it, so the path a reader copies out of the error is not the
+    path on disk.
     """
-    (stderr_console if stderr else console).print(f"[red]{esc(message)}[/red]")
+    (stderr_console if stderr else console).print(
+        f"[red]{esc(message)}[/red]", soft_wrap=True
+    )
 
 
 def print_live_pr(record: dict) -> None:
@@ -222,6 +230,15 @@ def notice_console() -> Console:
     notice printed there ahead of the JSON makes the whole output unparseable.
     """
     return console if get_output_format() == "txt" else stderr_console
+
+
+def print_notice(message: str) -> None:
+    """Print ``message`` (Rich markup) on :func:`notice_console`, soft-wrapped.
+
+    Soft-wrapped for the reason :func:`print_error` is: a notice names paths
+    and URLs too, and a hard wrap folds them.
+    """
+    notice_console().print(message, soft_wrap=True)
 
 
 def _styled(value: str, table: dict) -> str:

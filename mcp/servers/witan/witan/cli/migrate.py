@@ -53,9 +53,9 @@ def _backfill_topics() -> None:
     s = _srv()
     try:
         if not s._topic_schema_present():
-            console.print(
-                "[red]The store has no Topic schema yet. "
-                "Run `witan migrate schema` first (or `witan migrate all`).[/red]"
+            print_error(
+                "The store has no Topic schema yet. "
+                "Run `witan migrate schema` first (or `witan migrate all`)."
             )
             raise SystemExit(1)
         result = s.migrate_topics()
@@ -388,7 +388,8 @@ def _report_accounting(result: dict, *, incomplete_reason: str | None = None) ->
 
     console.print(
         f"\n[red]NOT verified[/red]: the source held {total} row(s) and this "
-        f"merge accounts for {check['decided']} ({working})."
+        f"merge accounts for {check['decided']} ({working}).",
+        soft_wrap=True,
     )
     if check["undecided"] > 0:
         console.print(
@@ -495,7 +496,7 @@ def _merge(
         # traceback says nothing about how much. The watermark stays retired
         # (`_invalidate_watermark` ran before the first batch), which is the
         # right state for a graph whose last write was half a merge.
-        console.print("\n[red]Interrupted.[/red]")
+        print_error("\nInterrupted.")
         _report_partial(exc)
         raise SystemExit(130) from None
 
@@ -591,8 +592,8 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
         try:
             response = input("Continue? [y/N] ").strip().lower()
         except EOFError:
-            console.print(
-                "\n[red]Aborted (non-interactive terminal; pass --yes to skip the prompt).[/red]"
+            print_error(
+                "\nAborted (non-interactive terminal; pass --yes to skip the prompt)."
             )
             raise SystemExit(1) from None
         if response not in ("y", "yes"):
@@ -804,8 +805,8 @@ def dedupe_sessions(
     for pair in supersede or []:
         dup, sep, survivor = pair.partition("=")
         if not sep or not dup.strip() or not survivor.strip():
-            console.print(
-                f"[red]--supersede expects <duplicate-slug>=<survivor-slug>, got {pair!r}[/red]"
+            print_error(
+                f"--supersede expects <duplicate-slug>=<survivor-slug>, got {pair!r}"
             )
             raise SystemExit(1)
         extra[dup.strip()] = survivor.strip()

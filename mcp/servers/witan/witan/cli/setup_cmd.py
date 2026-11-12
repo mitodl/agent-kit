@@ -18,7 +18,7 @@ from agent_config_kit.installers import ConflictingPathError, install_files
 from witan_core import install_omnigraph
 from witan_core.cli import AGENT_NAMES, AgentName, report_install, resolve_author
 
-from ._common import app, console
+from ._common import app, console, print_error
 
 
 def _witan_code_mounted() -> bool:
@@ -181,7 +181,7 @@ def setup(
                 console=console,
             )
     except ConflictingPathError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
 
     if agent in ("claude", "all"):
@@ -199,7 +199,7 @@ def setup(
                 force=force,
             )
         except ConflictingPathError as exc:
-            console.print(f"[red]{exc}[/red]")
+            print_error(exc)
             raise SystemExit(2) from exc
 
         # Heal config drift: an older docs flow registered the workflow hooks as

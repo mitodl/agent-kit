@@ -31,7 +31,7 @@ deferred until an allowed read actually asks for it.
 from __future__ import annotations
 
 from ..config import LocalDispatch
-from ._common import print_error, stderr_console
+from ._common import esc, print_error, stderr_console
 
 __all__ = [
     "CLIENT_READ_ATTRS",
@@ -156,10 +156,12 @@ def local_store_notice(diagnosis: LocalDispatch) -> str:
     the data went.
     """
     where = f"target [{diagnosis.target_name}]" if diagnosis.target_name else "no match"
+    # Escaped: Rich reads `[qa]` in `target [qa]` as a style tag and drops it,
+    # which removes the one word saying which target matched.
     return (
-        f"[dim]witan: using local store {diagnosis.graph_uri} "
-        f"({where}) — deployed targets: "
-        f"{', '.join(diagnosis.deployed_targets)}[/dim]"
+        f"[dim]witan: using local store {esc(diagnosis.graph_uri)} "
+        f"({esc(where)}) — deployed targets: "
+        f"{esc(', '.join(diagnosis.deployed_targets))}[/dim]"
     )
 
 
@@ -219,7 +221,7 @@ class _LocalStoreGuard:
         """Return the server module, importing and announcing it on first use."""
         if not self._announced:
             self._announced = True
-            stderr_console.print(local_store_notice(self._diagnosis))
+            stderr_console.print(local_store_notice(self._diagnosis), soft_wrap=True)
         if self._inner is None:
             self._inner = self._load_inner()
         return self._inner
@@ -255,6 +257,6 @@ def local_server(diagnosis: LocalDispatch | None, load_inner=_import_server):
     if diagnosis is None:
         return load_inner()
     if diagnosis.deliberate:
-        stderr_console.print(local_store_notice(diagnosis))
+        stderr_console.print(local_store_notice(diagnosis), soft_wrap=True)
         return load_inner()
     return _LocalStoreGuard(load_inner, diagnosis)

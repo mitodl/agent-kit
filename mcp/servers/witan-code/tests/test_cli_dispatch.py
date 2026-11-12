@@ -9,6 +9,7 @@ regression here fails loudly instead of quietly going local-only.
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -367,6 +368,64 @@ def test_rebuild_refuses_a_path_that_is_not_the_repo_root(
     out = " ".join(capsys.readouterr().out.split())
     assert "not the repo root" in out
     assert str(root) in out
+
+
+def _no_terminal(monkeypatch):
+    """Make Rich see no terminal on any standard stream, with COLUMNS unset.
+
+    Rich sizes a console from fds 0, 1 and 2 before falling back to 80, so
+    clearing COLUMNS alone still picks up a terminal under ``pytest -s``.
+    """
+    from rich.console import Console
+
+    def _not_a_terminal(*_args):
+        raise OSError
+
+    monkeypatch.delenv("COLUMNS", raising=False)
+    monkeypatch.setattr(os, "get_terminal_size", _not_a_terminal)
+    assert Console().width == 80
+
+
+def test_rebuild_refusal_keeps_a_long_path_on_one_line_when_piped(
+    tmp_path, monkeypatch, capsys
+):
+    """With no standard stream a terminal and COLUMNS unset, Rich renders at
+    80 columns, which is how an agent's shell or a CI job sees this CLI. A
+    hard-wrapped path longer than that is folded with a newline inside it, so
+    the path copied out of the refusal is not the path on disk.
+    """
+    from witan_code import repo as repo_module
+
+    _no_terminal(monkeypatch)
+    root = (
+        tmp_path
+        / "a-directory-name-long-enough-to-push-the-whole-path-past-eighty-columns"
+    )
+    sub = root / "src"
+    sub.mkdir(parents=True)
+    assert len(str(sub)) > 80
+    monkeypatch.setattr(repo_module, "git_toplevel", lambda _p: root)
+
+    with pytest.raises(SystemExit):
+        cli_module._rebuild_stores(sub, yes=True, slug="https://github.com/test/cg")
+
+    lines = capsys.readouterr().out.splitlines()
+    assert any(f"{sub} is not the repo root" in line for line in lines), lines
+
+
+@pytest.mark.parametrize("stderr", [False, True])
+def test_print_error_keeps_a_long_path_on_one_line_on_either_stream(
+    tmp_path, monkeypatch, capsys, stderr
+):
+    _no_terminal(monkeypatch)
+    path = tmp_path / ("x" * 80) / "store.omni"
+
+    cli_module.print_error(f"cannot open [qa] store {path}", stderr=stderr)
+
+    captured = capsys.readouterr()
+    text = captured.err if stderr else captured.out
+    assert (captured.out if stderr else captured.err) == ""
+    assert any(f"[qa] store {path}" in line for line in text.splitlines()), text
 
 
 def test_rebuild_refuses_a_file_path_with_real_git(tmp_path, monkeypatch, capsys):

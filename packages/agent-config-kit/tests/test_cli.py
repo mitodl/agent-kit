@@ -1156,6 +1156,46 @@ def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
     assert config_path.read_text() == "default_manifest = 'existing'\n"
 
 
+def test_an_error_keeps_a_long_path_on_one_line_when_piped(tmp_path, monkeypatch):
+    """With no standard stream a terminal and COLUMNS unset, Rich renders at
+    80 columns, which is how an agent's shell or a CI job sees this CLI. A
+    hard-wrapped path longer than that is folded with a newline inside it, so
+    the copied path is wrong. The console is built the way the CLI's is (no
+    width) after clearing the hermetic COLUMNS pin and hiding any terminal:
+    Rich sizes from fds 0, 1 and 2 before falling back to 80."""
+    import io
+    import os
+
+    from rich.console import Console
+
+    from agent_config_kit import cli
+
+    def _not_a_terminal(*_args):
+        raise OSError
+
+    monkeypatch.delenv("COLUMNS", raising=False)
+    monkeypatch.setattr(os, "get_terminal_size", _not_a_terminal)
+    piped = Console(file=io.StringIO())
+    assert not piped.is_terminal
+    assert piped.width == 80
+    monkeypatch.setattr(cli, "console", piped)
+    config_path = (
+        tmp_path
+        / "a-directory-name-long-enough-to-push-the-whole-path-past-eighty-columns"
+        / "config.toml"
+    )
+    assert len(str(config_path)) > 80
+    config_path.parent.mkdir()
+    config_path.write_text("default_manifest = 'existing'\n")
+
+    with pytest.raises(SystemExit):
+        cli.app(["config", "init", "--config", str(config_path)])
+
+    text = piped.file.getvalue()
+    assert "already exists" in text
+    assert any(str(config_path) in line for line in text.splitlines()), text
+
+
 def test_config_init_force_overwrites_existing_file(tmp_path):
     from agent_config_kit.cli import app
 

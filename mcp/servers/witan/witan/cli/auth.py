@@ -67,7 +67,7 @@ def login() -> None:
     try:
         claims = oidc.login(remote, on_prompt=_prompt)
     except oidc.RemoteAuthError as exc:
-        console.print(f"[red]Login failed:[/red] {esc(exc)}")
+        print_error(f"Login failed: {exc}")
         raise SystemExit(1) from None
     who = claims.get("preferred_username") or claims.get("sub", "?")
     console.print(
@@ -152,10 +152,13 @@ def whoami() -> None:
     try:
         code_dest = code_graph_destination(remote.target_name)
     except ValueError as exc:
-        console.print(f"[bold]Code[/bold]      [red]unreadable — {esc(str(exc))}[/red]")
+        console.print(
+            f"[bold]Code[/bold]      [red]unreadable — {esc(str(exc))}[/red]",
+            soft_wrap=True,
+        )
     else:
         if code_dest:
-            console.print(f"[bold]Code[/bold]      {esc(code_dest)}")
+            console.print(f"[bold]Code[/bold]      {esc(code_dest)}", soft_wrap=True)
     console.print(
         f"[bold]User[/bold]      {esc(claims.get('preferred_username', '?'))}"
     )
