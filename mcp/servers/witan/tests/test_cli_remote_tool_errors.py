@@ -213,8 +213,12 @@ def _missing_task(monkeypatch, _export):
 
     from witan.cli import _common
 
-    monkeypatch.setattr(_common, "_server", SimpleNamespace(task_get=lambda **_: None))
-    return ("task", "show", "tk-missing"), "No task 'tk-missing'"
+    # `task close`, not `task show`: show already printed to stderr, so it
+    # would pass with the old helper too.
+    monkeypatch.setattr(
+        _common, "_server", SimpleNamespace(task_close=lambda **_: None)
+    )
+    return ("task", "close", "tk-missing"), "No task 'tk-missing'"
 
 
 def _refused_merge(monkeypatch, export):
@@ -228,7 +232,7 @@ def _refused_merge(monkeypatch, export):
 @pytest.mark.parametrize(
     "arrange",
     [_misconfigured_remote, _unloadable_config, _missing_task, _refused_merge],
-    ids=["srv-remote-config", "run-config-load", "task-show-missing", "migrate"],
+    ids=["srv-remote-config", "run-config-load", "task-close-missing", "migrate"],
 )
 def test_print_error_sites_keep_structured_stdout_empty(
     monkeypatch, capsys, launcher_state, export, arrange
