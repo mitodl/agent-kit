@@ -3830,6 +3830,22 @@ def _refuse_empty_repo(repo: str | None) -> None:
         raise ValueError(_EMPTY_REPO_REFUSAL)
 
 
+def _check_scope(repo: str | None, all_repos: bool = False) -> None:
+    """Refuse a ``repo``/``all_repos`` pair that names no scope or two.
+
+    Split from :func:`_scope` so a tool with branches that ignore the repo
+    can refuse a bad pair up front without paying for repo detection.
+
+    :param repo: The caller's ``repo`` argument.
+    :param all_repos: The caller's ``all_repos`` argument.
+    :raises ValueError: On an empty ``repo``, or ``repo`` with ``all_repos``.
+    """
+    _refuse_empty_repo(repo)
+    if all_repos and repo is not None:
+        msg = f"Pass repo or all_repos=true, not both (got repo={repo!r})."
+        raise ValueError(msg)
+
+
 def _scope(repo: str | None, all_repos: bool = False) -> str | None:
     """Resolve a repo-taking tool's ``repo`` and ``all_repos`` to one repo.
 
@@ -3846,13 +3862,8 @@ def _scope(repo: str | None, all_repos: bool = False) -> str | None:
     :rtype: str | None
     :raises ValueError: On an empty ``repo``, or ``repo`` with ``all_repos``.
     """
-    _refuse_empty_repo(repo)
-    if all_repos:
-        if repo is not None:
-            msg = f"Pass repo or all_repos=true, not both (got repo={repo!r})."
-            raise ValueError(msg)
-        return None
-    return repo_module.detect(override=repo)
+    _check_scope(repo, all_repos)
+    return None if all_repos else repo_module.detect(override=repo)
 
 
 def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
@@ -7905,7 +7916,7 @@ def task_list(
     if limit is not None and not 1 <= limit <= _MAX_TASK_LIMIT:
         msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
         raise ValueError(msg)
-    detected = _scope(repo, all_repos)
+    _check_scope(repo, all_repos)
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
     if project_slug:
@@ -7914,7 +7925,7 @@ def task_list(
         )
     elif parent:
         rows = client.read("read.gq", "list_tasks_by_parent", {"parent_slug": parent})
-    elif detected:
+    elif detected := _scope(repo, all_repos):
         # Include repo-scoped tasks and unscoped (repo=null) tasks. Unscoped
         # tasks were created without git context (e.g. via MCP from a global
         # server) and should be visible regardless of which repo you're in.
@@ -8740,12 +8751,12 @@ def task_ready(
     # a time: ~3.0s of a 4.2s ``task_ready`` against the deployed service,
     # which is most of what blows the context hook's timeout (agent-kit#349).
     known: list[dict] = []
-    detected = _scope(repo, all_repos)
+    _check_scope(repo, all_repos)
     if project_slug:
         rows = client.read(
             "read.gq", "list_tasks_by_project", {"project_slug": project_slug}
         )
-    elif detected:
+    elif detected := _scope(repo, all_repos):
         repo_rows = client.read(
             "read.gq", "list_tasks_by_repo", {"repo": detected, "status": None}
         )

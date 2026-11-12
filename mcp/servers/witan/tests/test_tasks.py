@@ -2356,3 +2356,34 @@ def test_claiming_a_migrated_row_sets_first_claimed_at_from_the_new_lease(server
     node = server.task_get("tk-migrated-then-claimed")
     assert node["first_claimed_at"] == node["claimed_at"]
     assert not node["first_claimed_at"].startswith("2026-09-01")
+
+
+@requires_omnigraph
+def test_project_and_parent_listings_skip_repo_detection(server, monkeypatch):
+    """The project/parent branches never read the detected repo, so they must
+    not pay for detecting it, while an empty repo is still refused."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
+    epic = server.task_create(title="epic", description="x", type="epic")
+    child = server.task_create(
+        title="child", description="x", project_slug=proj["slug"], parent=epic["slug"]
+    )
+
+    def no_detect(**_):
+        raise AssertionError("repo detection ran on a branch that ignores it")
+
+    monkeypatch.setattr(srv.repo_module, "detect", no_detect)
+
+    assert [t["slug"] for t in server.task_list(project_slug=proj["slug"])] == [
+        child["slug"]
+    ]
+    assert [t["slug"] for t in server.task_list(parent=epic["slug"])] == [child["slug"]]
+    assert [t["slug"] for t in server.task_ready(project_slug=proj["slug"])] == [
+        child["slug"]
+    ]
+    for tool in (server.task_list, server.task_ready):
+        with pytest.raises(ValueError, match="names no repo"):
+            tool(repo="", project_slug=proj["slug"])
+        with pytest.raises(ValueError, match="not both"):
+            tool(repo="https://github.com/test/a", all_repos=True, project_slug="x")
