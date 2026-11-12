@@ -539,9 +539,9 @@ def _origin(_repo):
         ["git", "-C", str(_repo), "remote", "add", "origin", f"{_REPO_URI}.git"],
         check=True,
     )
-    hooks.indexer._served_graph_ids.cache_clear()
+    hooks.indexer._SERVED_GRAPHS.clear()
     yield
-    hooks.indexer._served_graph_ids.cache_clear()
+    hooks.indexer._SERVED_GRAPHS.clear()
 
 
 @pytest.fixture
@@ -585,6 +585,30 @@ def test_drain_pending_skips_an_unserved_repo_on_a_direct_cluster(
 
     assert _batches == []
     assert listed == ["https://omnigraph.test"]
+
+
+def test_the_served_listing_is_cached_per_cluster(_repo, _origin, monkeypatch):
+    """A repo is checked against its own cluster's listing, never the one a
+    different config cached earlier in the same process."""
+    from witan_code import store as store_mod
+
+    listings = {
+        "https://a.test": frozenset({"code-github-com-mitodl-ol-llm"}),
+        "https://b.test": frozenset({"code-github-com-mitodl-other"}),
+    }
+    listed = []
+
+    def _graphs(server_url, token=None):
+        listed.append(server_url)
+        return listings[server_url]
+
+    monkeypatch.setattr(store_mod, "cluster_graphs", _graphs)
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://a.test")
+    assert hooks.indexer.cluster_serves(_repo)
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://b.test")
+    assert not hooks.indexer.cluster_serves(_repo)
+    assert hooks.indexer.cluster_serves(_repo) is False
+    assert listed == ["https://a.test", "https://b.test"]
 
 
 def test_drain_pending_makes_no_per_repo_call_for_an_unserved_repo(_repo, _serve):
