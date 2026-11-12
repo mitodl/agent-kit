@@ -36,6 +36,8 @@ def _state(tmp_path, monkeypatch):
     tmp.mkdir()
     monkeypatch.setenv("TMPDIR", str(tmp))
     monkeypatch.setattr(tempfile, "tempdir", str(tmp))
+    # Where state_dir() lives on Windows; the hermetic guard leaves it alone.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp))
     return tmp
 
 
@@ -913,24 +915,32 @@ def test_state_dir_refuses_a_symlink_planted_in_its_place(_state, tmp_path):
         context.state_dir()
 
 
-def test_state_dir_on_windows_is_keyed_by_username(_state, monkeypatch):
-    """%TEMP% is per-user there, and there is no uid or mode to check."""
+def test_state_dir_on_windows_lives_under_localappdata(_state, monkeypatch):
+    """Not the temp dir, which TEMP can point at a shared directory."""
     monkeypatch.setattr(context, "_WINDOWS", True)
-    monkeypatch.setattr(context.getpass, "getuser", lambda: "alice")
 
     path = context.state_dir()
 
-    assert path == _state / "witan-code-alice"
+    assert path == _state / "witan-code" / "state"
     assert path.is_dir()
     assert context.state_dir() == path  # an existing one is reused
 
 
-def test_state_dir_on_windows_refuses_a_file_in_its_place(_state, monkeypatch):
+def test_state_dir_on_windows_refuses_a_link_in_its_place(
+    _state, tmp_path, monkeypatch
+):
     monkeypatch.setattr(context, "_WINDOWS", True)
-    monkeypatch.setattr(context.getpass, "getuser", lambda: "alice")
-    (_state / "witan-code-alice").write_text("")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (_state / "witan-code").mkdir()
+    try:
+        (_state / "witan-code" / "state").symlink_to(
+            elsewhere, target_is_directory=True
+        )
+    except OSError:
+        pytest.skip("this account cannot create symlinks")
 
-    with pytest.raises(OSError):
+    with pytest.raises(PermissionError):
         context.state_dir()
 
 

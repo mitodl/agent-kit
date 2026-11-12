@@ -30,6 +30,7 @@ the hook only checks that the lock is free and the drainer takes its own.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -264,20 +265,22 @@ def _submit(checkout: Path, target: Path) -> None:
         return
     if lock_fd is None:
         return
-    handoff: int | None = lock_fd
-    if not _HANDS_OFF_LOCK:
-        _filelock.release(lock_fd)
-        handoff = None
+    handoff: int | None = lock_fd if _HANDS_OFF_LOCK else None
     # Marked busy here rather than only once the drainer is up, so a prompt
     # that fires right after SessionStart already says indexing is under way.
     busy = _busy_path(checkout)
     log_path = _state_path(checkout, "log")
     try:
+        if handoff is None:
+            _filelock.release(lock_fd)
         busy.touch()
         # Appended, so a failure is still there after the next edit spawns a
         # new drainer; restarted once it grows past the cap.
         if log_path.exists() and log_path.stat().st_size > _LOG_MAX_BYTES:
-            log_path.unlink()
+            # Windows refuses while an exiting drainer still has it open as
+            # stdout. A log past the cap must not cost the spawn.
+            with contextlib.suppress(OSError):
+                log_path.unlink()
         with log_path.open("a") as log:
             popen_detached(
                 [

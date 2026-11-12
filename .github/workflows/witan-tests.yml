@@ -209,7 +209,8 @@ jobs:
     # path (fcntl, os.getuid, pass_fds) breaks every Windows session, and the
     # Linux job above cannot see it. test_hooks.py takes the real lock
     # (msvcrt.locking here) and exercises the no-handoff drainer path that only
-    # Windows runs. Its requires_stack tests skip: omnigraph publishes no
+    # Windows runs; test_cli_hooks.py parses the drainer's command line without
+    # a lock descriptor. The requires_stack tests skip: omnigraph publishes no
     # Windows binary.
     name: witan-code hooks (windows)
     runs-on: windows-latest
@@ -222,7 +223,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Run hook tests
-        run: uv run --frozen --isolated --package witan-code --group test pytest mcp/servers/witan-code/tests/test_hooks.py
+        run: uv run --frozen --isolated --package witan-code --group test pytest mcp/servers/witan-code/tests/test_hooks.py mcp/servers/witan-code/tests/test_cli_hooks.py
 
   witan-policy:
     name: witan (Cedar policy bundle)
