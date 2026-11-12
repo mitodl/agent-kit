@@ -6165,7 +6165,7 @@ def workflow_project_memories(
     session:
         A ``ws-`` slug. Return only the memories that one session produced,
         in one query, instead of the project's. ``group_by_session`` is
-        ignored. The Stop hook uses this to summarize a session it
+        ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it
         auto-closes; named ``session`` rather than ``session_slug`` because
         the remote proxy fills an omitted ``session_slug`` with the caller's
         active session, which would silently narrow every project-wide call.
@@ -6177,7 +6177,9 @@ def workflow_project_memories(
         return {
             "project_slug": project_slug,
             "memories": client.read(
-                "read.gq", "session_produced_memories", {"session_slug": session}
+                "read.gq",
+                "session_produced_memories",
+                {"project_slug": project_slug, "session_slug": session},
             ),
             "by_session": {},
         }
@@ -6193,7 +6195,7 @@ def workflow_project_memories(
             produced = client.read(
                 "read.gq",
                 "session_produced_memories",
-                {"session_slug": sess["slug"]},
+                {"project_slug": project_slug, "session_slug": sess["slug"]},
             )
             if produced:
                 by_session[sess["slug"]] = produced

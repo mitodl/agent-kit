@@ -142,43 +142,54 @@ def _git(project_dir: str, *args: str) -> list[str]:
     ).splitlines()
 
 
+def _dirty_files(project_dir: str) -> list[str]:
+    """Tracked files changed against HEAD plus untracked, non-ignored ones.
+
+    Untracked files count because a session that only created files still
+    left work behind. Raises when git fails.
+    """
+    paths = _git(project_dir, "diff", "--name-only", "HEAD")
+    paths += _git(project_dir, "ls-files", "--others", "--exclude-standard")
+    return list(dict.fromkeys(paths))[:50]
+
+
 def changed_files(project_dir: str) -> list[str]:
-    """Files dirty in the agent's checkout, or ``[]`` outside a repo."""
+    """Files dirty in the agent's checkout, or ``[]`` when they can't be read.
+
+    For the close's ``files_changed``, which is best-effort. The summary reads
+    through :func:`git_activity` instead, so a failure there is named.
+    """
     try:
-        return _git(project_dir, "diff", "--name-only", "HEAD")[:50]
+        return _dirty_files(project_dir)
     except (subprocess.SubprocessError, OSError):
         return []
 
 
 def current_branch(project_dir: str) -> str | None:
-    """The checked-out branch, or ``None`` on a detached HEAD or outside a repo."""
-    try:
-        lines = _git(project_dir, "rev-parse", "--abbrev-ref", "HEAD")
-    except (subprocess.SubprocessError, OSError):
-        return None
+    """The checked-out branch, or ``None`` on a detached HEAD. Raises when git fails."""
+    lines = _git(project_dir, "rev-parse", "--abbrev-ref", "HEAD")
     branch = lines[0] if lines else ""
     return branch if branch and branch != "HEAD" else None
 
 
-def session_commits(project_dir: str, since: datetime) -> list[str]:
-    """``<short sha> <subject>`` for each commit made on HEAD since ``since``.
+def session_commits(project_dir: str, since: datetime, author: str) -> list[str]:
+    """``<short sha> <subject>`` for each of ``author``'s commits on HEAD since ``since``.
 
     Limited to the checkout's git author, so commits a ``git pull`` brought in
     from other people during the window are not credited to this session.
     Raises when git fails, so the caller can report the source as unread
     rather than as "no commits".
     """
-    args = [
+    return _git(
+        project_dir,
         "log",
         "--no-merges",
         f"--since={since.isoformat()}",
         f"-n{LIST_CAP + 1}",
         "--format=%h %s",
-    ]
-    email = _author_email(project_dir)
-    if email:
-        args.append(f"--author={email}")
-    return _git(project_dir, *args, "HEAD")
+        f"--author={author}",
+        "HEAD",
+    )
 
 
 def _author_email(project_dir: str) -> str | None:
@@ -199,16 +210,30 @@ def git_activity(activity: Activity, project_dir: str, since: datetime) -> None:
     """Fill in the branch, commits and uncommitted files from ``project_dir``.
 
     A directory that is not a checkout has no git activity to report, which is
-    not a failed read: that session's summary can still say "no activity".
+    not a failed read: that session's summary can still say "no activity". In
+    a checkout, each read that fails is named in ``activity.unread`` rather
+    than left looking empty. So is the commit read when there is no author
+    identity to filter on, because an unfiltered log would credit everyone's
+    commits to this session.
     """
     try:
         _git(project_dir, "rev-parse", "--git-dir")
     except (subprocess.SubprocessError, OSError):
         return
-    activity.changed_files = changed_files(project_dir)
-    activity.branch = current_branch(project_dir)
     try:
-        activity.commits = session_commits(project_dir, since)
+        activity.changed_files = _dirty_files(project_dir)
+    except (subprocess.SubprocessError, OSError):
+        activity.unread.append("uncommitted changes")
+    try:
+        activity.branch = current_branch(project_dir)
+    except (subprocess.SubprocessError, OSError):
+        activity.unread.append("branch")
+    try:
+        author = _author_email(project_dir)
+        if author is None:
+            activity.unread.append("commits")
+        else:
+            activity.commits = session_commits(project_dir, since, author)
     except (subprocess.SubprocessError, OSError):
         activity.unread.append("commits")
 

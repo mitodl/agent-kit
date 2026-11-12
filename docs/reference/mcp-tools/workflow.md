@@ -275,7 +275,7 @@ it is opt-in.
 | --- | --- | --- | --- |
 | `project_slug` | str | **required** | The ``wp-`` slug whose memories to assemble. |
 | `group_by_session` | bool | `False` | Also return a ``by_session`` breakdown of which session produced what.<br>Costs one extra query per session, so leave it off unless you need the<br>attribution. |
-| `session` | str? | `null` | A ``ws-`` slug. Return only the memories that one session produced,<br>in one query, instead of the project's. ``group_by_session`` is<br>ignored. The Stop hook uses this to summarize a session it<br>auto-closes; named ``session`` rather than ``session_slug`` because<br>the remote proxy fills an omitted ``session_slug`` with the caller's<br>active session, which would silently narrow every project-wide call. |
+| `session` | str? | `null` | A ``ws-`` slug. Return only the memories that one session produced,<br>in one query, instead of the project's. ``group_by_session`` is<br>ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it<br>auto-closes; named ``session`` rather than ``session_slug`` because<br>the remote proxy fills an omitted ``session_slug`` with the caller's<br>active session, which would silently narrow every project-wide call. |
 
 ## `workflow_session_start`
 

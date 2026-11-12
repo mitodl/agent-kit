@@ -171,6 +171,55 @@ def test_a_directory_that_is_not_a_checkout_has_no_git_activity(tmp_path):
     assert activity == session_summary.Activity()
 
 
+def test_untracked_files_count_as_uncommitted_changes(repo):
+    """A session that only created files left work behind."""
+    _commit(repo, "base", "base")
+    (repo / "new.py").write_text("x")
+    (repo / ".gitignore").write_text("ignored.log\n")
+    (repo / "ignored.log").write_text("x")
+
+    activity = session_summary.Activity()
+    session_summary.git_activity(activity, str(repo), SINCE)
+
+    assert sorted(activity.changed_files) == [".gitignore", "new.py"]
+    assert session_summary.changed_files(str(repo)) == activity.changed_files
+
+
+@pytest.mark.parametrize(
+    ("failing", "source"),
+    [("diff", "uncommitted changes"), ("rev-parse --abbrev-ref", "branch")],
+)
+def test_a_failed_git_read_is_named_not_read_as_empty(
+    repo, monkeypatch, failing, source
+):
+    _commit(repo, "base", "base", date="2026-11-12T14:00:00+00:00")
+    real_git = session_summary._git
+
+    def flaky(project_dir, *args):
+        if " ".join(args).startswith(failing):
+            raise subprocess.TimeoutExpired(["git", *args], 5)
+        return real_git(project_dir, *args)
+
+    monkeypatch.setattr(session_summary, "_git", flaky)
+    activity = session_summary.Activity()
+    session_summary.git_activity(activity, str(repo), SINCE)
+
+    assert activity.unread == [source]
+    assert session_summary.render(activity) == session_summary.PLACEHOLDER
+
+
+def test_no_author_identity_leaves_commits_unread(repo, monkeypatch):
+    """Without an author to filter on, `git log` would credit everyone's commits."""
+    _commit(repo, "theirs", "someone else's", date="2026-11-12T15:30:00+00:00")
+    monkeypatch.setattr(session_summary, "_author_email", lambda _dir: None)
+
+    activity = session_summary.Activity()
+    session_summary.git_activity(activity, str(repo), SINCE)
+
+    assert activity.commits == []
+    assert activity.unread == ["commits"]
+
+
 # ── the Stop hook, end to end ────────────────────────────────────────────────
 
 
@@ -324,6 +373,34 @@ def test_memories_can_be_read_for_one_session(server):
 
     assert [m["slug"] for m in result["memories"]] == [kept["slug"]]
     assert len(server.workflow_project_memories(proj["slug"])["memories"]) == 2
+
+    elsewhere = server.workflow_project_create(title="elsewhere", description="d")
+    mismatched = server.workflow_project_memories(
+        elsewhere["slug"], session=mine["session_slug"]
+    )
+    assert mismatched["memories"] == []
+
+
+@requires_omnigraph
+def test_auto_close_survives_a_deleted_working_directory(
+    server, hook, monkeypatch, tmp_path
+):
+    """`Path.cwd()` raises once the directory is gone; the close must still land."""
+    proj = server.workflow_project_create(title="gone", description="d")
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=SID, phase="spec"
+    )
+    doomed = tmp_path / "doomed"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+
+    hook.session_checkpoint()
+
+    last = _handoff(server, proj["slug"])
+    assert last["slug"] == handle["session_slug"]
+    assert not last["open"]
+    assert session_state.read_handle(SID) is None
 
 
 def test_parse_timestamp_reads_naive_as_utc():

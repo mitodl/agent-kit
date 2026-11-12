@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -128,6 +127,7 @@ def session_checkpoint() -> None:
     ``workflow_session_end`` or an earlier Stop, is not closed again: its
     summary stands and only the stale handle is dropped.
     """
+    from .. import context as ctx_module
     from .. import maintenance, session_state
     from ._common import _srv
 
@@ -151,7 +151,7 @@ def session_checkpoint() -> None:
                 # summary wins over anything derived here, so only the handle
                 # goes.
                 if session is None or not session.get("ended_at"):
-                    project_dir = _project_dir()
+                    project_dir = ctx_module._cwd_or_dot()
                     _fn(server.workflow_session_end)(
                         session_slug=session_slug,
                         summary=_derived_summary(
@@ -222,15 +222,6 @@ def _codex_session_id(payload: dict) -> str | None:
     if "turn_id" not in payload:
         return None
     return payload["session_id"]
-
-
-def _project_dir() -> str:
-    """The agent's checkout: ``$CLAUDE_PROJECT_DIR`` under Claude Code, else cwd.
-
-    Pi's extension spawns the checkpoint in the session's cwd, and Codex runs
-    its hooks there, so the working directory is right for both.
-    """
-    return os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
 
 
 def _read_session(server, handle: dict) -> dict | None:
