@@ -1318,6 +1318,84 @@ def test_release_accepts_another_session_of_the_same_person(server, monkeypatch)
 
 
 @requires_omnigraph
+def test_close_refuses_a_live_claim_by_someone_else(server):
+    """A worker whose task was taken over must not close the new holder's work,
+    or unblock its dependents, when it finishes late."""
+    t = server.task_create(title="taken over", description="x")
+    dep = server.task_create(title="after", description="x", blocked_by=[t["slug"]])
+    server.task_claim(t["slug"], assignee="agentA")
+    before = server.task_get(t["slug"])
+
+    refused = server.task_close(t["slug"], resolution="late")
+    assert refused["closed"] is False
+    assert refused["reason"] == "held"
+    assert refused["held_by"] == "agentA"
+    assert f"witan task close {t['slug']} --force" in refused["remedy"]
+    assert server.task_get(t["slug"]) == before
+    assert server.task_get(dep["slug"])["status"] == "blocked"
+
+    closed = server.task_close(t["slug"], resolution="forced", force=True)
+    assert closed["status"] == "closed"
+    assert closed["resolution"] == "forced"
+    assert server.task_get(dep["slug"])["status"] == "open"
+
+
+@requires_omnigraph
+def test_task_update_close_is_refused_the_same_way(server):
+    """`task_update(status="closed")` reaches the same transition, so it gets the
+    same check rather than being a one-call way around it."""
+    t = server.task_create(title="taken over", description="x")
+    server.task_claim(t["slug"], assignee="agentA")
+    before = server.task_get(t["slug"])
+
+    refused = server.task_update(t["slug"], status="closed", priority="p0")
+    assert refused["closed"] is False
+    assert refused["held_by"] == "agentA"
+    assert (
+        f"witan task update {t['slug']} --status closed --force" in (refused["remedy"])
+    )
+    assert server.task_get(t["slug"]) == before
+
+    # Other edits to someone else's claimed task are not this check's business.
+    assert server.task_update(t["slug"], priority="p0")["priority"] == "p0"
+
+    closed = server.task_update(t["slug"], status="closed", force=True)
+    assert closed["status"] == "closed"
+
+
+@requires_omnigraph
+def test_close_accepts_a_claim_of_the_same_person(server, monkeypatch):
+    """The reconcile step closes tasks its own earlier sessions held. Any session
+    of the closer's identity, its bare claim, or a claim made under an explicit
+    name the closer passes, closes without force."""
+    from witan import server as srv
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "dddddddd-0000-0000-0000-000000000000")
+    other_session = server.task_create(title="other session", description="x")
+    server.task_claim(other_session["slug"])
+    bare = server.task_create(title="bare", description="x")
+    server.task_claim(bare["slug"], assignee=srv.cfg.author)
+    named = server.task_create(title="named", description="x")
+    server.task_claim(named["slug"], assignee="agentA")
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "eeeeeeee-0000-0000-0000-000000000000")
+    assert server.task_close(other_session["slug"])["status"] == "closed"
+    assert server.task_close(bare["slug"])["status"] == "closed"
+    assert server.task_close(named["slug"], assignee="agentA")["status"] == "closed"
+
+
+@requires_omnigraph
+def test_close_accepts_an_expired_lease(server, monkeypatch):
+    from witan import readiness
+
+    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    t = server.task_create(title="abandoned", description="x")
+    server.task_claim(t["slug"], assignee="agentA")
+
+    assert server.task_close(t["slug"])["status"] == "closed"
+
+
+@requires_omnigraph
 def test_refused_claim_names_a_way_out(server):
     """A refusal that only names the holder is a dead end — especially when
     there is no holder to name. Every refusal carries the recovery command."""

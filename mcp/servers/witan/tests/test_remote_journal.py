@@ -36,6 +36,11 @@ def _data_home(tmp_path, monkeypatch):
 def proxy(server, monkeypatch):
     import witan.server as srv
 
+    # A replayed call carries the journal holder's token, so a deployment acts
+    # as that person. `task_close` checks the claim against it.
+    monkeypatch.setattr(
+        srv, "cfg", srv.cfg.model_copy(update={"author": "ada@example.org"})
+    )
     p = RemoteServerProxy(REMOTE_CFG, lambda: "tok")
     monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
     return p

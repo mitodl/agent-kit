@@ -372,13 +372,15 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     same rule ``task_release`` applies: a close queued from a plain shell on a
     task one of your agent sessions claimed is still yours to close.
 
-    A ``task_release`` that named its ``assignee`` is compared as that holder,
-    because the tool releases as it (``server._claim_holder`` lets an explicit
-    assignee override the caller's identity): a worker that claimed as
-    ``ci-worker`` releases as ``ci-worker``, not as its token's user.
+    A ``task_release`` or ``task_close`` that named its ``assignee`` is
+    compared as that holder, because the tool acts as it
+    (``server._claim_holder`` lets an explicit assignee override the caller's
+    identity): a worker that claimed as ``ci-worker`` releases and closes as
+    ``ci-worker``, not as its token's user. ``task_update``'s ``assignee`` is
+    the task's new holder, not the caller, so it is not read this way.
     """
     holder = entry.holder
-    if entry.tool == "task_release" and "assignee" in entry.args:
+    if entry.tool in ("task_release", "task_close") and "assignee" in entry.args:
         holder = entry.args["assignee"]
     assignee = task.get("assignee")
     if assignee and readiness.holder_identity(assignee) != readiness.holder_identity(
