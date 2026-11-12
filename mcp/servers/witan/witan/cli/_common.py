@@ -188,8 +188,12 @@ def esc(value: object) -> str:
     return escape("" if value is None else str(value))
 
 
-def print_error(message: object, *, stderr: bool = False) -> None:
-    """Print ``message`` in red, escaped and soft-wrapped.
+def print_error(message: object) -> None:
+    """Print ``message`` to stderr in red, escaped and soft-wrapped.
+
+    Always stderr: an error is never the command's output, and under
+    ``--output-format json|toml|yaml`` a consumer parsing stdout would get the
+    error sentence where it expects a document.
 
     Error text is the worst place to drop a bracketed substring: witan's own
     refusals name the config section to fix (``[targets.production]``), and an
@@ -201,9 +205,7 @@ def print_error(message: object, *, stderr: bool = False) -> None:
     newline inside it, so the path a reader copies out of the error is not the
     path on disk.
     """
-    (stderr_console if stderr else console).print(
-        f"[red]{esc(message)}[/red]", soft_wrap=True
-    )
+    stderr_console.print(f"[red]{esc(message)}[/red]", soft_wrap=True)
 
 
 def print_live_pr(record: dict) -> None:

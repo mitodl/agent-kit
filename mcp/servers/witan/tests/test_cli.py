@@ -4,14 +4,17 @@ from .conftest import requires_omnigraph
 
 
 def _patch_server(monkeypatch, srv):
-    """Redirect CLI server calls to a test server and capture console output."""
+    """Redirect CLI server calls to a test server and capture console output.
+
+    Both streams land in one list: errors go to stderr, everything else to
+    stdout, and these tests assert on the text rather than the stream.
+    """
     from witan.cli import _common
 
     monkeypatch.setattr(_common, "_server", srv)
     printed = []
-    monkeypatch.setattr(
-        _common.console, "print", lambda *a, **kw: printed.append(str(a[0]))
-    )
+    for stream in (_common.console, _common.stderr_console):
+        monkeypatch.setattr(stream, "print", lambda *a, **kw: printed.append(str(a[0])))
     return printed
 
 

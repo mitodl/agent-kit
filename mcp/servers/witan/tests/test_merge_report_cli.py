@@ -12,15 +12,16 @@ import pytest
 
 
 def _capture(monkeypatch):
-    """Collect what the merge prints, in order."""
+    """Collect what the merge prints to either stream, in order."""
     from witan.cli import _common
 
     printed: list[str] = []
-    monkeypatch.setattr(
-        _common.console,
-        "print",
-        lambda *a, **kw: printed.append(str(a[0]) if a else ""),
-    )
+    for stream in (_common.console, _common.stderr_console):
+        monkeypatch.setattr(
+            stream,
+            "print",
+            lambda *a, **kw: printed.append(str(a[0]) if a else ""),
+        )
     return printed
 
 
@@ -92,6 +93,30 @@ def test_a_complete_merge_prints_the_arithmetic_it_was_verified_from(
     assert verdict, printed
     assert "all 6 source row(s) accounted for" in verdict[0]
     assert "2 added + 1 updated + 1 kept + 2 unkeyed" in verdict[0]
+
+
+def test_a_partial_failure_keeps_its_accounting_with_the_error_on_stderr(
+    monkeypatch, capsys, stub_source
+):
+    """The totals qualify the error, so they go where it goes. On stdout they
+    would land in a redirected log while the reason stayed on the terminal."""
+    from witan import merge_report
+    from witan.cli import migrate
+
+    failure = RuntimeError("batch 3 refused: data tier unavailable")
+    merge_report.attach_partial(
+        failure,
+        {"batches_applied": 2, "source_rows": 100, "added": 40, "rows_loaded": 40},
+    )
+    monkeypatch.setattr(migrate, "_srv", lambda: _StubProvider(error=failure))
+
+    with pytest.raises(SystemExit):
+        migrate._merge(stub_source, target=None, dry_run=False)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "batch 3 refused" in captured.err
+    assert "NOT verified" in captured.err
 
 
 def test_an_interrupted_merge_is_reported_as_incomplete(monkeypatch, stub_source):

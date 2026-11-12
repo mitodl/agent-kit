@@ -1744,7 +1744,7 @@ def test_merge_from_a_remote_only_target_says_it_has_no_local_store(
 
     with pytest.raises(SystemExit):
         cli_migrate._merge_source(None, "production")
-    assert "no local store" in capsys.readouterr().out.lower()
+    assert "no local store" in capsys.readouterr().err.lower()
 
 
 def test_merge_from_an_undefined_target_lists_the_defined_ones(targets_config, capsys):
@@ -1754,7 +1754,7 @@ def test_merge_from_an_undefined_target_lists_the_defined_ones(targets_config, c
 
     with pytest.raises(SystemExit):
         cli_migrate._merge_source(None, "typo")
-    assert "work" in capsys.readouterr().out
+    assert "work" in capsys.readouterr().err
 
 
 def test_merge_without_a_source_or_from_says_so(targets_config):
@@ -1784,7 +1784,7 @@ def test_merge_rejects_to_and_target_together(targets_config, capsys):
 
     with pytest.raises(SystemExit):
         cli_migrate._merge_destination("work", "/tmp/elsewhere.omni")
-    assert "--target" in capsys.readouterr().out
+    assert "--target" in capsys.readouterr().err
 
 
 def test_merge_to_a_local_target_dispatches_in_process(targets_config, monkeypatch):
@@ -1900,9 +1900,9 @@ def test_merge_from_a_target_with_a_per_store_token_is_refused(targets_config, c
 
     with pytest.raises(SystemExit):
         cli_migrate._merge_source(None, "work")
-    out = capsys.readouterr().out
-    assert "OMNIGRAPH_BEARER_TOKEN" in out
-    assert "sekrit" not in out
+    captured = capsys.readouterr()
+    assert "OMNIGRAPH_BEARER_TOKEN" in captured.err
+    assert "sekrit" not in captured.out + captured.err
 
 
 def test_merge_from_a_file_uri_target_keeps_the_double_slash(targets_config):

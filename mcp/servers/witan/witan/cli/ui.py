@@ -68,7 +68,7 @@ def ui(
     try:
         remote = cfg_module.load_remote_config(target=selected_target())
     except ValueError as exc:
-        print_error(exc, stderr=True)
+        print_error(exc)
         raise SystemExit(1) from None
 
     if remote is not None:
@@ -81,8 +81,7 @@ def ui(
         # build step.
         print_error(
             "No UI bundle was built, so there is nothing to serve.\n"
-            "Build it with:  cd mcp/servers/witan/ui && npm ci && npm run build",
-            stderr=True,
+            "Build it with:  cd mcp/servers/witan/ui && npm ci && npm run build"
         )
         raise SystemExit(1)
 
