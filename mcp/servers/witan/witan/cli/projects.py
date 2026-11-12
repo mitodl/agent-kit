@@ -122,7 +122,7 @@ def _project_show(slug: str) -> None:
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
-        print_error(f"No project {slug!r}.", stderr=True)
+        print_error(f"No project {slug!r}.")
         raise SystemExit(1)
     p = live_pr.annotate(p, live_pr.LINKED_FIELDS["workflow_project_get"])
     console.print(f"[bold]{p['slug']}[/bold]  {esc(p.get('title'))}")
@@ -214,7 +214,7 @@ def project_status(
     s = _srv()
     st = _fn(s.workflow_project_status)(slug=slug)
     if not st:
-        print_error(f"No project {slug!r}.", stderr=True)
+        print_error(f"No project {slug!r}.")
         raise SystemExit(1)
 
     st = {
@@ -304,7 +304,7 @@ def project_tasks(
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
-        print_error(f"No project {slug!r}.", stderr=True)
+        print_error(f"No project {slug!r}.")
         raise SystemExit(1)
 
     rows = _fn(s.task_list)(project_slug=slug)

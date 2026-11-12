@@ -12,6 +12,7 @@ from ._common import (
     console,
     esc,
     print_error,
+    stderr_console,
 )
 
 # The size of a claim's list, for a prompt with no claim to take one from.
@@ -237,7 +238,7 @@ def _run_task_slug(
             reason = res.get("held_by") or res.get("reason") or "unavailable"
             print_error(f"Could not claim {slug} ({reason}).")
             if res.get("remedy"):
-                console.print(f"  [yellow]{esc(res['remedy'])}[/yellow]")
+                stderr_console.print(f"  [yellow]{esc(res['remedy'])}[/yellow]")
             raise SystemExit(1)
         console.print(f"[cyan]Claimed {slug} (assignee={res.get('assignee')}).[/cyan]")
 

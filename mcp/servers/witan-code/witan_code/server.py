@@ -24,8 +24,8 @@ mcp = FastMCP(
     "witan-code",
     instructions=(
         "Tree-sitter code graph across one or many repositories: resolve symbol "
-        "definitions, callers, references, and change-impact, and trace cross-repo "
-        "contracts (env vars, endpoints, packages, services).\n\n"
+        "definitions, callers, callees, references, and change-impact, and trace "
+        "cross-repo contracts (env vars, endpoints, packages, services).\n\n"
         "Symbol ids have the form `<repo>#<path/to/file.py>::<QualifiedName>` "
         "(a whole module is `<repo>#<path/to/file.py>::<module>`). Name-based "
         "tools return this id in the `symbol_id` field; pass it straight back to "
@@ -47,8 +47,9 @@ mcp = FastMCP(
         "that store's default (main) view — pass `branch` "
         "explicitly to target another view. Id-routed tools (code_find_references "
         "/ callers / impact / cross_repo_impact) take no `branch`: `symbol_id` "
-        "does not encode a branch, so they read the default view of the id's "
-        "repo store.\n\n"
+        "does not encode a branch, so they follow the same default, reading the "
+        "checkout's branch view when the id's repo is the current detected repo "
+        "and that store's main view otherwise.\n\n"
         "min_precision (`heuristic` default | `precise`) on the interface and "
         "cross-repo tools: `precise` keeps only edges also confirmed by a "
         "canonical-symbol join, suppressing false positives.\n\n"
@@ -505,13 +506,22 @@ async def code_find_references(
     return _as_symbol_id(refs + [c for c in callers if c["slug"] not in seen])
 
 
-@mcp.tool
-async def code_callers(symbol_id: str, ctx: Context | None = None) -> list[dict]:
-    """
-    Find symbols that call ``symbol_id`` (incoming Calls edges).
+# Each value is also the name of the code_read.gq query that answers it.
+CallDirection = Literal["callers", "callees"]
 
-    Heuristic name-resolution based; not a precise call graph. For calls plus
-    other references use code_find_references.
+
+@mcp.tool
+async def code_callers(
+    symbol_id: str,
+    direction: CallDirection = "callers",
+    ctx: Context | None = None,
+) -> list[dict]:
+    """
+    Find symbols that call ``symbol_id``, or that ``symbol_id`` calls.
+
+    Follows Calls edges into ``symbol_id`` by default, or out of it with
+    ``direction="callees"``. Heuristic name-resolution based; not a precise
+    call graph. For calls plus other references use code_find_references.
 
     Parameters
     ----------
@@ -519,13 +529,18 @@ async def code_callers(symbol_id: str, ctx: Context | None = None) -> list[dict]
         The symbol to start from, as returned in the ``symbol_id`` field of
         code_find_definition or code_search_symbol. Form:
         ``<repo>#<path/to/file.py>::<QualifiedName>``.
+    direction:
+        ``callers`` (default) returns the symbols that call ``symbol_id``;
+        ``callees`` returns the symbols ``symbol_id`` calls. The indexer
+        resolves a call only to a symbol defined in the same file, so a call
+        into another module (in this repo or a library) is not listed.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
         client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
         if client is None:
             return []
-    return _as_symbol_id(client.read("code_read.gq", "callers", {"id": symbol_id}))
+    return _as_symbol_id(client.read("code_read.gq", direction, {"id": symbol_id}))
 
 
 @mcp.tool

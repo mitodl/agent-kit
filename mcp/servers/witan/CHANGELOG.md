@@ -8,6 +8,81 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.48.0] - 2026-11-12
+
+### Added
+
+- The `witan.memory.surfaced` log line carries `content_scores` and
+  `title_scores`, parallel to `slugs`: the raw BM25 scores
+  `WITAN_RANK_SURFACE_MIN_CONTENT` and `WITAN_RANK_SURFACE_MIN_TITLE` were
+  applied to, `null` for a linked memory the title did not match. They are
+  what lets the floors be set from production lines.
+- `memory_get` and `recall` log a `witan.memory.read` line in the same shape
+  (`surface`, `task`, `session`, `count`, `slugs`), and `witan.memory.surfaced`
+  gains `session`, so a Loki join on session (or `actor_id`) and slug says
+  whether a surfaced memory was read. `session` is the 8-hex digest a claim
+  holder carries after `#`, never the raw id. Both tools take an optional
+  `session_id`, which only feeds the log; the CLI's remote proxy fills it in.
+
+### Changed
+
+- Under `--output-format json|toml|yaml`, the table commands print the records
+  behind the table instead of its display cells, still inside the
+  `{title, rows}` envelope. This breaks scripts that parse the old shape.
+  Empty values are `null` in JSON and YAML and omitted in TOML, where they
+  used to be `""`, and every row carries the fields the table does not show.
+  The fields whose type or name changes:
+  - `tasks`: `repo` is the full URI (`null` when unscoped) rather than
+    `org/name`; `blocked_by` is a list (`null` when none) rather than a
+    comma-joined string. Rows for `witan tasks <query>` come from
+    `task_search` and carry no `blocked_by`, as before.
+  - `projects`: `repos` is a list of full URIs rather than a comma-joined
+    string of `org/name`.
+  - `traces`: `repos` likewise; `sessions` is `session_count`, and `mined`
+    (`"2p/1l"`) is the `patterns_slug` and `lessons_slug` lists (`null`
+    when empty).
+  - `memory`: `repo` is `null` rather than `""` for an unscoped memory. A
+    listing outside a repo with no `--all-repos` gets `memory_list`'s slim
+    rows, which carry only `slug`, `kind`, `title` and `tags`.
+  - `target list`: `cur` (`"*"`) is a boolean `current`, and `matches` is the
+    `match_orgs`, `match_repos`, `match_hosts` and `match_paths` lists. Each
+    row carries every key in the target's table, including witan-code's
+    (`code_server`, `code_transport`, `index_role`, ...), except `token` and
+    `code_token`.
+  - `scan test`: `span` (`"4-24"`) is the integers `start` and `end`, and
+    `suppressed` is `null` rather than `""` when a finding is not allowlisted.
+  - `journal list`: `args` is an object rather than a JSON-encoded string, and
+    each row adds `context`.
+
+  `scan rules` and `journal replay` already printed their data and are
+  unchanged. `witan code repos|symbols|stitch` still print display cells.
+
+### Fixed
+
+- A remote failure or refusal caught by the `witan` entrypoint (an unreachable
+  deployment, a Cedar denial, a missing tool, a local `Refusal`) now prints to
+  stderr. It went to stdout, so under `--output-format json|toml|yaml` a
+  consumer parsing stdout got a sentence instead of a document. This also
+  covers `witan code …`, which runs under this entrypoint rather than
+  witan-code's own.
+
+- Error messages and notices keep a long path on one line.
+  Rich hard-wrapped them at 80 columns when no standard stream is a
+  terminal (an agent's shell, a CI job), which put a newline inside any
+  longer path. Tables still wrap to the width.
+  Red error prints outside `witan target` now go through `print_error`,
+  so they are escaped too, and the local-store notice no longer drops
+  the `[name]` of the matched target.
+
+- More CLI errors now print to stderr: a misconfigured remote, a config that
+  will not load (`witan task run`), `No task ...` from `task close` and the
+  other task and project commands that still printed it to stdout, and a
+  refused `witan migrate merge`, including the accounting printed after a merge
+  that failed part-way. They went to stdout, so under
+  `--output-format json|toml|yaml` a consumer parsing stdout got a sentence
+  instead of a document, and a redirected `migrate merge` log kept the totals
+  but not the error that explained them.
+
 ## [0.47.0] - 2026-11-12
 
 ### Changed
