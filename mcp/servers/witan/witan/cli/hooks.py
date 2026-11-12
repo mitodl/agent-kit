@@ -11,7 +11,8 @@ from pathlib import Path
 from witan_core.observability import get_logger
 
 from .. import config as cfg_module
-from ._common import app
+from .. import session_summary
+from ._common import _fn, app
 from .selected_target import selected_target
 
 logger = get_logger("witan.hook")
@@ -120,9 +121,15 @@ def session_checkpoint() -> None:
 
     Under Codex, whose hooks get no session variable, the session id comes
     from the hook's stdin payload instead.
+
+    The summary is derived from what the session left behind (see
+    ``witan.session_summary``), because the next session's handoff shows it
+    and agents rarely write one. A session already ended, by an explicit
+    ``workflow_session_end`` or an earlier Stop, is not closed again: its
+    summary stands and only the stale handle is dropped.
     """
     from .. import maintenance, session_state
-    from ._common import _fn, _srv
+    from ._common import _srv
 
     # $CLAUDE_SESSION_ID under Claude Code's Stop hook; $PI_SESSION_ID under
     # Pi, whose workflow extension sets it on this process at session_shutdown;
@@ -135,15 +142,25 @@ def session_checkpoint() -> None:
             # Codex fails a Stop hook whose stdout isn't a JSON decision, and
             # `_srv()` prints its half-configured-remote error to stdout.
             with contextlib.redirect_stdout(sys.stderr):
-                _fn(_srv().workflow_session_end)(
-                    session_slug=session_slug,
-                    summary=(
-                        "Session ended (auto-closed by Stop hook — "
-                        "call workflow_session_end explicitly for a better summary)"
-                    ),
-                    tools_used=None,
-                    files_changed=_changed_files() or None,
-                )
+                server = _srv()
+                session = _read_session(server, handle)
+                # An ended session was closed by an explicit
+                # `workflow_session_end` that left this handle behind (one
+                # called through the remote proxy clears nothing locally), or
+                # by an earlier Stop whose response was lost. Either way its
+                # summary wins over anything derived here, so only the handle
+                # goes.
+                if session is None or not session.get("ended_at"):
+                    project_dir = _project_dir()
+                    _fn(server.workflow_session_end)(
+                        session_slug=session_slug,
+                        summary=_derived_summary(
+                            server, handle, session, session_id, project_dir
+                        ),
+                        tools_used=None,
+                        files_changed=session_summary.changed_files(project_dir)
+                        or None,
+                    )
         # SystemExit is not an Exception: _srv() raises it for a half-configured
         # remote, and letting it escape would break the "never blocks" contract.
         except (Exception, SystemExit):  # noqa: BLE001, S110 — never fail the agent
@@ -152,7 +169,8 @@ def session_checkpoint() -> None:
             # or an expired token needing `witan login`. Dropping the handle would
             # discard the only pointer to the session and leak it open forever;
             # keeping it lets the next Stop, or `witan session end`, finish the job.
-            # Re-closing an already-ended session just re-stamps ended_at.
+            # A close that landed but whose response was lost is found ended by
+            # that next Stop and left as it is.
             pass
         else:
             session_state.clear_handle(session_id)
@@ -206,16 +224,73 @@ def _codex_session_id(payload: dict) -> str | None:
     return payload["session_id"]
 
 
-def _changed_files() -> list[str]:
-    """Files dirty in the agent's checkout, for the auto-close record."""
-    import subprocess
+def _project_dir() -> str:
+    """The agent's checkout: ``$CLAUDE_PROJECT_DIR`` under Claude Code, else cwd.
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path.cwd()))
+    Pi's extension spawns the checkpoint in the session's cwd, and Codex runs
+    its hooks there, so the working directory is right for both.
+    """
+    return os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
+
+
+def _read_session(server, handle: dict) -> dict | None:
+    """The handle's session row, or ``None`` when it can't be read.
+
+    ``None`` covers a handle with no ``project_slug`` (one parked by hand or by
+    an older client) and a failed read. The caller then closes the session as
+    it always did, rather than refusing to close what it can't see.
+    """
+    project_slug = handle.get("project_slug")
+    if not project_slug:
+        return None
     try:
-        return subprocess.check_output(
-            ["git", "-C", project_dir, "diff", "--name-only", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).splitlines()[:50]
-    except (subprocess.CalledProcessError, OSError):
-        return []
+        rows = _fn(server.workflow_session_list)(project_slug=project_slug)
+    except Exception:  # a failed read must not stop the close
+        logger.debug("witan.hook.session_read_failed", exc_info=True)
+        return None
+    return next((r for r in rows if r.get("slug") == handle["session_slug"]), None)
+
+
+def _derived_summary(
+    server, handle: dict, session: dict | None, session_id: str, project_dir: str
+) -> str:
+    """The auto-close summary, built from what this session left in the graph and git.
+
+    Each source is read separately and a failed one is named in the summary
+    rather than read as "nothing happened". Without a start time there is no
+    window to attribute anything to, so the placeholder is all that's true.
+    Never raises: anything unexpected also falls back to the placeholder,
+    because the close itself matters more than what it says.
+    """
+    try:
+        started_at = (session or {}).get("started_at") or handle.get("started_at")
+        since = session_summary.parse_timestamp(started_at)
+        project_slug = handle.get("project_slug")
+        if since is None or not project_slug:
+            return session_summary.PLACEHOLDER
+        activity = session_summary.Activity()
+        try:
+            rows = _fn(server.task_list)(project_slug=project_slug)
+        except Exception:
+            logger.debug("witan.hook.task_read_failed", exc_info=True)
+            activity.unread.append("tasks")
+        else:
+            activity.closed_tasks, activity.claimed_tasks = (
+                session_summary.session_tasks(
+                    rows, handle.get("session_id") or session_id, since
+                )
+            )
+        try:
+            produced = _fn(server.workflow_project_memories)(
+                project_slug=project_slug, session=handle["session_slug"]
+            )
+        except Exception:
+            logger.debug("witan.hook.memory_read_failed", exc_info=True)
+            activity.unread.append("memories")
+        else:
+            activity.memories = produced["memories"]
+        session_summary.git_activity(activity, project_dir, since)
+        return session_summary.render(activity)
+    except Exception:
+        logger.debug("witan.hook.summary_failed", exc_info=True)
+        return session_summary.PLACEHOLDER
