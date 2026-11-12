@@ -185,6 +185,8 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
             if targets:
                 _stamp_flush(checkout)
             for batch in _by_checkout(targets):
+                if not indexer.cluster_serves(batch[0]):
+                    continue
                 try:
                     indexer.index_paths(batch, force=False)
                 except Exception as exc:  # noqa: BLE001 — the drainer must still release

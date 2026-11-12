@@ -29,7 +29,7 @@ from . import identity as identity_module
 from . import repo as repo_module
 from .bridge_extractors import ParsedBinding
 from .graph import OmnigraphClient, check_writable, owns_view
-from .store import ensure_store
+from .store import ensure_store, served_graph_ids
 
 logger = get_logger("witan.code.index")
 
@@ -440,6 +440,55 @@ def index_path(
     return index_paths(
         [target], force=force, repo_override=repo_override, config=config
     )
+
+
+def cluster_serves(target: Path) -> bool:
+    """Whether the cluster serves a code graph for ``target``'s repo.
+
+    The hook drainer asks this before each batch, so an edit in a repo that
+    provisioning does not declare is skipped without a server call. Indexing
+    it would only be refused, and each refusal counts as a failed tool call on
+    the server, which feeds its error-ratio alert. An explicit ``witan-code
+    index`` does not ask, and still surfaces the refusal.
+
+    ``True`` whenever it cannot tell: not on a cluster, no repo key, a bad
+    config, or a listing that failed or came back empty (the deployment
+    degrades its own failed listing to empty), so a broken listing costs the
+    old behaviour rather than dropped edits.
+
+    Assumes a cluster refuses a graph it does not list. An MCP-tier deployment
+    over LOCAL stores instead creates one on first write, and there a hook
+    edit in a repo it holds no store for yet is skipped: that repo's first
+    index has to be an explicit one.
+    """
+    try:
+        cfg = cfg_module.load()
+        if not cfg.is_cluster:
+            return True
+        slug = resolve_repo_key(target.resolve())
+        served = _served_graph_ids(cfg)
+    except Exception:  # cannot tell, so index as before
+        logger.debug("witan.code.index.served_check_failed", exc_info=True)
+        return True
+    if not served or cfg_module.graph_id(slug) in served:
+        return True
+    logger.debug("witan.code.index.repo_not_served", repo=slug)
+    return False
+
+
+_SERVED_GRAPHS: dict[tuple[str | None, str, str | None], frozenset[str]] = {}
+
+
+def _served_graph_ids(cfg: cfg_module.Config) -> frozenset[str]:
+    """The served graphs of ``cfg``'s cluster, asked once per process and
+    cluster: a drainer keeps the answer while it keeps draining, so a graph
+    provisioned meanwhile is picked up by the next drainer. Keyed on the
+    target and address, so a repo is never checked against another cluster's
+    listing. A failure is not cached."""
+    key = (cfg.target_name, cfg.code_transport, cfg.code_server)
+    if key not in _SERVED_GRAPHS:
+        _SERVED_GRAPHS[key] = served_graph_ids(cfg)
+    return _SERVED_GRAPHS[key]
 
 
 def index_paths(
