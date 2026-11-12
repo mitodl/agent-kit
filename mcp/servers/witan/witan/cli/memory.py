@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -72,8 +73,32 @@ memory_app = cyclopts.App(
 app.command(memory_app)
 
 
+#: ``recall``'s query seed is two BM25 runs (content, then title) of 20 rows
+#: each. Asking for both in full keeps an exact title match that ranks low in
+#: the title band from being cut by 20 stronger content hits.
+_DEDUPE_LIMIT = 40
+
+#: What the scanner leaves in place of a redacted span (``scan.redact``).
+_REDACTED = re.compile(r"«redacted:[^»]*»")
+
+
 def _norm(text: object) -> str:
     return " ".join(str(text or "").split()).casefold()
+
+
+def _same(stored: object, local_text: str) -> bool:
+    """Whether stored text is ``local_text``, letting a redacted span stand for
+    anything.
+
+    The scanner redacts PII in a title or content on the way in, so a memory
+    this command stored would otherwise never equal its source file again, and
+    each re-run would store one more copy of it.
+    """
+    parts = _REDACTED.split(_norm(stored))
+    if len(parts) == 1:
+        return parts[0] == _norm(local_text)
+    pattern = ".+?".join(re.escape(part) for part in parts)
+    return re.fullmatch(pattern, _norm(local_text), re.DOTALL) is not None
 
 
 def _existing(recall, mem: local.LocalMemory, repo: str) -> str | None:
@@ -85,13 +110,17 @@ def _existing(recall, mem: local.LocalMemory, repo: str) -> str | None:
     title matches, or its full content does (a cut-short ``content`` cannot be
     compared).
     """
-    hits = recall(query=mem.name, repo=repo, hops=0, include_superseded=True)
+    hits = recall(
+        query=mem.name,
+        repo=repo,
+        hops=0,
+        limit=_DEDUPE_LIMIT,
+        include_superseded=True,
+    )
     for hit in hits["memories"]:
-        if _norm(hit.get("title")) == _norm(mem.name):
+        if _same(hit.get("title"), mem.name):
             return hit["slug"]
-        if not hit.get("content_truncated") and _norm(hit.get("content")) == _norm(
-            mem.content
-        ):
+        if not hit.get("content_truncated") and _same(hit.get("content"), mem.content):
             return hit["slug"]
     return None
 
@@ -162,10 +191,24 @@ def memory_import(
             m for m in memories if _matches_repo(repo, resolutions[m.project_dir].repo)
         ]
 
-    def ident(mem: local.LocalMemory) -> str:
+    def by_repo(mem: local.LocalMemory) -> str:
         res = resolutions[mem.project_dir]
         label = _short_repo(res.repo) if res.repo else mem.project_dir.lstrip("-")
         return f"{label}/{mem.path.stem}"
+
+    # A main checkout and a worktree of it resolve to one repo, so the same file
+    # stem in both would share an id and --select could not pick just one. Those
+    # fall back to the project directory, which is unique.
+    taken = Counter(by_repo(m) for m in memories)
+    ids = {
+        m.path: by_repo(m)
+        if taken[by_repo(m)] == 1
+        else f"{m.project_dir.lstrip('-')}/{m.path.stem}"
+        for m in memories
+    }
+
+    def ident(mem: local.LocalMemory) -> str:
+        return ids[mem.path]
 
     def named(mem: local.LocalMemory, pattern: str) -> bool:
         return pattern in (ident(mem), mem.path.stem)
@@ -193,6 +236,8 @@ def memory_import(
             "repo": res.repo,
             "status": "",
             "detail": "",
+            "slug": None,
+            "redaction_note": None,
             "title": mem.name,
             "path": str(mem.path),
         }
@@ -205,7 +250,7 @@ def memory_import(
             continue
         key = (res.repo, _norm(mem.name))
         if dup := _existing(recall, mem, res.repo):
-            row.update(status="duplicate", detail=dup)
+            row.update(status="duplicate", detail=dup, slug=dup)
             continue
         if key in claimed:
             row.update(status="duplicate", detail="same title earlier in this run")
@@ -238,11 +283,13 @@ def memory_import(
             claimed.discard(key)
             row.update(status="blocked", detail=str(exc))
             continue
+        redacted = sorted({r["field"] for r in result.get("redactions", [])})
         row.update(
             status="stored",
-            detail=" ".join(
-                part for part in (result["slug"], result.get("redaction_note")) if part
-            ),
+            slug=result["slug"],
+            detail=result["slug"]
+            + (f" (redacted: {', '.join(redacted)})" if redacted else ""),
+            redaction_note=result.get("redaction_note"),
         )
 
     render_table(

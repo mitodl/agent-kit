@@ -127,6 +127,18 @@ def test_unquoted_frontmatter_that_is_not_yaml_still_parses(tmp_path):
     assert parsed.kind == "lesson"
 
 
+def test_a_hash_in_an_unquoted_value_is_not_a_comment(tmp_path):
+    """As YAML, `` #`` would start a comment and drop the rest of the value."""
+    path = tmp_path / "m.md"
+    path.write_text(
+        "---\nname: Ship PR #614 first\ndescription: 'quoted: kept whole'\n"
+        "type: project\n---\nb\n"
+    )
+    parsed = local.parse(path, "p")
+    assert parsed.name == "Ship PR #614 first"
+    assert parsed.description == "quoted: kept whole"
+
+
 @pytest.mark.parametrize(
     ("text", "error"),
     [
@@ -221,7 +233,7 @@ def test_confirmed_import_stores_the_selection_and_a_rerun_stores_nothing(
     assert first["test/repo/who"]["status"] == "user", "--all must skip user memories"
     assert _titles(server) == ["Fact: the cache lives on disk", "feedback"]
 
-    stored = server.memory_get(first["test/repo/feedback"]["detail"])
+    stored = server.memory_get(first["test/repo/feedback"]["slug"])
     assert stored["kind"] == "lesson"
     assert stored["repo"] == REPO
     from witan import server as srv
@@ -230,7 +242,7 @@ def test_confirmed_import_stores_the_selection_and_a_rerun_stores_nothing(
 
     second = cli(source=projects, all_=True, confirm=True)
     assert second["test/repo/fact"]["status"] == "duplicate"
-    assert second["test/repo/fact"]["detail"] == first["test/repo/fact"]["detail"]
+    assert second["test/repo/fact"]["slug"] == first["test/repo/fact"]["slug"]
     assert second["test/repo/feedback"]["status"] == "duplicate"
     assert len(_titles(server)) == 2
 
@@ -242,9 +254,7 @@ def test_a_user_memory_is_stored_only_when_named_exactly(cli, projects, server):
 
     named = cli(source=projects, select=["who"], confirm=True)
     assert named["test/repo/who"]["status"] == "stored"
-    assert (
-        server.memory_get(named["test/repo/who"]["detail"])["kind"] == "agent_context"
-    )
+    assert server.memory_get(named["test/repo/who"]["slug"])["kind"] == "agent_context"
 
 
 @requires_omnigraph
@@ -281,6 +291,74 @@ def test_the_scanner_result_is_reported_per_row(cli, tmp_path, projects, capsys)
     assert "aws_access_key" in rows["test/repo/leak"]["detail"]
     assert AWS_KEY not in rows["test/repo/leak"]["detail"]
     assert rows["test/repo/fact"]["status"] == "stored"
+
+
+@requires_omnigraph
+def test_a_redacted_memory_is_still_a_duplicate_on_rerun(
+    cli, tmp_path, projects, server
+):
+    """The scanner rewrites the stored title and content, so they no longer
+    equal the file; without matching through the redaction, every rerun
+    stores another copy."""
+    checkout = tmp_path / "src" / "repo"
+    _memory(
+        projects,
+        checkout,
+        "mail",
+        name="Alerts go to ops@example.org",
+        description="Alerts go to ops@example.org",
+        body="Page ops@example.org first.",
+    )
+    first = cli(source=projects, select=["mail"], confirm=True)
+    assert first["test/repo/mail"]["status"] == "stored"
+    assert "redacted" in server.memory_get(first["test/repo/mail"]["slug"])["title"]
+    assert first["test/repo/mail"]["detail"].endswith("(redacted: content, title)")
+    assert "ALTERED" in first["test/repo/mail"]["redaction_note"]
+
+    second = cli(source=projects, select=["mail"], confirm=True)
+    assert second["test/repo/mail"]["status"] == "duplicate"
+    assert len(_titles(server)) == 1
+
+
+@requires_omnigraph
+def test_an_exact_title_is_found_under_many_stronger_content_hits(
+    cli, projects, server
+):
+    """recall's title-only hits rank below its content hits, so a top-20
+    cut lost the one memory whose title is an exact match."""
+    for i in range(25):
+        server.memory_store(
+            kind="project_fact",
+            title=f"note {i}",
+            content="the cache lives on disk, the cache lives on disk",
+            repo=REPO,
+        )
+    existing = server.memory_store(
+        kind="project_fact",
+        title="Fact: the cache lives on disk",
+        content="worded differently",
+        repo=REPO,
+    )
+    rows = cli(source=projects)
+    assert rows["test/repo/fact"]["status"] == "duplicate"
+    assert rows["test/repo/fact"]["slug"] == existing["slug"]
+
+
+@requires_omnigraph
+def test_one_stem_in_two_checkouts_of_a_repo_gets_two_ids(
+    cli, tmp_path, projects, server
+):
+    worktree = _checkout(tmp_path / "src" / "repo.worktrees" / "wt")
+    _memory(projects, tmp_path / "src" / "repo", "note", body="from the checkout")
+    _memory(projects, worktree, "note", name="other note", body="from the worktree")
+
+    rows = cli(source=projects)
+    notes = sorted(k for k in rows if k.endswith("/note"))
+    assert len(notes) == 2
+    assert not any(k.startswith("test/repo/") for k in notes)
+
+    stored = cli(source=projects, select=[notes[0]], confirm=True)
+    assert [stored[k]["status"] for k in notes] == ["stored", "new"]
 
 
 @requires_omnigraph

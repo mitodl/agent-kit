@@ -140,14 +140,27 @@ def resolve_project(project_dir: str, root: Path = Path("/")) -> Resolution:
     return Resolution(repo, checkout=path)
 
 
+def _unquote(value: str) -> str:
+    """``value`` without its quotes, when it is one quoted YAML string."""
+    if len(value) < 2 or value[0] not in "\"'" or value[-1] != value[0]:
+        return value
+    try:
+        parsed = yaml.safe_load(value)
+    except yaml.YAMLError:
+        return value
+    return parsed if isinstance(parsed, str) else value
+
+
 def _loose_frontmatter(text: str) -> dict:
     """Read ``key: value`` lines the way Claude Code writes them, not as YAML.
 
-    The agent writes frontmatter by hand and does not quote values, so a
-    description such as ``"Ship PR N" means ...`` is invalid YAML (a quoted
-    scalar followed by more text) though its meaning is plain. Values are
-    taken verbatim to the end of the line; an indented line belongs to the
-    last top-level key that had no value of its own (``metadata:``).
+    The agent writes frontmatter by hand and mostly does not quote values. As
+    YAML, a description such as ``"Ship PR N" means ...`` does not parse (a
+    quoted scalar followed by more text), and ``Merge PR #614 first`` parses
+    but loses everything from `` #`` on as a comment. So a value is taken
+    verbatim to the end of the line, and unquoted only when the quotes wrap
+    all of it. An indented line belongs to the last top-level key that had no
+    value of its own (``metadata:``).
     """
     meta: dict = {}
     parent: dict | None = None
@@ -156,7 +169,7 @@ def _loose_frontmatter(text: str) -> dict:
         if m is None:
             continue
         indent, key, value = m.groups()
-        value = (value or "").strip()
+        value = _unquote((value or "").strip())
         if indent and parent is not None:
             parent[key] = value
         elif not indent:
@@ -174,12 +187,7 @@ def parse(path: Path, project_dir: str) -> LocalMemory:
     match = _FRONTMATTER.match(text)
     if match is None:
         return LocalMemory(path, project_dir, error="no frontmatter")
-    try:
-        meta = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        meta = _loose_frontmatter(match.group(1))
-    if not isinstance(meta, dict):
-        return LocalMemory(path, project_dir, error="frontmatter is not a mapping")
+    meta = _loose_frontmatter(match.group(1))
     nested = meta.get("metadata")
     # Older files carry `type` at the top level rather than under `metadata`.
     mem_type = (nested.get("type") if isinstance(nested, dict) else None) or meta.get(
