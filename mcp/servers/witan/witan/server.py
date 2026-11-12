@@ -1134,6 +1134,65 @@ def _claim_refusal(
     return None
 
 
+def _close_refusal(
+    slug: str, row: dict, closer: str, force: bool, override: str
+) -> dict | None:
+    """The refusal for closing ``row`` as ``closer``, or ``None`` if it may close.
+
+    Only a live claim by another person refuses. A worker whose lease lapsed
+    and whose task someone else then claimed would otherwise finish late and
+    close the new holder's work, unblocking its dependents with it; runners
+    make that an ordinary sequence, not a rare one. Everything else closes:
+
+    - another session of the closer's own identity, which is a handover
+      (``_same_person``, as ``task_release`` decides it), and is what the
+      witan-project-tracker reconcile step does when it closes tasks its
+      earlier sessions held;
+    - an expired lease, which nobody is working;
+    - a row that is not ``in_progress``, including one already closed, so a
+      retry of a close that landed still answers with the task;
+    - an ``in_progress`` row naming no holder. ``task_claim`` refuses that as
+      held by someone unknown, but a close has to be refused *as* someone,
+      and there is nobody to name or ask.
+
+    ``override`` is the command that closes it anyway, quoted in ``remedy``.
+    """
+    if force or row.get("status") != "in_progress":
+        return None
+    holder = row.get("assignee")
+    lease_started_at = row.get("claimed_at") or row.get("updated_at")
+    if not holder or _same_person(holder, closer) or _lease_expired(lease_started_at):
+        return None
+    expiry = _lease_expiry(lease_started_at)
+    when = f" Its lease lapses at {expiry}." if expiry else ""
+    return {
+        "slug": slug,
+        "closed": False,
+        "reason": "held",
+        "held_by": holder,
+        "claimed_at": row.get("claimed_at"),
+        "remedy": (
+            f"{slug} is held by {holder}, not {closer}.{when} Leave it to that "
+            f"holder, or if their work is done or abandoned close it anyway "
+            f"with `{override}`."
+        ),
+    }
+
+
+def _require_closable(
+    slug: str, closer: str, force: bool, override: str
+) -> Callable[[dict], None]:
+    """An ``_update_task`` ``require`` that raises :func:`_close_refusal`'s answer."""
+
+    def require(current: dict) -> None:
+        if (
+            refusal := _close_refusal(slug, current, closer, force, override)
+        ) is not None:
+            raise _TaskWriteRefused(refusal)
+
+    return require
+
+
 # Bounded re-tries for a fenced task write (`_update_task`): on each refused
 # precondition (a 412) or write conflict (a 409 from a writer that moved the
 # branch head during prepare) it backs off, re-reads and merges again. The
@@ -8040,6 +8099,7 @@ def task_update(
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
     session_id: str | None = None,
+    force: bool = False,
 ) -> dict | None:
     """
     Update a task's mutable fields. Only non-null arguments are applied.
@@ -8081,8 +8141,11 @@ def task_update(
         side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,
         on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this
         task's dependents**, exactly as ``task_close`` does. Prefer
-        ``task_claim`` / ``task_close`` for those two transitions — they carry
-        the ownership checks this does not.
+        ``task_claim`` / ``task_close`` for those two transitions. ``closed``
+        is refused here as ``task_close`` refuses it, with the same answer,
+        while another person holds a live claim (see ``force``); nothing else
+        is written either. ``in_progress`` carries none of ``task_claim``'s
+        checks.
 
         ``closed_at`` follows the status whatever value you pass: set on
         arrival at ``closed``, cleared on any move away from it, so reopening
@@ -8131,6 +8194,10 @@ def task_update(
         exists on the task. Appended after every other parameter, not placed
         near ``assignee``, so inserting it cannot shift what an existing
         positional caller's later arguments bind to.
+    force:
+        With ``status="closed"``, close even while another person's claim is
+        live. The holder compared is the caller, never ``assignee``: here
+        that names who the task goes to, not who is closing it.
     """
     # A blank ``assignee`` is "not provided", not "provided as nothing".
     # ``_claim_holder`` already reads it that way (``if assignee:``), and
@@ -8210,12 +8277,28 @@ def task_update(
             ("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
         )
 
-    updated = _update_task(
-        slug,
-        changes,
-        extra_steps=extra_steps,
-        default_if_missing=default_if_missing or None,
+    # The close check runs here too, or `task_close`'s refusal is one call
+    # away from being sidestepped.
+    require = (
+        _require_closable(
+            slug,
+            _claim_holder(None, session_id),
+            force,
+            f"witan task update {slug} --status closed --force",
+        )
+        if status == "closed"
+        else None
     )
+    try:
+        updated = _update_task(
+            slug,
+            changes,
+            extra_steps=extra_steps,
+            default_if_missing=default_if_missing or None,
+            require=require,
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
@@ -8225,12 +8308,25 @@ def task_update(
 
 
 @_tool
-def task_close(slug: str, resolution: str | None = None) -> dict | None:
+def task_close(
+    slug: str,
+    resolution: str | None = None,
+    assignee: str | None = None,
+    force: bool = False,
+) -> dict | None:
     """
     Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 
     Closing a blocker is what unblocks its dependents — they become visible to
     ``task_ready`` once every blocker is closed.
+
+    Refuses, writing nothing, while another person holds a live claim on the
+    task: ``{"closed": false, "reason": "held", "held_by", "claimed_at",
+    "remedy"}``. That stops a worker whose lease lapsed, and whose task was
+    taken over, from closing the new holder's work when it finishes late. A
+    claim held by any session of your own identity, an expired lease, and a
+    task nobody is named as holding all close as before. The check is made on
+    the row the close is fenced on, so a claim that lands first is seen.
 
     The close is fenced like ``task_update`` and has the same trade: under
     write load elsewhere on the graph it can run out of attempts and raise
@@ -8251,11 +8347,25 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
         Short note on what was actually done. Worth writing: this is what a
         later reader sees when asking why the task ended, and closing without
         one leaves that unanswerable.
+    assignee:
+        Holder identity closing the task. Defaults to the calling user, same
+        resolution as ``task_claim``'s ``assignee``. Compared at the identity
+        level, ignoring the ``#<session>`` qualifier, as ``task_release``
+        does; pass it when the claim was taken under an explicit name (a
+        worker, a CI job).
+    force:
+        Close even while another person's claim is live.
     """
-    closed = _update_task(
-        slug,
-        {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
-    )
+    try:
+        closed = _update_task(
+            slug,
+            {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
+            require=_require_closable(
+                slug, _claim_holder(assignee), force, f"witan task close {slug} --force"
+            ),
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
     if closed:
         closed = _with_unswept_warning(closed, _unblock_dependents())
     return closed

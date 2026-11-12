@@ -1155,12 +1155,17 @@ witan task close [OPTIONS] SLUG
 
 Close a task, recording an optional resolution.
 
-Closing a blocker unblocks its dependents.
+Closing a blocker unblocks its dependents. A live claim held by someone
+else is refused unless ``--force`` is passed.
 
 **Parameters**:
 
 * `SLUG, --slug`: The ``tk-`` slug to close. **[required]**
 * `--resolution STR`: Short note on what was done.
+* `--assignee STR`: Holder identity closing the task (default: the author). A claim taken
+    by another of your own sessions still matches, since the check is on
+    identity, not session.
+* `--force, --no-force`: Close even while another person's claim is live. *[default: False]*
 
 ### witan task claim
 
@@ -1222,6 +1227,8 @@ to add dependencies use ``task link``.
 * `--assignee STR`: Owner identity.
 * `--external-uri STR`: Reference URI (e.g. a GitHub issue or PR).
 * `--tags STR..., --empty-tags`: Replacement free-form tags.
+* `--force, --no-force`: With ``--status closed``, close even while another person's claim
+    is live. *[default: False]*
 
 ### witan task link
 
