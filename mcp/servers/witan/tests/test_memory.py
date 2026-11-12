@@ -212,11 +212,12 @@ def test_nullable_filters_match_every_combination(server):
     """
     from witan import server as srv
 
-    repos = ["https://github.com/test/one", "https://github.com/test/two", ""]
+    repos = ["https://github.com/test/one", "https://github.com/test/two", None]
     for repo in repos:
+        scope = {"repo": repo} if repo else {"all_repos": True}
         for kind in ("pattern", "lesson"):
             server.memory_store(
-                kind=kind, title=f"{kind} note", content="zorblat body", repo=repo
+                kind=kind, title=f"{kind} note", content="zorblat body", **scope
             )
     every = srv.client.read("read.gq", "list_memories_unbounded", {"kind": None})
     stored = {r["repo"] for r in every}
@@ -401,8 +402,8 @@ def test_superseded_rows_do_not_shorten_a_full_list(server, kwargs):
 
 
 @requires_omnigraph
-@pytest.mark.parametrize("repo", [None, ""])
-def test_language_filter_applies_before_the_cap(server, repo):
+@pytest.mark.parametrize("scope", [{}, {"all_repos": True}])
+def test_language_filter_applies_before_the_cap(server, scope):
     """Filtering by language after the 100-row read left a listing short
     whenever newer memories in another language filled part of the window."""
     from witan import server as srv
@@ -441,7 +442,7 @@ def test_language_filter_applies_before_the_cap(server, repo):
         ]
     )
 
-    listed = [m["slug"] for m in server.memory_list(repo=repo, language="python")]
+    listed = [m["slug"] for m in server.memory_list(language="python", **scope)]
     assert listed == [r["data"]["slug"] for r in python[-6::-1]][:100]
 
 

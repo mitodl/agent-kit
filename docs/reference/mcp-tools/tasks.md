@@ -42,7 +42,7 @@ building one.
 | `external_uri` | str? | `null` | A reference URI — e.g. a GitHub issue or PR. |
 | `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns. |
 | `tags` | list[str]? | `null` | Optional free-form tags. |
-| `all_repos` | bool | `False` | Create the task under no repo, so every repo's task reads see it — see<br>instructions. |
+| `all_repos` | bool | `False` | Create the task under no repo. Repo-scoped task reads include<br>unscoped tasks, so every repo sees it — see instructions. |
 
 ## `task_get`
 

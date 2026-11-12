@@ -18,6 +18,7 @@ from fastmcp import Client
 from witan import readiness
 from witan.config import RemoteConfig
 from witan.remote.proxy import (
+    _REPO_TOOLS,
     RemoteServerProxy,
     RemoteToolFailed,
     RemoteToolUnavailable,
@@ -131,8 +132,9 @@ _ALL_REPOS_CALLS = {
     "workflow_trace_list": {},
 }
 
-# Rows these write are filed under no repo when called with `all_repos`.
-_ALL_REPOS_STAMPS = {"memory_store", "task_create", "workflow_session_start"}
+# Rows these write, and return, are filed under no repo with `all_repos`.
+# (`workflow_session_start` writes one too, but its handle carries no `repo`.)
+_ALL_REPOS_STAMPS = {"memory_store", "task_create"}
 
 
 def _declaring(param: str) -> set[str]:
@@ -198,12 +200,26 @@ def test_all_repos_reaches_the_server_without_an_injected_repo(
         assert result["repo"] is None
 
 
+def _empty_repo_args(proxy, tool: str) -> dict:
+    if tool in _ALL_REPOS_CALLS:
+        return _call_args(proxy, tool)
+    if tool == "task_for_branch":
+        return {"branch": "main"}
+    if tool == "memory_update":
+        return {
+            "slug": proxy.memory_store(kind="pattern", title="t", content="c")["slug"]
+        }
+    # task_claim, task_update
+    return {"slug": proxy.task_create(title="t", description="d")["slug"]}
+
+
 @requires_omnigraph
-@pytest.mark.parametrize("tool", [*sorted(_ALL_REPOS_CALLS), "task_for_branch"])
+@pytest.mark.parametrize("tool", sorted(_REPO_TOOLS))
 def test_an_empty_repo_is_refused_naming_all_repos(proxy, tool):
     # An un-upgraded client still sends an empty repo for "every repo". It is
-    # refused rather than read as every repo or as no repo given.
-    args = {"branch": "main"} if tool == "task_for_branch" else _call_args(proxy, tool)
+    # refused on every tool taking `repo`, rather than read as every repo, as
+    # no repo given, or (on an update) written as the stored value.
+    args = _empty_repo_args(proxy, tool)
     with pytest.raises(RemoteToolFailed, match="all_repos=true"):
         getattr(proxy, tool)(repo="", **args)
 

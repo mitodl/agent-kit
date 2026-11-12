@@ -206,17 +206,19 @@ def test_agrees_with_recall_on_pairs_expansion_pulls_in_from_another_repo(server
     server.memory_link(seed, there, "contradicts")
 
     def recalled(repo):
-        out = server.recall(query="quokka", repo=repo)
+        scope = {"repo": repo} if repo else {"all_repos": True}
+        out = server.recall(query="quokka", **scope)
         assert {seed, there, there_too} <= {m["slug"] for m in out["memories"]}
         return sorted(({c["a"], c["b"]} for c in out["contradictions"]), key=sorted)
 
     def inbox(repo):
-        return sorted(_pairs(server.memory_contradictions(repo=repo)), key=sorted)
+        scope = {"repo": repo} if repo else {"all_repos": True}
+        return sorted(_pairs(server.memory_contradictions(**scope)), key=sorted)
 
     assert recalled(HERE) == inbox(HERE) == [{seed, there}]
     assert (
-        recalled("")
-        == inbox("")
+        recalled(None)
+        == inbox(None)
         == sorted([{seed, there}, {there, there_too}], key=sorted)
     )
 

@@ -423,7 +423,8 @@ mcp = FastMCP(
         "Pass repo (a canonical URI like https://github.com/mitodl/ol-django) to "
         "override it. To span every repo, omit repo and pass all_repos=true; on "
         "memory_store, task_create and workflow_session_start that files the row "
-        "under no repo, where every repo's reads see it. Never pass an empty repo: "
+        "under no repo (repo-scoped task reads include such tasks, repo-scoped "
+        "memory reads do not include such memories). Never pass an empty repo: "
         "it is refused. When memory_list detects no repo and none is passed, it "
         "returns slim records (slug, kind, title, tags — no content); memory_get a "
         "slug for the full memory.\n\n"
@@ -3812,10 +3813,21 @@ def _fit_contents(rows: list[dict]) -> list[dict]:
 
 
 _EMPTY_REPO_REFUSAL = (
-    'repo="" names no repo. Omit repo to use the current repo, or pass a '
-    "canonical repo URI (e.g. https://github.com/mitodl/ol-django) for another. "
-    "To span every repo, omit repo and pass all_repos=true instead."
+    'repo="" names no repo. Omit repo to use the current repo (or, on an '
+    "update, to leave it unchanged), or pass a canonical repo URI (e.g. "
+    "https://github.com/mitodl/ol-django). To span every repo, omit repo and "
+    "pass all_repos=true instead."
 )
+
+
+def _refuse_empty_repo(repo: str | None) -> None:
+    """Refuse a ``repo`` that names no repo.
+
+    :param repo: A caller's ``repo`` argument.
+    :raises ValueError: When ``repo`` is empty or whitespace.
+    """
+    if repo is not None and not repo.strip():
+        raise ValueError(_EMPTY_REPO_REFUSAL)
 
 
 def _scope(repo: str | None, all_repos: bool = False) -> str | None:
@@ -3834,8 +3846,7 @@ def _scope(repo: str | None, all_repos: bool = False) -> str | None:
     :rtype: str | None
     :raises ValueError: On an empty ``repo``, or ``repo`` with ``all_repos``.
     """
-    if repo is not None and not repo.strip():
-        raise ValueError(_EMPTY_REPO_REFUSAL)
+    _refuse_empty_repo(repo)
     if all_repos:
         if repo is not None:
             msg = f"Pass repo or all_repos=true, not both (got repo={repo!r})."
@@ -4550,8 +4561,8 @@ async def memory_store(
         the only way the ``SessionProduced`` provenance edge can be created.
         Omit it under a local stdio server, which finds the handle itself.
     all_repos:
-        Store the memory under no repo, so every repo's reads see it — see
-        instructions.
+        Store the memory under no repo. Repo-scoped memory reads leave it
+        out; ``all_repos`` reads include it — see instructions.
     """
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
@@ -4692,6 +4703,7 @@ def memory_update(
         tags = [tags]
     if isinstance(symbol_refs, str):
         symbol_refs = [symbol_refs]
+    _refuse_empty_repo(repo)
     changes = {
         key: value
         for key, value in (
@@ -6484,6 +6496,7 @@ def workflow_trace_mine(
                 raise ValueError(
                     f"Each proposed {label} must be a dict containing 'title' and 'content', got {spec!r}"
                 )
+            _refuse_empty_repo(spec.get("repo"))
 
     created_patterns = [
         _store_memory(
@@ -7508,8 +7521,8 @@ async def task_create(
     tags:
         Optional free-form tags.
     all_repos:
-        Create the task under no repo, so every repo's task reads see it — see
-        instructions.
+        Create the task under no repo. Repo-scoped task reads include
+        unscoped tasks, so every repo sees it — see instructions.
     """
     now = now_iso()
     slug = _make_slug("task", title)
@@ -8242,6 +8255,7 @@ def task_update(
     if priority is not None:
         changes["priority"] = priority
     if repo is not None:
+        _refuse_empty_repo(repo)
         changes["repo"] = repo
     if assignee is not None:
         changes["assignee"] = assignee
@@ -8433,6 +8447,8 @@ async def task_claim(
         automatically; under local stdio they default to the server's own
         working directory, which is the agent's.
     """
+    # Before the steal prompt below, so nobody confirms a steal that then fails.
+    _refuse_empty_repo(repo)
     # This first read only decides whether to refuse or offer a steal; the
     # claim loop below re-decides on the row its conditional write is fenced
     # on (see docs/adr/0003). The claim also upserts a CodeBranch for the

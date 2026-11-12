@@ -74,10 +74,11 @@ def test_nullable_filters_match_every_combination(server):
     """
     from witan import server as srv
 
-    for repo in ("https://github.com/test/one", "https://github.com/test/two", ""):
+    for repo in ("https://github.com/test/one", "https://github.com/test/two", None):
+        scope = {"repo": repo} if repo else {"all_repos": True}
         for n in range(2):
             t = server.task_create(
-                title=f"zorblat title {n}", description="zorblat body", repo=repo
+                title=f"zorblat title {n}", description="zorblat body", **scope
             )
             if n:
                 server.task_close(t["slug"], resolution="done")

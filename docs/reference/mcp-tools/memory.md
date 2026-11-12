@@ -89,7 +89,7 @@ so callers can link to it.
 | `symbol_refs` | list[str]? | `null` | Optional code-graph symbol ids (``<repo>#<path/to/file.py>::<Name>``,<br>from the witan-code tools' ``symbol_id`` field) this memory concerns,<br>e.g. the function a lesson is about. Stored as a soft reference. |
 | `confidence` | float? | `null` | Optional author/agent trust in this memory, 0.0–1.0. Feeds the search<br>re-rank; omitted memories use the configured default. |
 | `session_slug` | str? | `null` | The ``ws-`` handle returned by ``workflow_session_start``, recording<br>which session produced this memory. Pass it whenever you have one: the<br>protocol carries no session state, so against a deployed service this is<br>the only way the ``SessionProduced`` provenance edge can be created.<br>Omit it under a local stdio server, which finds the handle itself. |
-| `all_repos` | bool | `False` | Store the memory under no repo, so every repo's reads see it — see<br>instructions. |
+| `all_repos` | bool | `False` | Store the memory under no repo. Repo-scoped memory reads leave it<br>out; ``all_repos`` reads include it — see instructions. |
 
 ## `memory_get`
 
