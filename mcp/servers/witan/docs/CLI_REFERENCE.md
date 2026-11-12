@@ -247,7 +247,7 @@ List tasks for the current repo (or filtered).
 | `--assignee` | str \| None | — | Filter by owner |
 | `--ready` | bool | `False` | Show only ready-to-work tasks (open, all blockers closed) |
 | `--all-repos` | bool | `False` | Span every repo in the graph |
-| `--limit` | int | `50` | Max rows |
+| `--limit` | int | `50` | Max rows (not applied to a `QUERY` search yet) |
 
 ```bash
 witan tasks --ready --project wp-migrate-auth-oauth2

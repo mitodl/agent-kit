@@ -1035,9 +1035,9 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 **Arguments**:
 
 * `QUERY`: Free-text search over title and description, ranked by relevance.
-    The server caps a search at 20 hits after ``--status``, ``--project``
-    and ``--assignee`` apply, and before ``--ready`` and the default
-    closed-task elision.
+    A search returns at most 20 hits, counted after ``--status``,
+    ``--project`` and ``--assignee`` apply, and before ``--ready`` and the
+    default closed-task elision. ``--limit`` does not apply to it yet.
 
 **Parameters**:
 
@@ -1057,7 +1057,8 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 * `--assignee STR`: Filter by owner.
 * `--ready, --no-ready`: Show only ready-to-work tasks (open, all blockers closed). *[default: False]*
 * `--all-repos, --no-all-repos`: Span every repo in the graph. *[default: False]*
-* `--limit INT`: Max rows. *[default: 50]*
+* `--limit INT`: Max rows. Does not apply to a search (``QUERY``) yet: sending it would
+    break against a server that predates ``task_search``'s ``limit``. *[default: 50]*
 
 ## witan task
 
