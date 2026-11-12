@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from types import SimpleNamespace
 
+import pytest
 from fastmcp import Client
 from mcp.types import Implementation
 
@@ -112,3 +114,119 @@ def test_trace_mine_cli_prints_material_then_creates_memories(
     created = "\n".join(printed)
     assert trace["patterns_slug"][0] in created
     assert trace["lessons_slug"][0] in created
+
+
+def _fake_trace_server(monkeypatch, result: dict) -> tuple[list[dict], list[str]]:
+    """Point the CLI at a stub whose ``workflow_trace_mine`` records its kwargs."""
+    calls: list[dict] = []
+
+    def workflow_trace_mine(**kwargs):
+        calls.append(kwargs)
+        return result
+
+    printed = _patch_server(
+        monkeypatch, SimpleNamespace(workflow_trace_mine=workflow_trace_mine)
+    )
+    return calls, printed
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"pattern": [{"title": "t", "content": "c"}]},
+        {"patterns": [], "lessons": []},
+        [{"title": "t", "content": "c"}],
+    ],
+    ids=["typo-key", "empty-lists", "top-level-list"],
+)
+def test_trace_mine_refuses_proposals_that_propose_nothing(spec, monkeypatch, tmp_path):
+    from witan.cli.traces import trace_mine_cmd
+
+    calls, printed = _fake_trace_server(monkeypatch, {})
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(json.dumps(spec))
+
+    with pytest.raises(SystemExit) as exc:
+        trace_mine_cmd("wt-x", proposals=proposals)
+
+    assert exc.value.code == 1
+    assert calls == [], "an empty proposal set must not reach the write path"
+    assert "proposals.json" in "\n".join(printed)
+
+
+def test_trace_mine_fills_the_callers_repo_into_proposals(monkeypatch, tmp_path):
+    """A deployment has no checkout to detect a repo from, and the proxy only
+    fills a tool's top-level ``repo``, never one nested in a proposal."""
+    from witan.cli.traces import trace_mine_cmd
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/acme/widgets")
+    calls, _ = _fake_trace_server(
+        monkeypatch, {"created_patterns": [], "created_lessons": []}
+    )
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps(
+            {
+                "patterns": [{"title": "p", "content": "c"}],
+                "lessons": [
+                    {"title": "l", "content": "c", "repo": None},
+                    {"title": "l2", "content": "c", "repo": "https://github.com/a/b"},
+                ],
+            }
+        )
+    )
+
+    trace_mine_cmd("wt-x", proposals=proposals)
+
+    (call,) = calls
+    assert [p["repo"] for p in call["patterns"]] == ["https://github.com/acme/widgets"]
+    assert [ls["repo"] for ls in call["lessons"]] == [
+        "https://github.com/acme/widgets",
+        "https://github.com/a/b",
+    ]
+
+
+def test_trace_mine_leaves_repo_unset_when_none_is_detected(monkeypatch, tmp_path):
+    from witan.cli.traces import trace_mine_cmd
+
+    monkeypatch.setenv("WITAN_REPO", "")
+    calls, _ = _fake_trace_server(
+        monkeypatch, {"created_patterns": [], "created_lessons": []}
+    )
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(json.dumps({"patterns": [{"title": "p", "content": "c"}]}))
+
+    trace_mine_cmd("wt-x", proposals=proposals)
+
+    assert "repo" not in calls[0]["patterns"][0]
+
+
+def test_trace_mine_prints_the_servers_redaction_note(monkeypatch, tmp_path):
+    from witan.cli.traces import trace_mine_cmd
+
+    note = "⚠ CONTENT WAS ALTERED BEFORE STORAGE: pat-p.content[0:16] matched x."
+    _, printed = _fake_trace_server(
+        monkeypatch,
+        {"created_patterns": ["pat-p"], "created_lessons": [], "redaction_note": note},
+    )
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(json.dumps({"patterns": [{"title": "p", "content": "c"}]}))
+
+    trace_mine_cmd("wt-x", proposals=proposals)
+
+    assert note in "\n".join(printed)
+
+
+def test_trace_annotate_honours_output_format(monkeypatch, capsys):
+    from witan.cli.output import set_output_format
+    from witan.cli.traces import trace_annotate_cmd
+
+    record = {"slug": "wt-x", "lessons_slug": ["les-a"], "patterns_slug": []}
+    _patch_server(
+        monkeypatch, SimpleNamespace(workflow_trace_annotate=lambda **_: record)
+    )
+    set_output_format("json")
+
+    trace_annotate_cmd("wt-x", lesson=["les-a"])
+
+    assert json.loads(capsys.readouterr().out) == record

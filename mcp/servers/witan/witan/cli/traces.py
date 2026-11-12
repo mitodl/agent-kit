@@ -185,11 +185,53 @@ def trace_annotate_cmd(
     if result.get("error"):
         print_error(f"No trace {result['slug']!r}.")
         raise SystemExit(1)
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_record(result, fmt)
+        return
     console.print(
         f"Annotated {result['slug']}: "
         f"{len(result.get('lessons_slug') or [])} lesson(s), "
         f"{len(result.get('patterns_slug') or [])} pattern(s) recorded."
     )
+
+
+def _load_proposals(path: Path) -> tuple[list, list]:
+    """Read a ``--proposals`` file, refusing one that would create nothing.
+
+    The server reads any ``patterns``/``lessons`` argument, even an empty one,
+    as the write call, so a typo'd key or two empty lists would exit 0 having
+    created nothing.
+
+    Each proposal with no ``repo`` gets the caller's detected repo. A
+    deployment has no checkout to detect one from, and the remote proxy fills
+    only a tool's top-level ``repo``, not one nested in a proposal.
+    """
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(spec, dict):
+        print_error(
+            f"{path} must hold a JSON object with 'patterns' and/or 'lessons' "
+            f"lists, not a JSON {type(spec).__name__}."
+        )
+        raise SystemExit(1)
+    groups = []
+    for key in ("patterns", "lessons"):
+        items = spec.get(key) or []
+        groups.append([items] if isinstance(items, dict) else items)
+    patterns, lessons = groups
+    if not patterns and not lessons:
+        print_error(
+            f"{path} proposes no patterns or lessons (keys found: "
+            f"{', '.join(spec) or 'none'}). Expected non-empty 'patterns' "
+            "and/or 'lessons' lists."
+        )
+        raise SystemExit(1)
+    repo = _detect_repo_for_display()
+    if repo is not None:
+        for item in (*patterns, *lessons):
+            if isinstance(item, dict) and item.get("repo") is None:
+                item["repo"] = repo
+    return patterns, lessons
 
 
 @trace_app.command(name="mine")
@@ -222,9 +264,7 @@ def trace_mine_cmd(
     trace_slug = _trace_slug(slug)
     kwargs: dict = {"trace_slug": trace_slug, "session_slug": session_slug}
     if proposals is not None:
-        spec = json.loads(proposals.read_text(encoding="utf-8"))
-        kwargs["patterns"] = spec.get("patterns") or []
-        kwargs["lessons"] = spec.get("lessons") or []
+        kwargs["patterns"], kwargs["lessons"] = _load_proposals(proposals)
     result = _fn(_srv().workflow_trace_mine)(**kwargs)
     if result.get("error"):
         print_error(f"No trace {trace_slug!r}.")
@@ -242,6 +282,8 @@ def trace_mine_cmd(
         ):
             for created in result[key]:
                 console.print(f"Created {label} [cyan]{created}[/cyan]")
+        if result.get("redaction_note"):
+            console.print(f"[yellow]{esc(result['redaction_note'])}[/yellow]")
         return
 
     tr = result["trace"]
