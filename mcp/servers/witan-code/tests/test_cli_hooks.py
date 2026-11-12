@@ -135,3 +135,24 @@ def test_inject_context_cmd_passes_an_explicit_client_through(monkeypatch, clien
     command(*bound.args, **bound.kwargs)
 
     assert seen == [client]
+
+
+@pytest.mark.parametrize(
+    ("argv", "lock_fd"),
+    [
+        (["_drain-pending", "repo", "7"], 7),  # POSIX: the inherited lock
+        (["_drain-pending", "repo"], None),  # Windows: the drainer locks
+    ],
+)
+def test_drain_pending_cmd_takes_an_optional_lock_fd(monkeypatch, argv, lock_fd):
+    import witan_code.hooks as hooks_module
+
+    seen = []
+    monkeypatch.setattr(
+        hooks_module, "drain_pending", lambda checkout, fd: seen.append(fd)
+    )
+
+    command, bound, _ = cli.app.parse_args(argv)
+    command(*bound.args, **bound.kwargs)
+
+    assert seen == [lock_fd]

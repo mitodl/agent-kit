@@ -20,14 +20,17 @@ waits out ``FLUSH_INTERVAL_SECONDS`` since the checkout's last flush before
 starting the next, so a session editing every few seconds writes its branch
 view a bounded number of times per interval rather than once per edit.
 
-The lock is a kernel ``flock`` on a file, taken by the hook and handed to the
-drainer as an inherited descriptor. The kernel drops it when the holder exits
-however it exits, so a killed indexer cannot leave the checkout locked.
+The lock is a kernel file lock (``witan_core._filelock``: ``flock`` on POSIX,
+``msvcrt.locking`` on Windows). The OS drops it when the holder exits however
+it exits, so a killed indexer cannot leave the checkout locked. On POSIX the
+hook takes it and hands it to the drainer as an inherited descriptor. Windows
+has no way to hand a lock to a child (see :data:`_HANDS_OFF_LOCK`), so there
+the hook only checks that the lock is free and the drainer takes its own.
 """
 
 from __future__ import annotations
 
-import fcntl
+import contextlib
 import json
 import os
 import re
@@ -36,7 +39,7 @@ import sys
 import time
 from pathlib import Path
 
-from witan_core import popen_detached
+from witan_core import _filelock, popen_detached
 from witan_core.observability import get_logger
 
 from . import indexer
@@ -46,6 +49,15 @@ from .context import _busy_path, _lock_path, _project_dir, _state_path
 logger = get_logger("witan.code.hooks")
 
 _LOG_MAX_BYTES = 1024 * 1024
+
+# Whether the hook passes its locked descriptor to the drainer, so the
+# checkout is never unlocked between the two. Not on Windows: subprocess has
+# no pass_fds there, and an msvcrt lock belongs to the process that took it,
+# not to a handle a child inherits. There the hook releases its probe and the
+# drainer takes the lock itself; a drainer that loses that race exits, and
+# the holder that beat it drains its target, which was queued before the
+# probe and so before the holder took the lock.
+_HANDS_OFF_LOCK = sys.platform != "win32"
 
 # The least time between two flushes of one checkout's queue, which bounds how
 # often an edit session writes its branch view: at most one batched index per
@@ -154,17 +166,23 @@ def _reindex_one(raw: str) -> None:
     _submit(root, path)
 
 
-def drain_pending(checkout: Path, lock_fd: int) -> None:
+def drain_pending(checkout: Path, lock_fd: int | None) -> None:
     """Index everything queued for ``checkout`` as one batch per flush.
 
     Run by the detached child :func:`_submit` spawns, holding the lock it was
-    handed as ``lock_fd``. A flush waits out :data:`FLUSH_INTERVAL_SECONDS`
-    since the checkout's previous one, so edits that land in the meantime
-    join it rather than each starting their own write. After letting go it
+    handed as ``lock_fd``, or taking it itself when handed ``None`` (Windows,
+    see :data:`_HANDS_OFF_LOCK`) and exiting if another drainer has it. A
+    flush waits out :data:`FLUSH_INTERVAL_SECONDS` since the checkout's
+    previous one, so edits that land in the meantime join it rather than each
+    starting their own write. After letting go it
     looks at the queue once more and takes the lock back if anything arrived:
     a hook that queued while the lock was held did not spawn anyone, trusting
     this re-check to pick its target up.
     """
+    if lock_fd is None:
+        lock_fd = _try_lock(checkout)
+        if lock_fd is None:
+            return
     busy = _busy_path(checkout)
     while True:
         try:
@@ -197,7 +215,7 @@ def drain_pending(checkout: Path, lock_fd: int) -> None:
                     )
         finally:
             busy.unlink(missing_ok=True)
-            os.close(lock_fd)
+            _filelock.release(lock_fd)
         if not _has_pending(checkout):
             return
         next_fd = _try_lock(checkout)
@@ -247,16 +265,22 @@ def _submit(checkout: Path, target: Path) -> None:
         return
     if lock_fd is None:
         return
+    handoff: int | None = lock_fd if _HANDS_OFF_LOCK else None
     # Marked busy here rather than only once the drainer is up, so a prompt
     # that fires right after SessionStart already says indexing is under way.
     busy = _busy_path(checkout)
     log_path = _state_path(checkout, "log")
     try:
+        if handoff is None:
+            _filelock.release(lock_fd)
         busy.touch()
         # Appended, so a failure is still there after the next edit spawns a
         # new drainer; restarted once it grows past the cap.
         if log_path.exists() and log_path.stat().st_size > _LOG_MAX_BYTES:
-            log_path.unlink()
+            # Windows refuses while an exiting drainer still has it open as
+            # stdout. A log past the cap must not cost the spawn.
+            with contextlib.suppress(OSError):
+                log_path.unlink()
         with log_path.open("a") as log:
             popen_detached(
                 [
@@ -265,9 +289,9 @@ def _submit(checkout: Path, target: Path) -> None:
                     "witan_code",
                     "_drain-pending",
                     str(checkout),
-                    str(lock_fd),
+                    *([] if handoff is None else [str(handoff)]),
                 ],
-                pass_fds=(lock_fd,),
+                pass_fds=() if handoff is None else (handoff,),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -278,8 +302,10 @@ def _submit(checkout: Path, target: Path) -> None:
     finally:
         # The child holds its own copy of the descriptor, and a flock belongs
         # to the open file, not the descriptor, so closing ours releases
-        # nothing while the child runs.
-        os.close(lock_fd)
+        # nothing while the child runs. Closed, not released: unlocking would
+        # unlock the child's copy too.
+        if handoff is not None:
+            os.close(handoff)
 
 
 # ── Pending queue ─────────────────────────────────────────────────────────────
@@ -289,9 +315,18 @@ def _enqueue(checkout: Path, target: Path) -> None:
     line = str(target)
     if "\n" in line:
         return  # would split into two bogus entries
-    with _state_path(checkout, "pending").open("a", encoding="utf-8") as fh:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    with (
+        _filelock.locked(_queue_lock_path(checkout)),
+        _state_path(checkout, "pending").open("a", encoding="utf-8") as fh,
+    ):
         fh.write(f"{line}\n")
+
+
+def _queue_lock_path(checkout: Path) -> Path:
+    """Guards the queue file. A file of its own rather than a lock on the queue
+    itself, because an ``msvcrt`` lock is mandatory: Windows would refuse the
+    holder's own reads and writes through any handle but the one locking it."""
+    return _state_path(checkout, "pending.lock")
 
 
 def _has_pending(checkout: Path) -> bool:
@@ -307,15 +342,15 @@ def _take_pending(checkout: Path) -> list[Path]:
     A burst of edits to one file queues it many times; indexing it once
     catches up with all of them, since the index reads the file as it is now.
     """
-    try:
-        fh = _state_path(checkout, "pending").open("r+", encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    with fh:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        lines = fh.read().splitlines()
-        fh.seek(0)
-        fh.truncate()
+    with _filelock.locked(_queue_lock_path(checkout)):
+        try:
+            fh = _state_path(checkout, "pending").open("r+", encoding="utf-8")
+        except FileNotFoundError:
+            return []
+        with fh:
+            lines = fh.read().splitlines()
+            fh.seek(0)
+            fh.truncate()
     return [Path(line) for line in dict.fromkeys(lines) if line]
 
 
@@ -357,11 +392,10 @@ def _await_flush_slot(checkout: Path) -> None:
 
 
 def _try_lock(checkout: Path) -> int | None:
-    """Take the checkout's lock without waiting; its descriptor, or ``None``."""
-    fd = os.open(_lock_path(checkout), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    return fd
+    """Take the checkout's lock without waiting; its descriptor, or ``None``.
+
+    Release it with ``_filelock.release``. No ``O_NOFOLLOW`` guard: the lock
+    file sits in :func:`~witan_code.context.state_dir`, which is private to
+    this user, so nobody else can plant a symlink in its place.
+    """
+    return _filelock.acquire(_lock_path(checkout), blocking=False)

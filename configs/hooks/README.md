@@ -2,7 +2,7 @@
 
 Six Claude Code hooks that wire the trackers into every session: two
 workflow hooks (bash scripts, `witan setup`-installed) and four code-graph
-hooks (bare CLI commands, no scripts; not yet runnable on Windows, see
+hooks (bare CLI commands, no scripts, so they run on Windows too; see
 [the witan-code README](../../mcp/servers/witan-code/README.md#hooks)).
 
 Both sets are installed automatically: `witan setup` for the workflow hooks

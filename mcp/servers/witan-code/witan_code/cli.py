@@ -1021,8 +1021,12 @@ def session_init_cmd() -> None:
 
 
 @app.command(name="_drain-pending", show=False)
-def _drain_pending_cmd(checkout: Path, lock_fd: int) -> None:
-    """Internal — run only by the detached drainer the two hooks spawn."""
+def _drain_pending_cmd(checkout: Path, lock_fd: int | None = None) -> None:
+    """Internal — run only by the detached drainer the two hooks spawn.
+
+    ``lock_fd`` is the inherited lock on POSIX. Windows spawns without one and
+    the drainer takes the lock itself.
+    """
     from . import hooks as hooks_module
 
     hooks_module.drain_pending(checkout, lock_fd)

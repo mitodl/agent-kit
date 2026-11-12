@@ -668,8 +668,9 @@ symlink or copy the directory into the equivalent path for your agent.
 ## Hooks
 
 Four hooks — all bare CLI commands, no wrapper scripts, so they need no
-bash or setsid. They do not run on Windows yet: the hook commands' queue
-lock and state directory still use POSIX-only calls. Named `witan-code <command>` below (standalone install via
+bash or setsid and run on Windows as well as Linux and macOS (there against
+a remote deployment, since omnigraph publishes no Windows binary for a local
+store). Named `witan-code <command>` below (standalone install via
 `witan-code setup`); when `witan setup` folds this bundle in instead (see
 [Install](#install)), they register as `witan code <command>` so only
 `witan` needs to be on `PATH`. Register manually per
