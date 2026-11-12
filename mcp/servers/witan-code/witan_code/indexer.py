@@ -17,6 +17,7 @@ import os
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from witan_core import chunking, now_iso
@@ -933,6 +934,65 @@ def _is_nested_checkout(path: Path) -> bool:
     return (path / ".git").exists()
 
 
+class Exclusion(StrEnum):
+    """A rule by which the indexer leaves a file out of the code graph."""
+
+    UNSUPPORTED_LANGUAGE = "unsupported language"
+    EXCLUDED_PATH = "excluded path"
+    NESTED_CHECKOUT = "nested checkout"
+    GITIGNORED = "gitignored"
+
+
+def _excluded_dir(path: Path) -> Exclusion | None:
+    """Why the walk does not descend into directory ``path``, or ``None``."""
+    if path.name in _SKIP_DIRS:
+        return Exclusion.EXCLUDED_PATH
+    if _is_nested_checkout(path):
+        return Exclusion.NESTED_CHECKOUT
+    return None
+
+
+def _exclusion_below(
+    target: Path,
+    path: Path,
+    excluded_dir: Callable[[Path], Exclusion | None] = _excluded_dir,
+) -> tuple[Exclusion, Path] | None:
+    """The first rule that keeps a walk of ``target`` from collecting ``path``
+    (a file under it), with the path the rule matched: the file itself for its
+    language, else the directory between ``target`` and the file that is
+    skipped. ``None`` when the walk collects it, git's ignore rules aside.
+    """
+    if not indexable(path):
+        return Exclusion.UNSUPPORTED_LANGUAGE, path
+    dirs = path.relative_to(target).parts[:-1]
+    for i in range(len(dirs)):
+        directory = target.joinpath(*dirs[: i + 1])
+        rule = excluded_dir(directory)
+        if rule is not None:
+            return rule, directory
+    return None
+
+
+def why_excluded(path: Path, repo_root: Path) -> tuple[Exclusion, Path] | None:
+    """The rule that keeps a full index of ``repo_root`` from collecting
+    ``path``, with the path it matched, or ``None`` when the index collects it.
+
+    The same checks :func:`_collect_files` makes, in the order that keeps git
+    out of it until the path rules pass: ``git check-ignore`` refuses a path
+    inside a nested repository, and answers nothing for the whole call when it
+    does.
+
+    :param path: an existing file under ``repo_root``, resolved.
+    :param repo_root: the git root of the checkout ``path`` belongs to.
+    """
+    found = _exclusion_below(repo_root, path)
+    if found is not None:
+        return found
+    if path in repo_module.ignored(repo_root, [path]):
+        return Exclusion.GITIGNORED, path
+    return None
+
+
 def _collect_files(
     target: Path, *, on_error: Callable[[OSError], None] | None = None
 ) -> list[Path]:
@@ -954,7 +1014,7 @@ def _collect_files(
     declines to purge when anything fired.
     """
     if target.is_file():
-        return [target] if target.suffix in _EXT_TO_SPEC else []
+        return [target] if indexable(target) else []
     listed = repo_module.unignored_files(target, on_error=on_error)
     if listed is None:
         return _walk_files(target, on_error=on_error)
@@ -974,19 +1034,12 @@ def _filter_listed(target: Path, listed: list[Path]) -> list[Path]:
     submodule gitlinks, and symlinks to directories. A symlink to a file is
     kept, as the walk kept it.
     """
-    nested = functools.cache(_is_nested_checkout)
-    out: list[Path] = []
-    for path in listed:
-        if path.suffix not in _EXT_TO_SPEC:
-            continue
-        dirs = path.relative_to(target).parts[:-1]
-        if any(d in _SKIP_DIRS for d in dirs):
-            continue
-        if any(nested(target.joinpath(*dirs[: i + 1])) for i in range(len(dirs))):
-            continue
-        if path.is_file():
-            out.append(path)
-    return sorted(out)
+    excluded_dir = functools.cache(_excluded_dir)
+    return sorted(
+        path
+        for path in listed
+        if _exclusion_below(target, path, excluded_dir) is None and path.is_file()
+    )
 
 
 def _walk_files(
@@ -1007,14 +1060,10 @@ def _walk_files(
         # `dirs` are), so indexing a repo root — or a path *inside* a
         # worktree, which is how the hooks index while an agent works there —
         # still works. Only descending into one from outside is refused.
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in _SKIP_DIRS and not _is_nested_checkout(root_path / d)
-        ]
+        dirs[:] = [d for d in dirs if _excluded_dir(root_path / d) is None]
         for name in files:
             path = root_path / name
-            if path.suffix in _EXT_TO_SPEC:
+            if indexable(path):
                 out.append(path)
     # os.walk's directory order is arbitrary; sort so a run is reproducible
     # and `_dedupe`'s first-wins tie-break is stable across runs.

@@ -15,6 +15,7 @@ unconditionally.
 
 import asyncio
 import inspect
+import os
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -403,6 +404,150 @@ def doctor() -> None:
             "first one and refills as the rest are reindexed."
         )
     raise SystemExit(1)
+
+
+def _exclusion_detail(rule: indexer.Exclusion, matched: str) -> str:
+    """What ``rule`` means for the file, and how to get it indexed if it can be."""
+    if rule is indexer.Exclusion.UNSUPPORTED_LANGUAGE:
+        suffix = Path(matched).suffix or "a file with no extension"
+        return (
+            f"The indexer has no grammar for {suffix}. It parses "
+            f"{', '.join(sorted(indexer._EXT_TO_SPEC))}."
+        )
+    if rule is indexer.Exclusion.EXCLUDED_PATH:
+        return (
+            f"{matched}/ is a directory name the indexer always skips "
+            f"({', '.join(sorted(indexer._SKIP_DIRS))})."
+        )
+    if rule is indexer.Exclusion.NESTED_CHECKOUT:
+        return (
+            f"{matched}/ has its own .git, so its files belong to that "
+            f"checkout's graph. Index it from there: `witan code index {matched}`."
+        )
+    return (
+        f"git ignores it (`git check-ignore -v {matched}` names the pattern). "
+        "A tracked file is indexed whatever the patterns say, so `git add -f` "
+        "it or drop the pattern."
+    )
+
+
+@app.command
+def why(path: Path, *, repo: str | None = None) -> None:
+    """Say whether a file is in the code graph and, if not, which rule left it out.
+
+    An empty `code_*` result reads the same for an unused symbol and for a file
+    the indexer never wrote. This replays the indexer's own file filter on
+    PATH (unsupported language, skipped directory, nested checkout, gitignored)
+    and looks the file up in the view the `code_*` tools read from its
+    checkout.
+
+    Parameters
+    ----------
+    path:
+        The file to explain, as part of the checkout this runs from when it is
+        inside it, else as part of its own.
+    repo:
+        Canonical repo URI, when the checkout has no remote to detect it from.
+    """
+    from rich.console import Console
+    from rich.markup import escape
+
+    from . import repo as repo_module
+    from . import server as server_module
+
+    target = path.resolve()
+    if not target.is_file():
+        print_error(
+            f"{path} is not a file. `witan code why` explains one file.", stderr=True
+        )
+        raise SystemExit(1)
+    # The checkout run from, when PATH is under it: a file in a nested
+    # checkout is the case the nested-checkout rule exists for, and asked from
+    # its own root it is simply that checkout's file.
+    root = repo_module.root(Path.cwd())
+    if root is None or not target.is_relative_to(root.resolve()):
+        root = repo_module.root(target.parent)
+    if root is None:
+        print_error(
+            f"{path} is not inside a git checkout, so there is no full index of "
+            "it to explain.",
+            stderr=True,
+        )
+        raise SystemExit(1)
+    root = root.resolve()
+    try:
+        slug = indexer.resolve_repo_key(root, repo)
+    except repo_module.RepoNotDetected as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from exc
+
+    rel = indexer._relative_path(target, root)
+    excluded = indexer.why_excluded(target, root)
+    found = server_module.indexed_file(slug, rel, root)
+    row = found["file"]
+    rule, matched = (
+        (excluded[0], indexer._relative_path(excluded[1], root))
+        if excluded
+        else (None, None)
+    )
+
+    # The commands in the advice run from the cwd, which may be below `root`.
+    def here(p: Path) -> str:
+        return Path(os.path.relpath(p)).as_posix()
+
+    if rule is not None:
+        explained = _exclusion_detail(rule, here(excluded[1]))
+        if row is None:
+            state = f"not indexed: {rule}"
+            detail = explained
+        else:
+            # `index_paths` checks a file named directly against git's ignore
+            # rules, but not against the path rules.
+            cause = (
+                "before the rule applied to it"
+                if rule is indexer.Exclusion.GITIGNORED
+                else "by indexing the file by name, or before the rule applied to it"
+            )
+            state = f"in the graph, but excluded: {rule}"
+            detail = (
+                f"{explained} Its rows were written {cause}; a full index of "
+                "the repo drops them."
+            )
+    elif found["store"] is None:
+        state = f"not indexed: {slug} has no code graph"
+        detail = f"Index the repo with `witan code index {here(root)}`."
+    elif row is not None:
+        state = f"indexed ({row.get('language')}, at {row.get('indexed_at')})"
+        detail = ""
+    else:
+        state = "not indexed yet"
+        detail = (
+            "No indexer rule excludes it, so the next index writes it: "
+            f"`witan code index {here(target)}`."
+        )
+
+    record = {
+        "path": rel,
+        "repo": slug,
+        "store": found["store"] or "",
+        "view": found["view"] or ("main" if found["store"] else ""),
+        "indexed": row is not None,
+        "rule": str(rule or ""),
+        "matched": matched or "",
+        "state": state,
+        "detail": detail,
+    }
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_structured([record], f"why {rel}", fmt)
+        return
+    console = Console(soft_wrap=True)
+    where = (
+        f" (store {record['store']}, view {record['view']})" if found["store"] else ""
+    )
+    console.print(f"{escape(rel)}: {escape(state)}{escape(where)}")
+    if detail:
+        console.print(escape(detail))
 
 
 def _index(path: Path, *, force: bool, repo: str | None = None) -> indexer.IndexStats:

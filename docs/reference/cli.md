@@ -80,6 +80,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`index`](#witan-code-index)
     - [`reindex`](#witan-code-reindex)
     - [`doctor`](#witan-code-doctor)
+    - [`why`](#witan-code-why)
     - [`deps`](#witan-code-deps)
     - [`symbols`](#witan-code-symbols)
     - [`stitch`](#witan-code-stitch)
@@ -1676,6 +1677,26 @@ witan code doctor
 Check that every code graph — per-repo and the shared bridge — can be read.
 
 Exits non-zero when any store is unreadable, so it is usable as a check.
+
+### witan code why
+
+```console
+witan code why [OPTIONS] PATH
+```
+
+Say whether a file is in the code graph and, if not, which rule left it out.
+
+An empty `code_*` result reads the same for an unused symbol and for a file
+the indexer never wrote. This replays the indexer's own file filter on
+PATH (unsupported language, skipped directory, nested checkout, gitignored)
+and looks the file up in the view the `code_*` tools read from its
+checkout.
+
+**Parameters**:
+
+* `PATH, --path`: The file to explain, as part of the checkout this runs from when it is
+    inside it, else as part of its own. **[required]**
+* `--repo STR`: Canonical repo URI, when the checkout has no remote to detect it from.
 
 ### witan code deps
 
