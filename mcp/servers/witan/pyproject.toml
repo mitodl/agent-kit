@@ -267,7 +267,14 @@ dependencies = [
   # remote/proxy.py chunk through it, so on 0.51.0 a merge whose rows fit one
   # batch still commits nodes and edges separately: one extra commit, no
   # wrong result.
-  "witan-core[cli,remote,observability,sentry]>=0.51.1,<1",
+  #
+  # ★ >=0.54 IS A BEHAVIOUR FLOOR: `remote/proxy.py` overrides
+  # `_replay_result`, which witan-core's journal replay calls only from
+  # 0.54.0. On 0.53 the override is never called, so a queued close that the
+  # server refuses on replay (a claim landed after replay checked the holder)
+  # is reported applied and dropped instead of becoming a comment. It imports
+  # fine, so `just check-core-floor` cannot see it.
+  "witan-core[cli,remote,observability,sentry]>=0.54.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
