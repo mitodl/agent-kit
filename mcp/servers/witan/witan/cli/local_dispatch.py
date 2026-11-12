@@ -227,7 +227,7 @@ class _LocalStoreGuard:
         return self._inner
 
     def _refuse(self, what: str) -> None:
-        print_error(local_write_refused(what, self._diagnosis), stderr=True)
+        print_error(local_write_refused(what, self._diagnosis))
         raise SystemExit(1)
 
     def __getattr__(self, name: str):

@@ -112,7 +112,7 @@ def _serve_target(transport: str):
     try:
         remote = cfg_module.load_remote_config(target=selected_target())
     except ValueError as exc:
-        print_error(exc, stderr=True)
+        print_error(exc)
         raise SystemExit(1) from None
 
     if remote is None:
@@ -121,7 +121,7 @@ def _serve_target(transport: str):
         return witan_mcp
 
     if transport != "stdio":
-        print_error(remote_serving_needs_stdio(remote, transport), stderr=True)
+        print_error(remote_serving_needs_stdio(remote, transport))
         raise SystemExit(1) from None
 
     from ..remote.serve import build_remote_server
@@ -129,7 +129,7 @@ def _serve_target(transport: str):
     try:
         server = asyncio.run(build_remote_server(remote))
     except Exception as exc:  # noqa: BLE001 — every failure mode is the same answer
-        print_error(remote_startup_failure(remote, exc), stderr=True)
+        print_error(remote_startup_failure(remote, exc))
         raise SystemExit(1) from None
     warn_if_code_graph_is_local()
     return server

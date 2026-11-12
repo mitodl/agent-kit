@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import cyclopts
+from rich.console import Console
 
 from .. import merge_report, merge_watermark
-from ._common import _srv, console, esc, print_error, remote_proxy
+from ._common import _srv, console, esc, print_error, remote_proxy, stderr_console
 
 migrate_app = cyclopts.App(
     name="migrate",
@@ -337,7 +338,9 @@ def _report_divergence(result: dict, since: dict | None, dry_run: bool) -> None:
         )
 
 
-def _report_accounting(result: dict, *, incomplete_reason: str | None = None) -> None:
+def _report_accounting(
+    result: dict, *, incomplete_reason: str | None = None, out: Console = console
+) -> None:
     """Answer "did all of it arrive?" from the merge's own numbers.
 
     The counts above this in the summary say what the merge DECIDED. None of
@@ -349,7 +352,8 @@ def _report_accounting(result: dict, *, incomplete_reason: str | None = None) ->
     ``incomplete_reason`` is set when this is rendering the totals off a failed
     merge. The numbers are then a floor rather than a result, and saying so is
     the difference between "here is what landed" and a report that reads like a
-    successful merge with odd arithmetic.
+    successful merge with odd arithmetic. That caller passes ``out`` as the
+    stderr console, so the totals stay next to the error they qualify.
     """
     check = merge_report.accounting(result)
     if check is None:
@@ -359,7 +363,7 @@ def _report_accounting(result: dict, *, incomplete_reason: str | None = None) ->
         # no token for it, which is the same gap this whole report exists to
         # close. Sending them to a check they cannot run is worse than saying
         # plainly that nobody without cluster access can answer this yet.
-        console.print(
+        out.print(
             "[yellow]This deployment does not report merge accounting, so "
             "witan cannot confirm every source row arrived. Ask for it to be "
             "upgraded; until then only someone with data-tier access can "
@@ -381,29 +385,29 @@ def _report_accounting(result: dict, *, incomplete_reason: str | None = None) ->
 
     if check["complete"] and not incomplete_reason:
         verb = "would be accounted for" if check["dry_run"] else "accounted for"
-        console.print(
+        out.print(
             f"[green]Verified[/green]: all {total} source row(s) {verb} ({working})."
         )
         return
 
-    console.print(
+    out.print(
         f"\n[red]NOT verified[/red]: the source held {total} row(s) and this "
         f"merge accounts for {check['decided']} ({working}).",
         soft_wrap=True,
     )
     if check["undecided"] > 0:
-        console.print(
+        out.print(
             f"  {check['undecided']} row(s) never reached a decision — they "
             "were read from the source and never sent."
         )
     if check["unwritten"]:
-        console.print(
+        out.print(
             f"  {check['unwritten']} row(s) were decided but not written "
             f"({check['rows_loaded']} of {check['expected_loaded']} loaded)."
         )
     if incomplete_reason:
-        console.print(f"  {incomplete_reason}")
-    console.print(
+        out.print(f"  {incomplete_reason}")
+    out.print(
         "[yellow]Re-run the same `witan migrate merge` — it is idempotent, so "
         "rows that already landed are kept rather than duplicated.[/yellow]"
     )
@@ -432,6 +436,7 @@ def _report_partial(exc: BaseException) -> None:
             incomplete_reason=(
                 f"{applied} batch(es) landed before this and are not rolled back."
             ),
+            out=stderr_console,
         )
         return
 
@@ -448,7 +453,7 @@ def _report_partial(exc: BaseException) -> None:
     # has no message of its own. Silence there would read as "nothing
     # happened", so it gets the one fact it is missing.
     if partial.get("interrupted"):
-        console.print(
+        stderr_console.print(
             "[yellow]The batch in flight when you interrupted may or may not "
             "have been applied, and nothing after it was sent. Re-run the same "
             "`witan migrate merge` — it is idempotent, so a batch that did land "
