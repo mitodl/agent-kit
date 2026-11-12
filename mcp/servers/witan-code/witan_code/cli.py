@@ -309,12 +309,13 @@ def _rebuild_stores(path: Path, *, yes: bool, slug: str) -> None:
         return
 
     for what, ref in candidates:
-        console.print(f"[yellow]Will DELETE {what}: {ref}[/yellow]")
+        console.print(f"[yellow]Will DELETE {what}: {ref}[/yellow]", soft_wrap=True)
     if any(ref == bridge for _, ref in candidates):
         console.print(
             "[yellow]The bridge holds every indexed repo's cross-repo bindings. "
             "Deleting it empties them all; each repo restores its own on its "
-            "next index.[/yellow]"
+            "next index.[/yellow]",
+            soft_wrap=True,
         )
     if not yes:
         try:

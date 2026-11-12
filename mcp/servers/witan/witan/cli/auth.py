@@ -158,7 +158,7 @@ def whoami() -> None:
         )
     else:
         if code_dest:
-            console.print(f"[bold]Code[/bold]      {esc(code_dest)}")
+            console.print(f"[bold]Code[/bold]      {esc(code_dest)}", soft_wrap=True)
     console.print(
         f"[bold]User[/bold]      {esc(claims.get('preferred_username', '?'))}"
     )
