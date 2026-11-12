@@ -303,7 +303,7 @@ holder's injected session context if they are actively working it.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `SLUG` (positional) | str | required | The `tk-` slug to comment on |
-| `TEXT` (positional) | str | required | The comment body |
+| `BODY` (positional) | str | required | The comment text |
 
 ```bash
 witan task comment tk-fix-flaky-retry-abc123 \

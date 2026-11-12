@@ -42,8 +42,7 @@ from .selected_target import selected_target
 # task_ready truncates server-side. Anything filtered client-side afterwards (a
 # search intersection, --status) needs every ready task, so the cap goes out of
 # reach.
-# The server's own ceiling on `task_list` and `task_search` `limit`; asking for
-# more raises.
+# The server's own ceiling on `task_list(limit=...)`; asking for more raises.
 _MAX_TASK_LIMIT = 10000
 
 _ALL_READY = 2**31 - 1
@@ -58,7 +57,6 @@ def _search_tasks(
     project: str | None,
     assignee: str | None,
     ready: bool,
-    limit: int,
 ) -> list[dict]:
     """Search hits in relevance order, narrowed by the listing filters.
 
@@ -71,7 +69,6 @@ def _search_tasks(
         status=status,
         project_slug=project,
         assignee=assignee,
-        limit=min(limit, _MAX_TASK_LIMIT),
     )
     if status is None:
         hits = [h for h in hits if h.get("status") != "closed"]
@@ -108,9 +105,9 @@ def tasks(
     ----------
     query:
         Free-text search over title and description, ranked by relevance.
-        The server caps a search at ``--limit`` hits after ``--status``,
-        ``--project`` and ``--assignee`` apply, and before ``--ready`` and the
-        default closed-task elision.
+        The server caps a search at 20 hits after ``--status``, ``--project``
+        and ``--assignee`` apply, and before ``--ready`` and the default
+        closed-task elision.
     repo:
         Scope to a specific repo URI (default: the current git repo).
     status:
@@ -142,7 +139,6 @@ def tasks(
             project=project,
             assignee=assignee,
             ready=ready,
-            limit=limit,
         )
     elif ready:
         rows = _fn(s.task_ready)(
