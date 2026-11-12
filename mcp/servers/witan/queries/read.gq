@@ -1250,9 +1250,11 @@ query memories_with_refs() {
     limit 200
 }
 
-// Every current memory's symbol_refs, for the stale-ref review. Unlike
-// memories_with_refs it is not capped at 200, because a review that silently
-// checks an arbitrary 200 memories reads as "nothing else is stale".
+// Every current memory's symbol_refs, for the stale-ref review. Uncapped:
+// the filter to memories that carry refs runs in Python, after any limit, so
+// a cap would let newer memories without refs push the older ones that have
+// them out of the read, and the review would report nothing stale. The rows
+// carry no content, so the full read stays small.
 query current_memory_refs($repo: String?) {
     match {
         $m: Memory
@@ -1260,8 +1262,6 @@ query current_memory_refs($repo: String?) {
         not { $_ supersedes $m }
     }
     return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
-    order { $m.created_at desc }
-    limit 10000
 }
 
 query tasks_with_refs() {

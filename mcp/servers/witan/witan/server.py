@@ -9164,12 +9164,13 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     file_symbols: dict[tuple[str, str], set[str]] = {}
     for ref in refs:
-        if "::" not in ref:
+        # The repo has to be in the ref. Borrowing the cwd's, as symbol_context
+        # does for a bare id, would judge the ref against whichever repo the
+        # caller happens to run from.
+        repo, _, rest = ref.partition("#")
+        path, _, name = rest.rpartition("::")
+        if not (repo and path and name):
             out[ref] = {"status": "unknown", "reason": "not a repo#path::Name id"}
-            continue
-        repo = _symbol_repo(ref)
-        if repo is None:
-            out[ref] = {"status": "unknown", "reason": "no repo in the ref or cwd"}
             continue
         repo = repo_module.normalise(repo)
         row = indexed.get(repo)
@@ -9182,7 +9183,6 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
                 "reason": f"{repo}'s code graph is unreadable: {row.get('unreadable')}",
             }
             continue
-        path, name = ref.split("#", 1)[-1].rsplit("::", 1)
         symbol_id = f"{repo}#{path}::{name}"
         try:
             # Liveness is an exact-id check against the file's symbols. A name

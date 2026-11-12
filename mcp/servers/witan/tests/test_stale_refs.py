@@ -219,6 +219,32 @@ def test_a_memory_with_one_missing_ref_is_stale_and_keeps_its_live_ref(server, c
     ]
 
 
+@pytest.mark.parametrize(
+    "ref",
+    [
+        # No repo prefix: resolving it against the cwd's repo (WITAN_REPO here,
+        # which is INDEXED) would judge it against whatever repo the caller
+        # happens to be in.
+        "app/old.py::gone",
+        "#app/old.py::gone",
+        f"{INDEXED}#::gone",
+        f"{INDEXED}#app/old.py::",
+    ],
+)
+@requires_omnigraph
+def test_a_ref_without_repo_path_and_name_is_unknown(server, code, ref):
+    code(_fake_code({LIVE}, {INDEXED: 10}))
+    slug = _lesson(server, "malformed", [ref])
+
+    (resolved,) = _by_slug(server.memory_stale_refs(repo=INDEXED))[slug]["refs"]
+
+    assert resolved == {
+        "symbol_ref": ref,
+        "status": "unknown",
+        "reason": "not a repo#path::Name id",
+    }
+
+
 @requires_omnigraph
 def test_memories_without_refs_and_superseded_ones_are_not_checked(server, code):
     code(_fake_code(set(), {INDEXED: 10}))
