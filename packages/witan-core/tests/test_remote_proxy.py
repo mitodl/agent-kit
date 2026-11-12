@@ -1307,3 +1307,17 @@ def test_the_proxy_names_itself_to_the_deployment(monkeypatch):
     RemoteMCPProxy("http://x/mcp", lambda: "tok")._new_client("tok")
     info = built["client_info"]
     assert (info.name, info.version) == ("witan-remote-proxy", version("witan-core"))
+
+
+def test_the_proxy_connects_without_dist_metadata(monkeypatch):
+    from witan_core.remote import proxy as proxy_module
+
+    def missing(name):
+        raise proxy_module.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(proxy_module.metadata, "version", missing)
+    proxy_module.proxy_client_info.cache_clear()
+    try:
+        assert proxy_module.proxy_client_info().version == "unknown"
+    finally:
+        proxy_module.proxy_client_info.cache_clear()

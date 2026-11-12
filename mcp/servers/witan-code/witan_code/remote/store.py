@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import functools
 import threading
 from collections.abc import Callable
-from importlib.metadata import version
 from typing import Any
 
 from fastmcp import Client
@@ -36,6 +36,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from mcp.types import Implementation
 
+from agent_config_kit.version import resolve_version
 from witan_core import chunking
 from witan_core.observability import get_logger
 from witan_core.remote.proxy import (
@@ -59,14 +60,23 @@ __all__ = [
 
 logger = get_logger("witan.code.remote")
 
-CLIENT_INFO = Implementation(name="witan-code", version=version("witan-code"))
-"""What this client calls itself in the MCP handshake and per-request ``_meta``.
 
-The SDK default is ``mcp 0.1.0`` for every client, so the deployment's
-``mcp.tool_call`` line could not tell one witan-code release from another, and
-a post-release check ("did this actor's write stream stop after 0.29.0?")
-could not separate an un-upgraded client from a fix that did not work.
-"""
+@functools.cache
+def client_info() -> Implementation:
+    """What this client calls itself in the MCP handshake and per-request ``_meta``.
+
+    The SDK default is ``mcp 0.1.0`` for every client, so the deployment's
+    ``mcp.tool_call`` line could not tell one witan-code release from another,
+    and a post-release check ("did this actor's write stream stop after
+    0.29.0?") could not separate an un-upgraded client from a fix that did not
+    work.
+
+    ``resolve_version`` reports ``unknown`` rather than raising when the
+    distribution metadata is missing, and appends the git short ref for an
+    editable or VCS install. Resolved on first connect rather than at import,
+    since the editable case runs ``git``.
+    """
+    return Implementation(name="witan-code", version=resolve_version("witan-code"))
 
 
 class RemoteStoreUnsupported(RuntimeError):
@@ -234,7 +244,7 @@ class StoreSession:
     def _default_client(self, token: str) -> Client:
         return Client(
             StreamableHttpTransport(self.url, auth=BearerAuth(token)),
-            client_info=CLIENT_INFO,
+            client_info=client_info(),
         )
 
     def call(self, tool: str, **arguments: Any) -> Any:

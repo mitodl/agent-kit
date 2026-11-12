@@ -57,13 +57,14 @@ the ``remote`` extra (``fastmcp``).
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import math
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from importlib.metadata import version
+from importlib import metadata
 from typing import Any
 
 import httpx2
@@ -80,16 +81,26 @@ from .oidc import decode_claims
 
 logger = logging.getLogger(__name__)
 
-PROXY_CLIENT_INFO = Implementation(
-    name="witan-remote-proxy", version=version("witan-core")
-)
-"""What the remote proxy calls itself in MCP ``clientInfo``.
 
-Without it the proxy reports the SDK default, ``mcp 0.1.0``, the same value an
-un-upgraded witan-code sends, so a post-release check on one actor's traffic
-could not tell the two apart. The proxy's code is witan-core's, hence its
-version.
-"""
+@functools.cache
+def proxy_client_info() -> Implementation:
+    """What the remote proxy calls itself in MCP ``clientInfo``.
+
+    Without it the proxy reports the SDK default, ``mcp 0.1.0``, the same value
+    an un-upgraded witan-code sends, so a post-release check on one actor's
+    traffic could not tell the two apart. The proxy's code is witan-core's,
+    hence its version.
+
+    Not ``agent_config_kit.version.resolve_version``: that ships with the
+    ``cli`` extra, and this module needs only ``remote``. Resolved on first
+    connect rather than at import, and ``unknown`` when the metadata is
+    missing, so a source checkout still imports.
+    """
+    try:
+        resolved = metadata.version("witan-core")
+    except metadata.PackageNotFoundError:
+        resolved = "unknown"
+    return Implementation(name="witan-remote-proxy", version=resolved)
 
 
 class RemoteToolUnavailable(RuntimeError):
@@ -774,7 +785,7 @@ class RemoteMCPProxy:
         return Client(
             transport,
             elicitation_handler=self._elicitation_handler(),
-            client_info=PROXY_CLIENT_INFO,
+            client_info=proxy_client_info(),
         )
 
     async def _refresh_param_names(self, client: Client) -> None:
