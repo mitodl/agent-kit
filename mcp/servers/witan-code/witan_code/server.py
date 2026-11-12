@@ -665,24 +665,37 @@ SymbolKind = Literal[
 #: the field instead and answers).
 _NO_FTS_INDEX = "T27:"
 
+#: Marks a docstring-run row inside one store's results until the union
+#: in ``code_search_symbol`` has placed it. Never reaches a caller.
+_DOCSTRING_ONLY = "_docstring_only"
+
 
 def _docstring_search(client: OmnigraphClient, name: str, params: dict) -> list[dict]:
-    """The docstring BM25 run, or no rows from a store whose schema lacks its index.
+    """The docstring BM25 run, or no rows from a store or tier that cannot run it.
 
-    A local store gains the index on its next index, which applies the schema
-    (``store.ensure_store``). A cluster graph gains it when the data tier's
-    ``cluster apply`` runs with the new schema. Until then the name run still
-    answers, so a stale store costs docstring matches, not the whole search.
+    Two cases answer with no rows instead of failing the search. A store whose
+    schema lacks the index refuses the run with ``T27``: a local store gains the
+    index on its next index, which applies the schema (``store.ensure_store``),
+    and a cluster graph when the data tier's ``cluster apply`` runs with the new
+    schema. And a deployed MCP tier older than the query (``code_transport =
+    "mcp"``, ``RemoteStoreClient``) looks the name up in its own bundled
+    ``code_read.gq`` and refuses one it does not have. Either way the name run
+    still answers, so the mismatch costs docstring matches, not the search.
     """
     try:
         return client.read("code_read.gq", name, params)
     except RuntimeError as exc:
-        if _NO_FTS_INDEX not in str(exc):
+        text = str(exc)
+        if _NO_FTS_INDEX not in text and f"{name!r} not found in source" not in text:
             raise
         logger.warning(
-            "witan.code.search.docstring_index_missing",
-            store=client.graph_uri,
-            recovery="reindex the repo (local) or roll out the data tier (cluster)",
+            "witan.code.search.docstring_search_unavailable",
+            store=str(client),
+            error=text,
+            recovery=(
+                "reindex the repo (local store), or roll out the data tier and "
+                "witan-code tier (deployment)"
+            ),
         )
         return []
 
@@ -732,22 +745,29 @@ def code_search_symbol(
     """
 
     # Two runs unioned here, because the engine will not `or` two `search`
-    # predicates in one match. Each is fanned out in full before the next, so
-    # across repos too every name match precedes every docstring-only one.
+    # predicates in one match. Both run inside one fan-out, so a store that
+    # fails fails both and the healthy stores' rows survive, as `_fan_out`
+    # promises. The rows are then split, so across repos too every name match
+    # precedes every docstring-only one.
     suffix = "_by_kind" if kind else ""
     params = {"query": query, "kind": kind} if kind else {"query": query}
-    clients = _resolve_clients(repo, branch)
-    rows = _fan_out(
-        clients,
-        lambda c: c.read("code_read.gq", f"search_symbols{suffix}", params),
+
+    def _query(client: OmnigraphClient) -> list[dict]:
+        names = client.read("code_read.gq", f"search_symbols{suffix}", params)
+        docstrings = _docstring_search(
+            client, f"search_symbols_docstring{suffix}", params
+        )
+        return [*names, *({**r, _DOCSTRING_ONLY: True} for r in docstrings)]
+
+    rows = _fan_out(_resolve_clients(repo, branch), _query)
+    named = [r for r in rows if _DOCSTRING_ONLY not in r]
+    seen = {r["slug"] for r in named}
+    named.extend(
+        {k: v for k, v in r.items() if k != _DOCSTRING_ONLY}
+        for r in rows
+        if _DOCSTRING_ONLY in r and r["slug"] not in seen
     )
-    seen = {r["slug"] for r in rows}
-    docstring_rows = _fan_out(
-        clients,
-        lambda c: _docstring_search(c, f"search_symbols_docstring{suffix}", params),
-    )
-    rows.extend(r for r in docstring_rows if r["slug"] not in seen)
-    return _as_symbol_id(rows)
+    return _as_symbol_id(named)
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
