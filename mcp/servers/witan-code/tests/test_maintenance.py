@@ -7,19 +7,41 @@ duplicated too.
 """
 
 import subprocess
+import tempfile
+
+import pytest
 
 from .conftest import requires_omnigraph
+
+
+@pytest.fixture(autouse=True)
+def _state(tmp_path, monkeypatch):
+    """Keep the throttle stamps' state dir inside ``tmp_path``.
+
+    The hermetic guard redirects HOME and XDG but not the temp dir, and
+    ``tempfile`` caches the first one it computes, so ``TMPDIR`` alone does not
+    move it. Same shape as ``tests/test_hooks.py``'s ``_state``.
+    """
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(tmp))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp))
+    # Where state_dir() lives on Windows; the hermetic guard leaves it alone.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp))
+    return tmp
+
 
 # ── throttle logic (no omnigraph needed) ─────────────────────────────────────
 
 
-def test_stamps_live_in_the_private_state_dir(tmp_path):
+def test_stamps_live_in_the_private_state_dir(tmp_path, _state):
     """Not the bare temp dir, where another user could create the name first."""
     from witan_code import maintenance
     from witan_code.context import state_dir
 
     store = tmp_path / "g.omni"
 
+    assert state_dir().is_relative_to(_state)
     assert maintenance._stamp_file(store).parent == state_dir()
     assert maintenance._stamp_file(store, "cleanup").parent == state_dir()
 
@@ -40,7 +62,6 @@ def test_optimize_interval_env_override(monkeypatch):
 def test_due_respects_interval_disabled_remote_and_missing(monkeypatch, tmp_path):
     from witan_code import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     store = tmp_path / "g.omni"
 
     # missing store — nothing to compact yet
@@ -67,7 +88,6 @@ def test_due_respects_interval_disabled_remote_and_missing(monkeypatch, tmp_path
 def test_spawn_background_optimize_throttles(monkeypatch, tmp_path):
     from witan_code import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
     store = tmp_path / "g.omni"
     store.mkdir()
@@ -110,7 +130,6 @@ def test_cleanup_rides_optimize_on_its_own_window(monkeypatch, tmp_path):
     without bound."""
     from witan_code import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
     monkeypatch.setenv("WITAN_CODE_CLEANUP_INTERVAL", "86400")
     store = tmp_path / "g.omni"
@@ -132,7 +151,6 @@ def test_cleanup_rides_optimize_on_its_own_window(monkeypatch, tmp_path):
 def test_cleanup_disabled_leaves_optimize_alone(monkeypatch, tmp_path):
     from witan_code import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
     monkeypatch.setenv("WITAN_CODE_CLEANUP_INTERVAL", "0")
     store = tmp_path / "g.omni"
@@ -150,7 +168,6 @@ def test_cleanup_disabled_leaves_optimize_alone(monkeypatch, tmp_path):
 def test_spawn_marks_before_spawn_so_failure_does_not_hotloop(monkeypatch, tmp_path):
     from witan_code import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
     store = tmp_path / "g.omni"
     store.mkdir()
@@ -169,7 +186,6 @@ def test_spawn_marks_before_spawn_so_failure_does_not_hotloop(monkeypatch, tmp_p
 def test_mark_run_atomic_roundtrip(tmp_path, monkeypatch):
     from witan_code import maintenance
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     store = tmp_path / "g.omni"
     maintenance._mark_run(store, 12345.0)
     assert maintenance._last_run(store) == 12345.0
@@ -378,7 +394,6 @@ def test_checkpoint_spawns_for_repo_and_bridge_stores(tmp_path, monkeypatch):
     from witan_code import config as cfg_module
     from witan_code import maintenance as maintenance_module
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("WITAN_CODE_OPTIMIZE_INTERVAL", "3600")
     monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
     monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path))
