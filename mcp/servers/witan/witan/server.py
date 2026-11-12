@@ -1,3 +1,4 @@
+import asyncio
 import contextvars
 import functools
 import hashlib
@@ -9011,6 +9012,18 @@ def _code_server():
     return _code_server._cached
 
 
+def _code_result(result):
+    """The value of a witan-code tool call, awaited when the tool is async.
+
+    witan-code's read tools became ``async def`` when they gained elicitation,
+    and calling one from here returns a coroutine. ``memory_symbols`` stored that
+    coroutine as the ``definition`` and ``memory_for_contract`` returned it as
+    the bindings. Every caller is a sync tool, which FastMCP runs in a worker
+    thread with no event loop, so ``asyncio.run`` is safe here.
+    """
+    return asyncio.run(result) if inspect.isawaitable(result) else result
+
+
 @_tool
 def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
     """
@@ -9052,8 +9065,12 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
     if code is not None and kind is not None:
         try:
             bindings = {
-                "providers": code.code_interface_providers(kind, key_norm),
-                "consumers": code.code_interface_consumers(kind, key_norm),
+                "providers": _code_result(
+                    code.code_interface_providers(kind, key_norm)
+                ),
+                "consumers": _code_result(
+                    code.code_interface_consumers(kind, key_norm)
+                ),
             }
         except Exception:  # cross-store lookup is best-effort
             # Info: the contract answer is still returned, just without its
@@ -9104,7 +9121,7 @@ def memory_symbols(slug: str) -> dict:
             try:
                 name = ref.split("::")[-1]
                 repo = ref.split("#", 1)[0] if "#" in ref else None
-                defs = code.code_find_definition(name, repo)
+                defs = _code_result(code.code_find_definition(name, repo))
                 if defs:
                     entry["definition"] = defs
             except Exception:  # best-effort enrichment
@@ -9116,6 +9133,140 @@ def memory_symbols(slug: str) -> dict:
                 )
         symbols.append(entry)
     return {"slug": slug, "symbols": symbols}
+
+
+def _unknown(refs: Iterable[str], reason: str) -> dict[str, dict]:
+    return {ref: {"status": "unknown", "reason": reason} for ref in refs}
+
+
+def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
+    """Classify each ref against the code graph as live, missing or unknown.
+
+    A ref is ``missing`` only when its repo has a readable index and the id is
+    not in it. Everything that stops us asking (witan-code absent, the graph
+    unreachable, the repo never indexed) is ``unknown``, because reporting those
+    as stale would flag every memory in a repo nobody indexed.
+
+    :param refs: Distinct ``symbol_refs`` values.
+    :returns: Each ref mapped to ``{"status", "reason"?, "candidates"?}``.
+    :rtype: dict[str, dict]
+    """
+    refs = list(refs)
+    code = _code_server()
+    if code is None:
+        return _unknown(refs, "witan-code is not installed")
+    try:
+        indexed = {row["repo"]: row for row in code.code_indexed_repos()}
+    except Exception:  # cross-store lookup is best-effort
+        logger.info("witan.stale_refs.code_graph_unreachable", exc_info=True)
+        return _unknown(refs, "code graph unreachable")
+
+    out: dict[str, dict] = {}
+    file_symbols: dict[tuple[str, str], set[str]] = {}
+    for ref in refs:
+        if "::" not in ref:
+            out[ref] = {"status": "unknown", "reason": "not a repo#path::Name id"}
+            continue
+        repo = _symbol_repo(ref)
+        if repo is None:
+            out[ref] = {"status": "unknown", "reason": "no repo in the ref or cwd"}
+            continue
+        repo = repo_module.normalise(repo)
+        row = indexed.get(repo)
+        if row is None:
+            out[ref] = {"status": "unknown", "reason": f"{repo} is not indexed"}
+            continue
+        if row.get("files") is None:
+            out[ref] = {
+                "status": "unknown",
+                "reason": f"{repo}'s code graph is unreadable: {row.get('unreadable')}",
+            }
+            continue
+        path, name = ref.split("#", 1)[-1].rsplit("::", 1)
+        symbol_id = f"{repo}#{path}::{name}"
+        try:
+            # Liveness is an exact-id check against the file's symbols. A name
+            # lookup is capped at 50 rows in no stable order, so a qualified
+            # name that repeats across files (every `<module>`, Django's
+            # `Command.handle`) would report a live symbol as missing.
+            if (repo, path) not in file_symbols:
+                file_symbols[repo, path] = {
+                    s["symbol_id"]
+                    for s in _code_result(code.code_symbols_in_file(path, repo))
+                }
+            if symbol_id in file_symbols[repo, path]:
+                out[ref] = {"status": "live"}
+                continue
+            defs = _code_result(code.code_find_definition(name, repo))
+        except Exception:  # cross-store lookup is best-effort
+            logger.info("witan.stale_refs.lookup_failed", ref=ref, exc_info=True)
+            out[ref] = {"status": "unknown", "reason": "definition lookup failed"}
+            continue
+        # Same-named symbols elsewhere in the repo: the likely rename/move
+        # targets a reviewer checks before deciding the memory is stale.
+        out[ref] = {
+            "status": "missing",
+            "candidates": sorted({d["symbol_id"] for d in defs}),
+        }
+    return out
+
+
+@_tool
+def memory_stale_refs(repo: str | None = None) -> dict:
+    """
+    Memories whose ``symbol_refs`` no longer resolve in the code graph.
+
+    A review list, never an edit. Resolves every current memory's
+    ``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+    symbol is still defined), ``missing`` (its repo is indexed and the symbol is
+    not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
+    index, or witan-code is unreachable). A missing symbol may have been renamed
+    or moved, so the memory can still be true: ``candidates`` lists the indexed
+    symbols with the same name to check first, then ``memory_update`` the refs
+    or supersede the memory.
+
+    Parameters
+    ----------
+    repo:
+        Repo scoping — see instructions. ``""`` checks every repo's memories.
+
+    Returns ``{"repo", "checked", "counts", "memories"}``. ``checked`` is how
+    many memories carry refs; ``counts`` tallies refs by status. ``memories``
+    holds only those with a ref that is not live, each with ``status``
+    (``stale`` when any ref is missing, else ``unknown``) and its ``refs``.
+    """
+    detected = repo_module.detect(override=repo)
+    rows = [
+        r
+        for r in client.read("read.gq", "current_memory_refs", {"repo": detected})
+        if r.get("symbol_refs")
+    ]
+    resolved = _resolve_symbol_refs({ref for r in rows for ref in r["symbol_refs"]})
+
+    counts: Counter[str] = Counter({"live": 0, "missing": 0, "unknown": 0})
+    flagged = []
+    for row in rows:
+        refs = [{"symbol_ref": ref, **resolved[ref]} for ref in row["symbol_refs"]]
+        statuses = {r["status"] for r in refs}
+        counts.update(r["status"] for r in refs)
+        if statuses == {"live"}:
+            continue
+        flagged.append(
+            {
+                "slug": row["slug"],
+                "kind": row.get("kind"),
+                "title": row.get("title"),
+                "repo": row.get("repo"),
+                "status": "stale" if "missing" in statuses else "unknown",
+                "refs": refs,
+            }
+        )
+    return {
+        "repo": detected,
+        "checked": len(rows),
+        "counts": dict(counts),
+        "memories": flagged,
+    }
 
 
 # ── Graph-aware recall (spec §8) ──────────────────────────────────

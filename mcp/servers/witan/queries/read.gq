@@ -1250,6 +1250,20 @@ query memories_with_refs() {
     limit 200
 }
 
+// Every current memory's symbol_refs, for the stale-ref review. Unlike
+// memories_with_refs it is not capped at 200, because a review that silently
+// checks an arbitrary 200 memories reads as "nothing else is stale".
+query current_memory_refs($repo: String?) {
+    match {
+        $m: Memory
+        $repo is null or $m.repo = $repo
+        not { $_ supersedes $m }
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
+    order { $m.created_at desc }
+    limit 10000
+}
+
 query tasks_with_refs() {
     match {
         $t: Task

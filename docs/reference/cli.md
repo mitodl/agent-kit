@@ -26,6 +26,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`optimize`](#witan-optimize)
 - [`cleanup`](#witan-cleanup)
 - [`memory`](#witan-memory)
+    - [`stale-refs`](#witan-memory-stale-refs)
 - [`projects`](#witan-projects)
 - [`project`](#witan-project)
     - [`status`](#witan-project-status)
@@ -426,10 +427,14 @@ Stop hook and the deployed maintenance job use.
 ## witan memory
 
 ```console
-witan memory [OPTIONS] [ARGS]
+witan memory COMMAND [OPTIONS] [ARGS]
 ```
 
 Search memory (BM25), or with no query list memories (filtered by --kind).
+
+**Commands**:
+
+* [`stale-refs`](#witan-memory-stale-refs): List memories whose symbol_refs no longer resolve in the code graph.
 
 **Parameters**:
 
@@ -447,6 +452,24 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 * `--repo STR`:
 * `--all-repos, --no-all-repos`: *[default: False]*
 * `--limit INT`: *[default: 20]*
+
+### witan memory stale-refs
+
+```console
+witan memory stale-refs [OPTIONS]
+```
+
+List memories whose symbol_refs no longer resolve in the code graph.
+
+A review list, never an edit. ``missing`` means the repo is indexed and the
+symbol is not, which may be a rename: the detail column lists indexed
+symbols with the same name. ``unknown`` means the ref could not be checked
+(the repo is not indexed, or witan-code is unreachable).
+
+**Parameters**:
+
+* `--repo STR`:
+* `--all-repos, --no-all-repos`: *[default: False]*
 
 ## witan projects
 
