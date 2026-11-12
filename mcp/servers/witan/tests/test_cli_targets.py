@@ -395,6 +395,8 @@ def test_list_under_json_prints_each_target_record(config_file, monkeypatch, cap
         "oidc_issuer = 'https://sso.example.org/realms/eng'\n"
         "token = 'not-for-stdout'\n"  # pragma: allowlist secret gitleaks:allow
         "code_token = 'nor-this'\n"  # pragma: allowlist secret gitleaks:allow
+        "code_transport = 'mcp'\n"
+        "index_role = 'ci'\n"
         "match_orgs = ['mitodl']\n"
         "match_repos = ['https://github.com/x/one']\n"
         "\n"
@@ -415,7 +417,11 @@ def test_list_under_json_prints_each_target_record(config_file, monkeypatch, cap
     assert rows["hosted"]["match_orgs"] == ["mitodl"]
     assert rows["hosted"]["match_repos"] == ["https://github.com/x/one"]
     assert rows["hosted"]["server"] is None
+    # witan-code's keys share the table; witan's model ignores them.
+    assert rows["hosted"]["code_transport"] == "mcp"
+    assert rows["hosted"]["index_role"] == "ci"
     assert "token" not in rows["hosted"]
+    assert "code_token" not in rows["hosted"]
     assert "not-for-stdout" not in out
     assert "nor-this" not in out
 

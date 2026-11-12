@@ -319,7 +319,8 @@ commands (`tasks`, `projects`, `memory`, `traces`, `scan test`, `scan rules`,
 commands an empty result is `rows: []`, never a sentence, and each row is the
 record behind the table row rather than its cells: `repo` is the full URI,
 `blocked_by` and `repos` are lists, and fields the table does not show are
-included (`target list` leaves out each target's `token`). A row carries
+included (`target list` carries every key in each target's table except
+`token` and `code_token`). A row carries
 what its tool returns, so `tasks <query>` rows have no `blocked_by`. `task <slug>`
 (also `task show <slug>`) and `project status` print the tool's record whole,
 and `project tasks` and `session list` print the tool's rows. All of witan's

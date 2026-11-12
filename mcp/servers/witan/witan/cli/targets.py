@@ -926,7 +926,9 @@ def list_targets() -> None:
     from .. import repo as repo_module
 
     try:
-        targets = cfg_module._parse_targets(cfg_module._load_toml())
+        raw = cfg_module._load_toml()
+        targets = cfg_module._parse_targets(raw)
+        tables = cfg_module.parse_target_tables(raw)
     except ValueError as exc:
         print_error(exc, stderr=True)
         raise SystemExit(1) from None
@@ -972,6 +974,14 @@ def list_targets() -> None:
         records=[
             {
                 "current": selected is not None and t.name == selected.name,
+                # The table is shared with witan-code, whose keys (code_server,
+                # code_transport, index_role, ...) witan's _Target ignores, so
+                # lay the raw table under the normalized fields.
+                **{
+                    k: v
+                    for k, v in tables[t.name].items()
+                    if k not in _CREDENTIAL_FIELDS
+                },
                 **t.model_dump(exclude=_CREDENTIAL_FIELDS),
             }
             for t in targets

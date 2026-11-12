@@ -19,8 +19,10 @@
     listing outside a repo with no `--all-repos` gets `memory_list`'s slim
     rows, which carry only `slug`, `kind`, `title` and `tags`.
   - `target list`: `cur` (`"*"`) is a boolean `current`, and `matches` is the
-    `match_orgs`, `match_repos`, `match_hosts` and `match_paths` lists. A
-    target's `token` is left out.
+    `match_orgs`, `match_repos`, `match_hosts` and `match_paths` lists. Each
+    row carries every key in the target's table, including witan-code's
+    (`code_server`, `code_transport`, `index_role`, ...), except `token` and
+    `code_token`.
   - `scan test`: `span` (`"4-24"`) is the integers `start` and `end`, and
     `suppressed` is `null` rather than `""` when a finding is not allowlisted.
   - `journal list`: `args` is an object rather than a JSON-encoded string, and
