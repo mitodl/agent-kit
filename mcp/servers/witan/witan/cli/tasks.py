@@ -428,6 +428,16 @@ def task_comment_cmd(slug: str, text: str) -> None:
     )
 
 
+def _close_override(force: bool) -> dict:
+    """``task_close``/``task_update``'s ``force``, sent only when set.
+
+    A deployment older than that parameter rejects it as an unexpected
+    argument, and the remote proxy keeps a ``False`` (it drops only ``None``),
+    so an unforced close or update would fail there.
+    """
+    return {"force": True} if force else {}
+
+
 def _exit_if_close_refused(slug: str, result: dict) -> None:
     """Print ``task_close``'s holder refusal and exit 1, if that is the answer."""
     if result.get("closed") is not False:
@@ -468,7 +478,7 @@ def task_close_cmd(
     """
     s = _srv()
     result = _fn(s.task_close)(
-        slug=slug, resolution=resolution, assignee=assignee, force=force
+        slug=slug, resolution=resolution, assignee=assignee, **_close_override(force)
     )
     if _queued(result):
         return
@@ -634,7 +644,7 @@ def task_update_cmd(
         assignee=assignee,
         external_uri=external_uri,
         tags=_split_csv(tags),
-        force=force,
+        **_close_override(force),
     )
     if _queued(result):
         return
