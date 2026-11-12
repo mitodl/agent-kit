@@ -530,7 +530,10 @@ authorization. Neither changes D1-D5 today. Tracked as
 
 EMA is deferred. What it would buy witan: a client already signed in to the
 organization's IdP gets a witan access token without a per-server OAuth flow,
-and access is granted by IdP group rather than one user at a time. The IdP
+and an administrator can enable witan for an IdP group in one place. That is a
+token-issuance policy only. A token still reaches the graph only through D3's
+pre-provisioned per-user actor token and the Cedar bundle's membership rules
+(ADR-0002), and EMA replaces neither. The IdP
 issues an ID-JAG to the client, and witan's authorization server (Keycloak, the
 `authorization_servers` entry `RemoteAuthProvider` advertises, 2026-09-10
 addendum) validates it and issues the access token. witan would still validate
