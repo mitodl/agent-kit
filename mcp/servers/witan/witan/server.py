@@ -6468,11 +6468,12 @@ def workflow_trace_mine(
     patterns:
         Proposed pattern memories to create on this call. Each dict needs
         ``title`` and ``content``; may also include ``repo``, ``language``,
-        and ``tags``.
+        ``tags``, and ``all_repos`` (``true`` stores it under no repo, as on
+        ``memory_store``; not with ``repo``).
     lessons:
         Proposed lesson memories to create on this call. Each dict needs
         ``title`` and ``content``; may also include ``repo``, ``severity``,
-        and ``tags``.
+        ``tags``, and ``all_repos`` (as for ``patterns``).
     session_slug:
         The ``ws-`` handle from ``workflow_session_start``, recorded as the
         provenance of every memory mined on this call — see ``memory_store``.
@@ -6507,7 +6508,11 @@ def workflow_trace_mine(
                 raise ValueError(
                     f"Each proposed {label} must be a dict containing 'title' and 'content', got {spec!r}"
                 )
-            _refuse_empty_repo(spec.get("repo"))
+            if not isinstance(spec.get("all_repos", False), bool):
+                raise TypeError(
+                    f"A proposed {label}'s all_repos must be true or false, got {spec['all_repos']!r}"
+                )
+            _check_scope(spec.get("repo"), spec.get("all_repos", False))
 
     created_patterns = [
         _store_memory(
@@ -6518,6 +6523,7 @@ def workflow_trace_mine(
             language=spec.get("language"),
             tags=spec.get("tags"),
             session_slug=session_slug,
+            all_repos=spec.get("all_repos", False),
         )["slug"]
         for spec in patterns or []
     ]
@@ -6530,6 +6536,7 @@ def workflow_trace_mine(
             severity=spec.get("severity"),
             tags=spec.get("tags"),
             session_slug=session_slug,
+            all_repos=spec.get("all_repos", False),
         )["slug"]
         for spec in lessons or []
     ]

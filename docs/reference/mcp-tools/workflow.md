@@ -448,6 +448,6 @@ project can follow the reasoning, not just a terse note for a future agent.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `trace_slug` | str | **required** | The ``wt-`` slug of the trace to mine. |
-| `patterns` | list[object]? | `null` | Proposed pattern memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``language``,<br>and ``tags``. |
-| `lessons` | list[object]? | `null` | Proposed lesson memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``severity``,<br>and ``tags``. |
+| `patterns` | list[object]? | `null` | Proposed pattern memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``language``,<br>``tags``, and ``all_repos`` (``true`` stores it under no repo, as on<br>``memory_store``; not with ``repo``). |
+| `lessons` | list[object]? | `null` | Proposed lesson memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``severity``,<br>``tags``, and ``all_repos`` (as for ``patterns``). |
 | `session_slug` | str? | `null` | The ``ws-`` handle from ``workflow_session_start``, recorded as the<br>provenance of every memory mined on this call — see ``memory_store``. |

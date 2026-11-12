@@ -641,6 +641,58 @@ def test_mine_trace_rejects_proposal_missing_required_keys(server):
 
 
 @requires_omnigraph
+def test_mine_trace_all_repos_stores_unscoped_memories(server):
+    """With a repo detected (the fixture sets WITAN_REPO), a proposal's
+    `all_repos` is the only way to mine a memory under no repo."""
+    proj = server.workflow_project_create(title="mine unscoped", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+
+    created = server.workflow_trace_mine(
+        done["trace_slug"],
+        patterns=[{"title": "p", "content": "c", "all_repos": True}],
+        lessons=[
+            {"title": "l", "content": "c", "all_repos": True},
+            {"title": "scoped", "content": "c"},
+        ],
+    )
+
+    unscoped, scoped = created["created_lessons"]
+    for slug in (*created["created_patterns"], unscoped):
+        assert server.memory_get(slug)["repo"] is None
+    assert server.memory_get(scoped)["repo"] == "https://github.com/test/repo"
+
+
+@requires_omnigraph
+@pytest.mark.parametrize(
+    ("bad", "error", "match"),
+    [
+        ({"repo": ""}, ValueError, "names no repo"),
+        (
+            {"repo": "https://github.com/test/other", "all_repos": True},
+            ValueError,
+            "not both",
+        ),
+        ({"all_repos": "yes"}, TypeError, "true or false"),
+    ],
+)
+def test_mine_trace_refuses_a_bad_scope_before_creating_anything(
+    server, bad, error, match
+):
+    proj = server.workflow_project_create(title="mine bad scope", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+    before = {m["slug"] for m in server.memory_list(all_repos=True)}
+
+    with pytest.raises(error, match=match):
+        server.workflow_trace_mine(
+            done["trace_slug"],
+            patterns=[{"title": "fine", "content": "c"}],
+            lessons=[{"title": "bad", "content": "c", **bad}],
+        )
+
+    assert {m["slug"] for m in server.memory_list(all_repos=True)} == before
+
+
+@requires_omnigraph
 def test_missing_trace_returns_consistent_shape(server):
     """Both trace tools return {"slug": ..., "error": ...} for a missing trace (C8)."""
     mined = server.workflow_trace_mine("wt-does-not-exist")
