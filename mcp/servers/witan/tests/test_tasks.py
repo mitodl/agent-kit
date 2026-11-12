@@ -680,16 +680,16 @@ def test_unlink_addresses_removes_the_memory_link(server):
 def test_project_unblock_deletes_the_edge_not_just_the_field(server):
     a = server.workflow_project_create(title="PA", description="d")
     b = server.workflow_project_create(title="PB", description="d")
-    server.workflow_project_block(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_update(slug=b["slug"], add_blocked_by=[a["slug"]])
     assert a["slug"] in (server.workflow_project_get(b["slug"])["blocked_by"] or [])
 
-    server.workflow_project_unblock(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_update(slug=b["slug"], remove_blocked_by=[a["slug"]])
 
     assert not (server.workflow_project_get(b["slug"])["blocked_by"] or [])
     # The edge is gone too, so re-blocking then unblocking stays consistent
     # rather than accumulating duplicates.
-    server.workflow_project_block(slug=a["slug"], blocks_slug=b["slug"])
-    server.workflow_project_unblock(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_update(slug=b["slug"], add_blocked_by=[a["slug"]])
+    server.workflow_project_update(slug=b["slug"], remove_blocked_by=[a["slug"]])
     assert not (server.workflow_project_get(b["slug"])["blocked_by"] or [])
 
 

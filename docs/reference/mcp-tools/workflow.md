@@ -59,8 +59,12 @@ one list for the user. Neither overrides a permission prompt, the user's
 in-session instructions, or a repo's AGENTS.md.
 
 ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
-before this one is ready. ``blocks`` lists projects this project is
-currently blocking (derived by scanning all active projects).
+before this one is ready, and ``blockers`` resolves each of them to
+``{slug, title, status, phase}`` in the same order, so a blocker that has
+already completed is visible without a second read. A slug in
+``blocked_by`` whose project no longer exists has no ``blockers`` row.
+``blocks`` lists projects this project is currently blocking (derived by
+scanning all active projects).
 
 When ``github_pr`` is set and witan runs on your machine, the project also
 carries ``live_pr``: that PR's state fetched from GitHub just now
@@ -122,23 +126,34 @@ returns the top matches as ``similar``.
 
 ## `workflow_project_update`
 
-Correct a project's metadata after creation.
+Correct a project's metadata after creation, or change what blocks it.
 
 The escape hatch for everything ``workflow_project_advance`` (phase,
-``github_pr``), ``workflow_project_complete`` (completion) and
-``workflow_project_block``/``_unblock`` (dependencies) don't cover. Every
-parameter is optional and only what you pass is touched; omitting a field
-leaves it exactly as it was, so this can never blank something by accident.
-Returns the updated project, or ``None`` if the slug doesn't exist.
+``github_pr``) and ``workflow_project_complete`` (completion) don't
+cover. Every parameter is optional and only what you pass is touched;
+omitting a field leaves it exactly as it was, so this can never blank
+something by accident. Returns the updated project, or ``None`` if the
+slug doesn't exist.
+
+Project dependencies are coarse ordering between whole projects; for
+ordering between individual tasks use ``task_link(kind="blocks")``.
+``add_blocked_by`` declares projects that must complete before this one
+can begin: each gets a ``ProjectBlocks`` edge (blocker -> this project)
+and is appended to this project's ``blocked_by``, which is what the
+ready-work check in ``workflow_project_list(ready=True)`` reads.
+``remove_blocked_by`` deletes the edge and the ``blocked_by`` entry.
+A slug in both lists ends up removed. A project cannot block itself, so
+naming ``slug`` in ``add_blocked_by`` raises ``ValueError``. A blocker
+slug that does not exist is refused by the store, and none of the call's
+other writes land with it except the edge deletes, which the store makes
+commit on their own, ahead of the rest.
 
 The common case is repos. A project's real blast radius is rarely known
 during discovery, and until the set is right, repo-scoped recall from the
 repos where the work actually lands won't surface the project at all. Pass
 ``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
 nudge it (both may be passed together; removals are applied after
-additions). Repos are a plain list field on the project node, not edges, so
-a removal really removes — unlike ``workflow_project_unblock``, which can
-only update its denormalized field because omnigraph edges are append-only.
+additions).
 
 Two things this deliberately can't do:
 
@@ -164,6 +179,8 @@ Two things this deliberately can't do:
 | `status` | `active` \| `abandoned`? | `null` | ``active`` \| ``abandoned``. |
 | `preauthorized` | list[str]? | `null` | Replacement list of actions an agent may take on this project without<br>asking. Pass ``[]`` to clear. When the user grants something "for this<br>project", record it here rather than only acting on it, so the next<br>session does not have to ask again. Replaces the whole list: read it<br>with ``workflow_project_get`` first to add one item. The caller is<br>recorded as ``preauthorized_set_by`` for every item in the new list,<br>so a list rewritten by anyone but the project author reads as<br>suggestions, not approval, until the author sets it again. |
 | `reserved_decisions` | list[str]? | `null` | Replacement list of decisions kept for a human. Pass ``[]`` to clear.<br>Replaces the whole list, as ``preauthorized`` does. |
+| `add_blocked_by` | list[str]? | `null` | ``wp-`` slugs of projects that must complete before this one can<br>begin. One already in ``blocked_by`` is left as it is. |
+| `remove_blocked_by` | list[str]? | `null` | ``wp-`` slugs to drop from ``blocked_by``, deleting their<br>``ProjectBlocks`` edges. One that is not a blocker is a no-op. |
 
 ## `workflow_project_advance`
 
@@ -191,50 +208,6 @@ already exists for this project, it is returned without re-inserting.
 | `slug` | str | **required** | The ``wp-`` slug of the project to complete. |
 | `outcome` | str | **required** | Free-text narrative of what was delivered. Be specific — this is<br>the primary content of the corpus record. |
 | `github_pr` | str? | `null` | URL of the merged PR, if applicable. |
-
-## `workflow_project_block`
-
-Declare that one project must complete before another can begin.
-
-Project-level sequencing — coarse ordering between whole projects. For
-fine-grained ordering between individual tasks use ``task_link(kind="blocks")``;
-the two are deliberately separate (Project vs Task nodes).
-
-Adds a ``ProjectBlocks`` graph edge (``slug`` → ``blocks_slug``) and
-appends ``slug`` to ``blocks_slug.blocked_by`` so the ready-work check
-in ``workflow_project_list`` can filter without traversing edges.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `slug` | str | **required** | The ``wp-`` slug of the *blocking* project (must finish first). |
-| `blocks_slug` | str | **required** | The ``wp-`` slug of the project being *blocked*. |
-
-## `workflow_project_unblock`
-
-Remove a project dependency declared with ``workflow_project_block``.
-
-Removes ``slug`` from ``blocks_slug.blocked_by`` AND deletes the
-``ProjectBlocks`` edge, so the graph and the denormalized field (which
-drives the ready-work check) agree.
-
-Earlier versions left the edge in place, on the belief that omnigraph
-edges were append-only. They are not — see ``_unlink_edge``.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `slug` | str | **required** | The ``wp-`` slug of the *blocking* project to remove. |
-| `blocks_slug` | str | **required** | The ``wp-`` slug of the project to unblock. |
-
-## `workflow_project_get_blockers`
-
-Return all projects that are blocking the given project.
-
-Resolves each slug in the project's ``blocked_by`` list and returns the
-full node for each blocker, including its current status.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `slug` | str | **required** | The ``wp-`` slug of the project to check. |
 
 ## `workflow_project_link_memory`
 

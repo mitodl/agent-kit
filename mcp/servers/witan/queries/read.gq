@@ -797,7 +797,7 @@ query list_all_projects() {
 }
 
 // One project's status and blockers, for `_project_blocker_status`'s cached
-// per-blocker lookup. `workflow_project_get_blockers` reads all of a project's
+// per-blocker lookup. `workflow_project_get` resolves all of a project's
 // blockers at once with `get_workflow_projects_by_slugs` below.
 query get_workflow_project_by_slug($slug: String) {
     match {

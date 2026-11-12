@@ -8,3 +8,11 @@
   `workflow_project_list` for the same BM25 search over title and description,
   ranked and capped at 20. Its `repo`, `status`, `phase` and `ready` filters
   apply to the matches.
+- Breaking: `workflow_project_block`, `workflow_project_unblock` and
+  `workflow_project_get_blockers` are gone. Call `workflow_project_update` on
+  the blocked project with `add_blocked_by=[<blocker>]` or
+  `remove_blocked_by=[<blocker>]`, the same shape as `add_repos`/`remove_repos`.
+  A self-block now raises `ValueError` instead of returning `linked: false`.
+  `workflow_project_get` gains a `blockers` list with each blocker's `slug`,
+  `title`, `status` and `phase`, the fields `witan project show` read from
+  `get_blockers`. `witan project block`/`unblock` keep their names.

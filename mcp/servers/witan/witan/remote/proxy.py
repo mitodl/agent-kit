@@ -257,7 +257,6 @@ _READ_ONLY = frozenset(
         "task_search",
         "topic_get",
         "workflow_project_get",
-        "workflow_project_get_blockers",
         "workflow_project_list",
         "workflow_project_memories",
         "workflow_project_status",

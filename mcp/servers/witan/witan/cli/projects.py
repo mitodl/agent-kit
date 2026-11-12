@@ -131,9 +131,7 @@ def _project_show(slug: str) -> None:
         console.print(f"  pr: {p['github_pr']}")
     print_live_pr(p)
     if p.get("blocked_by"):
-        blockers = {
-            b["slug"]: b for b in _fn(s.workflow_project_get_blockers)(slug=slug)
-        }
+        blockers = {b["slug"]: b for b in p.get("blockers") or []}
         for blocker in p["blocked_by"]:
             b = blockers.get(blocker)
             st = b.get("status") if b else "missing"
@@ -609,11 +607,13 @@ def project_block(slug: str, blocks: str) -> None:
         The blocked project's ``wp-`` slug.
     """
     s = _srv()
-    result = _fn(s.workflow_project_block)(slug=slug, blocks_slug=blocks)
-    if not result.get("linked"):
-        reason = (result.get("reason") or "").strip() or "unknown"
-        print_error(f"Not linked: {reason}")
+    if slug == blocks:
+        print_error("Not linked: a project cannot block itself")
         return
+    result = _fn(s.workflow_project_update)(slug=blocks, add_blocked_by=[slug])
+    if result is None:
+        print_error(f"No project {blocks!r}.")
+        raise SystemExit(1)
     console.print(f"[green]Blocked[/green] {blocks} on {slug}")
 
 
@@ -629,8 +629,12 @@ def project_unblock(slug: str, blocks: str) -> None:
         The project to unblock.
     """
     s = _srv()
-    result = _fn(s.workflow_project_unblock)(slug=slug, blocks_slug=blocks)
-    if result.get("removed"):
+    before = _fn(s.workflow_project_get)(slug=blocks)
+    if before is None:
+        print_error(f"No project {blocks!r}.")
+        raise SystemExit(1)
+    _fn(s.workflow_project_update)(slug=blocks, remove_blocked_by=[slug])
+    if slug in (before.get("blocked_by") or []):
         console.print(f"[green]Unblocked[/green] {blocks} (removed blocker {slug})")
     else:
         console.print(f"[dim]{slug} was not a blocker of {blocks} — no change.[/dim]")

@@ -16,6 +16,9 @@ import pytest
 FOLDED = {
     "task_unlink": "task_link(remove=True)",
     "workflow_project_search": "workflow_project_list(query=...)",
+    "workflow_project_block": "workflow_project_update(add_blocked_by=...)",
+    "workflow_project_unblock": "workflow_project_update(remove_blocked_by=...)",
+    "workflow_project_get_blockers": 'workflow_project_get()["blockers"]',
 }
 
 

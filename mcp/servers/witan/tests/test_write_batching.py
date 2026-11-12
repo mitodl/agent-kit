@@ -402,7 +402,7 @@ def test_workflow_project_block_with_sync_is_one_commit(server, commits):
     blocked = server.workflow_project_create(title="blocked-proj", description="d")
     commits.clear()
 
-    server.workflow_project_block(blocker["slug"], blocked["slug"])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker["slug"]])
 
     assert len(commits) == 1, f"expected one commit, got {commits}"
     updated = server.workflow_project_get(blocked["slug"])
@@ -415,10 +415,10 @@ def test_workflow_project_block_already_recorded_is_still_one_commit(server, com
     a repeat call has nothing to sync and must be the bare edge write."""
     blocker = server.workflow_project_create(title="blocker-proj2", description="d")
     blocked = server.workflow_project_create(title="blocked-proj2", description="d")
-    server.workflow_project_block(blocker["slug"], blocked["slug"])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker["slug"]])
     commits.clear()
 
-    server.workflow_project_block(blocker["slug"], blocked["slug"])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker["slug"]])
 
     assert commits == ["link_project_blocks"], f"expected the bare edge: {commits}"
 

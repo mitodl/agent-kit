@@ -61,7 +61,6 @@ READ_TOOLS = frozenset(
         "workflow_project_status",
         "workflow_project_list",
         "workflow_project_memories",
-        "workflow_project_get_blockers",
         "workflow_trace_list",
         "workflow_trace_get",
         "workflow_session_list",
@@ -91,7 +90,7 @@ only on the in-process server. ``RemoteServerProxy`` mirrors the tool surface,
 so all three raised ``AttributeError`` against every deployed target while
 passing every test and working on the author's laptop (fixed in agent-kit#272).
 They now go through
-``workflow_session_list``/``workflow_trace_get``/``workflow_project_get_blockers``,
+``workflow_session_list``/``workflow_trace_get``/``workflow_project_get``,
 which dispatch correctly either way. Keeping ``read`` here as an escape hatch
 would let the next command ship the same way, and again fail only on a
 deployment. One rule instead: CLI reads go through tools.

@@ -387,15 +387,17 @@ def test_project_block_and_unblock(server):
     upstream = server.workflow_project_create(title="upstream", description="d")
     downstream = server.workflow_project_create(title="downstream", description="d")
 
-    res = server.workflow_project_block(upstream["slug"], downstream["slug"])
-    assert res["blocker"] == upstream["slug"]
-    assert res["blocked"] == downstream["slug"]
-    assert res["linked"] is True  # success flag present on both paths (C8)
+    res = server.workflow_project_update(
+        downstream["slug"], add_blocked_by=[upstream["slug"]]
+    )
+    assert res["blocked_by"] == [upstream["slug"]]
 
-    # self-block soft-fails with linked=False rather than raising (C8).
-    selfblock = server.workflow_project_block(upstream["slug"], upstream["slug"])
-    assert selfblock["linked"] is False
-    assert "reason" in selfblock
+    # A self-block is refused before anything is written.
+    with pytest.raises(ValueError, match="cannot block itself"):
+        server.workflow_project_update(
+            upstream["slug"], add_blocked_by=[upstream["slug"]]
+        )
+    assert not server.workflow_project_get(upstream["slug"])["blocked_by"]
 
     got = server.workflow_project_get(downstream["slug"])
     assert upstream["slug"] in (got.get("blocked_by") or [])
@@ -405,24 +407,57 @@ def test_project_block_and_unblock(server):
     assert downstream["slug"] in (up_got.get("blocks") or [])
 
     # unblock removes the entry
-    server.workflow_project_unblock(upstream["slug"], downstream["slug"])
+    server.workflow_project_update(
+        downstream["slug"], remove_blocked_by=[upstream["slug"]]
+    )
     after = server.workflow_project_get(downstream["slug"])
     assert upstream["slug"] not in (after.get("blocked_by") or [])
 
 
 @requires_omnigraph
+def test_project_block_refuses_a_missing_blocker(server):
+    """The edge write names the blocker, so the store refuses an unknown slug,
+    and the `blocked_by` sync riding in the same commit does not land."""
+    from witan.server import MissingReference
+
+    blocked = server.workflow_project_create(title="blocked", description="d")
+
+    with pytest.raises(MissingReference):
+        server.workflow_project_update(blocked["slug"], add_blocked_by=["wp-nope"])
+    assert not server.workflow_project_get(blocked["slug"])["blocked_by"]
+
+
+@requires_omnigraph
+def test_project_unblock_of_a_non_blocker_changes_nothing(server, monkeypatch):
+    from witan import server as srv
+
+    a = server.workflow_project_create(title="a", description="d")
+    b = server.workflow_project_create(title="b", description="d")
+    writes: list = []
+    monkeypatch.setattr(srv.client, "change_many", writes.append)
+
+    server.workflow_project_update(b["slug"], remove_blocked_by=[a["slug"]])
+
+    assert not any(writes)
+
+
+@requires_omnigraph
 def test_get_project_blockers(server):
-    """workflow_project_get_blockers returns full blocker nodes."""
+    """workflow_project_get resolves each blocker's status."""
     blocker1 = server.workflow_project_create(title="blocker one", description="d")
     blocker2 = server.workflow_project_create(title="blocker two", description="d")
     blocked = server.workflow_project_create(title="blocked project", description="d")
 
-    server.workflow_project_block(blocker1["slug"], blocked["slug"])
-    server.workflow_project_block(blocker2["slug"], blocked["slug"])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker1["slug"]])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker2["slug"]])
 
-    blockers = server.workflow_project_get_blockers(blocked["slug"])
-    blocker_slugs = {b["slug"] for b in blockers}
-    assert {blocker1["slug"], blocker2["slug"]} == blocker_slugs
+    server.workflow_project_complete(blocker1["slug"], outcome="done")
+
+    blockers = server.workflow_project_get(blocked["slug"])["blockers"]
+    assert {b["slug"]: b["status"] for b in blockers} == {
+        blocker1["slug"]: "completed",
+        blocker2["slug"]: "active",
+    }
 
 
 def test_get_project_blockers_keeps_blocked_by_order(server, monkeypatch):
@@ -437,8 +472,8 @@ def test_get_project_blockers_keeps_blocked_by_order(server, monkeypatch):
     blocker1 = server.workflow_project_create(title="blocker one", description="d")
     blocker2 = server.workflow_project_create(title="blocker two", description="d")
     blocked = server.workflow_project_create(title="blocked project", description="d")
-    server.workflow_project_block(blocker1["slug"], blocked["slug"])
-    server.workflow_project_block(blocker2["slug"], blocked["slug"])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker1["slug"]])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker2["slug"]])
 
     wanted = [blocker2["slug"], blocker1["slug"], blocker2["slug"]]
     real_read = srv.client.read
@@ -450,7 +485,7 @@ def test_get_project_blockers_keeps_blocked_by_order(server, monkeypatch):
         return rows
 
     monkeypatch.setattr(srv.client, "read", reordering_read)
-    blockers = server.workflow_project_get_blockers(blocked["slug"])
+    blockers = server.workflow_project_get(blocked["slug"])["blockers"]
     assert [b["slug"] for b in blockers] == wanted
 
 
@@ -464,7 +499,9 @@ def test_blocked_project_not_ready(server):
         title="waits for upstream", description="d"
     )
 
-    server.workflow_project_block(upstream["slug"], downstream["slug"])
+    server.workflow_project_update(
+        downstream["slug"], add_blocked_by=[upstream["slug"]]
+    )
 
     ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
     # upstream is ready (no blockers), downstream is not
@@ -484,7 +521,9 @@ def test_blocking_completed_project_does_not_block(server):
     downstream = server.workflow_project_create(title="free to go", description="d")
 
     server.workflow_project_complete(upstream["slug"], outcome="done")
-    server.workflow_project_block(upstream["slug"], downstream["slug"])
+    server.workflow_project_update(
+        downstream["slug"], add_blocked_by=[upstream["slug"]]
+    )
 
     ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
     assert downstream["slug"] in ready
@@ -496,7 +535,7 @@ def test_list_blocked_projects_includes_blocked_by(server):
     blocker = server.workflow_project_create(title="a blocker", description="d")
     blocked = server.workflow_project_create(title="a blocked", description="d")
 
-    server.workflow_project_block(blocker["slug"], blocked["slug"])
+    server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker["slug"]])
 
     rows = server.workflow_project_list(status="active", repo="")
     blocked_row = next((r for r in rows if r["slug"] == blocked["slug"]), None)

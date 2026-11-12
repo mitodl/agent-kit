@@ -447,7 +447,7 @@ mcp = FastMCP(
         "for long-running calls. A task_* slug is a unit of work someone is "
         "assigned; an MCP task id is a handle on a call still executing.\n\n"
         "Errors: a lookup that finds nothing returns null/empty, never raises; an "
-        "invalid-but-well-formed mutation (self-link, self-block, claim "
+        "invalid-but-well-formed mutation (self-link, claim "
         "contention) returns a status object with a reason; only malformed input "
         "raises."
     ),
@@ -5545,8 +5545,12 @@ def workflow_project_get(slug: str) -> dict | None:
     in-session instructions, or a repo's AGENTS.md.
 
     ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
-    before this one is ready. ``blocks`` lists projects this project is
-    currently blocking (derived by scanning all active projects).
+    before this one is ready, and ``blockers`` resolves each of them to
+    ``{slug, title, status, phase}`` in the same order, so a blocker that has
+    already completed is visible without a second read. A slug in
+    ``blocked_by`` whose project no longer exists has no ``blockers`` row.
+    ``blocks`` lists projects this project is currently blocking (derived by
+    scanning all active projects).
 
     When ``github_pr`` is set and witan runs on your machine, the project also
     carries ``live_pr``: that PR's state fetched from GitHub just now
@@ -5573,6 +5577,7 @@ def workflow_project_get(slug: str) -> dict | None:
     all_rows = client.read("read.gq", "list_projects_by_status", {"status": "active"})
     blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
     project["blocks"] = blocks
+    project["blockers"] = _project_blockers(project.get("blocked_by") or [])
     return live_pr.tool_result(
         "workflow_project_get", _with_ui_url(project, ui_routes.project_url(slug))
     )
@@ -5822,25 +5827,38 @@ def workflow_project_update(
     status: Literal["active", "abandoned"] | None = None,
     preauthorized: list[str] | None = None,
     reserved_decisions: list[str] | None = None,
+    add_blocked_by: list[str] | None = None,
+    remove_blocked_by: list[str] | None = None,
 ) -> dict | None:
     """
-    Correct a project's metadata after creation.
+    Correct a project's metadata after creation, or change what blocks it.
 
     The escape hatch for everything ``workflow_project_advance`` (phase,
-    ``github_pr``), ``workflow_project_complete`` (completion) and
-    ``workflow_project_block``/``_unblock`` (dependencies) don't cover. Every
-    parameter is optional and only what you pass is touched; omitting a field
-    leaves it exactly as it was, so this can never blank something by accident.
-    Returns the updated project, or ``None`` if the slug doesn't exist.
+    ``github_pr``) and ``workflow_project_complete`` (completion) don't
+    cover. Every parameter is optional and only what you pass is touched;
+    omitting a field leaves it exactly as it was, so this can never blank
+    something by accident. Returns the updated project, or ``None`` if the
+    slug doesn't exist.
+
+    Project dependencies are coarse ordering between whole projects; for
+    ordering between individual tasks use ``task_link(kind="blocks")``.
+    ``add_blocked_by`` declares projects that must complete before this one
+    can begin: each gets a ``ProjectBlocks`` edge (blocker -> this project)
+    and is appended to this project's ``blocked_by``, which is what the
+    ready-work check in ``workflow_project_list(ready=True)`` reads.
+    ``remove_blocked_by`` deletes the edge and the ``blocked_by`` entry.
+    A slug in both lists ends up removed. A project cannot block itself, so
+    naming ``slug`` in ``add_blocked_by`` raises ``ValueError``. A blocker
+    slug that does not exist is refused by the store, and none of the call's
+    other writes land with it except the edge deletes, which the store makes
+    commit on their own, ahead of the rest.
 
     The common case is repos. A project's real blast radius is rarely known
     during discovery, and until the set is right, repo-scoped recall from the
     repos where the work actually lands won't surface the project at all. Pass
     ``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
     nudge it (both may be passed together; removals are applied after
-    additions). Repos are a plain list field on the project node, not edges, so
-    a removal really removes — unlike ``workflow_project_unblock``, which can
-    only update its denormalized field because omnigraph edges are append-only.
+    additions).
 
     Two things this deliberately can't do:
 
@@ -5885,7 +5903,15 @@ def workflow_project_update(
     reserved_decisions:
         Replacement list of decisions kept for a human. Pass ``[]`` to clear.
         Replaces the whole list, as ``preauthorized`` does.
+    add_blocked_by:
+        ``wp-`` slugs of projects that must complete before this one can
+        begin. One already in ``blocked_by`` is left as it is.
+    remove_blocked_by:
+        ``wp-`` slugs to drop from ``blocked_by``, deleting their
+        ``ProjectBlocks`` edges. One that is not a blocker is a no-op.
     """
+    if slug in (add_blocked_by or []):
+        raise ValueError(f"a project cannot block itself: {slug}")
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     if not rows:
         return None
@@ -5917,13 +5943,14 @@ def workflow_project_update(
         ),
         "updated_at": now,
     }
-    # The envelope lists are written only when passed, each by its own
-    # mutation, never copied forward from `current`: a stale copy would restore
-    # a grant another session just revoked, or drop a reservation it just
-    # added. The general fields are skipped on an envelope-only call for the
-    # same reason. Every step lands in one commit.
-    envelope_only = (
-        preauthorized is not None or reserved_decisions is not None
+    # The envelope lists and `blocked_by` are written only when passed, each by
+    # its own mutation, never copied forward from `current`: a stale copy would
+    # restore a grant another session just revoked, or drop a reservation it
+    # just added. The general fields are skipped on a call that touches only
+    # those lists for the same reason.
+    lists_only = any(
+        v is not None
+        for v in (preauthorized, reserved_decisions, add_blocked_by, remove_blocked_by)
     ) and all(
         v is None
         for v in (
@@ -5939,9 +5966,13 @@ def workflow_project_update(
     )
     steps = (
         []
-        if envelope_only
+        if lists_only
         else [("mutations.gq", "update_workflow_project_fields", payload)]
     )
+    unlinks, blocker_steps = _blocked_by_steps(
+        slug, current, add_blocked_by or [], remove_blocked_by or [], now
+    )
+    steps += blocker_steps
     for key, value in (
         ("preauthorized", preauthorized),
         ("reserved_decisions", reserved_decisions),
@@ -5958,6 +5989,12 @@ def workflow_project_update(
                     },
                 )
             )
+    # The engine refuses a body that mixes deletes with inserts and updates,
+    # so the edge deletes go first, in their own commit. A failure between the
+    # two leaves `blocked_by` still naming the blocker, and a retry finds no
+    # edge to delete and drops it.
+    if unlinks:
+        client.change_many(unlinks)
     client.change_many(steps)
 
     updated = client.read("read.gq", "get_workflow_project", {"slug": slug})
@@ -6507,119 +6544,58 @@ def workflow_trace_mine(
     return {"created_patterns": created_patterns, "created_lessons": created_lessons}
 
 
-@_tool
-def workflow_project_block(slug: str, blocks_slug: str) -> dict:
+def _blocked_by_steps(
+    slug: str, current: dict, add: list[str], remove: list[str], now: str
+) -> tuple[list[_Step], list[_Step]]:
+    """The edge writes and ``blocked_by`` sync for ``workflow_project_update``.
+
+    An added blocker's edge is written even when ``blocked_by`` already names
+    it, so a project whose edge went missing gets it back. A removed one's edge
+    is deleted only when it exists, since the delete is matched on both
+    endpoints and a no-op delete would still cost a write. A slug in both
+    lists is removed, so it is not linked first.
+
+    :param slug: The blocked project.
+    :param current: Its row, as read for this update.
+    :param add: Blocker slugs to add.
+    :param remove: Blocker slugs to remove, applied after ``add``.
+    :param now: The update's timestamp.
+    :returns: The edge deletes, which need a commit of their own, and the
+        inserts and updates for the update's main commit.
+    :rtype: tuple[list[_Step], list[_Step]]
     """
-    Declare that one project must complete before another can begin.
-
-    Project-level sequencing — coarse ordering between whole projects. For
-    fine-grained ordering between individual tasks use ``task_link(kind="blocks")``;
-    the two are deliberately separate (Project vs Task nodes).
-
-    Adds a ``ProjectBlocks`` graph edge (``slug`` → ``blocks_slug``) and
-    appends ``slug`` to ``blocks_slug.blocked_by`` so the ready-work check
-    in ``workflow_project_list`` can filter without traversing edges.
-
-    Parameters
-    ----------
-    slug:
-        The ``wp-`` slug of the *blocking* project (must finish first).
-    blocks_slug:
-        The ``wp-`` slug of the project being *blocked*.
-    """
-    if slug == blocks_slug:
-        return {
-            "blocker": slug,
-            "blocked": blocks_slug,
-            "linked": False,
-            "reason": "a project cannot block itself",
-        }
-    now = now_iso()
-    # The edge always lands; the denormalized `blocked_by` sync only when
-    # there's something new to add. Read BEFORE writing so both can land in
-    # ONE commit via `change_many` when the sync applies — the edge write
-    # doesn't touch `blocks_slug`'s own row, so reading it first changes
-    # nothing about what's read.
-    steps: list[_Step] = [
-        ("mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug})
-    ]
-    blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
-    if blocked:
-        existing = blocked[0].get("blocked_by") or []
-        if slug not in existing:
-            steps.append(
-                (
-                    "mutations.gq",
-                    "update_workflow_project_blocked_by",
-                    {
-                        "slug": blocks_slug,
-                        "blocked_by": [*existing, slug],
-                        "updated_at": now,
-                    },
-                )
+    dropped = set(remove)
+    unlinks: list[_Step] = []
+    for blocker in dict.fromkeys(remove):
+        out = client.read("read.gq", "project_blocks_to_slugs", {"from": blocker})
+        if slug in {r["slug"] for r in out}:
+            unlinks.append(
+                ("mutations.gq", "unlink_project_blocks", {"from": blocker, "to": slug})
             )
-    client.change_many(steps)
-    return {"blocker": slug, "blocked": blocks_slug, "linked": True}
-
-
-@_tool
-def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
-    """
-    Remove a project dependency declared with ``workflow_project_block``.
-
-    Removes ``slug`` from ``blocks_slug.blocked_by`` AND deletes the
-    ``ProjectBlocks`` edge, so the graph and the denormalized field (which
-    drives the ready-work check) agree.
-
-    Earlier versions left the edge in place, on the belief that omnigraph
-    edges were append-only. They are not — see ``_unlink_edge``.
-
-    Parameters
-    ----------
-    slug:
-        The ``wp-`` slug of the *blocking* project to remove.
-    blocks_slug:
-        The ``wp-`` slug of the project to unblock.
-    """
-    now = now_iso()
-    _unlink_edge("project_blocks", slug, blocks_slug)
-    blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
-    if blocked:
-        existing = blocked[0].get("blocked_by") or []
-        updated = [s for s in existing if s != slug]
-        client.change(
-            "mutations.gq",
-            "update_workflow_project_blocked_by",
-            {
-                "slug": blocks_slug,
-                "blocked_by": updated or None,
-                "updated_at": now,
-            },
+    steps: list[_Step] = [
+        ("mutations.gq", "link_project_blocks", {"from": blocker, "to": slug})
+        for blocker in dict.fromkeys(add)
+        if blocker not in dropped
+    ]
+    existing = current.get("blocked_by") or []
+    blocked_by = [
+        b
+        for b in [*existing, *(a for a in dict.fromkeys(add) if a not in existing)]
+        if b not in dropped
+    ]
+    if blocked_by != existing:
+        steps.append(
+            (
+                "mutations.gq",
+                "update_workflow_project_blocked_by",
+                {"slug": slug, "blocked_by": blocked_by or None, "updated_at": now},
+            )
         )
-    return {
-        "blocker": slug,
-        "blocked": blocks_slug,
-        "removed": slug in (blocked[0].get("blocked_by") or [] if blocked else []),
-    }
+    return unlinks, steps
 
 
-@_tool
-def workflow_project_get_blockers(slug: str) -> list[dict]:
-    """
-    Return all projects that are blocking the given project.
-
-    Resolves each slug in the project's ``blocked_by`` list and returns the
-    full node for each blocker, including its current status.
-
-    Parameters
-    ----------
-    slug:
-        The ``wp-`` slug of the project to check.
-    """
-    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
-    if not rows:
-        return []
-    blocked_by = rows[0].get("blocked_by") or []
+def _project_blockers(blocked_by: list[str]) -> list[dict]:
+    """``{slug, title, status, phase}`` for each blocker, in ``blocked_by`` order."""
     if not blocked_by:
         return []
     by_slug = {
@@ -6628,7 +6604,11 @@ def workflow_project_get_blockers(slug: str) -> list[dict]:
             "read.gq", "get_workflow_projects_by_slugs", {"slugs": blocked_by}
         )
     }
-    return [by_slug[s] for s in blocked_by if s in by_slug]
+    return [
+        {k: by_slug[b].get(k) for k in ("slug", "title", "status", "phase")}
+        for b in blocked_by
+        if b in by_slug
+    ]
 
 
 def _project_blocker_status(blocker_slug: str, status_cache: dict[str, str]) -> str:
@@ -8920,10 +8900,6 @@ _EDGE_OPS: dict[str, dict[str, str]] = {
         "unlink": "unlink_discovered_from",
     },
     "addresses": {"to_q": "addresses_to_slugs", "unlink": "unlink_addresses"},
-    "project_blocks": {
-        "to_q": "project_blocks_to_slugs",
-        "unlink": "unlink_project_blocks",
-    },
 }
 
 
