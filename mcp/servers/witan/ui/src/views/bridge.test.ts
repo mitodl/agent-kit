@@ -226,7 +226,7 @@ describe("drillPlan", () => {
 			{ kind: "service", key: "example/web" },
 		);
 		expect(plan).toEqual({
-			providers: { kind: "service", key: `repo:${WEB}`, repo: INFRA },
+			providers: { kind: "service", key: WEB, repo: INFRA },
 			consumers: null,
 		});
 	});

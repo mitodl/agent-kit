@@ -146,8 +146,9 @@ export interface DrillPlan {
  * the provider rows from the provider repo and the consumer rows from the
  * consumer repo. A `service` edge is the other way about: witan-code draws
  * "the deploying repo depends on what it deploys", from the DEPLOYING repo's
- * provider binding keyed `repo:<deployed uri>`, and the contract's `key` is
- * only the deployed repo's short name. So it reads that one binding.
+ * provider binding keyed by the deployed repo's URI (`sub_kind` "repo"), and
+ * the contract's `key` is only the deployed repo's short name. So it reads
+ * that one binding.
  */
 export function drillPlan(
 	edge: { consumer: string; provider: string },
@@ -157,7 +158,7 @@ export function drillPlan(
 		return {
 			providers: {
 				kind: "service",
-				key: `repo:${edge.provider}`,
+				key: edge.provider,
 				repo: edge.consumer,
 			},
 			consumers: null,
