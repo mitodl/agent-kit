@@ -8,6 +8,79 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.47.0] - 2026-11-12
+
+### Changed
+
+- Raised the `witan-core` floor to `>=0.51.1`, which pins omnigraph 0.14
+  (storage format 16) and speaks HTTP contract 0.14 or 0.13, whichever the
+  server stamps. A 0.14 data tier refuses an older client's requests.
+- The `witan` image bakes the omnigraph 0.14.0 CLI and labels itself
+  `edu.mit.ol.omnigraph.internal-schema=16`. The `omnigraph-server` image
+  ships the 0.14.0 server with the patched CLI (`OMNIGRAPH_CLI_SOURCE=patched`)
+  so its entrypoint and maintenance scripts can still reach the S3 cluster
+  root.
+
+- A deployment's per-actor omnigraph client asserts its actor to the data
+  tier (`Omnigraph-If-Actor`), so on omnigraph 0.14 a token mapped to the
+  wrong actor is refused instead of writing under someone else's name.
+
+- The `witan` and `omnigraph-server` images bake omnigraph 0.15.0. Storage
+  format (16) and HTTP contract (0.14) are unchanged. The `omnigraph-server`
+  image takes the release CLI again instead of building the patched one,
+  because 0.15 accepts an inline `s3://` cluster root (upstream #1189) and
+  lists `cleanup` versions (upstream #1188), the two changes the patch
+  backported. Its `edu.mit.ol.omnigraph.cli-source` label is gone. This
+  supersedes the patched-CLI note in the 0.14 pin's entry.
+
+- `witan migrate topics` also stamps the Tagged edges written before edge
+  properties existed. An unstamped edge whose topic one of the memory's tags
+  derives is rewritten as `inferred` (role `tag`), so `recall` weights the
+  topic-sibling hop on graphs older than 0.33.0. Unstamped edges no tag
+  derives, and memory-to-memory edges, are left as they are.
+
+- `task_create`'s `similar` check searches every repo with the title plus the
+  start of the description, and each hit carries its `repo`. Replayed against
+  42 tasks closed as duplicates in production, the original reached the top 3
+  for 40 of them, up from 36 with the title alone in the caller's repo.
+
+### Fixed
+
+- `task_claim` with a `session_id` renews a live claim held under the
+  caller's own bare identity instead of refusing it as `held`, and records the
+  session on it. `witan task run` claims before launch with no session id, so
+  the launched agent could not renew its own claim the way the witan-task
+  skill says to. The `witan task run` prompt now asks for the session id on
+  renewal too.
+
+- `--help` shows every parameter's description. Most commands documented
+  parameters as `name: text` on one line, which cyclopts' numpydoc parser
+  reads as a parameter type, so `--help` printed nothing for them or only
+  the wrapped continuation line (e.g. `--remove-repo  after additions.`).
+
+- A deployment no longer tells a caller to run `witan migrate schema` when its
+  graph is missing an edge property or the `TaskComment` type. That command
+  calls `apply_schema`, which the remote CLI refuses, so the hint was a dead
+  end in exactly the case it fires. A deployment now says the schema ships in
+  the omnigraph-server image and is applied when that image is deployed.
+
+- `witan migrate schema` against a served graph now refuses up front with the
+  path that works: omnigraph changes a served graph's schema only through
+  `cluster apply`, which omnigraph-server runs on every start, so deploy or
+  restart omnigraph-server. With an omnigraph 0.14+ CLI it used to fail on
+  plain HTTP to a non-loopback server, which pointed at TLS, a fix that would
+  still have been refused.
+
+### Security
+
+- A token issued to the web UI's Keycloak client (`WITAN_UI_OIDC_CLIENT_ID`,
+  read from the token's client id, which Keycloak sets as `azp`) can call only
+  the UI's bound read tools (ADR 0011 §3), and `tools/list` shows it only
+  those. It could previously call every tool, so a script injected into the
+  deployed page could write to the shared graph as the person viewing it.
+  Other clients keep every tool. A call to a tool that does not exist now
+  fails as "not found or not authorized".
+
 ## [0.46.0] - 2026-11-02
 
 ### Added

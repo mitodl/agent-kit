@@ -2246,7 +2246,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.51.1"
+version = "0.52.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2320,7 +2320,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.46.0"
+version = "0.47.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
