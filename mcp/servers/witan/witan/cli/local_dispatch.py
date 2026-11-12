@@ -60,7 +60,6 @@ READ_TOOLS = frozenset(
         "workflow_project_get",
         "workflow_project_status",
         "workflow_project_list",
-        "workflow_project_search",
         "workflow_project_memories",
         "workflow_project_get_blockers",
         "workflow_trace_list",

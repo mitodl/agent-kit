@@ -698,7 +698,7 @@ query patterns_by_repo($repo: String) {
 // ── Workflow Projects ─────────────────────────────────────────────
 
 // Search (BM25 on description, then title). No by-repo variant: `repos` is a
-// list, so membership isn't a graph match-filter — `workflow_project_search`
+// list, so membership isn't a graph match-filter — `workflow_project_list(query=)`
 // filters on repo membership in Python after fetching, same as
 // `workflow_project_list` does for its listing.
 //
@@ -706,7 +706,7 @@ query patterns_by_repo($repo: String) {
 // small query-level cap applied *before* the Python repo filter could let 20
 // higher-scoring matches in other repos crowd out a real match in the
 // requested repo, so a repo-scoped search would incorrectly come back empty.
-// `workflow_project_search` re-applies the real `_SEARCH_LIMIT` cap in Python
+// `workflow_project_list(query=)` re-applies the real `_SEARCH_LIMIT` cap in Python
 // after filtering. Safe to leave unbounded — corpus size is WorkflowProject
 // count, not Task/Memory count, so orders of magnitude smaller.
 

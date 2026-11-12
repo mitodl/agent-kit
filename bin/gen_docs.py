@@ -312,7 +312,6 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "workflow_project_get",
             "workflow_project_status",
             "workflow_project_list",
-            "workflow_project_search",
             "workflow_project_update",
             "workflow_project_advance",
             "workflow_project_complete",

@@ -70,12 +70,7 @@ def projects(
     # The server reads status=None as every status; "all" is the CLI's
     # spelling of it, since an empty --status reaches the server as "".
     status_arg = None if status == "all" else status
-    if query is None:
-        rows = _fn(s.workflow_project_list)(repo=repo_arg, status=status_arg)
-    else:
-        rows = _fn(s.workflow_project_search)(
-            query=query, repo=repo_arg, status=status_arg
-        )
+    rows = _fn(s.workflow_project_list)(repo=repo_arg, status=status_arg, query=query)
     rows = rows[:limit]
     matching = "" if query is None else f" matching '{query}'"
     detected_repo = (

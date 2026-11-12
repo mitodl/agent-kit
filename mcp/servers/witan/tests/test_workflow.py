@@ -276,7 +276,7 @@ def test_project_search_bm25_ranked(server):
         title="unrelated", description="something about a totally different area"
     )
 
-    hits = server.workflow_project_search("vault kubernetes auth")
+    hits = server.workflow_project_list(query="vault kubernetes auth")
     assert hits and hits[0]["title"] == "vault k8s auth"
 
 
@@ -309,7 +309,7 @@ def test_project_search_finds_title_only_terms(server):
         description="totally unrelated prose about compaction and fragments",
     )
 
-    hits = server.workflow_project_search("zebrafish quokka narwhal")
+    hits = server.workflow_project_list(query="zebrafish quokka narwhal")
     assert [h["slug"] for h in hits] == [proj["slug"]]
 
 
@@ -330,8 +330,8 @@ def test_project_search_scoped_match_not_crowded_out_by_other_repo_hits(server):
             repos=["https://github.com/test/other"],
         )
 
-    hits = server.workflow_project_search(
-        "dedup graph search", repo="https://github.com/test/target"
+    hits = server.workflow_project_list(
+        query="dedup graph search", repo="https://github.com/test/target"
     )
     assert target["slug"] in [h["slug"] for h in hits]
 
@@ -342,7 +342,7 @@ def test_project_search_dedups_both_field_matches(server):
         title="quokka narwhal", description="more about the quokka narwhal"
     )
 
-    hits = server.workflow_project_search("quokka narwhal")
+    hits = server.workflow_project_list(query="quokka narwhal")
     assert [h["slug"] for h in hits].count(proj["slug"]) == 1
 
 
@@ -353,8 +353,8 @@ def test_project_search_excludes_completed_by_default(server):
     )
     server.workflow_project_complete(proj["slug"], outcome="done")
 
-    assert server.workflow_project_search("quokka narwhal") == []
-    all_status = server.workflow_project_search("quokka narwhal", status=None)
+    assert server.workflow_project_list(query="quokka narwhal") == []
+    all_status = server.workflow_project_list(query="quokka narwhal", status=None)
     assert proj["slug"] in [h["slug"] for h in all_status]
 
 

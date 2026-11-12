@@ -5723,13 +5723,22 @@ def workflow_project_list(
     status: WorkflowStatus | None = "active",
     phase: WorkflowPhase | None = None,
     ready: bool = False,
+    query: str | None = None,
 ) -> list[dict]:
     """
-    List workflow projects, optionally filtered by repo, status, and phase.
+    List workflow projects, optionally filtered by repo, status, and phase, or
+    search them with ``query``.
 
     Defaults to listing only ``active`` projects. Pass ``status=None`` to see
     all statuses. The ``UserPromptSubmit`` hook calls this to inject project
     context into new sessions.
+
+    With ``query``, this is a plain BM25 search (no graph expansion) matched
+    against ``description`` and ``title``: up to 20 projects, ranked by
+    relevance, after the other filters. Run it before
+    ``workflow_project_create`` to check whether the objective is already
+    tracked; ``workflow_project_create`` also runs the search itself and
+    returns the top matches as ``similar``.
 
     Parameters
     ----------
@@ -5745,12 +5754,19 @@ def workflow_project_list(
     ready:
         When ``True``, only return active projects whose blockers are all
         completed (i.e. projects that are unblocked and actionable).
+    query:
+        Free-text search query. The repo, phase and ready filters apply to
+        every match the BM25 fetch returns (it is unbounded), and the 20-row
+        cap after them, so a filter never hides a match that scored below a
+        query-level cap.
     """
     detected_repo = repo_module.detect(override=repo)
 
     # `repos` is a list, so membership can't be a graph match-filter — fetch by
     # status (or all) and filter on set membership in Python.
-    if status:
+    if query:
+        rows = _search_project_rows(query, status)
+    elif status:
         rows = client.read("read.gq", "list_projects_by_status", {"status": status})
     else:
         rows = client.read("read.gq", "list_all_projects", {})
@@ -5770,7 +5786,7 @@ def workflow_project_list(
         }
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
-    return rows
+    return rows[:_SEARCH_LIMIT] if query else rows
 
 
 def _search_project_rows(query: str, status: str | None) -> list[dict]:
@@ -5791,44 +5807,6 @@ def _search_project_rows(query: str, status: str | None) -> list[dict]:
         if r["slug"] not in seen
     )
     return rows
-
-
-@_tool
-def workflow_project_search(
-    query: str,
-    repo: str | None = None,
-    status: WorkflowStatus | None = "active",
-) -> list[dict]:
-    """
-    Plain BM25 text search over workflow projects (no graph expansion).
-
-    Returns up to 20 projects ranked by BM25 relevance, matched against
-    ``description`` and ``title``. Run this before ``workflow_project_create``
-    to check whether the objective is already tracked; ``workflow_project_create``
-    also runs it automatically and returns the top matches as ``similar`` in
-    its response.
-
-    Parameters
-    ----------
-    query:
-        Free-text search query.
-    repo:
-        Canonical repo URI to filter to (membership test against each
-        project's repo set). Auto-detected from ``.git/config`` if omitted;
-        pass ``""`` to search across all repos. Applied in Python after the
-        BM25 fetch (``repos`` is a list, not match-filterable) — the
-        underlying query is unbounded so this filter sees every match, not
-        just a small top-N, then the real ``limit 20`` is applied after.
-    status:
-        ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
-        Defaults to ``active`` — the useful default for a dedup check is
-        "is someone already working on this."
-    """
-    rows = _search_project_rows(query, status)
-    detected_repo = repo_module.detect(override=repo)
-    if detected_repo:
-        rows = [r for r in rows if detected_repo in _project_repos(r)]
-    return rows[:_SEARCH_LIMIT]
 
 
 @_tool

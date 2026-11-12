@@ -98,11 +98,19 @@ by the project's task count, which ready work is a subset of.
 
 ## `workflow_project_list`
 
-List workflow projects, optionally filtered by repo, status, and phase.
+List workflow projects, optionally filtered by repo, status, and phase, or
+search them with ``query``.
 
 Defaults to listing only ``active`` projects. Pass ``status=None`` to see
 all statuses. The ``UserPromptSubmit`` hook calls this to inject project
 context into new sessions.
+
+With ``query``, this is a plain BM25 search (no graph expansion) matched
+against ``description`` and ``title``: up to 20 projects, ranked by
+relevance, after the other filters. Run it before
+``workflow_project_create`` to check whether the objective is already
+tracked; ``workflow_project_create`` also runs the search itself and
+returns the top matches as ``similar``.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -110,22 +118,7 @@ context into new sessions.
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active``. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery`? | `null` | Optional phase filter applied after fetching. |
 | `ready` | bool | `False` | When ``True``, only return active projects whose blockers are all<br>completed (i.e. projects that are unblocked and actionable). |
-
-## `workflow_project_search`
-
-Plain BM25 text search over workflow projects (no graph expansion).
-
-Returns up to 20 projects ranked by BM25 relevance, matched against
-``description`` and ``title``. Run this before ``workflow_project_create``
-to check whether the objective is already tracked; ``workflow_project_create``
-also runs it automatically and returns the top matches as ``similar`` in
-its response.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `query` | str | **required** | Free-text search query. |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted;<br>pass ``""`` to search across all repos. Applied in Python after the<br>BM25 fetch (``repos`` is a list, not match-filterable) — the<br>underlying query is unbounded so this filter sees every match, not<br>just a small top-N, then the real ``limit 20`` is applied after. |
-| `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active`` — the useful default for a dedup check is<br>"is someone already working on this." |
+| `query` | str? | `null` | Free-text search query. The repo, phase and ready filters apply to<br>every match the BM25 fetch returns (it is unbounded), and the 20-row<br>cap after them, so a filter never hides a match that scored below a<br>query-level cap. |
 
 ## `workflow_project_update`
 

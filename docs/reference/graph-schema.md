@@ -75,7 +75,7 @@ e.g. wp-add-vault-k8s-auth-a3f912
 | --- | --- | --- |
 | `slug` | `String @key` |  |
 | `title` | `String @index` |  |
-| `description` | `String @index` | @index enables BM25 search($p.description, …) in workflow_project_search |
+| `description` | `String @index` | @index enables BM25 search($p.description, …) in workflow_project_list(query=) |
 | `repos` | `[String]?` |  |
 | `status` | `enum(active, completed, abandoned) @index` |  |
 | `phase` | `enum(discovery, spec, implementation, delivery) @index` |  |

@@ -260,7 +260,6 @@ _READ_ONLY = frozenset(
         "workflow_project_get_blockers",
         "workflow_project_list",
         "workflow_project_memories",
-        "workflow_project_search",
         "workflow_project_status",
         "workflow_session_list",
         "workflow_trace_get",
@@ -295,7 +294,6 @@ _REPO_IS_SCOPE_OR_STAMP = frozenset(
         "task_ready",
         "task_search",
         "workflow_project_list",
-        "workflow_project_search",
         "workflow_session_start",
         "workflow_trace_list",
     }

@@ -15,6 +15,7 @@ import pytest
 #: Folded tool -> where its capability lives now.
 FOLDED = {
     "task_unlink": "task_link(remove=True)",
+    "workflow_project_search": "workflow_project_list(query=...)",
 }
 
 

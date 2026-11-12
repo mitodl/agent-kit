@@ -152,7 +152,7 @@ edge Tagged: Memory -> Topic {
 node WorkflowProject {
     slug:        String @key
     title:       String @index
-    description: String @index    // @index enables BM25 search($p.description, …) in workflow_project_search
+    description: String @index    // @index enables BM25 search($p.description, …) in workflow_project_list(query=)
     // Set of canonical repo URIs this project spans (may be many, or none —
     // a "floating" cross-repo objective). Membership is filtered in Python;
     // list fields aren't indexed/match-filterable in this engine.
