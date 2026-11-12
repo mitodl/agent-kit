@@ -315,6 +315,29 @@ def git_blob_reader(
     return read
 
 
+def base_branch(base: str, cwd: Path) -> str | None:
+    """The git branch ``base`` names, with any remote stripped.
+
+    ``origin/main`` is ``main``, a local branch is itself, and a bare commit
+    falls back to the repo's default branch: the store's main view is the
+    closest indexed state to any commit on it.
+
+    :param base: The ref the branch merges into.
+    :param cwd: A directory inside the checkout.
+    :returns: The branch name, or ``None`` when no default is recognizable.
+    :rtype: str | None
+    """
+    from . import repo as repo_module
+
+    full = _git(cwd, "rev-parse", "--symbolic-full-name", base).strip()
+    if full.startswith("refs/heads/"):
+        return full.removeprefix("refs/heads/")
+    if full.startswith("refs/remotes/"):
+        # refs/remotes/<remote>/<branch>; a branch may itself contain "/".
+        return full.removeprefix("refs/remotes/").partition("/")[2]
+    return repo_module._default_branch(cwd)
+
+
 def branch_name(head: str, cwd: Path) -> str | None:
     """The local branch ``head`` names, or ``None`` for a commit or detached HEAD.
 
@@ -389,6 +412,7 @@ def build_report(
     code: Callable[[str], Callable[..., Any]],
     work: Callable[[str], Callable[..., Any]] | None,
     test_mentions: Callable[[str], list[str]],
+    view: str | None,
     limit: int,
     max_items: int,
 ) -> dict[str, Any]:
@@ -400,6 +424,10 @@ def build_report(
     :param repo: Canonical repo URI.
     :param branch: The head's git branch, for ``task_for_branch``; ``None``
         when detached.
+    :param view: The base's git branch, passed as ``branch`` to every code
+        lookup so they read the base's view (the store's main for the default
+        branch), where a symbol the head removed still exists. ``None`` sends
+        no ``branch``, for a deployment, which has no checkout to follow.
     :param code: Looks up a witan-code tool by name, already unwrapped.
     :param work: The same for witan (council) tools, or ``None`` when witan is
         not installed, in which case tasks and memories are skipped and the
@@ -412,6 +440,12 @@ def build_report(
     :rtype: dict[str, Any]
     """
     notes: list[str] = []
+    pin = {} if view is None else {"branch": view}
+    view_label = (
+        "the deployment's default view"
+        if view is None
+        else f"the base branch's view ({view})"
+    )
     indexed_repos = {r["repo"] for r in code("code_indexed_repos")()}
     indexed = repo in indexed_repos
     # A test's own callers and consumers say nothing about the change, and
@@ -439,10 +473,9 @@ def build_report(
     else:
         notes.append(
             "Callers are same-file only (the indexer resolves calls by name within "
-            "a file) and come from the view the code tools route to: the default "
-            "branch's, or locally the checkout's own branch view once it is "
-            "indexed. Callers in other files are not listed, and a symbol that "
-            "view lacks is marked [not in index]."
+            f"a file) and come from {view_label}, so callers in other files and "
+            "callers this branch adds are not listed. A symbol that view lacks "
+            "is marked [not in index]."
         )
         notes.append(
             f"Cross-repo consumers cover the {len(indexed_repos)} repos indexed "
@@ -461,7 +494,7 @@ def build_report(
     checked_paths = sorted({s.path for s in shown})
 
     def file_ids(path: str) -> set[str]:
-        rows = code("code_symbols_in_file")(path=path, repo=repo)
+        rows = code("code_symbols_in_file")(path=path, repo=repo, **pin)
         return {r["symbol_id"] for r in rows}
 
     def lookup(sym: ChangedSymbol) -> dict[str, Any]:
@@ -488,7 +521,10 @@ def build_report(
             # A module is never a Calls target, so it has no callers to walk.
             if not is_module:
                 impact = code("code_impact")(
-                    symbol_id=sym.symbol_id, max_depth=IMPACT_DEPTH, max_nodes=200
+                    symbol_id=sym.symbol_id,
+                    max_depth=IMPACT_DEPTH,
+                    max_nodes=200,
+                    **pin,
                 )
                 callers = []
                 for c in impact["impacted"]:
@@ -499,7 +535,7 @@ def build_report(
                         callers.append(_short(c["symbol_id"], repo))
                 row["callers"] = _bounded(callers, max_items)
                 row["callers_truncated"] = impact["truncated"]
-            cross = code("code_cross_repo_impact")(symbol_id=sym.symbol_id)
+            cross = code("code_cross_repo_impact")(symbol_id=sym.symbol_id, **pin)
             # One row per binding, so a repo reading the key in two files would
             # otherwise be listed twice.
             contracts = sorted(

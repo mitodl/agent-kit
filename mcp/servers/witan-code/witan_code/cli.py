@@ -624,7 +624,8 @@ def diff_impact(
         err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
         print_error(f"git {' '.join(exc.cmd[1:])} failed: {err.strip()}", stderr=True)
         raise SystemExit(1) from None
-    if _is_remote():
+    remote = _is_remote()
+    if remote:
         # Lookups fan out across threads; list the deployment's tools once
         # first rather than once per thread.
         _srv().prime_tool_schema()
@@ -637,6 +638,12 @@ def diff_impact(
         code=lambda name: _fn(getattr(_srv(), name)),
         work=_work_tool(),
         test_mentions=diff_module.git_test_mentions(cwd, head),
+        # In-process reads follow the checkout's branch view once it is
+        # indexed, where a symbol this branch removed is gone, so they are
+        # pinned to the base's view. A deployment has no checkout to follow
+        # and already reads its default view; sending nothing there also keeps
+        # this working against one older than the `branch` parameters.
+        view=None if remote else diff_module.base_branch(base, cwd),
         limit=limit,
         max_items=max_items,
     )

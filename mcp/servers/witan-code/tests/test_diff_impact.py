@@ -39,6 +39,10 @@ def main():
 
 
 BASE_URL = os.environ["APP_BASE_URL"]
+
+
+def legacy():
+    return retired()
 """
 
 HEAD_SVC = """\
@@ -64,6 +68,10 @@ def added():
 
 
 BASE_URL = os.environ["APP_BASE_URL"].rstrip("/")
+
+
+def legacy():
+    return retired()
 """
 
 TEST_SVC = """\
@@ -257,6 +265,7 @@ def test_report_bounds_every_list_and_says_so():
         work=None,
         # Only same-language test files count as a stand-in, never the file itself.
         test_mentions=lambda name: ["m.py", "tests/fixture.yaml", "tests/test_m.py"],
+        view=None,
         limit=2,
         max_items=3,
     )
@@ -300,6 +309,7 @@ def test_test_mentions_match_across_one_language_family():
         code=tools.__getitem__,
         work=None,
         test_mentions=lambda name: ["src/useCart.test.tsx", "tests/test_cart.py"],
+        view=None,
         limit=10,
         max_items=10,
     )
@@ -325,6 +335,7 @@ def test_unindexed_repo_does_not_read_as_no_impact():
         code=tools.__getitem__,
         work=None,
         test_mentions=lambda name: [],
+        view=None,
         limit=10,
         max_items=10,
     )
@@ -336,22 +347,28 @@ def test_unindexed_repo_does_not_read_as_no_impact():
 
 
 def test_a_removed_symbol_the_index_lacks_is_flagged():
-    # Added after the last indexing run, then removed by this branch: its empty
-    # impact is "not seen", so it carries the same flag as any other symbol.
+    # Added after the last indexing run, then removed by this branch: even the
+    # base's view lacks it, so its empty impact is "not seen" and carries the
+    # same flag as any other symbol.
     removed = diff_impact.ChangedSymbol(
         f"{REPO}#old.py::gone", "old.py", "gone", "function", 1, "removed"
     )
-    asked: list[str] = []
+    asked: list[tuple[str, str, dict]] = []
 
-    def symbols_in_file(path, repo):
-        asked.append(path)
-        return []
+    def recorder(name, result):
+        def call(**kwargs):
+            asked.append((name, kwargs.get("path", ""), kwargs))
+            return result
+
+        return call
 
     tools = {
         "code_indexed_repos": lambda: [{"repo": REPO}],
-        "code_symbols_in_file": symbols_in_file,
-        "code_impact": lambda **_: {"impacted": [], "truncated": False},
-        "code_cross_repo_impact": lambda **_: {"cross_repo": []},
+        "code_symbols_in_file": recorder("code_symbols_in_file", []),
+        "code_impact": recorder("code_impact", {"impacted": [], "truncated": False}),
+        "code_cross_repo_impact": recorder(
+            "code_cross_repo_impact", {"cross_repo": []}
+        ),
     }
     report = diff_impact.build_report(
         [removed],
@@ -362,11 +379,18 @@ def test_a_removed_symbol_the_index_lacks_is_flagged():
         code=tools.__getitem__,
         work=None,
         test_mentions=lambda name: [],
+        view="main",
         limit=10,
         max_items=10,
     )
-    assert asked == ["old.py"]
+    assert [path for name, path, _ in asked if name == "code_symbols_in_file"] == [
+        "old.py"
+    ]
+    # Every code lookup is pinned to the base's view.
+    assert {kwargs["branch"] for _, _, kwargs in asked} == {"main"}
     assert report["changed_symbols"]["shown"][0]["in_index"] is False
+    text = diff_impact.render_text(report, header="h")
+    assert "come from the base branch's view (main)" in text
 
 
 def test_a_git_failure_keeps_stdout_for_the_document(tmp_path, monkeypatch, capsys):
@@ -530,12 +554,10 @@ def test_diff_impact_without_witan_says_what_it_skipped(
 
 
 @requires_stack
-def test_a_removal_read_through_an_indexed_branch_view_is_flagged(
-    fixture_graph, monkeypatch, capsys
-):
+def test_a_removal_resolves_against_the_base_view(fixture_graph, monkeypatch, capsys):
     """Locally, the code tools follow the checkout's branch view once it is
-    indexed, and that view no longer has the removed symbol. Its empty callers
-    must come back flagged, not as "nothing calls this"."""
+    indexed, and that view no longer has the removed symbol. diff-impact pins
+    its lookups to the base's view, where the symbol and its callers exist."""
     from witan_code import indexer
     from witan_code import server as srv
 
@@ -550,4 +572,8 @@ def test_a_removal_read_through_an_indexed_branch_view_is_flagged(
         for r in json.loads(capsys.readouterr().out)["changed_symbols"]["shown"]
     }
     assert rows["retired"]["status"] == "removed"
-    assert rows["retired"]["in_index"] is False
+    assert rows["retired"]["in_index"] is True
+    assert rows["retired"]["callers"]["shown"] == ["svc.py::legacy"]
+    # Symbols the base never had are still flagged: `added` exists only in the
+    # branch view, which these lookups no longer read.
+    assert rows["added"]["in_index"] is False
