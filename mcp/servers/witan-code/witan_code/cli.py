@@ -492,8 +492,12 @@ def why(path: Path, *, repo: str | None = None) -> None:
     )
 
     # The commands in the advice run from the cwd, which may be below `root`.
+    # relpath raises on Windows across drives; the absolute path still works.
     def here(p: Path) -> str:
-        return Path(os.path.relpath(p)).as_posix()
+        try:
+            return Path(os.path.relpath(p)).as_posix()
+        except ValueError:
+            return str(p)
 
     if rule is not None:
         explained = _exclusion_detail(rule, here(excluded[1]))
