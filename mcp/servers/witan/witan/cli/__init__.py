@@ -342,8 +342,8 @@ def _launcher(
     output_format:
         txt | json | toml | yaml.
         Applies to tasks, task <slug>, projects, project status, project
-        tasks, session list, memory, traces, scan, target list, and mounted
-        witan-code tables. Env: WITAN_OUTPUT_FORMAT.
+        tasks, session list, memory, memory import, traces, scan, target list,
+        and mounted witan-code tables. Env: WITAN_OUTPUT_FORMAT.
     target:
         Which deployment to talk to.
         Names a [targets.<name>] block, and applies to every command — `witan
