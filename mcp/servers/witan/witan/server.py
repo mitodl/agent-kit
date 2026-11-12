@@ -52,6 +52,7 @@ from witan_core.omnigraph import (
     store_cli_args,
 )
 from witan_core.refusal import Refusal
+from witan_core.timeutil import parse_timestamp
 
 from . import config as cfg_module
 from . import (
@@ -1034,11 +1035,9 @@ def _lease_expiry(lease_started_at: str | None) -> str | None:
     if not lease_started_at:
         return None
     try:
-        started = datetime.fromisoformat(lease_started_at)
+        started = parse_timestamp(lease_started_at)
     except (ValueError, TypeError):
         return None
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
     return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
 
 
@@ -4097,11 +4096,9 @@ def _age_days(ts: str | None, now: datetime) -> float:
     if not ts:
         return 0.0
     try:
-        dt = datetime.fromisoformat(ts)
+        dt = parse_timestamp(ts)
     except (ValueError, TypeError):
         return 0.0
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 
@@ -6974,14 +6971,9 @@ def _ended_at_or_after(ended_at: str | None, since: datetime) -> bool:
     if not ended_at:
         return True
     try:
-        return _as_utc(datetime.fromisoformat(ended_at)) >= since
+        return parse_timestamp(ended_at) >= since
     except (ValueError, TypeError):
         return True
-
-
-def _as_utc(moment: datetime) -> datetime:
-    """Read a naive timestamp as UTC, so two of them are always comparable."""
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _parse_since(since: str) -> datetime:
@@ -6992,7 +6984,7 @@ def _parse_since(since: str) -> datetime:
     ``since`` there would make every row compare true.
     """
     try:
-        return _as_utc(datetime.fromisoformat(since))
+        return parse_timestamp(since)
     except (ValueError, TypeError):
         msg = f"since must be an ISO timestamp, got {since!r}"
         raise ValueError(msg) from None

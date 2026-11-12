@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from witan_core.observability import get_logger
+from witan_core.timeutil import parse_timestamp
 
 from . import envelope, live_pr, readiness, session_state
 from . import repo as repo_module
@@ -442,11 +443,9 @@ def _stamp(value: str | None) -> str:
     if not value:
         return ""
     try:
-        when = datetime.fromisoformat(value)
+        when = parse_timestamp(value)
     except ValueError:
         return ""
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
     return f" ({when.astimezone(UTC):%Y-%m-%d %H:%M} UTC)"
 
 

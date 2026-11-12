@@ -18,6 +18,8 @@ import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from witan_core.timeutil import parse_timestamp
+
 # A holder is ``"<identity>#<session>"`` — see ``server._claim_holder``. Matched
 # conservatively (the charset of a session id, anchored at the end) so an
 # identity that happens to contain a '#' is not mistaken for a qualified one.
@@ -88,11 +90,9 @@ def lease_expired(claimed_at: str | None, *, now: datetime | None = None) -> boo
     if not claimed_at:
         return True
     try:
-        started = datetime.fromisoformat(claimed_at)
+        started = parse_timestamp(claimed_at)
     except (ValueError, TypeError):
         return True
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)

@@ -457,9 +457,9 @@ def test_a_read_past_the_budget_still_closes_the_session(
     assert elapsed < 15
 
 
-def test_parse_timestamp_reads_naive_as_utc():
-    naive = session_summary.parse_timestamp("2026-11-12T15:00:00.000")
-    aware = session_summary.parse_timestamp("2026-11-12T10:00:00.000-05:00")
+def test_parse_or_none_reads_naive_as_utc():
+    naive = session_summary.parse_or_none("2026-11-12T15:00:00.000")
+    aware = session_summary.parse_or_none("2026-11-12T10:00:00.000-05:00")
     assert naive == aware == SINCE
-    assert session_summary.parse_timestamp("not a time") is None
-    assert session_summary.parse_timestamp(None) is None
+    assert session_summary.parse_or_none("not a time") is None
+    assert session_summary.parse_or_none(None) is None

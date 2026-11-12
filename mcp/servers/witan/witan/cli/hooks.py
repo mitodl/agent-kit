@@ -297,7 +297,7 @@ def _derived_summary(
     """
     try:
         started_at = (session or {}).get("started_at") or handle.get("started_at")
-        since = session_summary.parse_timestamp(started_at)
+        since = session_summary.parse_or_none(started_at)
         project_slug = handle.get("project_slug")
         if since is None or not project_slug:
             return session_summary.PLACEHOLDER

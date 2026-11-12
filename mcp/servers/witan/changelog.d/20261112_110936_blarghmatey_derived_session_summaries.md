@@ -21,3 +21,8 @@
   leaves the local handle in place, so the next Stop used to re-close the
   session with the placeholder. The hook now reads the session first and leaves an ended one
   alone.
+
+### Changed
+
+- Requires witan-core 0.54.0, for `witan_core.timeutil.parse_timestamp`, which
+  replaces eight local copies of the same naive-as-UTC timestamp parse.

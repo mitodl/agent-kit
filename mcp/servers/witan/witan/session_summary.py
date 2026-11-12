@@ -22,7 +22,9 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
+
+from witan_core.timeutil import parse_timestamp
 
 from . import readiness
 
@@ -74,24 +76,22 @@ class Activity:
         )
 
 
-def parse_timestamp(value: str | None) -> datetime | None:
-    """An ISO timestamp as an aware UTC datetime, or ``None`` when it won't parse.
+def parse_or_none(value: str | None) -> datetime | None:
+    """``parse_timestamp(value)``, or ``None`` for a missing or unparseable value.
 
-    The store hands ``DateTime`` columns back without an offset while
-    ``now_iso()`` writes one, so a naive value is read as UTC, as the server's
-    own window filters do.
+    The summary leaves out what it can't place in the window rather than
+    failing on it.
     """
     if not value:
         return None
     try:
-        moment = datetime.fromisoformat(value)
+        return parse_timestamp(value)
     except (ValueError, TypeError):
         return None
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _at_or_after(value: str | None, since: datetime) -> bool:
-    moment = parse_timestamp(value)
+    moment = parse_or_none(value)
     return moment is not None and moment >= since
 
 

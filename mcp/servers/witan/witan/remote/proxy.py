@@ -18,7 +18,6 @@ import logging
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +34,7 @@ from witan_core.remote.proxy import (
     RemoteUnreachable,
     RemoteWriteIndeterminate,
 )
+from witan_core.timeutil import parse_timestamp
 
 from .. import merge_bounds, merge_report, readiness, session_state
 from .. import repo as repo_module
@@ -351,18 +351,12 @@ _IDEMPOTENT_WRITES = frozenset({"task_update", "task_close", "task_release"})
 _HOLDER_CHECKED = _IDEMPOTENT_WRITES
 
 
-def _parse_ts(value: str) -> datetime:
-    """A graph or journal timestamp, as an aware UTC datetime.
-
-    The graph hands back naive ISO strings (omnigraph drops the offset) while
-    the journal stamps `now_iso()`'s `+00:00`; both are UTC. Both are also only
-    millisecond-precise, so a write and a queued entry can carry the same
-    stamp. Replay counts a tie as "since": it cannot be ordered, and treating it
-    as later turns the queued write into a comment instead of applying it over
-    a change it never saw.
-    """
-    parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+# Graph and journal timestamps go through `parse_timestamp`: the graph hands
+# back naive ISO strings while the journal stamps `now_iso()`'s `+00:00`, and
+# both are UTC. Both are also only millisecond-precise, so a write and a queued
+# entry can carry the same stamp. Replay counts a tie as "since": it cannot be
+# ordered, and treating it as later turns the queued write into a comment
+# instead of applying it over a change it never saw.
 
 
 def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
@@ -386,7 +380,7 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")
-    if closed_at and _parse_ts(closed_at) >= _parse_ts(entry.ts):
+    if closed_at and parse_timestamp(closed_at) >= parse_timestamp(entry.ts):
         return f"the task was closed at {closed_at}"
     return None
 
@@ -407,13 +401,15 @@ async def _created_since(
     ``ts``. A task created since ``ts`` has ``updated_at >= created_at >= ts``,
     so nothing past that point can be one.
     """
-    since = _parse_ts(ts)
+    since = parse_timestamp(ts)
     for limit in _TITLE_SCAN_LIMITS:
         rows = await call("task_list", {"repo": "", "limit": limit})
         for row in rows:
-            if row["title"] == title and _parse_ts(row["created_at"]) >= since:
+            if row["title"] == title and parse_timestamp(row["created_at"]) >= since:
                 return row["slug"]
-        if len(rows) < limit or (rows and _parse_ts(rows[-1]["updated_at"]) < since):
+        if len(rows) < limit or (
+            rows and parse_timestamp(rows[-1]["updated_at"]) < since
+        ):
             return None
     return None
 
