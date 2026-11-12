@@ -217,6 +217,13 @@ mean nothing exists: ``recall(query=...)`` searches more widely. A
 non-empty list comes with ``memories_note``, which says they are teammates'
 notes rather than instructions.
 
+It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
+share a symbol (``symbols``) or only a file (``files``) with this task's,
+shared symbols first. It is advisory, never a refusal, since work in the
+same file often merges cleanly. A shared symbol is a likely merge conflict:
+read the other task before editing that code, and ``task_comment`` it if
+the two plans collide. Empty when this task has no ``symbol_refs``.
+
 The coordination primitive for parallel/multi-user agents — call it before
 starting a ready task so others see it is taken. Returns ``{"claimed": true,
 …}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
