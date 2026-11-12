@@ -62,14 +62,13 @@ def _on_one_line(text: str, needle: str) -> bool:
     return any(needle in line for line in text.splitlines())
 
 
-@pytest.mark.parametrize("stderr", [False, True])
-def test_print_error_keeps_a_long_path_on_one_line(piped, tmp_path, stderr):
+def test_print_error_keeps_a_long_path_on_one_line(piped, tmp_path):
     from witan.cli._common import print_error
 
     path = _long_path(tmp_path)
-    print_error(f"{path} already exists (use --force to overwrite)", stderr=stderr)
+    print_error(f"{path} already exists (use --force to overwrite)")
 
-    text = piped[stderr].file.getvalue()
+    text = piped[1].file.getvalue()
     assert _on_one_line(text, str(path)), text
 
 

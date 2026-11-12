@@ -34,7 +34,7 @@ prek = [{ name = "prek", specifier = "==0.5.9" }]
 
 [[package]]
 name = "agent-config-kit"
-version = "0.14.0"
+version = "0.14.1"
 source = { editable = "packages/agent-config-kit" }
 dependencies = [
     { name = "pydantic" },
@@ -2180,7 +2180,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.29.0"
+version = "0.30.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2246,7 +2246,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.52.0"
+version = "0.53.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2320,7 +2320,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.47.0"
+version = "0.48.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
