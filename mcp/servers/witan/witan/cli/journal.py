@@ -13,6 +13,7 @@ never queues anything.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 
 import cyclopts
@@ -65,6 +66,7 @@ def journal_list() -> None:
         ],
         empty="[dim]Nothing queued.[/dim]",
         no_wrap={"id", "ts", "tool"},
+        records=[dataclasses.asdict(e) for e in entries],
     )
 
 

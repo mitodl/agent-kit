@@ -20,6 +20,7 @@ from ._common import (
     app,
     console,
     esc,
+    print_error,
     render_table,
 )
 
@@ -69,6 +70,7 @@ def traces(
         rows=rows_data,
         empty="[dim]No traces.[/dim]",
         no_wrap={"slug", "sessions", "mined"},
+        records=rows,
     )
 
 
@@ -77,7 +79,7 @@ def _trace_show(slug: str) -> None:
     s = _srv()
     tr = _fn(s.workflow_trace_get)(slug=slug)
     if not tr:
-        console.print(f"[red]No trace {slug!r}.[/red]")
+        print_error(f"No trace {slug!r}.")
         return
 
     console.print(f"[bold]{tr['slug']}[/bold]  {esc(tr.get('title'))}")

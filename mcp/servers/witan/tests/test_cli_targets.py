@@ -382,6 +382,50 @@ def test_list_with_no_targets_under_json_is_empty_rows(config_file, capsys):
     assert json.loads(capsys.readouterr().out)["rows"] == []
 
 
+def test_list_under_json_prints_each_target_record(config_file, monkeypatch, capsys):
+    """Structured rows keep the match lists and nulls the table cells flatten."""
+    import json
+
+    from witan.cli import output
+    from witan.cli.targets import list_targets
+
+    config_file.write_text(
+        "[targets.hosted]\n"
+        "remote_url = 'https://witan.example.org/mcp'\n"
+        "oidc_issuer = 'https://sso.example.org/realms/eng'\n"
+        "token = 'not-for-stdout'\n"  # pragma: allowlist secret gitleaks:allow
+        "code_token = 'nor-this'\n"  # pragma: allowlist secret gitleaks:allow
+        "code_transport = 'mcp'\n"
+        "index_role = 'ci'\n"
+        "match_orgs = ['mitodl']\n"
+        "match_repos = ['https://github.com/x/one']\n"
+        "\n"
+        "[targets.personal]\n"
+        "server = '/tmp/personal.omni'\n"
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    output.set_output_format("json")
+    try:
+        list_targets()
+    finally:
+        output.set_output_format("txt")
+
+    out = capsys.readouterr().out
+    rows = {r["name"]: r for r in json.loads(out)["rows"]}
+    assert rows["hosted"]["current"] is True
+    assert rows["personal"]["current"] is False
+    assert rows["hosted"]["match_orgs"] == ["mitodl"]
+    assert rows["hosted"]["match_repos"] == ["https://github.com/x/one"]
+    assert rows["hosted"]["server"] is None
+    # witan-code's keys share the table; witan's model ignores them.
+    assert rows["hosted"]["code_transport"] == "mcp"
+    assert rows["hosted"]["index_role"] == "ci"
+    assert "token" not in rows["hosted"]
+    assert "code_token" not in rows["hosted"]
+    assert "not-for-stdout" not in out
+    assert "nor-this" not in out
+
+
 def test_render_block_omits_empty_fields():
     from witan.cli.targets import render_target_block
 

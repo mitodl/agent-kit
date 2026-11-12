@@ -803,3 +803,39 @@ def test_a_read_cut_off_by_a_gateway_still_reconnects():
         "connect",
         "code_store_views",
     ]
+
+
+def test_the_deployed_client_names_its_release(monkeypatch):
+    # The deployment's mcp.tool_call line logs this, and it is the only way a
+    # post-release check can tell an un-upgraded client from a fix that did not
+    # work. The SDK default would report every release as `mcp 0.1.0`.
+    from agent_config_kit.version import resolve_version
+    from witan_code.remote import store as remote_store
+
+    built = {}
+
+    def fake_client(transport, **kwargs):
+        built.update(kwargs)
+
+    monkeypatch.setattr(remote_store, "Client", fake_client)
+    StoreSession("http://x/mcp", lambda: "jwt")._default_client("jwt")
+    info = built["client_info"]
+    assert (info.name, info.version) == ("witan-code", resolve_version("witan-code"))
+
+
+def test_missing_metadata_names_the_release_unknown(monkeypatch):
+    # A source checkout with no dist metadata must still connect, not fail to
+    # import the module or the first connect.
+    from importlib import metadata
+
+    from witan_code.remote import store as remote_store
+
+    def missing(_name):
+        raise metadata.PackageNotFoundError(_name)
+
+    monkeypatch.setattr(metadata, "distribution", missing)
+    remote_store.client_info.cache_clear()
+    try:
+        assert remote_store.client_info().version == "unknown"
+    finally:
+        remote_store.client_info.cache_clear()

@@ -57,12 +57,14 @@ the ``remote`` extra (``fastmcp``).
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import math
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from importlib import metadata
 from typing import Any
 
 import httpx2
@@ -71,12 +73,34 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from mcp.types import Implementation
 
 from ..identity import derive_actor_id
 from .journal import JournalEntry, WriteJournal, journal_path
 from .oidc import decode_claims
 
 logger = logging.getLogger(__name__)
+
+
+@functools.cache
+def proxy_client_info() -> Implementation:
+    """What the remote proxy calls itself in MCP ``clientInfo``.
+
+    Without it the proxy reports the SDK default, ``mcp 0.1.0``, the same value
+    an un-upgraded witan-code sends, so a post-release check on one actor's
+    traffic could not tell the two apart. The proxy's code is witan-core's,
+    hence its version.
+
+    Not ``agent_config_kit.version.resolve_version``: that ships with the
+    ``cli`` extra, and this module needs only ``remote``. Resolved on first
+    connect rather than at import, and ``unknown`` when the metadata is
+    missing, so a source checkout still imports.
+    """
+    try:
+        resolved = metadata.version("witan-core")
+    except metadata.PackageNotFoundError:
+        resolved = "unknown"
+    return Implementation(name="witan-remote-proxy", version=resolved)
 
 
 class RemoteToolUnavailable(RuntimeError):
@@ -758,7 +782,11 @@ class RemoteMCPProxy:
         Isolated so tests can point the proxy at an in-memory FastMCP server.
         """
         transport = StreamableHttpTransport(self._url, auth=BearerAuth(token))
-        return Client(transport, elicitation_handler=self._elicitation_handler())
+        return Client(
+            transport,
+            elicitation_handler=self._elicitation_handler(),
+            client_info=proxy_client_info(),
+        )
 
     async def _refresh_param_names(self, client: Client) -> None:
         """Re-read the deployment's tool surface and its cache directive.

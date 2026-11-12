@@ -104,6 +104,7 @@ def projects(
         empty=f"[dim]No projects{esc(matching)}.[/dim]",
         no_wrap={"status", "phase"},
         styles={"status": _STATUS_STYLE},
+        records=rows,
     )
 
 
@@ -492,8 +493,8 @@ def project_update(
         ``--empty-reserve`` clears the list.
     """
     if status is not None and status not in ("active", "abandoned"):
-        console.print(
-            f"[red]--status must be 'active' or 'abandoned', not {status!r}.[/red]"
+        print_error(
+            f"--status must be 'active' or 'abandoned', not {status!r}."
             + (
                 "\nUse `witan project complete` to complete a project — it seals "
                 "the corpus trace, which needs an outcome narrative."
@@ -518,7 +519,7 @@ def project_update(
         reserved_decisions=reserve,
     )
     if result is None:
-        console.print(f"[red]No project {slug}.[/red]")
+        print_error(f"No project {slug}.")
         raise SystemExit(1)
 
     console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
@@ -615,8 +616,8 @@ def project_block(slug: str, blocks: str) -> None:
     s = _srv()
     result = _fn(s.workflow_project_block)(slug=slug, blocks_slug=blocks)
     if not result.get("linked"):
-        reason = escape((result.get("reason") or "").strip() or "unknown")
-        console.print(f"[red]Not linked:[/red] {reason}")
+        reason = (result.get("reason") or "").strip() or "unknown"
+        print_error(f"Not linked: {reason}")
         return
     console.print(f"[green]Blocked[/green] {blocks} on {slug}")
 

@@ -481,10 +481,10 @@ def main() -> None:
         # written `[qa]` — which rich parses as a style tag and swallows, so
         # "unset `remote_url` on target [qa]" reached the user as "on target".
         # The one part of the sentence that identifies what to unset is exactly
-        # the part markup ate.
+        # the part markup ate. soft_wrap for the reason print_error has it.
         #
         # stderr, because under --output-format json|toml|yaml stdout holds the
         # document a consumer parses. That includes `witan code …`, whose own
         # cli() handler never runs under this launcher.
-        stderr_console.print(str(exc), style="red", markup=False)
+        stderr_console.print(str(exc), style="red", markup=False, soft_wrap=True)
         raise SystemExit(1) from None

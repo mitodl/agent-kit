@@ -213,13 +213,10 @@ def tasks(
         "assignee",
         "blocked_by",
     ]
-    # Search rows don't carry blocked_by, and a blank value would read as "no
-    # blockers". The status column still flags a blocked task. Drop the key
-    # from the rows too: structured output dumps rows, not columns.
+    # Search rows don't carry blocked_by, and a blank cell would read as "no
+    # blockers". The status column still flags a blocked task.
     if query is not None:
         columns.remove("blocked_by")
-        for row in rows_data:
-            del row["blocked_by"]
     render_table(
         title=f"{base_title} — {scope}",
         columns=columns,
@@ -228,6 +225,7 @@ def tasks(
         no_wrap={"priority", "status", "type"},
         styles={"priority": _PRIORITY_STYLE, "status": _STATUS_STYLE},
         placeholders={"repo": "(unscoped)"},
+        records=rows,
     )
 
 
@@ -448,7 +446,7 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
     if _queued(result):
         return
     if not result:
-        console.print(f"[red]No task {slug!r}.[/red]")
+        print_error(f"No task {slug!r}.")
         raise SystemExit(1)
     console.print(f"[green]Closed[/green] [bold]{slug}[/bold]")
     if resolution:
@@ -480,7 +478,7 @@ def task_claim_cmd(
     s = _srv()
     result = _fn(s.task_claim)(slug=slug, assignee=assignee, force=force)
     if result is None:
-        console.print(f"[red]No task {slug!r}.[/red]")
+        print_error(f"No task {slug!r}.")
         raise SystemExit(1)
     if result.get("claimed"):
         console.print(
@@ -525,7 +523,7 @@ def task_release_cmd(
     if _queued(result):
         return
     if result is None:
-        console.print(f"[red]No task {slug!r}.[/red]")
+        print_error(f"No task {slug!r}.")
         raise SystemExit(1)
     if result.get("released"):
         console.print(
@@ -608,7 +606,7 @@ def task_update_cmd(
     if _queued(result):
         return
     if not result:
-        console.print(f"[red]No task {slug!r}.[/red]")
+        print_error(f"No task {slug!r}.")
         raise SystemExit(1)
     console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
     console.print(
@@ -797,7 +795,7 @@ def task_run(
                     if res.get("remedy"):
                         console.print(f"  [yellow]{res['remedy']}[/yellow]")
         if not claimable:
-            console.print("[red]No tasks could be claimed.[/red]")
+            print_error("No tasks could be claimed.")
             raise SystemExit(1)
         merged = _merge_prompts(
             [

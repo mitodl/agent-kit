@@ -8,6 +8,36 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.52.0] - 2026-11-12
+
+### Changed
+
+- `acquire_store_flock` returns the locked file descriptor (`int`) instead of an open file object. Callers that only pass it back to `release_store_flock` are unaffected.
+- On Windows the token-cache write retries `os.replace` for up to two seconds, because Windows refuses to replace a file another process has open for reading.
+
+- `witan setup` installs omnigraph 0.15.0 (tag `v0.15.0`). Its
+  `omnigraph version --json` reports storage format 16, serving 14 to 16,
+  and HTTP contract 0.14, the same as 0.14.0, so no graph is rebuilt and the
+  contract negotiation is unchanged. 0.15 sign-ins write a login cache that
+  older binaries refuse, so log out with 0.15 before going back to 0.14.
+
+- A store that stays unreachable at a Kubernetes Service name
+  (`*.svc`, `*.svc.cluster.local`) from outside a pod says that the name
+  resolves only inside its cluster and points at registering and selecting
+  a `witan target add --remote-url --oidc-issuer` target, instead of reading
+  like an outage.
+
+### Fixed
+
+- `witan_core.omnigraph`, `witan_core.remote.oidc` and `witan_core.remote.journal` import on Windows. Their file locks go through a new `witan_core._filelock` helper (`fcntl.flock` on POSIX, unchanged; `msvcrt.locking` on Windows), and the operator-config temp dir check no longer calls `os.getuid` there. Both CLIs previously failed at import on Windows.
+- A `file:///C:/...` store URI resolves to `C:\...` on Windows instead of a path under the current drive's root.
+
+- A full-text index that needs rebuilding is classified as
+  `FULL_TEXT_REBUILD_REQUIRED` from 0.15's message too. 0.15 names the remedy
+  `omnigraph index rebuild --kind full-text` (upstream #1150), which neither
+  the CLI nor the HTTP prose markers matched, so on the CLI path the refusal
+  was classified as a generic fatal error.
+
 ## [0.51.1] - 2026-11-10
 
 ### Changed

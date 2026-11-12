@@ -1289,3 +1289,35 @@ def test_a_read_whose_retry_is_also_rejected_says_the_refresh_failed():
         proxy.task_get(slug="x")
     assert "A refresh was attempted" in str(caught.value)
     assert proxy.tokens == ["tok", "fresh-token"]
+
+
+def test_the_proxy_names_itself_to_the_deployment(monkeypatch):
+    # Otherwise it reports the SDK default, the same `mcp 0.1.0` an
+    # un-upgraded witan-code sends, and one actor's traffic can't be split.
+    from importlib.metadata import version
+
+    from witan_core.remote import proxy as proxy_module
+
+    built = {}
+
+    def fake_client(transport, **kwargs):
+        built.update(kwargs)
+
+    monkeypatch.setattr(proxy_module, "Client", fake_client)
+    RemoteMCPProxy("http://x/mcp", lambda: "tok")._new_client("tok")
+    info = built["client_info"]
+    assert (info.name, info.version) == ("witan-remote-proxy", version("witan-core"))
+
+
+def test_the_proxy_connects_without_dist_metadata(monkeypatch):
+    from witan_core.remote import proxy as proxy_module
+
+    def missing(name):
+        raise proxy_module.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(proxy_module.metadata, "version", missing)
+    proxy_module.proxy_client_info.cache_clear()
+    try:
+        assert proxy_module.proxy_client_info().version == "unknown"
+    finally:
+        proxy_module.proxy_client_info.cache_clear()

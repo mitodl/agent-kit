@@ -285,6 +285,31 @@ def test_journal_list_and_drop(monkeypatch):
         journal_cli.journal_drop(entry.id)
 
 
+def test_journal_list_under_json_prints_each_entry_record(monkeypatch, capsys):
+    """`args` stays an object rather than the JSON-encoded string the table shows."""
+    from witan.cli import journal as journal_cli
+    from witan.cli import output
+    from witan_core.remote.journal import WriteJournal, journal_path
+
+    monkeypatch.setattr(
+        journal_cli.cfg_module, "load_remote_config", lambda target=None: REMOTE_CFG
+    )
+    entry, _ = WriteJournal(journal_path(URL)).append(
+        "task_update", {"slug": "tk-1", "tags": ["a", "b"]}, context=None, holder=None
+    )
+    output.set_output_format("json")
+    try:
+        journal_cli.journal_list()
+    finally:
+        output.set_output_format("txt")
+
+    (row,) = json.loads(capsys.readouterr().out)["rows"]
+    assert row["id"] == entry.id
+    assert row["args"] == {"slug": "tk-1", "tags": ["a", "b"]}
+    assert row["context"] is None
+    assert row["holder"] is None
+
+
 def test_journal_refuses_without_a_deployment(monkeypatch):
     from witan.cli import journal as journal_cli
 

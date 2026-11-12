@@ -19,6 +19,7 @@ from pathlib import Path
 try:
     import cyclopts
     from rich.console import Console
+    from rich.markup import escape
     from rich.prompt import Confirm, Prompt
     from rich.table import Table
 except ImportError as exc:
@@ -85,6 +86,20 @@ app = cyclopts.App(
     version=lambda: resolve_version("agent-config-kit"),
 )
 console = Console()
+
+
+def print_error(message: object) -> None:
+    """Print ``message`` in red, escaped and soft-wrapped.
+
+    Escaped because exception text quotes TOML (``[[org]]``, ``[skills]``),
+    which Rich reads as style tags and deletes. Soft-wrapped because Rich
+    otherwise hard-wraps at the console width, which is 80 when no standard
+    stream is a terminal and ``COLUMNS`` is unset (an agent's shell, a CI
+    job): a path longer than that is folded with a literal newline inside it,
+    so the path copied out of the error is not the path on disk.
+    """
+    console.print(f"[red]{escape(str(message))}[/red]", soft_wrap=True)
+
 
 config_app = cyclopts.App(
     name="config", help="Manage the global agent-kit config file (spec §7)."
@@ -200,7 +215,7 @@ def _ask(prompt: str, *, default: str = "") -> str:
 
 def _ask_required(prompt: str) -> str:
     while not (value := _ask(prompt)):
-        console.print("[red]a value is required[/red]")
+        print_error("a value is required")
     return value
 
 
@@ -282,7 +297,7 @@ def config_init_command(
     """
     path = resolve_config_path(config)
     if path.is_file() and not force:
-        console.print(f"[red]{path} already exists (use --force to overwrite)[/red]")
+        print_error(f"{path} already exists (use --force to overwrite)")
         raise SystemExit(1)
 
     values = (
@@ -362,18 +377,18 @@ def _skill_entries(
         # matter here, not just the pattern, since a >64-char name would
         # otherwise write a manifest that immediately fails to load.
         if not 1 <= len(name) <= 64 or not SKILL_NAME_PATTERN.fullmatch(name):
-            console.print(
-                f"[red]{skill_md}: derived skill name {name!r} is not a valid "
+            print_error(
+                f"{skill_md}: derived skill name {name!r} is not a valid "
                 "Agent Skills name (1-64 characters, lowercase alphanumeric "
                 "segments separated by single hyphens) — fix its SKILL.md "
-                "'name' frontmatter or its directory name[/red]"
+                "'name' frontmatter or its directory name"
             )
             raise SystemExit(2)
         if name in by_name and by_name[name] != skill_md:
-            console.print(
-                f"[red]duplicate skill name {name!r}: {by_name[name]} and "
+            print_error(
+                f"duplicate skill name {name!r}: {by_name[name]} and "
                 f"{skill_md} — rename one (its SKILL.md 'name' frontmatter "
-                "or its directory)[/red]"
+                "or its directory)"
             )
             raise SystemExit(2)
         by_name[name] = skill_md
@@ -427,9 +442,7 @@ def manifest_init_command(
     ).resolve()
 
     if output_path.is_file() and not force:
-        console.print(
-            f"[red]{output_path} already exists (use --force to overwrite)[/red]"
-        )
+        print_error(f"{output_path} already exists (use --force to overwrite)")
         raise SystemExit(1)
 
     entries = _skill_entries(_find_skill_md_files(repo_root), output_path.parent)
@@ -451,9 +464,9 @@ def _resolve_platforms(
         return None
     unknown = sorted(set(platforms) - set(known_platforms()))
     if unknown:
-        console.print(
-            f"[red]unknown platform(s): {', '.join(unknown)} "
-            f"(known: {', '.join(known_platforms())})[/red]"
+        print_error(
+            f"unknown platform(s): {', '.join(unknown)} "
+            f"(known: {', '.join(known_platforms())})"
         )
         raise SystemExit(2)
     return platforms
@@ -499,7 +512,7 @@ def _materialize_manifest_arg(value: str, *, cache_dir: Path | None) -> Path:
             )
             return fetch_remote(value, resolved_cache_dir)
         except FetchError as exc:
-            console.print(f"[red]{exc}[/red]")
+            print_error(exc)
             raise SystemExit(2) from exc
     return Path(value).expanduser()
 
@@ -557,14 +570,14 @@ def _resolve_manifest_arg(
             Path.cwd(), config, config_path, cache_dir=cache_dir
         )
     except FetchError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
     if resolved is None:
-        console.print(
-            "[red]no MANIFEST given and none could be resolved from the "
+        print_error(
+            "no MANIFEST given and none could be resolved from the "
             "global config (no repo-local agent-config.toml, no matching "
-            r"\[\[org]] on the git remote, no matching \[\[scope]] prefix, "
-            "and no default_manifest set — see `agent-kit config init`)[/red]"
+            "[[org]] on the git remote, no matching [[scope]] prefix, "
+            "and no default_manifest set — see `agent-kit config init`)"
         )
         raise SystemExit(2)
     console.print(f"resolved manifest from {resolved.source}")
@@ -685,7 +698,7 @@ def _check_hook_skills(
     try:
         check_hook_skills(bundle, platforms, scope)
     except HookSkillError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
 
 
@@ -831,7 +844,7 @@ def apply_command(
         )
         bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
     except (ManifestError, ConfigError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
 
     resolved_scope = scope
@@ -948,7 +961,7 @@ def apply_command(
                     )
                 )
     except ConflictingPathError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
 
     # Same "skipped means nothing actually written" reasoning as the prune
@@ -1042,7 +1055,7 @@ def validate_command(
         )
         bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
     except (ManifestError, ConfigError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
 
     resolved_scope = scope
@@ -1095,7 +1108,7 @@ def profiles_command(manifest: str, *, cache_dir: Path | None = None) -> None:
     try:
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
     except ManifestError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(2) from exc
 
     if not loaded.profiles:

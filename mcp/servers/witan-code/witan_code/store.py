@@ -762,6 +762,22 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
     ]
 
 
+def served_graph_ids(config: cfg_module.Config) -> frozenset[str]:
+    """Graph id of every graph the cluster serves, for a membership test
+    against :func:`config.graph_id`.
+
+    Raises when the cluster could not be asked, unlike :func:`per_repo_stores`,
+    so a caller can tell "not served" from "could not tell". Through the MCP
+    tier each entry is a repo URI, or the graph's id for a graph with no files
+    (:func:`repo_for_store`), so both forms are mapped to an id.
+    """
+    if _via_mcp(config):
+        names = mcp_session(config).call("code_store_graphs")
+    else:
+        names = cluster_graphs(config.code_server, config.code_token)
+    return frozenset(names) | {cfg_module.graph_id(name) for name in names}
+
+
 def map_refs(refs: list[StoreRef], fn, *, max_workers: int = 8) -> list:
     """``[fn(ref) for ref in refs]``, run concurrently, in the original order.
 
