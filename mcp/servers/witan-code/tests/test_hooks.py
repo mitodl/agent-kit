@@ -507,6 +507,162 @@ def test_drain_pending_releases_after_a_failing_batch(_repo, monkeypatch):
     os.close(fd)
 
 
+# ── Repos the cluster does not serve ──────────────────────────────────────────
+
+_REPO_URI = "https://github.com/mitodl/ol-llm"
+
+
+class _Tier:
+    """A deployment reached through the MCP tier, serving ``served``. Records
+    every tool call, and refuses a per-repo one as the deployment refuses a
+    graph it does not serve."""
+
+    url = "https://witan.test"
+
+    def __init__(self, served):
+        self.served = served
+        self.calls: list[str] = []
+
+    def call(self, tool, **kwargs):
+        self.calls.append(tool)
+        if tool != "code_store_graphs":
+            raise RuntimeError(f"graph {kwargs.get('graph')!r} not found")
+        if isinstance(self.served, Exception):
+            raise self.served
+        return self.served
+
+
+@pytest.fixture
+def _origin(_repo):
+    """Give ``_repo`` a remote to key its graph on, around a fresh listing cache."""
+    subprocess.run(
+        ["git", "-C", str(_repo), "remote", "add", "origin", f"{_REPO_URI}.git"],
+        check=True,
+    )
+    hooks.indexer._served_graph_ids.cache_clear()
+    yield
+    hooks.indexer._served_graph_ids.cache_clear()
+
+
+@pytest.fixture
+def _serve(_origin, monkeypatch):
+    """Put ``_repo`` on a cluster reached through the MCP tier, and return a
+    function that installs a :class:`_Tier` serving the given list."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    monkeypatch.setenv("WITAN_CODE_TRANSPORT", cfg_mod.CODE_TRANSPORT_MCP)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.test")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.test/realms/ol")
+
+    def _install(served) -> _Tier:
+        tier = _Tier(served)
+        monkeypatch.setattr(store_mod, "mcp_session", lambda *_a, **_kw: tier)
+        return tier
+
+    return _install
+
+
+def test_drain_pending_skips_an_unserved_repo_on_a_direct_cluster(
+    _repo, _origin, _batches, monkeypatch
+):
+    """`code_server` set: the listing is the omnigraph-server's graph ids."""
+    from witan_code import store as store_mod
+
+    listed = []
+
+    def _graphs(server_url, token=None):
+        listed.append(server_url)
+        return frozenset({"code-github-com-mitodl-other", "code-bridge"})
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    monkeypatch.setattr(store_mod, "cluster_graphs", _graphs)
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == []
+    assert listed == ["https://omnigraph.test"]
+
+
+def test_drain_pending_makes_no_per_repo_call_for_an_unserved_repo(_repo, _serve):
+    """The real indexer runs here: had the check let the batch through, its
+    store probe would have reached the tier as `code_store_views`."""
+    tier = _serve(["https://github.com/mitodl/other"])
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert tier.calls == ["code_store_graphs"]
+    assert not hooks._has_pending(_repo)
+
+
+@pytest.mark.parametrize(
+    "served",
+    [
+        pytest.param([_REPO_URI], id="by-uri"),
+        # A served graph with no files yet is listed by its id.
+        pytest.param(["code-github-com-mitodl-ol-llm"], id="by-graph-id"),
+    ],
+)
+def test_drain_pending_indexes_a_served_repo(_repo, _serve, _batches, served):
+    _serve(served)
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == [[a]]
+
+
+@pytest.mark.parametrize(
+    "served",
+    [
+        pytest.param(RuntimeError("connection refused"), id="listing-failed"),
+        # The deployment degrades its own failed listing to an empty one.
+        pytest.param([], id="listing-empty"),
+    ],
+)
+def test_drain_pending_indexes_when_it_cannot_tell(_repo, _serve, _batches, served):
+    _serve(served)
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert _batches == [[a]]
+
+
+def test_drain_pending_lists_the_served_graphs_once_per_drainer(
+    _repo, _serve, monkeypatch
+):
+    tier = _serve([_REPO_URI])
+    a, b, c = _repo / "a.py", _repo / "b.py", _repo / "c.py"
+    for path in (a, b, c):
+        path.write_text("x = 1")
+    for path in (a, b):
+        hooks._enqueue(_repo, path)
+    batches = []
+
+    def _index(targets, force):
+        batches.append(targets)
+        if c not in targets:
+            hooks._enqueue(_repo, c)  # lands mid-drain: a second flush
+
+    monkeypatch.setattr(hooks.indexer, "index_paths", _index)
+
+    hooks.drain_pending(_repo, hooks._try_lock(_repo))
+
+    assert batches == [[a, b], [c]]
+    assert tier.calls == ["code_store_graphs"]
+
+
 # ── Flush pacing ──────────────────────────────────────────────────────────────
 
 
