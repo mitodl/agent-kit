@@ -126,22 +126,6 @@ def test_the_entrypoint_actually_lists_the_type_it_must_catch():
     assert "RemoteToolFailed" in inspect.getsource(main)
 
 
-@pytest.fixture
-def launcher_state():
-    """Undo the module-level state `main()`'s launcher sets for the process."""
-    from witan.cli.output import set_output_format
-    from witan.cli.selected_target import set_selected_target
-
-    yield
-    set_output_format("txt")
-    set_selected_target(None)
-    try:
-        from witan_code.output import set_output_format as set_code_output_format
-    except ImportError:
-        return
-    set_code_output_format("txt")
-
-
 def _run_main(monkeypatch, *argv: str) -> int:
     """Run the real `main()` and launcher over ``argv``, returning the exit code."""
     import warnings
