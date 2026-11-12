@@ -311,3 +311,71 @@ def test_a_directory_is_refused(checkout, capsys):
         cli_module.why(Path("node_modules"))
 
     assert "is not a file" in capsys.readouterr().err
+
+
+# ── Which graph `why` and `doctor` read ──────────────────────────────────────
+
+
+@pytest.fixture
+def qa_target(checkout, tmp_path, monkeypatch):
+    """A `[targets.qa]` whose code_dir differs from the default one, selected
+    the way witan's launcher forwards `--target qa`."""
+    from witan_code import config as cfg_module
+    from witan_code.selected_target import set_selected_target
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'code_dir = "{(tmp_path / "default-code").as_posix()}"\n'
+        "[targets.qa]\n"
+        f'code_dir = "{(tmp_path / "qa-code").as_posix()}"\n'
+    )
+    monkeypatch.setenv("WITAN_CONFIG", str(config))
+    monkeypatch.delenv("WITAN_CODE_DIR", raising=False)
+    _fresh_server(monkeypatch)
+    set_selected_target("qa")
+    yield cfg_module.load("qa")
+    set_selected_target(None)
+
+
+@requires_stack
+def test_why_reads_the_selected_target(checkout, qa_target, capsys):
+    indexer.index_path(checkout, config=qa_target)
+
+    row = _why("kept.py", capsys)
+
+    assert row["indexed"] is True
+
+
+@requires_stack
+def test_doctor_reads_the_selected_target(checkout, qa_target, capsys):
+    indexer.index_path(checkout, config=qa_target)
+    output_module.set_output_format("json")
+
+    cli_module.doctor()
+
+    rows = json.loads(capsys.readouterr().out)["rows"]
+    assert [(r["kind"], r["status"]) for r in rows if r["kind"] == "repo"] == [
+        ("repo", "ok")
+    ]
+
+
+def test_why_refuses_when_reads_go_to_a_deployment_but_stores_are_local(
+    checkout, monkeypatch, capsys
+):
+    """`WITAN_REMOTE_URL` sends the `code_*` reads to the deployment, while the
+    default `code_transport` leaves the code-graph stores local: the answer
+    would describe a graph those reads never look at."""
+    _fresh_server(monkeypatch)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.invalid/mcp")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://idp.example.invalid/realms/x")
+    output_module.set_output_format("json")
+
+    with pytest.raises(SystemExit) as exc:
+        cli_module.why(Path("kept.py"))
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert captured.out == ""
+    message = " ".join(captured.err.split())
+    assert "https://witan.example.invalid/mcp" in message
+    assert 'Set code_transport = "mcp"' in message

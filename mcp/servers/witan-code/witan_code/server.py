@@ -1145,6 +1145,21 @@ def code_store_health() -> dict:
     }
 
 
+def use_config(config: cfg_module.Config) -> None:
+    """Read ``config``'s stores from here on, instead of the import-time load.
+
+    For the CLI commands that call this module in-process (``doctor``,
+    ``why``): the import-time :func:`config.load` takes no target, so a
+    ``--target`` forwarded into :mod:`witan_code.selected_target` never
+    reaches it. Clients and branch listings cached under the old config are
+    dropped with it.
+    """
+    global cfg
+    cfg = config
+    _clients.clear()
+    _store_branches.clear()
+
+
 def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:
     """``rel_path``'s row in the view the ``code_*`` tools read for ``checkout``.
 

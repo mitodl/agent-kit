@@ -120,6 +120,24 @@ def _is_remote() -> bool:
     return _srv() is not server_module
 
 
+def _local_server():
+    """The in-process server module, reading the selected ``--target``'s stores.
+
+    For commands that ask about this machine's code-graph config rather than
+    dispatching through :func:`_srv` (``doctor``, ``why``).
+    """
+    from . import config as cfg_module
+    from . import server as server_module
+    from .selected_target import selected_target
+
+    try:
+        server_module.use_config(cfg_module.load(selected_target()))
+    except ValueError as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from None
+    return server_module
+
+
 def print_error(message: object, *, stderr: bool = False) -> None:
     """Print ``message`` in red, as plain text, soft-wrapped.
 
@@ -347,7 +365,7 @@ def doctor() -> None:
     # maintenance action on local files — the same side of the split as
     # `index`/`optimize`/`cleanup`. Dispatching to a deployment would report a
     # cluster's health and then advise a rebuild of stores that are fine.
-    from . import server as server_module
+    server_module = _local_server()
 
     # stderr under a structured format: stdout holds the table's document.
     console = Console(stderr=get_output_format() != "txt")
@@ -461,9 +479,32 @@ def why(path: Path, *, repo: str | None = None) -> None:
     from rich.console import Console
     from rich.markup import escape
 
+    from . import config as cfg_module
     from . import repo as repo_module
-    from . import server as server_module
     from . import store as store_module
+    from .selected_target import selected_target
+
+    server_module = _local_server()
+    # The `code_*` read commands dispatch to a deployment whenever a remote
+    # URL is configured, but the code-graph stores come from `code_transport`
+    # and `code_server`. With only the first set, this would explain a local
+    # graph the reads never look at.
+    try:
+        remote = cfg_module.load_remote_config(selected_target())
+    except ValueError as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from None
+    if remote is not None and not server_module.cfg.is_cluster:
+        print_error(
+            f"The code_* reads go to the deployment at {remote.url} (remote_url "
+            "or WITAN_REMOTE_URL), but the code-graph config points at the local "
+            f"stores in {server_module.cfg.code_dir}, so `witan code why` would "
+            "explain a graph those reads do not use. Set code_transport = "
+            '"mcp" on the target (or WITAN_CODE_TRANSPORT=mcp) to read the '
+            "deployment's code graphs, or unset remote_url to read local ones.",
+            stderr=True,
+        )
+        raise SystemExit(1)
 
     # Not resolved: the walk names a file by its path in the checkout, so a
     # symlinked directory on the way is a rule to report, and a symlink to a
