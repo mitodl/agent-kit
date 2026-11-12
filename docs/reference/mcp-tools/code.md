@@ -242,15 +242,23 @@ table.
 
 ## `code_search_symbol`
 
-Full-text/substring search over symbol qualified names (BM25-ranked).
+Full-text search over symbol qualified names and docstrings (BM25-ranked).
 
-Use to locate a symbol when you only remember part of its name. Each result
-carries its ``symbol_id`` and ``repo`` of origin. BM25 ranking is per-store;
-cross-repo fan-out concatenates each store's ranked results.
+Use to locate a symbol when you only remember part of its name, or by what
+its docstring says it does (e.g. "rate limiting"). Each result carries its
+``symbol_id`` and ``repo`` of origin.
+
+Name matches come first, then symbols whose docstring matches and whose
+name does not. A docstring-only match never outranks a name match: BM25
+scores the two fields on scales that cannot be compared (a short name
+inflates under length normalisation), so the order between them is a
+policy, and this is the policy. Within each group, BM25 ranking is
+per-store, and a cross-repo fan-out concatenates each store's ranked
+results. Each group holds up to 50 results per store.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | **required** | Search terms matched against ``qualified_name``. |
+| `query` | str | **required** | Search terms matched against ``qualified_name`` and ``docstring``. |
 | `kind` | `function` \| `method` \| `class` \| `module` \| `variable` \| `interface` \| `type` \| `enum` \| `key` \| `table` \| `cte` \| `block`? | `null` | Optional filter to a single symbol kind: ``function``, ``method``,<br>``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,<br>``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``<br>to exclude the many YAML ``key`` symbols when searching for code. |
 | `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all — ``repo=""`` does **not** force that, unlike the witan<br>memory/task tools; it is falsy and behaves like omitting the argument.<br>BM25 ranking is per-store, so a fan-out concatenates each store's<br>ranked results rather than producing one global ordering. |
 | `branch` | str? | `null` | Git branch whose indexed view to query. Defaults to the checkout's<br>branch when querying the current repo; when ``repo`` names a different<br>repo and ``branch`` is omitted, reads that store's default (main) view. |

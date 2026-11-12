@@ -2,11 +2,12 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastmcp import Context, FastMCP
 
 from witan_core import caching
+from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 
 from . import bridge_extractors, elicit, indexer, ingest, stitch, views
@@ -16,7 +17,12 @@ from . import repo as repo_module
 from . import store as store_module
 from .graph import OmnigraphClient
 
+if TYPE_CHECKING:
+    from .remote.store import RemoteStoreClient
+
 # ── Startup ───────────────────────────────────────────────────────
+
+logger = get_logger("witan.code.server")
 
 cfg = cfg_module.load()
 
@@ -721,6 +727,49 @@ SymbolKind = Literal[
 ]
 
 
+#: omnigraph's typecheck code for a ``search`` over a field with no full-text
+#: index. A store still on the schema from before ``Symbol.docstring`` gained
+#: ``@index`` answers the docstring run with it on omnigraph 0.15 (0.13 scans
+#: the field instead and answers).
+_NO_FTS_INDEX = "T27:"
+
+#: Marks a docstring-run row inside one store's results until the union
+#: in ``code_search_symbol`` has placed it. Never reaches a caller.
+_DOCSTRING_ONLY = "_docstring_only"
+
+
+def _docstring_search(
+    client: "OmnigraphClient | RemoteStoreClient", name: str, params: dict
+) -> list[dict]:
+    """The docstring BM25 run, or no rows from a store or tier that cannot run it.
+
+    Two cases answer with no rows instead of failing the search. A store whose
+    schema lacks the index refuses the run with ``T27``: a local store gains the
+    index on its next index, which applies the schema (``store.ensure_store``),
+    and a cluster graph when the data tier's ``cluster apply`` runs with the new
+    schema. And a deployed MCP tier older than the query (``code_transport =
+    "mcp"``, ``RemoteStoreClient``) looks the name up in its own bundled
+    ``code_read.gq`` and refuses one it does not have. Either way the name run
+    still answers, so the mismatch costs docstring matches, not the search.
+    """
+    try:
+        return client.read("code_read.gq", name, params)
+    except RuntimeError as exc:
+        text = str(exc)
+        if _NO_FTS_INDEX not in text and f"{name!r} not found in source" not in text:
+            raise
+        logger.warning(
+            "witan.code.search.docstring_search_unavailable",
+            store=str(client),
+            error=text,
+            recovery=(
+                "reindex the repo (local store), or roll out the data tier and "
+                "witan-code tier (deployment)"
+            ),
+        )
+        return []
+
+
 @mcp.tool
 def code_search_symbol(
     query: str,
@@ -729,16 +778,24 @@ def code_search_symbol(
     branch: str | None = None,
 ) -> list[dict]:
     """
-    Full-text/substring search over symbol qualified names (BM25-ranked).
+    Full-text search over symbol qualified names and docstrings (BM25-ranked).
 
-    Use to locate a symbol when you only remember part of its name. Each result
-    carries its ``symbol_id`` and ``repo`` of origin. BM25 ranking is per-store;
-    cross-repo fan-out concatenates each store's ranked results.
+    Use to locate a symbol when you only remember part of its name, or by what
+    its docstring says it does (e.g. "rate limiting"). Each result carries its
+    ``symbol_id`` and ``repo`` of origin.
+
+    Name matches come first, then symbols whose docstring matches and whose
+    name does not. A docstring-only match never outranks a name match: BM25
+    scores the two fields on scales that cannot be compared (a short name
+    inflates under length normalisation), so the order between them is a
+    policy, and this is the policy. Within each group, BM25 ranking is
+    per-store, and a cross-repo fan-out concatenates each store's ranked
+    results. Each group holds up to 50 results per store.
 
     Parameters
     ----------
     query:
-        Search terms matched against ``qualified_name``.
+        Search terms matched against ``qualified_name`` and ``docstring``.
     kind:
         Optional filter to a single symbol kind: ``function``, ``method``,
         ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
@@ -757,14 +814,30 @@ def code_search_symbol(
         repo and ``branch`` is omitted, reads that store's default (main) view.
     """
 
-    def _query(client: OmnigraphClient) -> list[dict]:
-        if kind:
-            return client.read(
-                "code_read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
-            )
-        return client.read("code_read.gq", "search_symbols", {"query": query})
+    # Two runs unioned here, because the engine will not `or` two `search`
+    # predicates in one match. Both run inside one fan-out, so a store that
+    # fails fails both and the healthy stores' rows survive, as `_fan_out`
+    # promises. The rows are then split, so across repos too every name match
+    # precedes every docstring-only one.
+    suffix = "_by_kind" if kind else ""
+    params = {"query": query, "kind": kind} if kind else {"query": query}
 
-    return _as_symbol_id(_fan_out(_resolve_clients(repo, branch), _query))
+    def _query(client: "OmnigraphClient | RemoteStoreClient") -> list[dict]:
+        names = client.read("code_read.gq", f"search_symbols{suffix}", params)
+        docstrings = _docstring_search(
+            client, f"search_symbols_docstring{suffix}", params
+        )
+        return [*names, *({**r, _DOCSTRING_ONLY: True} for r in docstrings)]
+
+    rows = _fan_out(_resolve_clients(repo, branch), _query)
+    named = [r for r in rows if _DOCSTRING_ONLY not in r]
+    seen = {r["slug"] for r in named}
+    named.extend(
+        {k: v for k, v in r.items() if k != _DOCSTRING_ONLY}
+        for r in rows
+        if _DOCSTRING_ONLY in r and r["slug"] not in seen
+    )
+    return _as_symbol_id(named)
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]

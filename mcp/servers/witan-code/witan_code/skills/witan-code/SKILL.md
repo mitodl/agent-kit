@@ -101,7 +101,7 @@ On Pi, invoke this skill as `/skill:witan-code`.
 
 | Question | Tool |
 |---|---|
-| Find a symbol by name | `code_find_definition(name)` / `code_search_symbol(query)` (BM25) |
+| Find a symbol by name, or by what its docstring says | `code_find_definition(name)` / `code_search_symbol(query)` (BM25 over names, then docstrings) |
 | What's in this file? | `code_symbols_in_file(path)` |
 | Who references/calls this symbol? | `code_find_references(symbol_id)` (References+Calls) / `code_callers(symbol_id)` (Calls only) |
 | What does this function call? | `code_callers(symbol_id, direction="callees")` |
