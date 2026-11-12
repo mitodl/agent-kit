@@ -118,6 +118,24 @@ def test_a_live_symbol_whose_name_repeats_past_the_lookup_cap_is_live(server, co
 
 
 @requires_omnigraph
+def test_a_symbol_the_file_read_misses_is_live_when_the_name_lookup_finds_it(
+    server, code
+):
+    # witan-code's file read resolves a relative path against the cwd when it
+    # exists there, so it can read the wrong file; the id lookup is the backstop.
+    fake = _fake_code({LIVE}, {INDEXED: 10})
+
+    async def wrong_file(path, repo=None, ctx=None):
+        return []
+
+    fake.code_symbols_in_file = wrong_file
+    code(fake)
+    slug = _lesson(server, "cwd collision", [LIVE])
+
+    assert slug not in _by_slug(server.memory_stale_refs(repo=INDEXED))
+
+
+@requires_omnigraph
 def test_missing_symbol_lists_same_named_candidates(server, code):
     # A move to another file is the common "stale" case: the memory may still be
     # true, so the report names where the symbol went rather than editing it.

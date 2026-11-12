@@ -9202,12 +9202,15 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
             logger.info("witan.stale_refs.lookup_failed", ref=ref, exc_info=True)
             out[ref] = {"status": "unknown", "reason": "definition lookup failed"}
             continue
+        ids = {d["symbol_id"] for d in defs}
+        # The file read can miss: witan-code resolves a relative path against
+        # the cwd when it exists there, which names a different file.
+        if symbol_id in ids:
+            out[ref] = {"status": "live"}
+            continue
         # Same-named symbols elsewhere in the repo: the likely rename/move
         # targets a reviewer checks before deciding the memory is stale.
-        out[ref] = {
-            "status": "missing",
-            "candidates": sorted({d["symbol_id"] for d in defs}),
-        }
+        out[ref] = {"status": "missing", "candidates": sorted(ids)}
     return out
 
 
