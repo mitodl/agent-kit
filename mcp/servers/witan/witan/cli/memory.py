@@ -182,13 +182,11 @@ def memory_import(
     """
     src = source or local.default_source()
     if not src.is_dir():
-        print_error(f"No such directory: {src}", stderr=True)
+        print_error(f"No such directory: {src}")
         raise SystemExit(1)
     patterns = _split_csv(select) or []
     if confirm and not (patterns or all_):
-        print_error(
-            "--confirm writes only what --select or --all chooses.", stderr=True
-        )
+        print_error("--confirm writes only what --select or --all chooses.")
         raise SystemExit(1)
 
     memories = local.discover(src)
@@ -230,7 +228,7 @@ def memory_import(
         p for p in patterns if not any(named(m, p) or globbed(m, p) for m in memories)
     ]
     if unmatched:
-        print_error(f"--select matched no memory: {', '.join(unmatched)}", stderr=True)
+        print_error(f"--select matched no memory: {', '.join(unmatched)}")
         raise SystemExit(1)
 
     from ..remote.proxy import RemoteToolFailed
