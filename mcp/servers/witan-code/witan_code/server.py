@@ -1141,10 +1141,20 @@ def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:
     Returns ``{"store", "view", "file"}``: the store's label (``None`` with
     ``view`` when the repo has no code graph at all), the view name (``None``
     for main), and the ``CodeFile`` row, or ``None`` when the view has none.
+
+    :raises store.ClusterUnreachable: when a cluster graph cannot be asked
+        about at all (a rejected token, a closed port), which
+        :meth:`StoreRef.exists` would report as an absent graph.
     """
+    absent = {"store": None, "view": None, "file": None}
     store = store_module.store_for_repo(repo, cfg)
-    if not store.exists(cfg):
-        return {"store": None, "view": None, "file": None}
+    if store.is_remote:
+        try:
+            store_module.probe_cluster_graph(store, f"{repo}'s code graph", cfg)
+        except store_module.ClusterGraphMissing:
+            return absent
+    elif not store.exists(cfg):
+        return absent
     branch = repo_module.store_branch(checkout)
     view = _view_for_branch(store, branch) if branch else None
     rows = _client_for_ref(store, view).read(

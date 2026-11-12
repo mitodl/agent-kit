@@ -940,11 +940,19 @@ class Exclusion(StrEnum):
     UNSUPPORTED_LANGUAGE = "unsupported language"
     EXCLUDED_PATH = "excluded path"
     NESTED_CHECKOUT = "nested checkout"
+    SYMLINKED_DIRECTORY = "symlinked directory"
     GITIGNORED = "gitignored"
 
 
 def _excluded_dir(path: Path) -> Exclusion | None:
-    """Why the walk does not descend into directory ``path``, or ``None``."""
+    """Why the walk does not descend into directory ``path``, or ``None``.
+
+    A symlinked directory is never descended into: ``os.walk`` does not
+    follow it, and :func:`repo.unignored_files` drops what git lists below
+    one. Checked here as well so :func:`why_excluded` can name it.
+    """
+    if path.is_symlink():
+        return Exclusion.SYMLINKED_DIRECTORY
     if path.name in _SKIP_DIRS:
         return Exclusion.EXCLUDED_PATH
     if _is_nested_checkout(path):
@@ -982,7 +990,9 @@ def why_excluded(path: Path, repo_root: Path) -> tuple[Exclusion, Path] | None:
     inside a nested repository, and answers nothing for the whole call when it
     does.
 
-    :param path: an existing file under ``repo_root``, resolved.
+    :param path: an existing file under ``repo_root``, as the walk would name
+        it: not resolved, since a symlinked directory between the two is one
+        of the rules and a symlink to a file is collected under its own name.
     :param repo_root: the git root of the checkout ``path`` belongs to.
     """
     found = _exclusion_below(repo_root, path)

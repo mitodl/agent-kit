@@ -16,6 +16,7 @@ unconditionally.
 import asyncio
 import inspect
 import os
+import shlex
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -422,12 +423,20 @@ def _exclusion_detail(rule: indexer.Exclusion, matched: str) -> str:
     if rule is indexer.Exclusion.NESTED_CHECKOUT:
         return (
             f"{matched}/ has its own .git, so its files belong to that "
-            f"checkout's graph. Index it from there: `witan code index {matched}`."
+            "checkout's graph. Index it from there: "
+            f"`witan code index {shlex.quote(matched)}`."
+        )
+    if rule is indexer.Exclusion.SYMLINKED_DIRECTORY:
+        return (
+            f"{matched}/ is a symlink, and the indexer does not follow a "
+            "symlinked directory, so files outside the repository are not "
+            "indexed as its own. Index the directory it points to from its own "
+            "checkout."
         )
     return (
-        f"git ignores it (`git check-ignore -v {matched}` names the pattern). "
-        "A tracked file is indexed whatever the patterns say, so `git add -f` "
-        "it or drop the pattern."
+        f"git ignores it (`git check-ignore -v {shlex.quote(matched)}` names the "
+        "pattern). A tracked file is indexed whatever the patterns say, so "
+        "`git add -f` it or drop the pattern."
     )
 
 
@@ -437,8 +446,8 @@ def why(path: Path, *, repo: str | None = None) -> None:
 
     An empty `code_*` result reads the same for an unused symbol and for a file
     the indexer never wrote. This replays the indexer's own file filter on
-    PATH (unsupported language, skipped directory, nested checkout, gitignored)
-    and looks the file up in the view the `code_*` tools read from its
+    PATH (unsupported language, skipped directory, nested checkout, symlinked
+    directory, gitignored) and looks the file up in the view the `code_*` tools read from its
     checkout.
 
     Parameters
@@ -454,8 +463,12 @@ def why(path: Path, *, repo: str | None = None) -> None:
 
     from . import repo as repo_module
     from . import server as server_module
+    from . import store as store_module
 
-    target = path.resolve()
+    # Not resolved: the walk names a file by its path in the checkout, so a
+    # symlinked directory on the way is a rule to report, and a symlink to a
+    # file is collected under its own name.
+    target = Path(os.path.abspath(path))
     if not target.is_file():
         print_error(
             f"{path} is not a file. `witan code why` explains one file.", stderr=True
@@ -466,6 +479,9 @@ def why(path: Path, *, repo: str | None = None) -> None:
     # its own root it is simply that checkout's file.
     root = repo_module.root(Path.cwd())
     if root is None or not target.is_relative_to(root.resolve()):
+        # Outside that checkout, or named through a symlink to it: git
+        # answers with the physical path, so compare against that.
+        target = target.parent.resolve() / target.name
         root = repo_module.root(target.parent)
     if root is None:
         print_error(
@@ -481,12 +497,19 @@ def why(path: Path, *, repo: str | None = None) -> None:
         print_error(exc, stderr=True)
         raise SystemExit(1) from exc
 
-    rel = indexer._relative_path(target, root)
+    rel = target.relative_to(root).as_posix()
     excluded = indexer.why_excluded(target, root)
-    found = server_module.indexed_file(slug, rel, root)
+    try:
+        # Looked up under the id the indexer writes, which resolves symlinks.
+        found = server_module.indexed_file(
+            slug, indexer._relative_path(target, root), root
+        )
+    except store_module.ClusterUnreachable as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from exc
     row = found["file"]
     rule, matched = (
-        (excluded[0], indexer._relative_path(excluded[1], root))
+        (excluded[0], excluded[1].relative_to(root).as_posix())
         if excluded
         else (None, None)
     )
@@ -498,6 +521,11 @@ def why(path: Path, *, repo: str | None = None) -> None:
             return Path(os.path.relpath(p)).as_posix()
         except ValueError:
             return str(p)
+
+    # A checkout with no remote indexes only with the same `--repo`.
+    def index_command(p: Path) -> str:
+        command = f"witan code index {shlex.quote(here(p))}"
+        return f"{command} --repo {shlex.quote(repo)}" if repo else command
 
     if rule is not None:
         explained = _exclusion_detail(rule, here(excluded[1]))
@@ -519,7 +547,7 @@ def why(path: Path, *, repo: str | None = None) -> None:
             )
     elif found["store"] is None:
         state = f"not indexed: {slug} has no code graph"
-        detail = f"Index the repo with `witan code index {here(root)}`."
+        detail = f"Index the repo with `{index_command(root)}`."
     elif row is not None:
         state = f"indexed ({row.get('language')}, at {row.get('indexed_at')})"
         detail = ""
@@ -527,7 +555,7 @@ def why(path: Path, *, repo: str | None = None) -> None:
         state = "not indexed yet"
         detail = (
             "No indexer rule excludes it, so the next index writes it: "
-            f"`witan code index {here(target)}`."
+            f"`{index_command(target)}`."
         )
 
     record = {

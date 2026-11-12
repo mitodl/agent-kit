@@ -1688,8 +1688,8 @@ Say whether a file is in the code graph and, if not, which rule left it out.
 
 An empty `code_*` result reads the same for an unused symbol and for a file
 the indexer never wrote. This replays the indexer's own file filter on
-PATH (unsupported language, skipped directory, nested checkout, gitignored)
-and looks the file up in the view the `code_*` tools read from its
+PATH (unsupported language, skipped directory, nested checkout, symlinked
+directory, gitignored) and looks the file up in the view the `code_*` tools read from its
 checkout.
 
 **Parameters**:

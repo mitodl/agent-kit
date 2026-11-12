@@ -151,6 +151,97 @@ def test_advice_paths_are_relative_to_the_cwd(checkout, monkeypatch, capsys):
     assert "`witan code index ..`" in unindexed["detail"]
 
 
+def test_a_symlink_to_a_file_is_explained_under_its_own_name(
+    checkout, monkeypatch, capsys
+):
+    """The walk collects `alias.py` itself, though it points into `build/`."""
+    _fresh_server(monkeypatch)
+    (checkout / "build").mkdir()
+    (checkout / "build" / "real.py").write_text("x = 1\n")
+    (checkout / "alias.py").symlink_to(checkout / "build" / "real.py")
+
+    row = _why("alias.py", capsys)
+
+    assert checkout / "alias.py" in indexer._collect_files(checkout)
+    assert row["path"] == "alias.py"
+    assert row["rule"] == ""
+
+
+def test_a_file_under_a_symlinked_directory_names_that_rule(
+    checkout, tmp_path, monkeypatch, capsys
+):
+    """Neither the git listing nor the disk walk descends into a symlinked
+    directory, so its files are never collected."""
+    _fresh_server(monkeypatch)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "x.py").write_text("x = 1\n")
+    (checkout / "linked").symlink_to(elsewhere, target_is_directory=True)
+
+    row = _why("linked/x.py", capsys)
+
+    assert checkout / "linked" / "x.py" not in indexer._collect_files(checkout)
+    assert checkout / "linked" / "x.py" not in indexer._walk_files(checkout)
+    assert row["path"] == "linked/x.py"
+    assert row["rule"] == "symlinked directory"
+    assert row["matched"] == "linked"
+
+
+def test_advice_keeps_an_explicit_repo(checkout, monkeypatch, capsys):
+    """A checkout with no remote only indexes with the same `--repo`."""
+    _fresh_server(monkeypatch)
+    output_module.set_output_format("json")
+
+    cli_module.why(Path("kept.py"), repo="https://github.com/test/no remote")
+
+    row = json.loads(capsys.readouterr().out)["rows"][0]
+    assert row["detail"].endswith(
+        "`witan code index . --repo 'https://github.com/test/no remote'`."
+    )
+
+
+def _cluster_store(monkeypatch, error: str) -> None:
+    """Point the lookup at a cluster graph whose probe fails with ``error``."""
+    from witan_code import server as server_module
+    from witan_code import store as store_module
+
+    class _Client:
+        def list_branches(self):
+            raise RuntimeError(error)
+
+    ref = store_module.StoreRef("http://cluster.invalid", "code-why")
+    monkeypatch.setattr(
+        server_module.store_module, "store_for_repo", lambda *_a, **_k: ref
+    )
+    monkeypatch.setattr(store_module.StoreRef, "client", lambda *_a, **_k: _Client())
+
+
+def test_an_unreachable_cluster_graph_is_an_error_not_an_absent_graph(
+    checkout, monkeypatch, capsys
+):
+    _fresh_server(monkeypatch)
+    _cluster_store(monkeypatch, "connection refused")
+    output_module.set_output_format("json")
+
+    with pytest.raises(SystemExit):
+        cli_module.why(Path("kept.py"))
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "could not be read: connection refused" in captured.err
+
+
+def test_a_cluster_graph_that_is_not_served_is_an_absent_graph(
+    checkout, monkeypatch, capsys
+):
+    _fresh_server(monkeypatch)
+    _cluster_store(monkeypatch, "graph 'code-why' not found")
+
+    row = _why("kept.py", capsys)
+
+    assert row["state"] == f"not indexed: {REPO} has no code graph"
+
+
 @requires_stack
 @pytest.mark.parametrize(("rel", "rule", "matched"), CASES)
 def test_why_reports_each_case_against_the_indexed_graph(
