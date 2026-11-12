@@ -2,10 +2,15 @@
 
 Anyone on the team can write a memory, task, comment or project, and witan puts
 that text in front of other people's agents without them asking: the context
-hook's block, the memories a first ``task_claim`` returns, a ``witan run``
-prompt. Unlabelled, an agent cannot tell a teammate's note from its user's
-instruction, so a line planted in a memory reads as part of the assignment.
-Every path that delivers such text says which it is, in the same words.
+hook's block, the memories a first ``task_claim`` returns, the memories in a
+``witan task run`` prompt. Unlabelled, an agent cannot tell a teammate's note
+from its user's instruction, so a line planted in a memory reads as part of the
+assignment. Every path that delivers such text unasked says which it is, in the
+same words.
+
+The task and project text in a ``witan task run`` or ``witan project run``
+prompt is not labelled, because it is the assignment: the user launched the run
+to work those tasks. What that prompt adds unasked is the memories.
 
 Labels are not screening. Nothing here inspects the text; a classifier for that
 is tracked in tk-screen-untrusted-content-returned-by-witan-tools-043ff5.

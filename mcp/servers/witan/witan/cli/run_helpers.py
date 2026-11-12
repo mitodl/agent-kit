@@ -125,7 +125,7 @@ def _memory_lines(memories: list[dict]) -> list[str]:
         "",
         (
             f"Team memories that match this task. {provenance.TEAMMATE_NOTES} "
-            "memory_get has the full text:"
+            "The full text of each is in memory_get:"
         ),
     ]
     for m in memories:
