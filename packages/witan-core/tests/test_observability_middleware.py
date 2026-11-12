@@ -459,6 +459,36 @@ def _call(mcp, name, arguments=None):
     return asyncio.run(drive())
 
 
+def test_the_client_s_self_reported_release_is_logged(capsys):
+    # Through a real client so the clientInfo travels the way it does deployed
+    # (handshake or per-request `_meta`), not a stub of where it ends up.
+    from fastmcp import Client
+    from mcp.types import Implementation
+
+    mcp = _server_with_tools()
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        info = Implementation(name="witan-code", version="9.9.9")
+        async with Client(mcp, client_info=info) as client:
+            await client.call_tool("takes_a_string", {"content": "x"})
+
+    asyncio.run(drive())
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["client_name"] == "witan-code"
+    assert payload["client_version"] == "9.9.9"
+
+
+def test_a_call_with_no_session_logs_no_client_fields(capsys):
+    async def call_next(_ctx):
+        return "result"
+
+    _run(ObservabilityMiddleware(), _Context("task_get"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "client_name" not in payload
+    assert "client_version" not in payload
+
+
 def test_a_refusal_keeps_its_class_through_the_server(capsys):
     mcp = _server_with_tools()
     with pytest.raises(Exception, match="not served"):
