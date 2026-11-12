@@ -530,9 +530,9 @@ async def code_callers(
         ``<repo>#<path/to/file.py>::<QualifiedName>``.
     direction:
         ``callers`` (default) returns the symbols that call ``symbol_id``;
-        ``callees`` returns the symbols ``symbol_id`` calls. A call to a
-        name the indexer could not resolve to an indexed symbol (a stdlib or
-        third-party function, a builtin) has no edge, so it is not listed.
+        ``callees`` returns the symbols ``symbol_id`` calls. The indexer
+        resolves a call only to a symbol defined in the same file, so a call
+        into another module (in this repo or a library) is not listed.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
