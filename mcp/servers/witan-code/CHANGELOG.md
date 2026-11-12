@@ -8,6 +8,32 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.30.0] - 2026-11-12
+
+### Added
+
+- The remote store client names itself `witan-code <version>` in its MCP `clientInfo` instead of the SDK default `mcp 0.1.0`, so the deployment's tool-call logs record which witan-code release made each call.
+
+### Changed
+
+- The pending queue is guarded by its own `codegraph-<digest>.pending.lock` file instead of a lock on the queue file, because Windows locks are mandatory and would block the holder's own reads through another handle. A drainer from the previous version still running during an upgrade does not exclude the new lock, so one queued edit can be dropped, once; the next edit to that file reindexes it.
+- Requires witan-core 0.52.0 or later, the first release with `witan_core._filelock`.
+
+### Fixed
+
+- `witan-code symbols` with no detectable repo now prints its refusal to stderr and exits 1. It printed to stdout and exited 0, so a consumer parsing `--output-format json|toml|yaml` got a sentence instead of a document and could not tell the refusal from success.
+- `witan-code branches --prune` against a remote deployment, a misconfigured remote (e.g. `WITAN_REMOTE_URL` without `WITAN_OIDC_ISSUER`), and a remote failure on any command (deployment unreachable, credential rejected, tool refused) print to stderr instead of stdout. All of them already exited 1. The umbrella `witan code ...` path still prints remote failures to stdout through `witan`'s own handler.
+
+- The code-graph hooks (`session-init`, `reindex-hook` and the drainer they spawn) run on Windows. `witan_code.hooks` imported `fcntl` and `context.state_dir` called `os.getuid`, so every hook command failed there. The queue and checkout locks now go through `witan_core._filelock` (`flock` on POSIX, unchanged; `msvcrt.locking` on Windows). Windows cannot hand a lock to a child process, so there the hook checks the lock is free and the drainer takes it itself. The state directory on Windows is `%LOCALAPPDATA%\witan-code\state`, which only its owner can write to, rather than the temp dir, which `TEMP` can point at a shared directory.
+
+- Error messages keep a long path on one line (e.g. the `reindex
+  --rebuild` refusal naming a subdirectory).
+  Rich hard-wrapped them at 80 columns when no standard stream is a
+  terminal (an agent's shell, a CI job), which put a newline inside any
+  longer path. Tables still wrap to the width.
+
+- The edit and SessionStart hooks skip a repo the cluster does not serve instead of indexing it. Each attempt was refused with `ClusterGraphMissing`, which the hook discarded, but the server logged it and counted it as a failed tool call against its error-ratio alert. The drainer asks the cluster for its served graphs once per process (`code_store_graphs` through the MCP tier, `GET /graphs` direct) and indexes as before when that listing fails or comes back empty. An explicit `witan-code index` still reports the refusal.
+
 ## [0.29.0] - 2026-11-10
 
 ### Changed
