@@ -378,13 +378,18 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     identity): a worker that claimed as ``ci-worker`` releases and closes as
     ``ci-worker``, not as its token's user. ``task_update``'s ``assignee`` is
     the task's new holder, not the caller, so it is not read this way.
+
+    A write queued with ``force`` skips the holder comparison: the caller
+    already said to override another person's claim, and the tool will.
     """
     holder = entry.holder
     if entry.tool in ("task_release", "task_close") and "assignee" in entry.args:
         holder = entry.args["assignee"]
     assignee = task.get("assignee")
-    if assignee and readiness.holder_identity(assignee) != readiness.holder_identity(
-        holder
+    if (
+        assignee
+        and not entry.args.get("force")
+        and readiness.holder_identity(assignee) != readiness.holder_identity(holder)
     ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")

@@ -126,6 +126,20 @@ def test_a_queued_close_on_a_task_someone_else_holds_becomes_a_comment(proxy):
 
 
 @requires_omnigraph
+def test_a_queued_forced_close_applies_over_someone_elses_claim(proxy):
+    # `witan task close --force` queued during an outage was told it would
+    # replay; turning it into a comment would drop the override silently.
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee="bob@example.org#11112222")
+    _queue(proxy, "task_close", {"slug": slug, "resolution": "done", "force": True})
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["status"] == "closed"
+    assert task["comments"] == []
+
+
+@requires_omnigraph
 def test_a_queued_update_on_a_task_closed_since_becomes_a_comment(proxy, server):
     slug = server.task_create(title="closed since", description="d")["slug"]
     _queue(proxy, "task_update", {"slug": slug, "priority": "p0"})

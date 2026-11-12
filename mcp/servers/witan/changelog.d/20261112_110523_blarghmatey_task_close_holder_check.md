@@ -10,3 +10,6 @@
   way around it. Both take `force`, `task_close` takes `assignee` for a claim
   made under an explicit name, and `witan task close` / `witan task update`
   take `--force` and exit 1 on a refusal.
+- A task write queued in the journal with `force` (e.g. `witan task close
+  --force` during an outage) now replays over another person's claim instead
+  of being turned into a comment.
