@@ -598,6 +598,48 @@ def test_two_writers_on_one_branch_do_not_overwrite_each_other(tmp_path, monkeyp
 
 
 @requires_stack
+def test_callees_follow_the_checkouts_branch_view(tmp_path, monkeypatch):
+    """`code_callers(direction="callees")` routes by symbol id like the callers
+    query does, so on a feature branch it reads that branch's view: a call the
+    branch added shows up there and nowhere on main."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+
+    def reset():
+        srv._clients.clear()
+        srv._store_branches.clear()
+        srv._git_context.clear()
+
+    reset()
+    base = _git_repo(tmp_path / "r")
+    (base / "svc.py").write_text(SAMPLE)
+    indexer.index_path(base, config=srv.cfg)
+
+    _git(base, "checkout", "-q", "-b", "feature/x")
+    (base / "svc.py").write_text(
+        SAMPLE.replace("return helper()", "audit()\n        return helper()")
+        + "\n\ndef audit():\n    return 0\n"
+    )
+    indexer.index_path(base, config=srv.cfg)
+
+    run_id = f"{REPO}#svc.py::Service.run"
+    monkeypatch.chdir(base)
+    reset()
+    on_branch = _fn(srv.code_callers)(run_id, direction="callees")
+    assert {c["qualified_name"] for c in on_branch} == {"audit", "helper"}
+
+    _git(base, "checkout", "-q", "main")
+    reset()
+    on_main = _fn(srv.code_callers)(run_id, direction="callees")
+    assert {c["qualified_name"] for c in on_main} == {"helper"}
+
+
+@requires_stack
 def test_a_reader_can_enumerate_every_writers_view_of_a_branch(tmp_path, monkeypatch):
     """Isolation and visibility are not in tension: the views are separated by
     writer AND every one of them is readable. This is the payoff the "branch
