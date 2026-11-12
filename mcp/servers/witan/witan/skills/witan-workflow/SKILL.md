@@ -114,7 +114,7 @@ agent), use any stable string unique to this session, and close the session
 yourself with `/witan-workflow end`, since nothing else can find it.
 
 Keep the returned `session_slug` for the rest of the session: pass it to
-`memory_store` (and `workflow_trace_mine`) so anything you record is attributed to
+`memory_store` (and `witan trace mine --session-slug`) so anything you record is attributed to
 this session, and to `workflow_session_end` when you close. The protocol carries
 no session state, so the handle is the only thing tying those calls together.
 

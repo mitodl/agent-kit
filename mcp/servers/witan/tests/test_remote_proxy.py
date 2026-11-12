@@ -22,6 +22,7 @@ from witan.remote.proxy import (
     RemoteToolUnavailable,
     RemoteUnreachable,
 )
+from witan_core.remote.proxy import proxy_client_info
 
 from .conftest import requires_omnigraph
 
@@ -41,7 +42,11 @@ def proxy(server, monkeypatch):
         return "tok"
 
     p = RemoteServerProxy(cfg, _token)
-    monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
+    monkeypatch.setattr(
+        p,
+        "_new_client",
+        lambda _token: Client(srv.mcp, client_info=proxy_client_info()),
+    )
     p._token_calls = tokens  # type: ignore[attr-defined]
     return p
 
@@ -311,13 +316,14 @@ def test_admin_only_functions_are_not_registered_as_tools(server):
     no per-user identity to the whole deployment.
 
     ``store_merge`` is the deliberate counter-example: it *is* a tool, because
-    it resolves the caller's actor per request and writes as them.
+    it resolves the caller's actor per request and writes as them. It is listed
+    only to the CLI's proxy (``witan.cli_only``), so this lists as the proxy.
     """
     import witan.server as srv
     from witan.remote.proxy import _ADMIN_ONLY
 
     async def _list() -> set[str]:
-        async with Client(srv.mcp) as client:
+        async with Client(srv.mcp, client_info=proxy_client_info()) as client:
             return {t.name for t in await client.list_tools()}
 
     exposed = asyncio.run(_list())
@@ -325,6 +331,28 @@ def test_admin_only_functions_are_not_registered_as_tools(server):
     assert exposed, "expected the in-memory server to expose some tools"
     assert not (_ADMIN_ONLY & exposed)
     assert "store_merge" in exposed
+
+
+@requires_omnigraph
+def test_cli_only_tools_dispatch_through_the_proxy(proxy, server):
+    """The CLI's only route to a deployed graph is this proxy, which resolves
+    parameter names from ``tools/list``. The server hides these tools from every
+    other client (``witan.cli_only``); the CLI must still reach each one."""
+    proj = server.workflow_project_create(title="over the wire", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped")
+    trace_slug = done["trace_slug"]
+
+    assert trace_slug in {t["slug"] for t in proxy.workflow_trace_list(repo="")}
+    assert proxy.workflow_trace_get(slug=proj["slug"])["slug"] == trace_slug
+    assert proxy.workflow_trace_mine(trace_slug=trace_slug)["trace"]["slug"] == (
+        trace_slug
+    )
+    annotated = proxy.workflow_trace_annotate(
+        trace_slug=trace_slug, lessons_slug=["les-wire"]
+    )
+    assert annotated["lessons_slug"] == ["les-wire"]
+    assert "claimed" in proxy.claim_authorship(was="nobody-at-all")
+    assert proxy.store_merge(rows=[], dry_run=True) is not None
 
 
 def test_memory_repair_tools_are_not_admin_only(server):
@@ -680,13 +708,14 @@ def test_read_only_tools_all_exist_on_the_server(server):
 
     The list names READS so that anything unlisted defaults to "assume it
     wrote" — which covers a tool added later. What that default cannot catch is
-    an entry that is renamed or removed, so pin it against the real surface.
+    an entry that is renamed or removed, so pin it against the real surface
+    (the one the proxy is listed, which includes ``witan.cli_only``'s tools).
     """
     import witan.server as srv
     from witan.remote.proxy import _READ_ONLY
 
     async def _list() -> set[str]:
-        async with Client(srv.mcp) as client:
+        async with Client(srv.mcp, client_info=proxy_client_info()) as client:
             return {t.name for t in await client.list_tools()}
 
     exposed = asyncio.run(_list())
@@ -771,7 +800,7 @@ def test_every_repo_tool_is_classified(server):
     from witan_core.remote.proxy import _tool_input_schema
 
     async def _declaring_repo() -> set[str]:
-        async with Client(srv.mcp) as client:
+        async with Client(srv.mcp, client_info=proxy_client_info()) as client:
             return {
                 t.name
                 for t in await client.list_tools()
@@ -1079,7 +1108,7 @@ def test_every_branch_tool_is_classified(server):
     from witan_core.remote.proxy import _tool_input_schema
 
     async def _declaring_branch() -> set[str]:
-        async with Client(srv.mcp) as client:
+        async with Client(srv.mcp, client_info=proxy_client_info()) as client:
             return {
                 t.name
                 for t in await client.list_tools()

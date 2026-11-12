@@ -32,10 +32,15 @@ def proxy(server, monkeypatch):
     import witan.server as srv
     from witan.config import RemoteConfig
     from witan.remote.proxy import RemoteServerProxy
+    from witan_core.remote.proxy import proxy_client_info
 
     cfg = RemoteConfig(url="http://unused/mcp", oidc_issuer="https://sso/realms/ol")
     p = RemoteServerProxy(cfg, lambda: "tok")
-    monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
+    monkeypatch.setattr(
+        p,
+        "_new_client",
+        lambda _token: Client(srv.mcp, client_info=proxy_client_info()),
+    )
     return p
 
 

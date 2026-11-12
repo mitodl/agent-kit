@@ -274,6 +274,11 @@ dependencies = [
   # server refuses on replay (a claim landed after replay checked the holder)
   # is reported applied and dropped instead of becoming a comment. It imports
   # fine, so `just check-core-floor` cannot see it.
+  #
+  # `witan/cli_only.py` also imports
+  # `witan_core.remote.proxy.proxy_client_info`, added in witan-core 0.53.0.
+  # It is also what makes the CLI's proxy name itself, and the server lists
+  # the CLI-only tools only to a client that does.
   "witan-core[cli,remote,observability,sentry]>=0.54.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",

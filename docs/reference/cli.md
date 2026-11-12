@@ -66,6 +66,8 @@ witan — agent memory, planning, and collaboration graph.
 - [`traces`](#witan-traces)
 - [`trace`](#witan-trace)
     - [`list`](#witan-trace-list)
+    - [`annotate`](#witan-trace-annotate)
+    - [`mine`](#witan-trace-mine)
 - [`ui`](#witan-ui)
 - [`migrate`](#witan-migrate)
     - [`schema`](#witan-migrate-schema)
@@ -1332,7 +1334,9 @@ Inspect corpus trace records.
 
 **Commands**:
 
+* [`annotate`](#witan-trace-annotate): Record lesson/pattern memory slugs a completed trace produced.
 * [`list`](#witan-trace-list): List corpus workflow traces (alias of ``witan traces``).
+* [`mine`](#witan-trace-mine): Turn a completed trace into reusable pattern and lesson memories.
 
 **Parameters**:
 
@@ -1362,6 +1366,45 @@ List corpus workflow traces (alias of ``witan traces``).
 * `--author STR`:
 * `--all-repos, --no-all-repos`: *[default: False]*
 * `--limit INT`: *[default: 50]*
+
+### witan trace annotate
+
+```console
+witan trace annotate [OPTIONS] SLUG
+```
+
+Record lesson/pattern memory slugs a completed trace produced.
+
+Unions with what the trace already records, so re-running is safe.
+
+**Parameters**:
+
+* `SLUG, --slug`: The ``wt-`` trace slug, or the ``wp-`` project slug it was built from. **[required]**
+* `--lesson STR..., --empty-lesson`: A ``les-`` memory slug to add. Repeat for more than one.
+* `--pattern STR..., --empty-pattern`: A ``pat-`` memory slug to add. Repeat for more than one.
+
+### witan trace mine
+
+```console
+witan trace mine [OPTIONS] SLUG
+```
+
+Turn a completed trace into reusable pattern and lesson memories.
+
+Run without ``--proposals`` first to print the raw material: the trace
+and every session summary from its project. Review it, write the patterns
+and lessons worth keeping to a JSON file, and run again with
+``--proposals`` to create them. Each becomes a memory linked back to the
+trace's project and recorded on the trace.
+
+**Parameters**:
+
+* `SLUG, --slug`: The ``wt-`` trace slug, or the ``wp-`` project slug it was built from. **[required]**
+* `--proposals PATH`: JSON file of the form ``{"patterns": [...], "lessons": [...]}``. Each
+    entry needs ``title`` and ``content``. A pattern may add ``repo``,
+    ``language`` and ``tags``; a lesson may add ``repo``, ``severity`` and
+    ``tags``.
+* `--session-slug STR`: The ``ws-`` session to record as the provenance of every mined memory.
 
 ## witan ui
 
