@@ -64,6 +64,7 @@ text.
 | `hops` | int | `1` | How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``<br>edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``<br>disables expansion and returns the seeds alone; ``1`` (the default) is<br>almost always right, since each extra hop widens results faster than it<br>deepens them. Counts HOPS, not the fractional distance the inferred-edge<br>surcharge produces — the surcharge only reranks, it never truncates the<br>walk. |
 | `limit` | int | `20` | Maximum memories to return after re-ranking. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` hides them, which is what makes recall return current<br>knowledge rather than its history. |
+| `session_id` | str? | `null` | The calling agent session's id. Only logged, never changes the result;<br>see ``memory_get``. |
 
 ## `memory_store`
 
@@ -98,6 +99,7 @@ Returns the full node or ``null`` if not found.
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug to retrieve. |
 | `include_topics` | bool | `False` | When ``True``, attach a ``topics`` list of the Topic nodes this memory is<br>tagged with (slug/name/kind), each with an ``edge`` dict describing the<br>link. ``edge.confidence`` is what separates a topic someone named from<br>one promoted out of the memory's free-string ``tags``. |
+| `session_id` | str? | `null` | The calling agent session's id. Only logged, never changes the result:<br>it is what ties this read to the ``task_claim`` that surfaced the<br>memory. The CLI's remote proxy fills it in; under local stdio the<br>server falls back to ``$CLAUDE_SESSION_ID`` (see ``task_claim``). |
 
 ## `memory_update`
 

@@ -3955,7 +3955,38 @@ def _task_memories(task: dict) -> tuple[list[dict], dict[str, tuple]]:
     return memories, scores
 
 
-def _surfaced_for_claim(task: dict) -> list[dict]:
+def _log_session(session_id: str | None) -> str | None:
+    """The calling session as the memory log lines name it, or ``None``.
+
+    The same 8-hex digest a session-qualified claim holder carries after its
+    ``#`` (``readiness.session_suffix``), so a surfaced line, a read line and a
+    task's ``assignee`` all join on one value, and the raw id stays out of the
+    logs.
+    """
+    return _session_suffix(session_state.current_session_id(session_id)) or None
+
+
+def _log_memory_read(
+    surface: str, slugs: list[str], session_id: str | None, task: str | None = None
+) -> None:
+    """Log the memories a read returned, in the ``witan.memory.surfaced`` shape.
+
+    The read side of the join that says whether a surfaced memory got read:
+    ``session`` (or the ``actor_id`` every tool call's lines carry) and a slug
+    tie this line to the ``witan.memory.surfaced`` line that preceded it.
+    Slugs only, never content or the query text.
+    """
+    logger.info(
+        "witan.memory.read",
+        surface=surface,
+        task=task,
+        session=_log_session(session_id),
+        count=len(slugs),
+        slugs=slugs,
+    )
+
+
+def _surfaced_for_claim(task: dict, session_id: str | None) -> list[dict]:
     """``_task_memories`` for a claim, which has already committed by now.
 
     A failed lookup returns nothing rather than raising: an error here would tell
@@ -3981,6 +4012,7 @@ def _surfaced_for_claim(task: dict) -> list[dict]:
         "witan.memory.surfaced",
         surface="task_claim",
         task=task["slug"],
+        session=_log_session(session_id),
         count=len(memories),
         slugs=slugs,
         content_scores=[scores[s][0] if s in scores else None for s in slugs],
@@ -4486,7 +4518,9 @@ async def memory_store(
 
 
 @_tool
-def memory_get(slug: str, include_topics: bool = False) -> dict | None:
+def memory_get(
+    slug: str, include_topics: bool = False, session_id: str | None = None
+) -> dict | None:
     """
     Retrieve a single memory by its slug.
 
@@ -4501,9 +4535,15 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
         tagged with (slug/name/kind), each with an ``edge`` dict describing the
         link. ``edge.confidence`` is what separates a topic someone named from
         one promoted out of the memory's free-string ``tags``.
+    session_id:
+        The calling agent session's id. Only logged, never changes the result:
+        it is what ties this read to the ``task_claim`` that surfaced the
+        memory. The CLI's remote proxy fills it in; under local stdio the
+        server falls back to ``$CLAUDE_SESSION_ID`` (see ``task_claim``).
     """
     rows = client.read("read.gq", "get_memory", {"slug": slug})
     if not rows:
+        _log_memory_read("memory_get", [], session_id)
         return None
     node = rows[0]
     if include_topics:
@@ -4516,6 +4556,7 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
             edge = _edge_meta(row)  # pops the edge_* columns off `row`
             topics.setdefault(row["slug"], {**row, "edge": edge})
         node["topics"] = list(topics.values())
+    _log_memory_read("memory_get", [node["slug"]], session_id)
     return node
 
 
@@ -8453,7 +8494,7 @@ async def task_claim(
     # relevant memories arrive here without anyone deciding to look. A renewal
     # is the same holder carrying on, which already had them.
     if not (held and own):
-        result["memories"] = await _offload(_surfaced_for_claim, claimed)
+        result["memories"] = await _offload(_surfaced_for_claim, claimed, session_id)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the
@@ -9043,9 +9084,10 @@ def memory_symbols(slug: str) -> dict:
         The memory whose ``symbol_refs`` to resolve. An unknown slug returns an
         empty ``symbols`` list rather than raising.
     """
-    node = memory_get(slug)
-    if node is None:
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    if not rows:
         return {"slug": slug, "symbols": []}
+    node = rows[0]
 
     code = _code_server()
     symbols: list[dict] = []
@@ -9180,6 +9222,7 @@ def recall(
     hops: int = 1,
     limit: int = 20,
     include_superseded: bool = False,
+    session_id: str | None = None,
 ) -> dict:
     """
     Graph-aware contextual recall — the composition of every other memory tool.
@@ -9264,6 +9307,9 @@ def recall(
         When ``True``, keep memories that a newer memory ``Supersedes``. Default
         ``False`` hides them, which is what makes recall return current
         knowledge rather than its history.
+    session_id:
+        The calling agent session's id. Only logged, never changes the result;
+        see ``memory_get``.
     """
     hops = max(0, min(hops, 2))
     now = datetime.now(UTC)
@@ -9281,6 +9327,9 @@ def recall(
     # by a guessed link sits further out than one reached by an asserted link
     # at the same hop. Seeds are always 0.
     candidates: dict[str, float] = {}
+    # The task as the graph has it, for the read log line: `task` is caller
+    # text, and only a slug that resolved is safe to log.
+    logged_task: str | None = None
 
     def add_seed(slug: str, bucket: str) -> None:
         seeds[bucket].append(slug)
@@ -9302,6 +9351,7 @@ def recall(
             seed_relevance[m["slug"]] = _CONTENT_BAND[1]
             add_seed(m["slug"], "task")
         task_rows = client.read("read.gq", "get_task", {"slug": task})
+        logged_task = task_rows[0]["slug"] if task_rows else None
         refs = (task_rows[0].get("symbol_refs") if task_rows else None) or []
         for slug in _memories_citing_symbols(refs):
             seed_relevance[slug] = _CONTENT_BAND[1]
@@ -9324,6 +9374,7 @@ def recall(
 
     # No seeds matched (and nothing to expand from) — skip the global edge scan.
     if not candidates:
+        _log_memory_read("recall", [], session_id, logged_task)
         return {"memories": [], "contradictions": [], "seeds": {}}
 
     # ── Prune + score ─────────────────────────────────────────────
@@ -9399,6 +9450,7 @@ def recall(
             seen_pairs.add(pair)
             contradictions.append({"a": pair[0], "b": pair[1]})
 
+    _log_memory_read("recall", [n["slug"] for n in returned], session_id, logged_task)
     return {
         "memories": returned,
         "contradictions": contradictions,
