@@ -10,14 +10,16 @@ Exact symbol lookups, caller graphs, change-impact analysis, and cross-repo cont
 
 ## `code_callers`
 
-Find symbols that call ``symbol_id`` (incoming Calls edges).
+Find symbols that call ``symbol_id``, or that ``symbol_id`` calls.
 
-Heuristic name-resolution based; not a precise call graph. For calls plus
-other references use code_find_references.
+Follows Calls edges into ``symbol_id`` by default, or out of it with
+``direction="callees"``. Heuristic name-resolution based; not a precise
+call graph. For calls plus other references use code_find_references.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``. |
+| `direction` | `callers` \| `callees` | `'callers'` | ``callers`` (default) returns the symbols that call ``symbol_id``;<br>``callees`` returns the symbols ``symbol_id`` calls. The indexer<br>resolves a call only to a symbol defined in the same file, so a call<br>into another module (in this repo or a library) is not listed. |
 
 ## `code_cross_repo_impact`
 

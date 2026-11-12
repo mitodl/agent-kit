@@ -139,8 +139,9 @@ def session_checkpoint() -> None:
     session_slug = (handle or {}).get("session_slug")
     if session_slug:
         try:
-            # Codex fails a Stop hook whose stdout isn't a JSON decision, and
-            # `_srv()` prints its half-configured-remote error to stdout.
+            # Codex fails a Stop hook whose stdout isn't a JSON decision, so
+            # nothing reached from here may print there. Errors already go to
+            # stderr; this also covers any notice a dispatch path adds later.
             with contextlib.redirect_stdout(sys.stderr):
                 server = _srv()
                 session = _read_session(server, handle)

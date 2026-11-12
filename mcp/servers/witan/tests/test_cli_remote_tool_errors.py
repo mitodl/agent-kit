@@ -51,9 +51,8 @@ def _capture(monkeypatch, proxy):
 
     monkeypatch.setattr(_common, "_server", proxy)
     printed: list[str] = []
-    monkeypatch.setattr(
-        _common.console, "print", lambda *a, **kw: printed.append(str(a[0]))
-    )
+    for stream in (_common.console, _common.stderr_console):
+        monkeypatch.setattr(stream, "print", lambda *a, **kw: printed.append(str(a[0])))
     return printed
 
 
@@ -191,6 +190,65 @@ def test_witan_code_refusals_reach_stderr_through_the_umbrella(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "cedar: read denied" in captured.err
+
+
+def _misconfigured_remote(monkeypatch, _export):
+    def _raise(**_):
+        raise ValueError("WITAN_REMOTE_URL is set but WITAN_OIDC_ISSUER is not")
+
+    monkeypatch.setattr("witan.config.load_remote_config", _raise)
+    return ("tasks", "--ready", "--all-repos"), "WITAN_OIDC_ISSUER is not"
+
+
+def _unloadable_config(monkeypatch, _export):
+    def _raise(**_):
+        raise ValueError("unset `remote_url` on target [qa]")
+
+    monkeypatch.setattr("witan.config.load", _raise)
+    return ("task", "run", "tk-x", "--dry-run"), "target [qa]"
+
+
+def _missing_task(monkeypatch, _export):
+    from types import SimpleNamespace
+
+    from witan.cli import _common
+
+    # `task close`, not `task show`: show already printed to stderr, so it
+    # would pass with the old helper too.
+    monkeypatch.setattr(
+        _common, "_server", SimpleNamespace(task_close=lambda **_: None)
+    )
+    return ("task", "close", "tk-missing"), "No task 'tk-missing'"
+
+
+def _refused_merge(monkeypatch, export):
+    from witan.cli import _common
+
+    proxy = _refusing_proxy("cannot merge: source graph has no __manifest")
+    monkeypatch.setattr(_common, "_server", proxy)
+    return ("migrate", "merge", export, "--dry-run"), "no __manifest"
+
+
+@pytest.mark.parametrize(
+    "arrange",
+    [_misconfigured_remote, _unloadable_config, _missing_task, _refused_merge],
+    ids=["srv-remote-config", "run-config-load", "task-close-missing", "migrate"],
+)
+def test_print_error_sites_keep_structured_stdout_empty(
+    monkeypatch, capsys, launcher_state, export, arrange
+):
+    # The handlers that print through `print_error` themselves, rather than
+    # leaving the failure to `main()`. They used to print on stdout, so a
+    # consumer of `--output-format json` read a sentence where it expected a
+    # document.
+    argv, message = arrange(monkeypatch, export)
+
+    code = _run_main(monkeypatch, "--output-format", "json", *argv)
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
 
 
 def test_a_refusal_is_a_runtime_error_so_existing_handlers_keep_working():

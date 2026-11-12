@@ -103,6 +103,23 @@ query callers($id: String) {
     limit 200
 }
 
+// Outgoing Calls: symbols that $id calls.
+
+query callees($id: String) {
+    match {
+        $source: Symbol { slug: $id }
+        $callee: Symbol
+        $source calls $callee
+    }
+    return {
+        $callee.slug, $callee.repo, $callee.file_id, $callee.name,
+        $callee.qualified_name, $callee.kind,
+        $callee.start_line, $callee.end_line
+    }
+    order { $callee.qualified_name asc }
+    limit 200
+}
+
 // Incoming Calls + References: anything that uses $id.
 
 query referencers($id: String) {

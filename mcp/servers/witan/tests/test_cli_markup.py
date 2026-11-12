@@ -48,12 +48,15 @@ def test_esc_keeps_a_toml_section_in_the_rendered_line(render):
     assert "[targets.production]" in out
 
 
-def test_an_error_naming_the_config_block_to_fix_still_names_it(render):
+def test_an_error_naming_the_config_block_to_fix_still_names_it():
     # Error text is the worst place to lose brackets: witan's own refusals name
     # the block to edit, and that name is the whole point of the sentence.
-    from witan.cli._common import print_error
+    from witan.cli._common import print_error, stderr_console
 
-    out = render(print_error, ValueError("unset `remote_url` on target [qa]"))
+    stderr_console.width = 200
+    with stderr_console.capture() as capture:
+        print_error(ValueError("unset `remote_url` on target [qa]"))
+    out = capture.get()
 
     assert "[qa]" in out
 
