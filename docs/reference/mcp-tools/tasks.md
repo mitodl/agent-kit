@@ -126,9 +126,10 @@ To find "the next task" in a project there is no query to rank by: use
 ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
 every task in it.
 
-With ``project_slug`` or ``assignee``, the ``limit`` applies after the
-filters, so a match that ranks below it on the unfiltered query is still
-returned.
+The ``limit`` applies after every filter, so a match that ranks below it
+on the unfiltered query is still returned. The one exception is the
+unscoped half of a repo-scoped search: those tasks are picked out of the
+all-repos read, so other repos' matches can still crowd them out.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

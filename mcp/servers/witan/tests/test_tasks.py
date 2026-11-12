@@ -95,7 +95,12 @@ def test_nullable_filters_match_every_combination(server):
                 and (status is None or r["status"] == status)
             }
             params = {"query": "zorblat", "repo": repo, "status": status}
-            for name in ("search_tasks", "search_tasks_title"):
+            for name in (
+                "search_tasks",
+                "search_tasks_title",
+                "search_tasks_all_uncapped",
+                "search_tasks_all_uncapped_title",
+            ):
                 rows = srv.client.read("read.gq", name, params)
                 assert {r["slug"] for r in rows} == expected, (name, params)
             if repo is not None:
@@ -249,6 +254,81 @@ def test_task_search_filters_reach_past_the_unfiltered_cap(server):
     everything = [h["slug"] for h in server.task_search("quokka", repo="", limit=50)]
     assert len(everything) == 23
     assert buried["slug"] in everything
+
+
+_UNCAPPED_SEARCH_PAIRS = (
+    "search_tasks_all_uncapped",
+    "search_tasks_all_uncapped_title",
+    "search_tasks_by_project",
+    "search_tasks_by_project_title",
+)
+
+
+@pytest.fixture
+def uncapped_search_cap(server, tmp_path, monkeypatch):
+    """Lower the uncapped search pairs' `limit 10000` to 3 for this test.
+
+    Reaching the real cap would take 10,001 tasks; a copy of the query files
+    with only those four queries' limits rewritten exercises the same boundary.
+    """
+    import re
+    import shutil
+
+    from witan import server as srv
+
+    cap = 3
+    queries = tmp_path / "queries"
+    shutil.copytree(srv.client.queries_dir, queries)
+    read_gq = queries / "read.gq"
+    source = read_gq.read_text()
+    for name in _UNCAPPED_SEARCH_PAIRS:
+        source, n = re.subn(
+            rf"(query {name}\(.*?\n    limit )10000",
+            rf"\g<1>{cap}",
+            source,
+            count=1,
+            flags=re.DOTALL,
+        )
+        assert n == 1, name
+    read_gq.write_text(source)
+    monkeypatch.setattr(srv.client, "queries_dir", queries)
+    return cap
+
+
+@requires_omnigraph
+def test_task_search_filters_apply_before_the_uncapped_cap(server, uncapped_search_cap):
+    """A limit above 20 reads the uncapped pair, whose cap must come after the
+    status, repo and project filters: more higher-ranked matches outside the
+    requested scope than the cap would otherwise leave no room for the
+    lower-ranked ones inside it."""
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
+    crowd_repo = "https://github.com/test/crowd"
+    for i in range(uncapped_search_cap):
+        closed = server.task_create(
+            title=f"quokka narwhal {i}",
+            description="quokka narwhal quokka",
+            repo=crowd_repo,
+            project_slug=proj["slug"],
+        )
+        server.task_close(closed["slug"], resolution="done")
+    buried = server.task_create(
+        title="unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        repo="https://github.com/test/wanted",
+        project_slug=proj["slug"],
+    )
+
+    by_status = server.task_search("quokka", repo="", status="open", limit=21)
+    assert [h["slug"] for h in by_status] == [buried["slug"]]
+    by_repo = server.task_search(
+        "quokka", repo="https://github.com/test/wanted", limit=21
+    )
+    assert [h["slug"] for h in by_repo] == [buried["slug"]]
+    by_project = server.task_search(
+        "quokka", project_slug=proj["slug"], status="open", limit=21
+    )
+    assert [h["slug"] for h in by_project] == [buried["slug"]]
 
 
 @requires_omnigraph

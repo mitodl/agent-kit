@@ -7974,17 +7974,20 @@ def _similar_task_query(title: str, description: str) -> str:
     return re.sub(r"[^\w\s]", " ", text).strip()
 
 
-def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
+def _search_task_rows(
+    query: str, repo: str | None, status: str | None, name: str = "search_tasks"
+) -> list[dict]:
     """BM25 candidate rows in score-desc order — the Task twin of
     ``_search_rows``; `description` stands in for Memory's `content` as the
-    primary matched field.
+    primary matched field. ``name`` picks the query pair: the capped default,
+    or ``search_tasks_all_uncapped`` for a limit above it.
     """
     detected = repo_module.detect(override=repo)
     global_params = {"query": query, "repo": None, "status": status or None}
     if not detected:
-        return _search_task_bm25(global_params)
+        return _search_task_bm25(global_params, name)
 
-    rows = _search_task_bm25(global_params | {"repo": detected})
+    rows = _search_task_bm25(global_params | {"repo": detected}, name)
 
     # Merge in unscoped (repo=None) matches — task_list's convention:
     # unscoped tasks were created without git context and should stay visible
@@ -7992,7 +7995,7 @@ def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in _search_task_bm25(global_params)
+        for r in _search_task_bm25(global_params, name)
         if not r.get("repo") and r["slug"] not in seen
     )
     return rows
@@ -8009,25 +8012,19 @@ def _filtered_task_search_rows(
 
     Reads through the uncapped query pairs, because the capped ones return the
     top 20 of the UNFILTERED query and filtering those afterwards loses every
-    match ranked below them. A project scope replaces the repo scope, as in
-    ``task_list``: a project spans repos.
+    match ranked below them. Project, repo and status filter in the query,
+    ahead of its cap; only the assignee match runs here. A project scope
+    replaces the repo scope, as in ``task_list``: a project spans repos.
     """
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
     if project_slug:
         rows = _search_task_bm25(
-            {"query": query, "project_slug": project_slug}, "search_tasks_by_project"
+            {"query": query, "project_slug": project_slug, "status": status or None},
+            "search_tasks_by_project",
         )
     else:
-        rows = _search_task_bm25({"query": query}, "search_tasks_all_uncapped")
-        detected = repo_module.detect(override=repo)
-        if detected:
-            # This repo's matches, then unscoped ones, as in _search_task_rows.
-            rows = [r for r in rows if r.get("repo") == detected] + [
-                r for r in rows if not r.get("repo")
-            ]
-    if status:
-        rows = [r for r in rows if r.get("status") == status]
+        rows = _search_task_rows(query, repo, status, "search_tasks_all_uncapped")
     if assignee:
         rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
     return rows
@@ -8057,9 +8054,10 @@ def task_search(
     ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
     every task in it.
 
-    With ``project_slug`` or ``assignee``, the ``limit`` applies after the
-    filters, so a match that ranks below it on the unfiltered query is still
-    returned.
+    The ``limit`` applies after every filter, so a match that ranks below it
+    on the unfiltered query is still returned. The one exception is the
+    unscoped half of a repo-scoped search: those tasks are picked out of the
+    all-repos read, so other repos' matches can still crowd them out.
 
     Parameters
     ----------
@@ -8085,7 +8083,7 @@ def task_search(
     if not 1 <= limit <= _MAX_TASK_LIMIT:
         msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
         raise ValueError(msg)
-    # The unfiltered read pair caps each half at 20 in the query, so a larger
+    # The default read pair caps each half at 20 in the query, so a larger
     # limit goes through the uncapped pair, as task_list swaps in its uncapped
     # twin when asked for more than its query cap.
     if project_slug or assignee or limit > _SEARCH_LIMIT:

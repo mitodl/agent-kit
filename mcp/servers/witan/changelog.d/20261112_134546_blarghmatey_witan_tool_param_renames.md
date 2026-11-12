@@ -3,8 +3,11 @@
 - `task_search` takes `limit` (default 20, at most 10,000). Agents were
   passing it and getting a validation error. A limit above 20 reads through
   the uncapped search queries, since the default pair caps each half at 20 in
-  the query. `witan tasks QUERY` does not send it yet, so it keeps working
-  against a deployment that predates the parameter.
+  the query. Those queries apply `status` and `repo` (and the project
+  queries `status`) before their own cap, so matches outside the requested
+  scope cannot crowd out the ones inside it. `witan tasks QUERY` does not send
+  `limit` yet, so it keeps working against a deployment that predates the
+  parameter, and `--limit` does not apply to a search.
 
 ### Changed
 
