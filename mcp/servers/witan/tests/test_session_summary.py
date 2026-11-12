@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -408,6 +410,51 @@ def test_auto_close_survives_a_deleted_working_directory(
     assert last["slug"] == handle["session_slug"]
     assert not last["open"]
     assert session_state.read_handle(SID) is None
+
+
+@requires_omnigraph
+def test_a_read_past_the_budget_still_closes_the_session(
+    server, hook, monkeypatch, tmp_path
+):
+    """A slow read is abandoned at the budget; the close goes ahead with the
+    placeholder instead of waiting for it and risking the hook's timeout."""
+    from witan import server as srv
+    from witan.cli import _common
+
+    proj = server.workflow_project_create(title="slow", description="d")
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=SID, phase="spec"
+    )
+    release = threading.Event()
+
+    class _SlowTasks:
+        def __getattr__(self, name):
+            if name == "task_list":
+
+                def _stall(*_a, **_kw):
+                    release.wait(30)
+                    return []
+
+                return _stall
+            return getattr(srv, name)
+
+    monkeypatch.setattr(_common, "_server", _SlowTasks())
+    monkeypatch.setattr(hook, "SUMMARY_READ_BUDGET_SECONDS", 1.0)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+
+    started = time.monotonic()
+    try:
+        hook.session_checkpoint()
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+
+    last = _handoff(server, proj["slug"])
+    assert last["slug"] == handle["session_slug"]
+    assert not last["open"]
+    assert last["summary"] == session_summary.PLACEHOLDER
+    assert session_state.read_handle(SID) is None
+    assert elapsed < 15
 
 
 def test_parse_timestamp_reads_naive_as_utc():

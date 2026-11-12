@@ -5,7 +5,11 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from witan_core.observability import get_logger
 
@@ -15,6 +19,8 @@ from ._common import _fn, app
 from .selected_target import selected_target
 
 logger = get_logger("witan.hook")
+
+T = TypeVar("T")
 
 
 @app.command(name="inject-context")
@@ -144,7 +150,8 @@ def session_checkpoint() -> None:
             # stderr; this also covers any notice a dispatch path adds later.
             with contextlib.redirect_stdout(sys.stderr):
                 server = _srv()
-                session = _read_session(server, handle)
+                deadline = time.monotonic() + SUMMARY_READ_BUDGET_SECONDS
+                session = _within(deadline, lambda: _read_session(server, handle), None)
                 # An ended session was closed by an explicit
                 # `workflow_session_end` that left this handle behind (one
                 # called through the remote proxy clears nothing locally), or
@@ -153,14 +160,21 @@ def session_checkpoint() -> None:
                 # goes.
                 if session is None or not session.get("ended_at"):
                     project_dir = ctx_module._cwd_or_dot()
+                    summary, files = _within(
+                        deadline,
+                        lambda: (
+                            _derived_summary(
+                                server, handle, session, session_id, project_dir
+                            ),
+                            session_summary.changed_files(project_dir),
+                        ),
+                        (session_summary.PLACEHOLDER, []),
+                    )
                     _fn(server.workflow_session_end)(
                         session_slug=session_slug,
-                        summary=_derived_summary(
-                            server, handle, session, session_id, project_dir
-                        ),
+                        summary=summary,
                         tools_used=None,
-                        files_changed=session_summary.changed_files(project_dir)
-                        or None,
+                        files_changed=files or None,
                     )
         # SystemExit is not an Exception: _srv() raises it for a half-configured
         # remote, and letting it escape would break the "never blocks" contract.
@@ -223,6 +237,33 @@ def _codex_session_id(payload: dict) -> str | None:
     if "turn_id" not in payload:
         return None
     return payload["session_id"]
+
+
+# Everything the Stop hook reads before its close shares this budget. The hook
+# is registered with a 60s timeout (see `witan.setup`) because one write to a
+# deployment has been measured at up to 51s, so the reads get what is left,
+# with a margin. A read still running when the budget runs out is abandoned
+# and the session closes with the placeholder: a late summary is worth less
+# than a session left open because the hook was killed mid-write.
+SUMMARY_READ_BUDGET_SECONDS = 8.0
+
+
+def _within(deadline: float, fn: Callable[[], T], default: T) -> T:
+    """``fn()``'s result, or ``default`` when it hasn't returned by ``deadline``.
+
+    ``deadline`` is a ``time.monotonic()`` value. The call runs on a daemon
+    thread, so one that never returns is left behind rather than joined and
+    can't hold the hook open past its timeout. ``fn`` must not raise; the
+    callers here already turn every failure into a value.
+    """
+    result: list[T] = []
+    worker = threading.Thread(target=lambda: result.append(fn()), daemon=True)
+    worker.start()
+    worker.join(max(0.0, deadline - time.monotonic()))
+    if result:
+        return result[0]
+    logger.debug("witan.hook.read_budget_exhausted")
+    return default
 
 
 def _read_session(server, handle: dict) -> dict | None:

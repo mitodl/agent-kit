@@ -7,6 +7,9 @@
   as the next session's handoff, which used to be a fixed placeholder. A
   session with no activity gets a one-line "no recorded activity" summary, and
   the placeholder is kept only when a read failed and nothing else was found.
+  The reads share an 8-second budget, so they and a slow deployed write still
+  fit in the hook's 60-second timeout; a read past the budget is abandoned and
+  the session closes with the placeholder.
 - `workflow_project_memories` takes `session`, a `ws-` slug, to return only the
   memories that one session produced in a single query.
 
