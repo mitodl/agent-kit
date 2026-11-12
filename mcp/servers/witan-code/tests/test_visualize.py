@@ -113,6 +113,38 @@ def test_deploy_edge_from_real_extractor_output(tmp_path):
     assert set(g.edges[(INFRA, target)].kinds) == {"service"}
 
 
+def test_only_repo_anchor_providers_draw_the_deploy_edge():
+    """A name anchor or a consumer row sharing a repo anchor's key draws no edge."""
+    other = "https://github.com/mitodl/other"
+    rows = [
+        {
+            "kind": "service",
+            "sub_kind": "repo",
+            "key_norm": A,
+            "role": "provider",
+            "repo": INFRA,
+        },
+        {
+            "kind": "service",
+            "sub_kind": "name",
+            "key_norm": A,
+            "role": "provider",
+            "repo": other,
+        },
+        {
+            "kind": "service",
+            "sub_kind": "repo",
+            "key_norm": A,
+            "role": "consumer",
+            "repo": B,
+        },
+    ]
+
+    g = visualize.build_graph(rows)
+
+    assert list(g.edges) == [(INFRA, A)]
+
+
 def test_kind_filter():
     g = visualize.build_graph(ROWS, kind="endpoint")
     assert list(g.edges) == [(A, B)]

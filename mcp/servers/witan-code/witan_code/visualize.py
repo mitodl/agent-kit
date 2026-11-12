@@ -186,16 +186,22 @@ def build_graph(
     # (DEBUG, PORT, ...). Carried on the edge's contract rather than filtered
     # here, so the edge still exists and a reader chooses whether to hide it.
     generic_keys: set[tuple[str, str]] = set()
-    # Service anchors whose key_norm is a repo URI (sub_kind "repo"), as opposed
-    # to an image or app name; only these name a repo to draw a deploy edge to.
-    deploy_targets: set[str] = set()
+    # Deployed repo URI -> the repos whose provider binding names it as a repo
+    # anchor (sub_kind "repo"). Image and name anchors name no repo, and an
+    # image or name provider that happens to share a repo anchor's key must not
+    # inherit its edge, so the sources are tracked per anchor row.
+    deploy_sources: dict[str, set[str]] = defaultdict(set)
 
     for b in filtered:
         b_kind = b["kind"]
         key_norm = b["key_norm"]
         b_repo = b["repo"]
-        if b_kind == "service" and b.get("sub_kind") == "repo":
-            deploy_targets.add(key_norm)
+        if (
+            b_kind == "service"
+            and b.get("sub_kind") == "repo"
+            and b["role"] == "provider"
+        ):
+            deploy_sources[key_norm].add(b_repo)
         if b.get("generic"):
             generic_keys.add((b_kind, key_norm))
         if b["role"] == "provider":
@@ -217,12 +223,10 @@ def build_graph(
             graph.repos.add(prov)
 
         if b_kind == "service":
-            # The deploying repo (provider) depends on the repo it deploys.
-            # Image and name anchors name no repo, so they draw no edge.
-            if key_norm in deploy_targets:
-                for src in g["providers"]:
-                    if src != key_norm:
-                        graph.edge(src, key_norm).add(b_kind, short_repo(key_norm))
+            # The deploying repo depends on the repo it deploys.
+            for src in deploy_sources.get(key_norm, ()):
+                if src != key_norm:
+                    graph.edge(src, key_norm).add(b_kind, short_repo(key_norm))
             continue
         # consumer depends on provider; skip when the consumer repo itself also
         # provides this key_norm (the repo self-serves its own route, so the
