@@ -38,6 +38,11 @@ _STATUS_ORDER: dict[str, int] = {"removed": 0, "modified": 1, "added": 2}
 # a second each against a deployment, so they run concurrently.
 _LOOKUP_WORKERS = 8
 
+# hops=0 and include_superseded=True make recall list exactly the memories that
+# cite a symbol; the limit only has to clear that count so the reported total
+# is the real one.
+_RECALL_LIMIT = 1000
+
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 # The graph has no test-to-code edges, so a test file that calls or names a
@@ -553,11 +558,16 @@ def build_report(
             )
         row["tests_to_run"] = _bounded(sorted(tests), max_items)
         if work is not None:
-            ctx = work("symbol_context")(symbol_id=sym.symbol_id)
+            ctx = work("recall")(
+                symbol_id=sym.symbol_id,
+                hops=0,
+                include_superseded=True,
+                limit=_RECALL_LIMIT,
+            )
             row["tasks"] = _bounded(
                 [
                     {"slug": t["slug"], "title": t["title"], "status": t["status"]}
-                    for t in ctx["tasks"]
+                    for t in ctx["symbol"]["tasks"]
                 ],
                 max_items,
             )
