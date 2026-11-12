@@ -1035,9 +1035,9 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 **Arguments**:
 
 * `QUERY`: Free-text search over title and description, ranked by relevance.
-    The server caps a search at 20 hits after ``--status``, ``--project``
-    and ``--assignee`` apply, and before ``--ready`` and the default
-    closed-task elision.
+    The server caps a search at ``--limit`` hits after ``--status``,
+    ``--project`` and ``--assignee`` apply, and before ``--ready`` and the
+    default closed-task elision.
 
 **Parameters**:
 
@@ -1134,7 +1134,7 @@ Create a task in the work-coordination graph.
 ### witan task comment
 
 ```console
-witan task comment SLUG TEXT
+witan task comment SLUG BODY
 ```
 
 Leave an attributed, append-only comment on a task.
@@ -1145,7 +1145,7 @@ one — without rewriting their description or filing a task that is not work.
 **Parameters**:
 
 * `SLUG, --slug`: The ``tk-`` slug to comment on. **[required]**
-* `TEXT, --text`: The comment body. **[required]**
+* `BODY, --body`: The comment text. **[required]**
 
 ### witan task close
 

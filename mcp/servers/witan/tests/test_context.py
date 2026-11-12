@@ -1180,7 +1180,7 @@ def test_inject_context_surfaces_unread_comment_once(tmp_path, monkeypatch):
     me = srv.cfg.author
     task = _unwrap(srv.task_create)(title="held work", description="x")
     _unwrap(srv.task_claim)(task["slug"])
-    _unwrap(srv.task_comment)(slug=task["slug"], text="the premise cannot fire")
+    _unwrap(srv.task_comment)(slug=task["slug"], body="the premise cannot fire")
 
     first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
     assert "## ⚠ New Comments on Work You Hold" in first
@@ -1191,7 +1191,7 @@ def test_inject_context_surfaces_unread_comment_once(tmp_path, monkeypatch):
     assert "New Comments on Work You Hold" not in second
 
     # A later comment is unread again — the watermark is a timestamp, not a flag.
-    _unwrap(srv.task_comment)(slug=task["slug"], text="and here is why")
+    _unwrap(srv.task_comment)(slug=task["slug"], body="and here is why")
     third = ctx_module.inject_context(str(store), queries_dir, None, author=me)
     assert "and here is why" in third
     assert "the premise cannot fire" not in third
@@ -1210,10 +1210,10 @@ def test_inject_context_ignores_comments_on_tasks_you_do_not_hold(
 
     theirs = _unwrap(srv.task_create)(title="not yours", description="x")
     _unwrap(srv.task_claim)(theirs["slug"], assignee="someone-else")
-    _unwrap(srv.task_comment)(slug=theirs["slug"], text="a note for them")
+    _unwrap(srv.task_comment)(slug=theirs["slug"], body="a note for them")
 
     unclaimed = _unwrap(srv.task_create)(title="nobody holds this", description="x")
-    _unwrap(srv.task_comment)(slug=unclaimed["slug"], text="a note for whoever")
+    _unwrap(srv.task_comment)(slug=unclaimed["slug"], body="a note for whoever")
 
     text = ctx_module.inject_context(
         str(store), queries_dir, None, author=srv.cfg.author
@@ -1238,7 +1238,7 @@ def test_inject_context_without_an_author_skips_the_comment_block(
 
     held = _unwrap(srv.task_create)(title="held work", description="x")
     _unwrap(srv.task_claim)(held["slug"])
-    _unwrap(srv.task_comment)(slug=held["slug"], text="unseen")
+    _unwrap(srv.task_comment)(slug=held["slug"], body="unseen")
     _unwrap(srv.task_create)(title="ready work", description="x")
 
     text = ctx_module.inject_context(str(store), queries_dir, None)
@@ -1268,7 +1268,7 @@ def test_inject_context_does_not_cache_a_render_carrying_comments(
     me = srv.cfg.author
     task = _unwrap(srv.task_create)(title="held work", description="x")
     _unwrap(srv.task_claim)(task["slug"])
-    _unwrap(srv.task_comment)(slug=task["slug"], text="the premise cannot fire")
+    _unwrap(srv.task_comment)(slug=task["slug"], body="the premise cannot fire")
 
     first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
     assert "the premise cannot fire" in first
@@ -1302,7 +1302,7 @@ def test_inject_context_surfaces_a_comment_that_arrives_out_of_order(
     me = srv.cfg.author
     task = _unwrap(srv.task_create)(title="held work", description="x")
     _unwrap(srv.task_claim)(task["slug"])
-    _unwrap(srv.task_comment)(slug=task["slug"], text="the later comment")
+    _unwrap(srv.task_comment)(slug=task["slug"], body="the later comment")
 
     first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
     assert "the later comment" in first
@@ -1344,7 +1344,7 @@ def test_inject_context_caps_comments_rendered_per_block(tmp_path, monkeypatch):
 
     total = ctx_module._COMMENT_RENDER_LIMIT + 2
     for i in range(total):
-        _unwrap(srv.task_comment)(slug=task["slug"], text=f"comment number {i}")
+        _unwrap(srv.task_comment)(slug=task["slug"], body=f"comment number {i}")
 
     first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
     shown = [i for i in range(total) if f"comment number {i}" in first]
@@ -1375,9 +1375,9 @@ def test_inject_context_skips_your_own_checkpoint_comments(tmp_path, monkeypatch
     _unwrap(srv.task_claim)(task["slug"], assignee=f"{me}#5e313f6d")
     _unwrap(srv.task_comment)(
         slug=task["slug"],
-        text="checkpoint pushed: tm/x @ 3f2a1c9 | next: gh pr create --fill-first",
+        body="checkpoint pushed: tm/x @ 3f2a1c9 | next: gh pr create --fill-first",
     )
-    _unwrap(srv.task_comment)(slug=task["slug"], text="my own plain note")
+    _unwrap(srv.task_comment)(slug=task["slug"], body="my own plain note")
     srv.client.change(
         "mutations.gq",
         "insert_task_comment",

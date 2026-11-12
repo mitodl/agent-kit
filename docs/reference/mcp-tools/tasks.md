@@ -114,7 +114,7 @@ the field existed — there is no backfill.
 
 Plain BM25 text search over tasks (no graph expansion).
 
-Returns up to 20 tasks ranked by BM25 relevance, matched against
+Returns up to ``limit`` tasks ranked by BM25 relevance, matched against
 ``description`` and ``title`` (description matches are seeded ahead of
 title-only matches — see ``memory_search``'s doc for why). Run this
 before ``task_create`` to check whether the work is already tracked;
@@ -126,8 +126,8 @@ To find "the next task" in a project there is no query to rank by: use
 ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
 every task in it.
 
-With ``project_slug`` or ``assignee``, the 20-hit cap applies after the
-filters, so a match that ranks below 20 on the unfiltered query is still
+With ``project_slug`` or ``assignee``, the ``limit`` applies after the
+filters, so a match that ranks below it on the unfiltered query is still
 returned.
 
 | Parameter | Type | Default | Description |
@@ -137,6 +137,7 @@ returned.
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Optional filter: ``open``, ``in_progress``, ``blocked``, or<br>``closed``. Omit to search all statuses — a closed task is still<br>useful to surface (the work may already be done). |
 | `project_slug` | str? | `null` | Search only the tasks of this WorkflowProject (``wp-`` slug), in<br>every repo. |
 | `assignee` | str? | `null` | Search only tasks held by this owner, matched as ``task_list``<br>matches it; ``"@me"`` is the calling identity. |
+| `limit` | int | `20` | Maximum hits to return, 1 to 10,000. |
 
 ## `task_ready`
 
@@ -334,7 +335,7 @@ cut-off run can resume. And not for reusable repo knowledge (that is
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to comment on. |
-| `text` | str | **required** | The comment body. Say the thing itself, with evidence — the holder is<br>mid-execution and will act on this instead of the description. |
+| `body` | str | **required** | The comment text. Say the thing itself, with evidence — the holder is<br>mid-execution and will act on this instead of the description. |
 
 ## `task_link`
 

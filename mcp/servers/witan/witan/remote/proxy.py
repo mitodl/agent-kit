@@ -400,14 +400,14 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
 
 def _conflict_comment(entry: JournalEntry, reason: str) -> JournalEntry:
     """The comment a queued task write that no longer applies is replayed as."""
-    text = (
+    body = (
         f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
         f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
     )
     return dataclasses.replace(
         entry,
         tool="task_comment",
-        args={"slug": entry.args["slug"], "text": text},
+        args={"slug": entry.args["slug"], "body": body},
         context=None,
     )
 

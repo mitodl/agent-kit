@@ -90,7 +90,7 @@ class _Proxy(RemoteMCPProxy):
         self.repo = repo
         self._param_names = {
             "task_get": ["slug"],
-            "task_comment": ["slug", "text"],
+            "task_comment": ["slug", "body"],
             "task_close": ["resolution", "slug"],
             "task_create": ["repo", "title"],
         }
@@ -125,7 +125,7 @@ def test_a_write_that_never_connected_is_queued_and_answered_not_raised():
     _down(deployment)
     proxy = _Proxy(deployment)
 
-    result = proxy.task_comment(slug="tk-1", text="hello")
+    result = proxy.task_comment(slug="tk-1", body="hello")
 
     assert result["buffered"] is True
     assert result["pending"] == 1
@@ -134,7 +134,7 @@ def test_a_write_that_never_connected_is_queued_and_answered_not_raised():
     assert entry.id == result["journal_id"]
     assert (entry.tool, entry.args) == (
         "task_comment",
-        {"slug": "tk-1", "text": "hello"},
+        {"slug": "tk-1", "body": "hello"},
     )
     assert entry.holder == "ada@example.org"
     assert deployment.calls == []
@@ -166,7 +166,7 @@ def test_a_drop_after_the_call_went_out_is_not_queued():
     deployment.exc = ExceptionGroup("x", [httpx2.ReadError("reset by peer")])
     proxy = _Proxy(deployment)
     with pytest.raises(RemoteUnreachable) as caught:
-        proxy.task_comment(slug="tk-1", text="hello")
+        proxy.task_comment(slug="tk-1", body="hello")
     assert not isinstance(caught.value, RemoteNotSent)
     assert not proxy.journal.has_pending()
 
@@ -179,7 +179,7 @@ def test_a_gateway_cut_queues_only_an_idempotent_write():
 
     assert proxy.task_close(slug="tk-1")["buffered"] is True
     with pytest.raises(RemoteWriteIndeterminate):
-        proxy.task_comment(slug="tk-1", text="hello")
+        proxy.task_comment(slug="tk-1", body="hello")
     assert [e.tool for e in proxy.journal.entries()] == ["task_close"]
 
 
@@ -189,7 +189,7 @@ def test_a_rejected_credential_at_connect_is_not_queued():
     deployment.exc = _status_error(401)
     proxy = _Proxy(deployment)
     with pytest.raises(RemoteCredentialRejected):
-        proxy.task_comment(slug="tk-1", text="hello")
+        proxy.task_comment(slug="tk-1", body="hello")
     assert not proxy.journal.has_pending()
 
 
@@ -197,7 +197,7 @@ def test_the_next_successful_call_replays_in_order_before_running():
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="first")
+    proxy.task_comment(slug="tk-1", body="first")
     proxy.task_close(slug="tk-1", resolution="done")
 
     _up(deployment)
@@ -208,7 +208,7 @@ def test_the_next_successful_call_replays_in_order_before_running():
         "task_close",
         "task_get",
     ]
-    assert deployment.calls[0][1] == {"slug": "tk-1", "text": "first"}
+    assert deployment.calls[0][1] == {"slug": "tk-1", "body": "first"}
     assert not proxy.journal.has_pending()
 
 
@@ -234,7 +234,7 @@ def test_a_retryable_write_that_fails_on_replay_is_kept_with_the_rest():
     _down(deployment)
     proxy = _Proxy(deployment)
     proxy.task_close(slug="tk-1")
-    proxy.task_comment(slug="tk-1", text="second")
+    proxy.task_comment(slug="tk-1", body="second")
 
     _up(deployment)
     deployment.fail_tools["task_close"] = ExceptionGroup(
@@ -260,15 +260,15 @@ def test_a_non_idempotent_write_that_fails_on_replay_is_never_resent(failure):
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="maybe")
-    proxy.task_comment(slug="tk-1", text="later")
+    proxy.task_comment(slug="tk-1", body="maybe")
+    proxy.task_comment(slug="tk-1", body="later")
 
     _up(deployment)
     deployment.fail_tools["task_comment"] = failure
     report = asyncio.run(proxy.replay_journal())
 
     assert [line["outcome"] for line in report] == ["lost"]
-    assert [e.args["text"] for e in proxy.journal.entries()] == ["later"]
+    assert [e.args["body"] for e in proxy.journal.entries()] == ["later"]
 
 
 def test_a_non_idempotent_write_is_off_the_journal_before_it_is_sent():
@@ -276,7 +276,7 @@ def test_a_non_idempotent_write_is_off_the_journal_before_it_is_sent():
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="once")
+    proxy.task_comment(slug="tk-1", body="once")
 
     _up(deployment)
     deployment.fail_tools["task_comment"] = asyncio.CancelledError()
@@ -293,7 +293,7 @@ def test_a_failed_pre_read_keeps_the_entry(monkeypatch):
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="queued")
+    proxy.task_comment(slug="tk-1", body="queued")
 
     async def plan(entry, call):
         await call("task_get", {"slug": "tk-1"})
@@ -314,7 +314,7 @@ def test_buffering_can_be_turned_off_for_a_caller_that_needs_the_error():
     proxy = _Proxy(deployment)
     proxy._buffer_writes = False
     with pytest.raises(RemoteNotSent):
-        proxy.task_comment(slug="tk-1", text="hello")
+        proxy.task_comment(slug="tk-1", body="hello")
     assert not proxy.journal.has_pending()
 
 
@@ -323,7 +323,7 @@ def test_the_journal_is_private_to_its_owner():
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="secret-ish")
+    proxy.task_comment(slug="tk-1", body="secret-ish")
     assert proxy.journal.path.stat().st_mode & 0o777 == 0o600
     assert proxy.journal.path.parent.stat().st_mode & 0o077 == 0
 
@@ -375,7 +375,7 @@ def test_replay_refreshes_a_credential_rejected_while_connecting():
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="queued")
+    proxy.task_comment(slug="tk-1", body="queued")
 
     deployment.exc = _status_error(401)
     tokens: list[str] = []
@@ -400,7 +400,7 @@ def test_a_refused_entry_is_dropped_and_replay_continues():
     _down(deployment)
     proxy = _Proxy(deployment)
     proxy.task_close(slug="tk-gone")
-    proxy.task_comment(slug="tk-1", text="after")
+    proxy.task_comment(slug="tk-1", body="after")
 
     _up(deployment)
     deployment.fail_tools["task_close"] = ToolError("no such task")
@@ -414,7 +414,7 @@ def test_a_held_replay_lock_means_this_caller_does_not_replay():
     deployment = _Deployment()
     _down(deployment)
     proxy = _Proxy(deployment)
-    proxy.task_comment(slug="tk-1", text="queued")
+    proxy.task_comment(slug="tk-1", body="queued")
 
     _up(deployment)
     with proxy.journal.replaying() as acquired:
@@ -441,7 +441,7 @@ def test_a_custom_replay_plan_can_skip_or_substitute(monkeypatch):
         if entry.tool == "task_create":
             return None
         return dataclasses.replace(
-            entry, tool="task_comment", args={"slug": "tk-1", "text": "x"}
+            entry, tool="task_comment", args={"slug": "tk-1", "body": "x"}
         )
 
     monkeypatch.setattr(proxy, "_replay_plan", plan)
@@ -479,7 +479,7 @@ def _substitute_refused_closes(monkeypatch, proxy):
         if plan.tool != "task_close":
             return None
         return dataclasses.replace(
-            entry, tool="task_comment", args={"slug": "tk-1", "text": "refused"}
+            entry, tool="task_comment", args={"slug": "tk-1", "body": "refused"}
         )
 
     monkeypatch.setattr(proxy, "_replay_result", result)
@@ -490,7 +490,7 @@ def test_a_custom_replay_result_substitutes_for_a_refused_answer(monkeypatch):
     _down(deployment)
     proxy = _Proxy(deployment)
     proxy.task_close(slug="tk-1")
-    proxy.task_comment(slug="tk-1", text="after")
+    proxy.task_comment(slug="tk-1", body="after")
     _substitute_refused_closes(monkeypatch, proxy)
 
     _up(deployment)
@@ -530,7 +530,7 @@ def test_a_retryable_write_whose_substitute_is_unsent_is_kept(monkeypatch):
 def test_each_deployment_has_its_own_journal():
     deployment = _Deployment()
     _down(deployment)
-    _Proxy(deployment, url="https://a.example.org/mcp").task_comment(slug="s", text="a")
+    _Proxy(deployment, url="https://a.example.org/mcp").task_comment(slug="s", body="a")
     other = _Proxy(deployment, url="https://b.example.org/mcp")
     assert not other.journal.has_pending()
     assert journal_path("https://a.example.org/mcp") != journal_path(

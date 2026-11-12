@@ -246,6 +246,21 @@ def test_task_search_filters_reach_past_the_unfiltered_cap(server):
     by_assignee = server.task_search("quokka", repo="", assignee="agentA")
     assert [h["slug"] for h in by_assignee] == [buried["slug"]]
 
+    everything = [h["slug"] for h in server.task_search("quokka", repo="", limit=50)]
+    assert len(everything) == 23
+    assert buried["slug"] in everything
+
+
+@requires_omnigraph
+def test_task_search_limit_trims_and_is_bounded(server):
+    for i in range(3):
+        server.task_create(title=f"quokka {i}", description="quokka", repo="")
+
+    assert len(server.task_search("quokka", repo="", limit=2)) == 2
+    for bad in (0, 10001):
+        with pytest.raises(ValueError, match="limit must be between"):
+            server.task_search("quokka", repo="", limit=bad)
+
 
 @requires_omnigraph
 def test_task_create_returns_similar_tasks(server):
@@ -2017,7 +2032,7 @@ def test_comment_is_attributed_and_read_back_by_task_get(server):
     t = server.task_create(title="held work", description="the original premise")
     before = server.task_get(t["slug"])
 
-    res = server.task_comment(slug=t["slug"], text="  your premise is wrong  ")
+    res = server.task_comment(slug=t["slug"], body="  your premise is wrong  ")
     assert res["commented"] is True
     assert res["slug"].startswith("tc-")
     assert res["author"] == srv.cfg.author
@@ -2036,7 +2051,7 @@ def test_comment_is_attributed_and_read_back_by_task_get(server):
 def test_comments_come_back_oldest_first(server):
     t = server.task_create(title="threaded", description="x")
     for n in ("first", "second", "third"):
-        server.task_comment(slug=t["slug"], text=n)
+        server.task_comment(slug=t["slug"], body=n)
     assert [c["body"] for c in server.task_get(t["slug"])["comments"]] == [
         "first",
         "second",
@@ -2048,11 +2063,11 @@ def test_comments_come_back_oldest_first(server):
 def test_comment_refuses_empty_text_and_unknown_task(server):
     t = server.task_create(title="real", description="x")
 
-    blank = server.task_comment(slug=t["slug"], text="   \n  ")
+    blank = server.task_comment(slug=t["slug"], body="   \n  ")
     assert blank["commented"] is False
     assert "empty" in blank["reason"]
 
-    missing = server.task_comment(slug="tk-nope-000000", text="hello")
+    missing = server.task_comment(slug="tk-nope-000000", body="hello")
     assert missing["commented"] is False
     assert "tk-nope-000000" in missing["reason"]
 
@@ -2063,7 +2078,7 @@ def test_comment_refuses_empty_text_and_unknown_task(server):
 def test_comments_are_scoped_to_their_own_task(server):
     a = server.task_create(title="task a", description="x")
     b = server.task_create(title="task b", description="x")
-    server.task_comment(slug=a["slug"], text="about a")
+    server.task_comment(slug=a["slug"], body="about a")
 
     assert len(server.task_get(a["slug"])["comments"]) == 1
     assert server.task_get(b["slug"])["comments"] == []
@@ -2115,14 +2130,14 @@ def test_comment_refuses_rather_than_reporting_a_write_that_did_not_happen(
         raise RuntimeError("type error: T10: unknown node/edge type `TaskComment`")
 
     monkeypatch.setattr(srv.client, "change", change)
-    res = server.task_comment(slug=t["slug"], text="this must not be lost silently")
+    res = server.task_comment(slug=t["slug"], body="this must not be lost silently")
     assert res["commented"] is False
     assert "witan migrate schema" in res["reason"]
 
     # Against a deployment the same refusal must not name a command the remote
     # CLI refuses (apply_schema is admin-only there).
     monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
-    res = server.task_comment(slug=t["slug"], text="still not lost")
+    res = server.task_comment(slug=t["slug"], body="still not lost")
     assert res["commented"] is False
     assert "run `witan migrate schema`" not in res["reason"]
     assert "omnigraph-server image" in res["reason"]

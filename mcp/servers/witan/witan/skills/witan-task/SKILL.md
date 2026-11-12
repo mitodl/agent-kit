@@ -172,7 +172,7 @@ above, and can change what `next` should be.
 When you find a problem with a task you are not executing, say it on the task:
 
 ```text
-task_comment(slug="tk-...", text="<the correction, with evidence>")
+task_comment(slug="tk-...", body="<the correction, with evidence>")
 ```
 
 The comment is attributed to you, timestamped, and append-only — it cannot be

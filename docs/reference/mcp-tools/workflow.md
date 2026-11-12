@@ -347,7 +347,7 @@ For best corpus quality, write a summary that includes:
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start``. |
+| `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start`` (its<br>``session_slug`` field). Not the agent's own session id<br>(``$CLAUDE_SESSION_ID`` and the like): this tool takes no<br>``session_id`` parameter. |
 | `summary` | str | **required** | Description of what was accomplished and what remains. |
 | `tools_used` | list[str]? | `null` | List of tool names used. e.g. ``["Edit", "Bash", "Read"]``. |
 | `files_changed` | list[str]? | `null` | List of file paths modified in this session. |

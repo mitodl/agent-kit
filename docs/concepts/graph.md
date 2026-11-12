@@ -49,7 +49,7 @@ task without being part of it.
 It exists because the alternatives are both wrong for a correction. Editing the
 description (`task_update`) destroys another author's text; filing a task
 (`task_create`) puts something that is not work into everyone's ready-work
-list. `task_comment(slug, text)` is neither — it changes nothing about the
+list. `task_comment(slug, body)` is neither — it changes nothing about the
 task, not even `updated_at`, and it never appears in `task_ready`.
 
 Comments come back with `task_get`, oldest first, and unread ones on a task you

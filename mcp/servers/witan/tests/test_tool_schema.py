@@ -57,3 +57,17 @@ def test_the_tool_surface_is_actually_being_inspected():
         "~200 parameters, so the schema inspection is probably broken rather "
         "than the surface having shrunk this far"
     )
+
+
+def test_parameters_carry_the_names_agents_guess():
+    """Transcripts showed agents passing ``body`` to ``task_comment`` and
+    ``limit`` to ``task_search``; both are the real names now, and the session
+    id ``workflow_session_end`` is often handed is ruled out by name."""
+    params = {(tool, param): schema for tool, param, schema in _tool_properties()}
+
+    assert ("task_comment", "body") in params
+    assert ("task_comment", "text") not in params
+    assert params[("task_search", "limit")]["default"] == 20
+    assert (
+        "session_id" in params[("workflow_session_end", "session_slug")]["description"]
+    )

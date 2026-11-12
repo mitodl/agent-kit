@@ -436,7 +436,7 @@ mcp = FastMCP(
         "  it contains a secret → rotate the credential. memory_delete removes it "
         "from the current graph but not from history, and no tool can erase "
         "that.\n\n"
-        "Found a problem with someone else's task? task_comment(slug, text) "
+        "Found a problem with someone else's task? task_comment(slug, body) "
         "leaves an attributed, append-only note ON it. Do NOT reach for "
         "task_update (it overwrites their description) or task_create (it puts "
         "an item that is not work into everyone's ready-work list). Comments "
@@ -6962,7 +6962,10 @@ def workflow_session_end(
     Parameters
     ----------
     session_slug:
-        The ``ws-`` slug returned by ``workflow_session_start``.
+        The ``ws-`` slug returned by ``workflow_session_start`` (its
+        ``session_slug`` field). Not the agent's own session id
+        (``$CLAUDE_SESSION_ID`` and the like): this tool takes no
+        ``session_id`` parameter.
     summary:
         Description of what was accomplished and what remains.
     tools_used:
@@ -7729,7 +7732,7 @@ def _task_comments(slug: str) -> list[dict]:
 
 
 @_tool
-def task_comment(slug: str, text: str) -> dict:
+def task_comment(slug: str, body: str) -> dict:
     """
     Leave an attributed, append-only comment ON a task without changing it.
 
@@ -7754,13 +7757,13 @@ def task_comment(slug: str, text: str) -> dict:
     ----------
     slug:
         The ``tk-`` slug to comment on.
-    text:
-        The comment body. Say the thing itself, with evidence — the holder is
+    body:
+        The comment text. Say the thing itself, with evidence — the holder is
         mid-execution and will act on this instead of the description.
     """
-    body = text.strip()
+    body = body.strip()
     if not body:
-        return {"commented": False, "reason": "comment text is empty"}
+        return {"commented": False, "reason": "comment body is empty"}
     task_rows = client.read("read.gq", "get_task", {"slug": slug})
     if not task_rows:
         return {"commented": False, "reason": f"no task {slug!r}"}
@@ -8037,11 +8040,12 @@ def task_search(
     status: TaskStatus | None = None,
     project_slug: str | None = None,
     assignee: str | None = None,
+    limit: int = _SEARCH_LIMIT,
 ) -> list[dict]:
     """
     Plain BM25 text search over tasks (no graph expansion).
 
-    Returns up to 20 tasks ranked by BM25 relevance, matched against
+    Returns up to ``limit`` tasks ranked by BM25 relevance, matched against
     ``description`` and ``title`` (description matches are seeded ahead of
     title-only matches — see ``memory_search``'s doc for why). Run this
     before ``task_create`` to check whether the work is already tracked;
@@ -8053,8 +8057,8 @@ def task_search(
     ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
     every task in it.
 
-    With ``project_slug`` or ``assignee``, the 20-hit cap applies after the
-    filters, so a match that ranks below 20 on the unfiltered query is still
+    With ``project_slug`` or ``assignee``, the ``limit`` applies after the
+    filters, so a match that ranks below it on the unfiltered query is still
     returned.
 
     Parameters
@@ -8075,12 +8079,20 @@ def task_search(
     assignee:
         Search only tasks held by this owner, matched as ``task_list``
         matches it; ``"@me"`` is the calling identity.
+    limit:
+        Maximum hits to return, 1 to 10,000.
     """
-    if project_slug or assignee:
+    if not 1 <= limit <= _MAX_TASK_LIMIT:
+        msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
+        raise ValueError(msg)
+    # The unfiltered read pair caps each half at 20 in the query, so a larger
+    # limit goes through the uncapped pair, as task_list swaps in its uncapped
+    # twin when asked for more than its query cap.
+    if project_slug or assignee or limit > _SEARCH_LIMIT:
         rows = _filtered_task_search_rows(query, repo, status, project_slug, assignee)
     else:
         rows = _search_task_rows(query, repo, status)
-    return rows[:_SEARCH_LIMIT]
+    return rows[:limit]
 
 
 @_tool
