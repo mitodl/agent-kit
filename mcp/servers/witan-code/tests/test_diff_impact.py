@@ -112,6 +112,34 @@ Binary files a/img.png and b/img.png differ
     assert (gone.old_path, gone.new_path, gone.new_lines) == ("gone.py", None, set())
 
 
+def test_parse_diff_reads_headers_only_before_the_first_hunk():
+    # -U0 hunks carry no body lines git would emit here, but a SQL comment
+    # removed or added in a hunk body starts with `--- ` / `+++ ` all the same.
+    text = """\
+diff --git a/models/orders.sql b/models/orders.sql
+--- a/models/orders.sql
++++ b/models/orders.sql
+@@ -1 +1 @@
+--- built from staging/stg_orders.sql
++++ built from staging/stg_orders_v2.sql
+"""
+    (f,) = diff_impact.parse_diff(text)
+    assert (f.old_path, f.new_path) == ("models/orders.sql", "models/orders.sql")
+
+
+def test_parse_diff_keeps_a_pure_rename():
+    text = """\
+diff --git a/pkg/old_name.py b/pkg/new_name.py
+similarity index 100%
+rename from pkg/old_name.py
+rename to pkg/new_name.py
+"""
+    (f,) = diff_impact.parse_diff(text)
+    assert f.renamed
+    assert (f.old_path, f.new_path) == ("pkg/old_name.py", "pkg/new_name.py")
+    assert not (f.old_lines or f.new_lines)
+
+
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
@@ -193,6 +221,7 @@ def test_report_bounds_every_list_and_says_so():
     report = diff_impact.build_report(
         [*_changed(5), test_change],
         [],
+        renamed=["old.py -> m.py"],
         repo=REPO,
         branch=None,
         code=tools.__getitem__,
@@ -216,6 +245,37 @@ def test_report_bounds_every_list_and_says_so():
     assert "callers (30, showing 3)" in text
     assert "m.py::f1 (function, modified) [not in index]" in text
     assert "witan (council) is not installed" in text
+    # A rename moves every id in the file, so it must not vanish from the report.
+    assert "Renamed files (1): old.py -> m.py" in text
+    assert "A renamed file moves every symbol id" in text
+
+
+def test_test_mentions_match_across_one_language_family():
+    tools = {
+        "code_indexed_repos": list,
+    }
+    hook = diff_impact.ChangedSymbol(
+        f"{REPO}#src/useCart.ts::useCart",
+        "src/useCart.ts",
+        "useCart",
+        "function",
+        1,
+        "modified",
+    )
+    report = diff_impact.build_report(
+        [hook],
+        [],
+        renamed=[],
+        repo=REPO,
+        branch=None,
+        code=tools.__getitem__,
+        work=None,
+        test_mentions=lambda name: ["src/useCart.test.tsx", "tests/test_cart.py"],
+        limit=10,
+        max_items=10,
+    )
+    row = report["changed_symbols"]["shown"][0]
+    assert row["tests_to_run"]["shown"] == ["src/useCart.test.tsx"]
 
 
 def test_unindexed_repo_does_not_read_as_no_impact():
@@ -230,6 +290,7 @@ def test_unindexed_repo_does_not_read_as_no_impact():
     report = diff_impact.build_report(
         _changed(1),
         [],
+        renamed=[],
         repo=REPO,
         branch=None,
         code=tools.__getitem__,
@@ -366,7 +427,7 @@ def test_diff_impact_on_a_fixture_graph(fixture_graph, monkeypatch, capsys):
     # Added on the unindexed branch: flagged, so "no callers" is not read as safe.
     assert rows["added"]["in_index"] is False
 
-    assert report["branch_tasks"][0]["slug"] == "tk-feature"
+    assert report["branch_tasks"]["shown"][0]["slug"] == "tk-feature"
     assert report["changed_tests"]["shown"] == ["tests/test_svc.py"]
     assert report["unparsed_files"]["shown"] == ["README.md"]
 
@@ -377,11 +438,14 @@ def test_diff_impact_without_witan_says_what_it_skipped(
 ):
     monkeypatch.setattr(cli_module, "_work_tool", lambda: None)
     output_module.set_output_format("txt")
+    # From a subdirectory: paths and the test search still cover the whole repo.
+    monkeypatch.chdir(fixture_graph / "tests")
 
     cli_module.diff_impact(base="main", head="feature")
     out = capsys.readouterr().out
 
     assert "svc.py::helper (function, modified)" in out
     assert "callers (2): svc.py::Service.run, svc.py::main" in out
+    assert "tests to run (stand-in) (1): tests/test_svc.py" in out
     assert "tasks (" not in out
     assert "witan (council) is not installed" in out

@@ -614,14 +614,16 @@ def diff_impact(
     cwd = Path.cwd()
     try:
         merge_base, files = diff_module.git_diff_files(base, head, cwd)
+        symbols, unparsed = diff_module.changed_symbols(
+            files,
+            repo=repo,
+            read_blob=diff_module.git_blob_reader(cwd, merge_base, head),
+        )
     except subprocess.CalledProcessError as exc:
-        print_error(f"git {' '.join(exc.cmd[1:])} failed: {exc.stderr.strip()}")
+        # `git show` runs in bytes mode (blobs are not text); the rest in text.
+        err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
+        print_error(f"git {' '.join(exc.cmd[1:])} failed: {err.strip()}")
         raise SystemExit(1) from None
-    symbols, unparsed = diff_module.changed_symbols(
-        files,
-        repo=repo,
-        read_blob=diff_module.git_blob_reader(cwd, merge_base, head),
-    )
     if _is_remote():
         # Lookups fan out across threads; list the deployment's tools once
         # first rather than once per thread.
@@ -629,6 +631,7 @@ def diff_impact(
     report = diff_module.build_report(
         symbols,
         unparsed,
+        renamed=[f"{f.old_path} -> {f.new_path}" for f in files if f.renamed],
         repo=repo,
         branch=diff_module.branch_name(head, cwd),
         code=lambda name: _fn(getattr(_srv(), name)),

@@ -63,6 +63,12 @@ class FileDiff:
     old_lines: set[int] = field(default_factory=set)
     new_lines: set[int] = field(default_factory=set)
 
+    @property
+    def renamed(self) -> bool:
+        return None not in (self.old_path, self.new_path) and (
+            self.old_path != self.new_path
+        )
+
 
 @dataclass(frozen=True)
 class ChangedSymbol:
@@ -101,29 +107,42 @@ def parse_diff(text: str) -> list[FileDiff]:
     and a pure deletion (``d == 0``) no new one, so each side carries only
     the lines that side really changed.
 
+    Header lines are read only before a file's first hunk: inside a hunk, a
+    removed SQL comment (``-- note``) is the line ``--- note``.
+
     :param text: Output of ``git diff -U0 --src-prefix=a/ --dst-prefix=b/``.
-    :returns: One entry per file with at least one hunk.
+    :returns: One entry per file with at least one hunk, plus pure renames,
+        which have none but still move every symbol id in the file.
     :rtype: list[FileDiff]
     """
     files: list[FileDiff] = []
     current: FileDiff | None = None
+    in_hunks = False
     for line in text.splitlines():
         if line.startswith("diff --git "):
             current = FileDiff(old_path=None, new_path=None)
             files.append(current)
+            in_hunks = False
         elif current is None:
             continue
-        elif line.startswith("--- "):
-            current.old_path = _diff_path(line[4:], "a/")
-        elif line.startswith("+++ "):
-            current.new_path = _diff_path(line[4:], "b/")
         elif match := _HUNK.match(line):
+            in_hunks = True
             old_start, old_count, new_start, new_count = match.groups()
             old_n = 1 if old_count is None else int(old_count)
             new_n = 1 if new_count is None else int(new_count)
             current.old_lines.update(range(int(old_start), int(old_start) + old_n))
             current.new_lines.update(range(int(new_start), int(new_start) + new_n))
-    return [f for f in files if f.old_lines or f.new_lines]
+        elif in_hunks:
+            continue
+        elif line.startswith("--- "):
+            current.old_path = _diff_path(line[4:], "a/")
+        elif line.startswith("+++ "):
+            current.new_path = _diff_path(line[4:], "b/")
+        elif line.startswith("rename from "):
+            current.old_path = line.removeprefix("rename from ")
+        elif line.startswith("rename to "):
+            current.new_path = line.removeprefix("rename to ")
+    return [f for f in files if f.old_lines or f.new_lines or f.renamed]
 
 
 def _parse(repo: str, path: str, raw: bytes) -> indexer.ParsedFile | None:
@@ -166,6 +185,8 @@ def changed_symbols(
     found: dict[str, ChangedSymbol] = {}
     unparsed: list[str] = []
     for f in files:
+        if not (f.old_lines or f.new_lines):  # a pure rename
+            continue
         head = (
             _parse(repo, f.new_path, read_blob("head", f.new_path))
             if f.new_path and indexer.indexable(Path(f.new_path))
@@ -277,6 +298,15 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout
 
 
+# A `.ts` hook is tested from `.test.tsx` as often as from `.test.ts`.
+_JS_FAMILY = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
+
+
+def _language_family(path: str) -> str:
+    suffix = Path(path).suffix
+    return "js" if suffix in _JS_FAMILY else suffix
+
+
 def _short(symbol_id: str, repo: str) -> str:
     return symbol_id.removeprefix(f"{repo}#")
 
@@ -294,7 +324,10 @@ def git_test_mentions(cwd: Path, head: str) -> Callable[[str], list[str]]:
 
     def mentions(name: str) -> list[str]:
         result = subprocess.run(
-            ["git", "grep", "-l", "-w", "-F", "-e", name, head, "--"],
+            # `:/` and --full-name: the whole tree, as repo-relative paths,
+            # whichever subdirectory the command runs from.
+            ["git", "grep", "-l", "-w", "-F", "--full-name", "-e", name, head]
+            + ["--", ":/"],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -315,6 +348,7 @@ def build_report(
     symbols: list[ChangedSymbol],
     unparsed: list[str],
     *,
+    renamed: list[str],
     repo: str,
     branch: str | None,
     code: Callable[[str], Callable[..., Any]],
@@ -327,6 +361,7 @@ def build_report(
 
     :param symbols: Output of :func:`changed_symbols`.
     :param unparsed: Changed paths the indexer does not parse.
+    :param renamed: ``old -> new`` for each renamed file.
     :param repo: Canonical repo URI.
     :param branch: The head's git branch, for ``task_for_branch``; ``None``
         when detached.
@@ -353,6 +388,12 @@ def build_report(
         notes.append(
             f"Showing {limit} of {len(code_symbols)} changed symbols; pass --limit "
             "to see more."
+        )
+    if renamed:
+        notes.append(
+            "A renamed file moves every symbol id in it (repo#path::Name), and "
+            "its importers in other files are not traced; grep for the old "
+            "module path."
         )
     if not indexed:
         notes.append(
@@ -397,12 +438,12 @@ def build_report(
         tests: set[str] = set()
         if not is_module:
             # Same language only: `run` in a YAML fixture is not a test of it.
-            suffix = Path(sym.path).suffix
+            family = _language_family(sym.path)
             name = sym.qualified_name.rsplit(".", 1)[-1]
             tests.update(
                 p
                 for p in test_mentions(name)
-                if p != sym.path and Path(p).suffix == suffix
+                if p != sym.path and _language_family(p) == family
             )
         if indexed:
             if sym.status != "removed":
@@ -472,12 +513,16 @@ def build_report(
             "not looked up."
         )
     elif branch:
-        report["branch_tasks"] = [
-            {"slug": t["slug"], "title": t["title"], "status": t["status"]}
-            for t in work("task_for_branch")(branch=branch, repo=repo)
-        ]
+        report["branch_tasks"] = _bounded(
+            [
+                {"slug": t["slug"], "title": t["title"], "status": t["status"]}
+                for t in work("task_for_branch")(branch=branch, repo=repo)
+            ],
+            max_items,
+        )
     report["changed_symbols"] = {"total": len(code_symbols), "shown": rows}
     report["changed_tests"] = _bounded(changed_tests, max_items)
+    report["renamed_files"] = _bounded(renamed, max_items)
     report["unparsed_files"] = _bounded(unparsed, max_items)
     report["notes"] = notes
     return report
@@ -527,17 +572,19 @@ def render_text(report: dict[str, Any], *, header: str) -> str:
             out.append(f"    more callers past depth {IMPACT_DEPTH} (see code_impact)")
     if "branch_tasks" in report:
         tasks = report["branch_tasks"]
-        listed = ", ".join(f"{t['slug']} [{t['status']}]" for t in tasks)
+        listed = ", ".join(f"{t['slug']} [{t['status']}]" for t in tasks["shown"])
         out.append(
-            f"\nTasks on branch {report['branch']} ({len(tasks)})"
-            + (f": {listed}" if tasks else "")
+            f"\nTasks on branch {report['branch']} ({_count(tasks)})"
+            + (f": {listed}" if listed else "")
         )
-    changed_tests = report["changed_tests"]
-    if changed_tests["total"]:
-        out.append(
-            f"\nChanged test files ({_count(changed_tests)}): "
-            + ", ".join(changed_tests["shown"])
-        )
+    for key, label in (
+        ("renamed_files", "Renamed files"),
+        ("changed_tests", "Changed test files"),
+    ):
+        if report[key]["total"]:
+            out.append(
+                f"\n{label} ({_count(report[key])}): " + ", ".join(report[key]["shown"])
+            )
     unparsed = report["unparsed_files"]
     if unparsed["total"]:
         out.append(
