@@ -213,8 +213,9 @@ file + a capture→kind map), and any new node types to `_DEF_NODE_TYPES`.
 
 ## Install
 
-witan-code is usually installed as part of the `witan` umbrella — `witan setup`
-wires both servers together via `uvx --from … --with …`. See the
+witan-code is usually installed as part of the `witan` umbrella: one `witan
+serve` mounts witan-code's `code_*` tools whenever witan-code is installed
+alongside it, and `witan setup` registers that one server. See the
 [witan README](../witan/README.md) for the one-step setup.
 
 To use witan-code **standalone** (code graph only, no memory/task tools):

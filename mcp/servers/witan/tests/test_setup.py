@@ -10,6 +10,7 @@ MCP entry and hook commands, and that the starter-config writer behaves.
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 from agent_config_kit import apply
@@ -74,6 +75,38 @@ def test_mcp_only_platforms_keep_the_self_contained_uvx_entry(tmp_path, monkeypa
     entry = json.loads((vscode_dir / "mcp.json").read_text())["servers"]["witan"]
     assert entry["command"] == "uvx"
     assert "--from" in entry["args"]
+
+
+def test_cli_entry_goes_to_every_platform_that_gets_hooks(tmp_path):
+    """Pinned as a literal so a platform gaining hooks in agent-config-kit
+    fails here and gets a deliberate look, instead of silently changing
+    which MCP entry its users get."""
+    bundle = setup.witan_bundle(tmp_path, "tester")
+
+    assert set(bundle.mcp_servers_by_platform) == {"claude", "pi", "codex"}
+
+
+def test_codex_rerun_replaces_a_uvx_entry_with_the_cli(tmp_path, monkeypatch):
+    """Re-running setup is how an existing Codex install moves off the uvx
+    entry, so the CLI entry has to replace it, not sit beside it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    config = codex_home / "config.toml"
+    config.write_text(
+        '[mcp_servers.witan]\ncommand = "uvx"\nargs = ["--from", "witan-council", "witan", "serve"]\n'
+    )
+    pkg_dir = tmp_path / "pkg"
+    pkg_dir.mkdir()
+
+    apply("codex", setup.witan_bundle(pkg_dir, "tester"))
+
+    assert tomllib.loads(config.read_text())["mcp_servers"]["witan"] == {
+        "command": "witan",
+        "args": ["serve"],
+        "env": {"WITAN_AUTHOR": "tester"},
+    }
 
 
 def test_witan_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):
