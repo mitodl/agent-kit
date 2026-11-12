@@ -15,6 +15,7 @@ unconditionally.
 
 import asyncio
 import inspect
+import shutil
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -1108,6 +1109,15 @@ def setup(
     pkg_dir = Path(__file__).parent
 
     author = resolve_author(author)
+
+    if not shutil.which("witan-code") and not dry_run:
+        print(
+            "Warning: witan-code not on PATH. Hooks calling "
+            "`witan-code inject-context`, and the `witan-code serve` MCP "
+            "server registered alongside them, will fail until:\n"
+            "  uv tool install git+https://github.com/mitodl/agent-kit"
+            "#subdirectory=mcp/servers/witan-code"
+        )
 
     print("omnigraph binary")
     # strict=False, same reasoning as `witan setup`: a refused binary must not
