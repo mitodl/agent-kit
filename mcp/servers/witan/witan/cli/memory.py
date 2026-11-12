@@ -112,9 +112,14 @@ def _existing(recall, mem: local.LocalMemory, repo: str) -> str | None:
     knowledge somebody already replaced. A hit counts as a duplicate when its
     title matches, or its full content does (a cut-short ``content`` cannot be
     compared).
+
+    The query carries the description as well as the title. A title the
+    scanner redacted whole (an address and nothing else) keeps none of its
+    terms in the graph, so a title-only query could not find the stored copy
+    and every rerun would store another.
     """
     hits = recall(
-        query=mem.name,
+        query=" ".join(part for part in (mem.name, mem.description) if part),
         repo=repo,
         hops=0,
         limit=_DEDUPE_LIMIT,
@@ -177,11 +182,13 @@ def memory_import(
     """
     src = source or local.default_source()
     if not src.is_dir():
-        print_error(f"No such directory: {src}")
+        print_error(f"No such directory: {src}", stderr=True)
         raise SystemExit(1)
     patterns = _split_csv(select) or []
     if confirm and not (patterns or all_):
-        print_error("--confirm writes only what --select or --all chooses.")
+        print_error(
+            "--confirm writes only what --select or --all chooses.", stderr=True
+        )
         raise SystemExit(1)
 
     memories = local.discover(src)
@@ -219,9 +226,11 @@ def memory_import(
     def globbed(mem: local.LocalMemory, pattern: str) -> bool:
         return fnmatchcase(ident(mem), pattern) or fnmatchcase(mem.path.stem, pattern)
 
-    unmatched = [p for p in patterns if not any(globbed(m, p) for m in memories)]
+    unmatched = [
+        p for p in patterns if not any(named(m, p) or globbed(m, p) for m in memories)
+    ]
     if unmatched:
-        print_error(f"--select matched no memory: {', '.join(unmatched)}")
+        print_error(f"--select matched no memory: {', '.join(unmatched)}", stderr=True)
         raise SystemExit(1)
 
     from ..remote.proxy import RemoteToolFailed

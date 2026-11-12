@@ -91,6 +91,18 @@ def test_a_checkout_without_a_remote_is_unresolved(tmp_path):
     assert local.resolve_project(local.encode(str(checkout))).repo is None
 
 
+@pytest.mark.parametrize(
+    ("project_dir", "start"),
+    [
+        ("-home-me-repo", (Path("/"), "home-me-repo")),
+        ("C--Users-me-repo", (Path("C:\\"), "Users-me-repo")),
+        ("relative-name", None),
+    ],
+)
+def test_path_root_reads_posix_and_windows_drive_names(project_dir, start):
+    assert local.path_root(project_dir) == start
+
+
 def test_a_moved_directory_is_unresolved(tmp_path):
     resolved = local.resolve_project(local.encode(str(tmp_path / "gone")))
     assert resolved.repo is None
@@ -152,6 +164,18 @@ def test_unimportable_files_carry_a_reason(tmp_path, text, error):
     path = tmp_path / "m.md"
     path.write_text(text)
     assert local.parse(path, "p").error == error
+
+
+def test_a_block_scalar_value_keeps_its_continuation_lines(tmp_path):
+    path = tmp_path / "m.md"
+    path.write_text(
+        "---\nname: folded\ndescription: >-\n  first line\n  second line\n"
+        "metadata:\n  type: project\n---\nb\n"
+    )
+    parsed = local.parse(path, "p")
+    assert parsed.error is None
+    assert parsed.description == "first line second line"
+    assert parsed.kind == "project_fact"
 
 
 def test_discover_skips_the_index(tmp_path):
@@ -384,13 +408,50 @@ def test_one_stem_in_two_checkouts_of_a_repo_gets_two_ids(
     [
         ({"confirm": True}, "--confirm writes only what --select or --all chooses."),
         ({"select": ["nope"]}, "--select matched no memory: nope"),
+        ({"source": Path("/nonexistent/projects")}, "No such directory"),
     ],
 )
-def test_refusals(cli, projects, monkeypatch, kwargs, message):
-    errors = []
-    monkeypatch.setattr(
-        "witan.cli.memory.print_error", lambda msg, **_: errors.append(str(msg))
-    )
+def test_refusals_go_to_stderr_under_structured_output(
+    cli, projects, capsys, kwargs, message
+):
+    """stdout holds the one JSON document a consumer parses; prose there
+    breaks it."""
+    from witan.cli.memory import memory_import
+
+    capsys.readouterr()
     with pytest.raises(SystemExit):
-        cli(source=projects, **kwargs)
-    assert errors == [message]
+        memory_import(**{"source": projects, **kwargs})
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert message in err
+
+
+@requires_omnigraph
+def test_a_stem_with_glob_characters_is_selectable_by_name(
+    cli, tmp_path, projects, server
+):
+    _memory(projects, tmp_path / "src" / "repo", "contact[team]", type="user")
+    rows = cli(source=projects, select=["contact[team]"], confirm=True)
+    assert rows["test/repo/contact[team]"]["status"] == "stored"
+
+
+@requires_omnigraph
+def test_a_wholly_redacted_title_is_still_a_duplicate_on_rerun(
+    cli, tmp_path, projects, server
+):
+    """Nothing of the title survives in the graph, so the lookup has to find
+    the stored copy through its description."""
+    _memory(
+        projects,
+        tmp_path / "src" / "repo",
+        "addr",
+        name="ops@example.org",
+        description="Where production alerts are routed",
+        body="Page the on-call engineer.",
+    )
+    first = cli(source=projects, select=["addr"], confirm=True)
+    assert first["test/repo/addr"]["status"] == "stored"
+
+    second = cli(source=projects, select=["addr"], confirm=True)
+    assert second["test/repo/addr"]["status"] == "duplicate"
+    assert second["test/repo/addr"]["slug"] == first["test/repo/addr"]["slug"]

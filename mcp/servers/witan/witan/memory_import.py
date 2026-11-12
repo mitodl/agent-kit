@@ -43,6 +43,8 @@ INDEX_FILE = "MEMORY.md"
 _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
 _NON_ALNUM = re.compile(r"[^A-Za-z0-9]")
 _KEY_LINE = re.compile(r"^(\s*)([A-Za-z_][\w-]*):(?:\s+(.*))?$")
+_BLOCK_SCALAR = re.compile(r"^\s*[A-Za-z_][\w-]*:\s+[|>][-+0-9]*\s*$", re.MULTILINE)
+_DRIVE = re.compile(r"([A-Za-z])--(.*)")
 
 
 def default_source() -> Path:
@@ -87,15 +89,30 @@ def encode(path_part: str) -> str:
     return _NON_ALNUM.sub("-", path_part)
 
 
-def candidate_paths(project_dir: str, root: Path = Path("/")) -> list[Path]:
-    """Existing directories under ``root`` whose absolute path encodes to
-    ``project_dir``.
+def path_root(project_dir: str) -> tuple[Path, str] | None:
+    """The filesystem root ``project_dir`` starts from, and the rest of it.
 
-    Walks one level at a time, descending only into entries whose encoding is
-    a prefix of what is left, so the cost is proportional to the depth of the
-    path rather than the size of the filesystem.
+    ``/home/me/repo`` encodes as ``-home-me-repo`` and ``C:\\Users\\me\\repo``
+    as ``C--Users-me-repo``. A UNC path (``\\\\server\\share``) is not
+    recognised: its ``--server-share`` prefix cannot be split into server and
+    share, so it is reported as unresolved.
     """
-    if not project_dir.startswith("-"):
+    if drive := _DRIVE.fullmatch(project_dir):
+        return Path(f"{drive.group(1)}:\\"), drive.group(2)
+    if project_dir.startswith("-"):
+        return Path("/"), project_dir[1:]
+    return None
+
+
+def candidate_paths(project_dir: str) -> list[Path]:
+    """Existing directories whose absolute path encodes to ``project_dir``.
+
+    Walks one level at a time from the root, descending only into entries
+    whose encoding is a prefix of what is left, so the cost is proportional to
+    the depth of the path rather than the size of the filesystem.
+    """
+    start = path_root(project_dir)
+    if start is None:
         return []
 
     def walk(base: Path, rest: str) -> Iterator[Path]:
@@ -110,10 +127,10 @@ def candidate_paths(project_dir: str, root: Path = Path("/")) -> list[Path]:
             elif rest.startswith(enc + "-"):
                 yield from walk(entry, rest[len(enc) + 1 :])
 
-    return list(walk(root, project_dir[1:]))
+    return list(walk(*start))
 
 
-def resolve_project(project_dir: str, root: Path = Path("/")) -> Resolution:
+def resolve_project(project_dir: str) -> Resolution:
     """Map a Claude Code project directory name to a canonical repo URI.
 
     Only a candidate that is itself a checkout root (has ``.git``) counts, so a
@@ -121,7 +138,7 @@ def resolve_project(project_dir: str, root: Path = Path("/")) -> Resolution:
     under dotfile management, a folder of checkouts) does not borrow that
     repository's remote.
     """
-    candidates = candidate_paths(project_dir, root)
+    candidates = candidate_paths(project_dir)
     if not candidates:
         return Resolution(None, reason="no directory on disk matches this name")
     found: dict[str, Path] = {}
@@ -187,7 +204,18 @@ def parse(path: Path, project_dir: str) -> LocalMemory:
     match = _FRONTMATTER.match(text)
     if match is None:
         return LocalMemory(path, project_dir, error="no frontmatter")
-    meta = _loose_frontmatter(match.group(1))
+    frontmatter = match.group(1)
+    if _BLOCK_SCALAR.search(frontmatter):
+        # A `>`/`|` value continues on indented lines the line reader would
+        # drop, so this file was written as YAML and is read as YAML.
+        try:
+            meta = yaml.safe_load(frontmatter)
+        except yaml.YAMLError:
+            return LocalMemory(path, project_dir, error="frontmatter is not valid YAML")
+        if not isinstance(meta, dict):
+            return LocalMemory(path, project_dir, error="frontmatter is not a mapping")
+    else:
+        meta = _loose_frontmatter(frontmatter)
     nested = meta.get("metadata")
     # Older files carry `type` at the top level rather than under `metadata`.
     mem_type = (nested.get("type") if isinstance(nested, dict) else None) or meta.get(
