@@ -27,12 +27,14 @@ import asyncio
 import atexit
 import threading
 from collections.abc import Callable
+from importlib.metadata import version
 from typing import Any
 
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from mcp.types import Implementation
 
 from witan_core import chunking
 from witan_core.observability import get_logger
@@ -56,6 +58,15 @@ __all__ = [
 
 
 logger = get_logger("witan.code.remote")
+
+CLIENT_INFO = Implementation(name="witan-code", version=version("witan-code"))
+"""What this client calls itself in the MCP handshake and per-request ``_meta``.
+
+The SDK default is ``mcp 0.1.0`` for every client, so the deployment's
+``mcp.tool_call`` line could not tell one witan-code release from another, and
+a post-release check ("did this actor's write stream stop after 0.29.0?")
+could not separate an un-upgraded client from a fix that did not work.
+"""
 
 
 class RemoteStoreUnsupported(RuntimeError):
@@ -221,7 +232,10 @@ class StoreSession:
         self._lock = threading.Lock()
 
     def _default_client(self, token: str) -> Client:
-        return Client(StreamableHttpTransport(self.url, auth=BearerAuth(token)))
+        return Client(
+            StreamableHttpTransport(self.url, auth=BearerAuth(token)),
+            client_info=CLIENT_INFO,
+        )
 
     def call(self, tool: str, **arguments: Any) -> Any:
         """Invoke ``tool`` on the deployment and return its unwrapped result."""
