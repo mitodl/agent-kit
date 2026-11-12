@@ -62,21 +62,23 @@ def test(
     allowlist = compile_allowlist(cfg.allowlist)
     reasons = {f: suppression_reason(f, text, cfg, allowlist) for f in findings}
 
-    rows_data = []
-    for f in findings:
-        reason = reasons[f]
-        mode = "warn" if reason else _mode_for(cfg, f.category, f.action)
-        rows_data.append(
-            {
-                "detector": f.detector,
-                "category": f.category,
-                "severity": f.severity,
-                "span": f"{f.start}-{f.end}",
-                "action": mode,
-                "suppressed": reason or "",
-                "preview": f.preview,
-            }
-        )
+    records = [
+        {
+            **f.model_dump(),
+            # The action this write would get, not the finding's own override.
+            "action": "warn" if reasons[f] else _mode_for(cfg, f.category, f.action),
+            "suppressed": reasons[f],
+        }
+        for f in findings
+    ]
+    rows_data = [
+        {
+            **r,
+            "span": f"{r['start']}-{r['end']}",
+            "suppressed": r["suppressed"] or "",
+        }
+        for r in records
+    ]
     render_table(
         title="Findings",
         columns=[
@@ -92,6 +94,7 @@ def test(
         empty="[green]No findings.[/green]",
         styles={"action": _MODE_STYLE},
         dim_if_present={"suppressed"},
+        records=records,
     )
     if not findings:
         return

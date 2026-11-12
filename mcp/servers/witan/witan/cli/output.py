@@ -1,11 +1,11 @@
-"""Global ``--output-format`` state and structured (non-table) rendering.
+"""Global ``--output-format`` state and structured rendering.
 
 The CLI's table-producing commands render a rich :class:`~rich.table.Table`
 by default (``txt``). ``--output-format json|toml|yaml`` swaps that for a
-machine-readable dump of the same rows instead, via :func:`dump_structured`.
-An empty table dumps ``rows: []``, never the prose the ``txt`` view prints.
-Commands whose output is a record rather than a table go through
-:func:`dump_record`.
+machine-readable ``{title, rows}`` dump of the records behind the table (not
+its display cells), via :func:`dump_record`. An empty table dumps
+``rows: []``, never the prose the ``txt`` view prints. Commands whose output
+is one record print it through :func:`dump_record` directly.
 """
 
 from __future__ import annotations
@@ -30,21 +30,6 @@ def get_output_format() -> OutputFormat:
     return _current_format
 
 
-def dump_structured(
-    rows: list[dict[str, object]], title: str, fmt: OutputFormat
-) -> None:
-    """Print ``rows`` as JSON, TOML, or YAML, preserving each value's native type.
-
-    Wrapped in a ``{title, rows}`` object rather than a bare array — TOML has
-    no bare top-level array, so this keeps all three formats consistent.
-    Uses plain ``print`` rather than the rich console: these are meant to be
-    piped/parsed, and rich's line-wrapping would corrupt the output. Callers
-    go through :func:`witan.cli._common.render_table`, which normalizes
-    ``None`` to ``""`` first — TOML has no null.
-    """
-    dump_record({"title": title, "rows": rows}, fmt)
-
-
 def _drop_nulls(value: object) -> object:
     if isinstance(value, dict):
         return {k: _drop_nulls(v) for k, v in value.items() if v is not None}
@@ -56,8 +41,12 @@ def _drop_nulls(value: object) -> object:
 def dump_record(payload: dict[str, object], fmt: OutputFormat) -> None:
     """Print one record as JSON, TOML, or YAML, as the tool returned it.
 
-    For output that is not a table: ``task <slug>`` and ``project status``
-    print a tool's record, ``project tasks`` and ``session list`` its rows.
+    ``task <slug>`` and ``project status`` print a tool's record here; the
+    list commands print a ``{title, rows}`` envelope of the records behind each
+    list, most
+    through :func:`witan.cli._common.render_table`. Wrapped rather than a bare
+    array because TOML has no top-level array. Plain ``print``, not the rich
+    console, because rich's line-wrapping would corrupt a piped document.
     JSON and YAML keep ``null``. TOML has none, so a ``None`` there is omitted
     rather than rewritten to ``""``, which would make an unset ``closed_at``
     read as present.

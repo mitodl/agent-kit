@@ -57,6 +57,11 @@ app.command(targets_app, name="target")
 # textual add/remove below from having to reason about quoting.
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# Left out of `target list`'s structured records: they belong in the config
+# file, not in output that gets pasted into issues and logs. `code_token` is
+# here although `_Target` ignores it today, so adding the field cannot leak it.
+_CREDENTIAL_FIELDS = frozenset({"token", "code_token"})
+
 # Ordered so a rendered block reads the way the docs introduce these: what to
 # talk to, how to authenticate, then which repos should route here.
 _FIELD_ORDER = (
@@ -964,6 +969,13 @@ def list_targets() -> None:
         ),
         no_wrap={"cur", "name"},
         placeholders={"matches": "explicit only"},
+        records=[
+            {
+                "current": selected is not None and t.name == selected.name,
+                **t.model_dump(exclude=_CREDENTIAL_FIELDS),
+            }
+            for t in targets
+        ],
     )
 
 

@@ -38,4 +38,5 @@ def memory(
         rows=rows_data,
         empty="[dim]No memories.[/dim]",
         no_wrap={"kind"},
+        records=rows,
     )

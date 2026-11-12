@@ -16,7 +16,7 @@ from witan_core.elicit import with_console_ctx
 
 from .. import live_pr
 from .. import repo as repo_module
-from .output import dump_structured, get_output_format
+from .output import dump_record, get_output_format
 from .selected_target import selected_target
 
 # Enum literals mirrored from witan.server — drive CLI argument validation.
@@ -252,16 +252,20 @@ def render_table(
     styles: dict[str, dict[str, str]] | None = None,
     dim_if_present: set[str] | None = None,
     placeholders: dict[str, str] | None = None,
+    records: list[dict[str, object]] | None = None,
 ) -> None:
-    """Render ``rows`` as a rich table, or dump them structured per ``--output-format``.
+    """Render ``rows`` as a rich table, or dump ``records`` per ``--output-format``.
 
-    ``rows`` hold plain, unstyled values of any JSON/TOML/YAML-serializable
-    type — ``None`` is normalized to ``""`` (TOML has no null, and a bare
-    ``None`` would otherwise print as the literal text ``"None"``); every
-    other type (``int``, ``float``, ``bool``, ``str``) passes through
-    unchanged, so structured output keeps its native type (e.g. a session
-    count stays a JSON number). ``styles``/``dim_if_present``/``placeholders``
-    are display-only concerns applied only in ``txt`` mode.
+    Structured output is the data, ``txt`` is the view. ``rows`` are the
+    display projection (repo URIs shortened, lists joined into one cell), so a
+    caller whose rows lose anything passes the records it fetched as
+    ``records``, and those are what JSON/TOML/YAML get, through
+    :func:`~witan.cli.output.dump_record`: ``None`` stays ``null`` in JSON and
+    YAML and is omitted in TOML. ``records`` defaults to ``rows`` for a table
+    whose cells are already the data. In ``txt`` a ``None`` cell prints as
+    ``""`` rather than the literal ``"None"``.
+    ``styles``/``dim_if_present``/``placeholders`` are display-only concerns
+    applied only in ``txt`` mode.
 
     ``empty`` is the Rich markup ``txt`` mode prints instead of a table when
     there are no rows. It is a parameter rather than each caller's early
@@ -273,11 +277,9 @@ def render_table(
     only, so structured output carries it as written. A caller that escaped it
     itself put the backslashes into every JSON/TOML/YAML title.
     """
-    rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
-
     fmt = get_output_format()
     if fmt != "txt":
-        dump_structured(rows, title, fmt)
+        dump_record({"title": title, "rows": rows if records is None else records}, fmt)
         return
     if not rows:
         console.print(empty)
@@ -298,7 +300,7 @@ def render_table(
     for r in rows:
         cells = []
         for col in columns:
-            value = str(r.get(col, ""))
+            value = "" if r.get(col) is None else str(r[col])
             if not value and col in placeholders:
                 cells.append(f"[dim]{esc(placeholders[col])}[/dim]")
             elif col in styles:

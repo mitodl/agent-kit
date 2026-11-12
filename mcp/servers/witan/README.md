@@ -314,14 +314,19 @@ Pass `--output-format json|toml|yaml` (default `txt`; env `WITAN_OUTPUT_FORMAT`)
 anywhere on the command line to get a machine-readable dump instead of the
 rich view, e.g. `witan tasks --all-repos --output-format json`. The table
 commands (`tasks`, `projects`, `memory`, `traces`, `scan test`, `scan rules`,
-`target list`, and with `witan-code` installed `code repos`, `code symbols`
-and `code stitch`) print `{title, rows}`. For witan's own commands an empty
-result is `rows: []`, never a sentence; the `code` commands still print prose
-when empty. `task <slug>` (also `task show <slug>`) and `project status`
-print the tool's record whole, and `project tasks` and `session list` print
-the tool's rows. Those four keep nulls in JSON and YAML and omit them in TOML,
-which has no null; the table commands still print a null as `""` in every
-format. `project <slug>`, `trace <slug>` and `graph` are unaffected.
+`target list`, `journal list`, and with `witan-code` installed `code repos`,
+`code symbols` and `code stitch`) print `{title, rows}`. For witan's own
+commands an empty result is `rows: []`, never a sentence, and each row is the
+record behind the table row rather than its cells: `repo` is the full URI,
+`blocked_by` and `repos` are lists, and fields the table does not show are
+included (`target list` leaves out each target's `token`). A row carries
+what its tool returns, so `tasks <query>` rows have no `blocked_by`. `task <slug>`
+(also `task show <slug>`) and `project status` print the tool's record whole,
+and `project tasks` and `session list` print the tool's rows. All of witan's
+own commands keep nulls in JSON and YAML and omit them in TOML, which has no
+null. The `code` commands still print their display cells, with a null as
+`""`, and prose when empty. `project <slug>`, `trace <slug>` and `graph` are
+unaffected.
 
 A structured run writes one document to stdout and nothing else; notices and
 log lines go to stderr, including on success. Branch on the exit code, not

@@ -69,6 +69,7 @@ def traces(
         rows=rows_data,
         empty="[dim]No traces.[/dim]",
         no_wrap={"slug", "sessions", "mined"},
+        records=rows,
     )
 
 

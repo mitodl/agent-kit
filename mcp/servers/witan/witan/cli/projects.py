@@ -104,6 +104,7 @@ def projects(
         empty=f"[dim]No projects{esc(matching)}.[/dim]",
         no_wrap={"status", "phase"},
         styles={"status": _STATUS_STYLE},
+        records=rows,
     )
 
 
