@@ -29,7 +29,7 @@ def _refusing_proxy(message: str):
     # Seeded so the call reaches call_tool without a tools/list round trip.
     proxy._param_names = {
         "store_merge": ["rows", "dry_run", "claim_from_author"],
-        "task_ready": ["repo", "limit"],
+        "task_ready": ["repo", "project_slug", "assignee", "limit"],
     }
 
     class _Client:
@@ -124,6 +124,73 @@ def test_the_entrypoint_actually_lists_the_type_it_must_catch():
     from witan.cli import main
 
     assert "RemoteToolFailed" in inspect.getsource(main)
+
+
+def _run_main(monkeypatch, *argv: str) -> int:
+    """Run the real `main()` and launcher over ``argv``, returning the exit code."""
+    import warnings
+
+    from witan import cli
+
+    monkeypatch.setattr("sys.argv", ["witan", *argv])
+    with warnings.catch_warnings(), pytest.raises(SystemExit) as exit_code:
+        # `main()` calls `app.meta()` with no tokens, as the console script
+        # does, and cyclopts warns about reading `sys.argv` under pytest.
+        warnings.filterwarnings("ignore", "Cyclopts application invoked without")
+        cli.main()
+    return exit_code.value.code
+
+
+@pytest.mark.parametrize("fmt", ["json", "toml", "yaml"])
+def test_the_entrypoint_keeps_a_refusal_off_structured_stdout(
+    monkeypatch, capsys, launcher_state, fmt
+):
+    # A consumer of `--output-format json` parses stdout. The refusal is not a
+    # document, so it belongs on stderr, with the exit status saying the
+    # command did not run.
+    from witan.cli import _common
+
+    proxy = _refusing_proxy("cedar: read denied on graph 'council'")
+    monkeypatch.setattr(_common, "_server", proxy)
+
+    code = _run_main(
+        monkeypatch, "--output-format", fmt, "tasks", "--ready", "--all-repos"
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "cedar: read denied" in captured.err
+
+
+def test_witan_code_refusals_reach_stderr_through_the_umbrella(
+    monkeypatch, capsys, launcher_state
+):
+    # `witan code …` mounts witan-code's App under this launcher, so
+    # witan-code's own cli() handler (which already prints to stderr) never
+    # runs. This entrypoint is the one that renders the failure.
+    code_cli = pytest.importorskip("witan_code.cli")
+    from types import SimpleNamespace
+
+    from witan.remote.proxy import RemoteToolFailed
+
+    # A stub rather than a real proxy: classification is covered above, and
+    # this test is only about where the entrypoint prints the message.
+    def _refuse(**_):
+        raise RemoteToolFailed("cedar: read denied on graph 'code'")
+
+    monkeypatch.setattr(
+        code_cli, "_srv", lambda: SimpleNamespace(code_repo_symbols=_refuse)
+    )
+
+    code = _run_main(
+        monkeypatch, "--output-format", "json", "code", "symbols", "--repo", "r"
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "cedar: read denied" in captured.err
 
 
 def test_a_refusal_is_a_runtime_error_so_existing_handlers_keep_working():

@@ -16,13 +16,7 @@ import pytest
 from witan.cli import _launcher, _warn_about_routing
 from witan.cli.selected_target import selected_target, set_selected_target
 
-
-@pytest.fixture(autouse=True)
-def _clean_selection():
-    """Module-level state, so a leaked value would silently steer a later test."""
-    set_selected_target(None)
-    yield
-    set_selected_target(None)
+pytestmark = pytest.mark.usefixtures("launcher_state")
 
 
 def _on_a_terminal(monkeypatch, is_terminal: bool):

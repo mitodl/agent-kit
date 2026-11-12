@@ -257,3 +257,30 @@ def _served_tools(monkeypatch, url: str) -> "_Tools":
     assert client._groups_writes()
     monkeypatch.setattr(srv, "client", client)
     return _Tools(srv)
+
+
+def _reset_launcher_state() -> None:
+    from witan.cli.output import set_output_format
+    from witan.cli.selected_target import set_selected_target
+
+    set_output_format("txt")
+    set_selected_target(None)
+    try:
+        from witan_code.output import set_output_format as set_code_output_format
+    except ImportError:
+        return
+    set_code_output_format("txt")
+
+
+@pytest.fixture
+def launcher_state():
+    """Reset the module-level state `main()`'s launcher sets for the process.
+
+    The output format and the selected target are process-wide, so a test that
+    drives the launcher leaks them into every later test. One test leaking a
+    target once took out nine elsewhere. Request this fixture (or mark a module
+    with it) rather than resetting a subset of that state locally.
+    """
+    _reset_launcher_state()
+    yield
+    _reset_launcher_state()

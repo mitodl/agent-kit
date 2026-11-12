@@ -11,31 +11,7 @@ import pytest
 from witan.cli import output as output_module
 from witan.cli._common import render_table
 
-# Imported from the module, not `witan.cli`: the package re-exports
-# `selected_target` as a FUNCTION, which shadows the submodule name.
-from witan.cli.selected_target import set_selected_target
-
-
-@pytest.fixture(autouse=True)
-def _reset_output_format():
-    """Every test starts and ends on the txt default regardless of order."""
-    output_module.set_output_format("txt")
-    yield
-    output_module.set_output_format("txt")
-
-
-@pytest.fixture(autouse=True)
-def _reset_selected_target():
-    """Same, for the launcher's other piece of module-level state.
-
-    Any test that drives `_launcher` with a `target` sets it process-wide, and
-    without this the value leaks into every test that runs afterwards — which
-    is how one test here took out nine elsewhere, all of them asserting on a
-    target they never set.
-    """
-    set_selected_target(None)
-    yield
-    set_selected_target(None)
+pytestmark = pytest.mark.usefixtures("launcher_state")
 
 
 def _rows():
