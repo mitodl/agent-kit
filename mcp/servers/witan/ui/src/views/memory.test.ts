@@ -33,6 +33,7 @@ import {
 	type MemoryPage,
 	memoryDetail,
 	memoryView,
+	TOPIC_ROW_CAP,
 } from "./memory.js";
 
 const memory = unwrap<Memory>("memory_get", memoryGetFixture);
@@ -260,7 +261,7 @@ describe("facets", () => {
 describe("the search form", () => {
 	it("submits the query and leaves a topic", () => {
 		const onNavigate = draw(
-			{ mode: "topic", topic: null, memories: [] },
+			{ mode: "topic", topic: null, memories: [], readAtLimit: false },
 			{ ...route, topic: "tp-x" },
 		);
 		const input = root.querySelector<HTMLInputElement>("input[name=q]");
@@ -278,7 +279,7 @@ describe("the search form", () => {
 describe("the topic list", () => {
 	it("names a missing topic as a stale link", () => {
 		draw(
-			{ mode: "topic", topic: null, memories: [] },
+			{ mode: "topic", topic: null, memories: [], readAtLimit: false },
 			{ ...route, topic: "tp-gone" },
 		);
 
@@ -297,6 +298,7 @@ describe("the topic list", () => {
 					created_at: memory.created_at,
 				},
 				memories: [memory],
+				readAtLimit: false,
 			},
 			{ ...route, topic: "tp-topic-mcp" },
 		);
@@ -307,6 +309,44 @@ describe("the topic list", () => {
 		);
 		expect(headings).not.toContain("Author");
 		expect(headings).not.toContain("Tags");
+	});
+});
+
+describe("a topic at its limits", () => {
+	const topic = {
+		slug: "tp-topic-mcp",
+		name: "mcp",
+		kind: "topic",
+		created_at: memory.created_at,
+	};
+	const at = { ...route, topic: topic.slug };
+
+	it("warns a filtered empty topic that its read was cut", () => {
+		draw({ mode: "topic", topic, memories: [], readAtLimit: true }, at);
+
+		expect(root.querySelector(".note")?.textContent).toContain(
+			"came back at its limit",
+		);
+		expect(text()).toContain("No memories are tagged with this topic.");
+	});
+
+	it("caps the rows after narrowing, and says how many it left out", () => {
+		const many = Array.from({ length: TOPIC_ROW_CAP + 3 }, (_, i) => ({
+			...memory,
+			slug: `pat-${i}`,
+		}));
+		draw({ mode: "topic", topic, memories: many, readAtLimit: false }, at);
+
+		expect(root.querySelectorAll("tbody tr")).toHaveLength(TOPIC_ROW_CAP);
+		expect(root.querySelector(".note")?.textContent).toContain(
+			`first ${TOPIC_ROW_CAP} of ${TOPIC_ROW_CAP + 3}`,
+		);
+	});
+
+	it("says nothing about limits for a topic under them", () => {
+		draw({ mode: "topic", topic, memories: [memory], readAtLimit: false }, at);
+
+		expect(root.querySelector(".note")).toBeNull();
 	});
 });
 

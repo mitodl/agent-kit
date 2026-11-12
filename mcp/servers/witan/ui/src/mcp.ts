@@ -416,8 +416,14 @@ export function memoryContradictions(args: {
 	return read("memory_contradictions", args);
 }
 
-/** The most memories a topic page lists. */
-export const TOPIC_MEMORY_CAP = 500;
+/**
+ * `recall`'s limit on a topic read. The Kind select and the facets narrow a
+ * topic in the browser (`recall`'s `kind` narrows only a query seed), so the
+ * read has to hold the whole topic: a limit at the page's row cap would rank a
+ * lesson out behind that many patterns before the filter saw it. Far past any
+ * topic in a real graph, and a read that reaches it is flagged on the page.
+ */
+export const TOPIC_READ_LIMIT = 5000;
 
 /**
  * A topic and every memory tagged to it, superseded ones included, or `null`
@@ -430,7 +436,7 @@ export async function topicGet(topic: string): Promise<TopicResult | null> {
 		topic,
 		repo: "",
 		hops: 0,
-		limit: TOPIC_MEMORY_CAP,
+		limit: TOPIC_READ_LIMIT,
 		include_superseded: true,
 	});
 	return topicResultOf(result);

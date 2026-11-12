@@ -14,6 +14,7 @@ import {
 	memoryNeighbors,
 	memorySearch,
 	recall,
+	TOPIC_READ_LIMIT,
 	taskGet,
 	taskList,
 	taskReady,
@@ -1190,12 +1191,16 @@ async function readMemoryPage(scope: MemoryScope): Promise<MemoryPage> {
 	const kind = scope.kind ?? undefined;
 	if (scope.topic) {
 		const result = await topicGet(scope.topic);
+		const read = result?.memories ?? [];
 		// `recall`'s `kind` narrows only a query seed, so the Kind select
-		// narrows here.
-		const memories = (result?.memories ?? []).filter(
-			(memory) => !kind || memory.kind === kind,
-		);
-		return { mode: "topic", topic: result?.topic ?? null, memories };
+		// narrows here, over the whole read; the view caps the rows after.
+		const memories = read.filter((memory) => !kind || memory.kind === kind);
+		return {
+			mode: "topic",
+			topic: result?.topic ?? null,
+			memories,
+			readAtLimit: read.length >= TOPIC_READ_LIMIT,
+		};
 	}
 	if (q && plain) {
 		const memories = await memorySearch({

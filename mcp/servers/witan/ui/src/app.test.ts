@@ -70,7 +70,9 @@ import { unwrap } from "./unwrap.js";
  * a given route, and what it does when the route changes under an in-flight
  * read.
  */
-vi.mock("./mcp.js", () => ({
+vi.mock("./mcp.js", async (importOriginal) => ({
+	TOPIC_READ_LIMIT: (await importOriginal<typeof import("./mcp.js")>())
+		.TOPIC_READ_LIMIT,
 	workflowProjectList: vi.fn(),
 	workflowProjectGet: vi.fn(),
 	workflowProjectStatus: vi.fn(),
@@ -1057,6 +1059,26 @@ describe("App", () => {
 		);
 		expect(kinds.length).toBeGreaterThan(0);
 		expect(new Set(kinds)).toEqual(new Set(["lesson"]));
+	});
+
+	it("warns a kind-filtered topic whose read came back at its limit", async () => {
+		const topicPage = unwrap<RecallResult>("recall", recallTopicFixture);
+		vi.mocked(mcp.topicGet).mockResolvedValue({
+			topic: topicPage.topic as Topic,
+			memories: Array.from({ length: mcp.TOPIC_READ_LIMIT }, () => ({
+				...memory,
+				kind: "pattern" as const,
+			})),
+		});
+		await open("#memory?topic=tp-topic-witan-ui&kind=lesson");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".topic-heading")).not.toBeNull(),
+		);
+
+		expect(root.querySelector(".note")?.textContent).toContain(
+			"came back at its limit",
+		);
+		expect(root.querySelector("tbody")).toBeNull();
 	});
 
 	it("opens a memory slug as a memory, not a task", async () => {

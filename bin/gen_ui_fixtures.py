@@ -528,7 +528,7 @@ async def _collect(store: Path) -> dict[str, str]:
                 "topic": "witan-ui:topic",
                 "repo": "",
                 "hops": 0,
-                "limit": 500,
+                "limit": 5000,
                 "include_superseded": True,
             },
         }
