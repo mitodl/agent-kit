@@ -3935,7 +3935,12 @@ def _task_memories(task: dict) -> tuple[list[dict], dict[str, tuple]]:
     scores = {}
     for row in _title_matches(task["title"]):
         rows.setdefault(row["slug"], row)
-        scores[row["slug"]] = (row[_SCORE_COLUMN], row[_TITLE_SCORE_KEY])
+        # The engine can omit a score, which the floors read as 0.0; null in
+        # the log is reserved for a linked memory the title did not match.
+        scores[row["slug"]] = (
+            row[_SCORE_COLUMN] or 0.0,
+            row[_TITLE_SCORE_KEY] or 0.0,
+        )
     if not rows:
         return [], scores
     superseded = {

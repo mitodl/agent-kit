@@ -296,6 +296,34 @@ def test_the_log_carries_the_scores_the_floors_were_applied_to(
 
 
 @requires_omnigraph
+def test_an_omitted_score_logs_zero_not_null(server, monkeypatch, no_floor, logged):
+    """The floors read a score the engine omitted as 0.0, so the log says 0.0
+    too; null would claim the title did not match a memory it matched."""
+    match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    task = _task(server)
+    real = server._module._title_matches
+
+    def unscored(text):
+        return [
+            {
+                **row,
+                server._module._SCORE_COLUMN: None,
+                server._module._TITLE_SCORE_KEY: None,
+            }
+            for row in real(text)
+        ]
+
+    monkeypatch.setattr(server._module, "_title_matches", unscored)
+
+    server.task_claim(task["slug"])
+
+    (line,) = logged["witan.memory.surfaced"]
+    assert line["slugs"] == [match["slug"]]
+    assert line["content_scores"] == [0.0]
+    assert line["title_scores"] == [0.0]
+
+
+@requires_omnigraph
 def test_a_failed_lookup_still_counts_as_a_claim_with_nothing(
     server, monkeypatch, logged
 ):
