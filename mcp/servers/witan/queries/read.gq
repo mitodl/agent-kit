@@ -1307,8 +1307,8 @@ query task_code_branches($task_slug: String) {
 }
 
 // ── Edge enumeration, for removal ─────────────────────────────────
-// `task_unlink` checks the edge exists before deleting it, so it can report
-// `removed`. Each query returns the slugs `$from` points at.
+// `task_link(remove=True)` checks the edge exists before deleting it, so it
+// can report `removed`. Each query returns the slugs `$from` points at.
 
 query blocks_to_slugs($from: String) {
     match {

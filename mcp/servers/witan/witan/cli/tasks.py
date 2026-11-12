@@ -703,7 +703,9 @@ def task_unlink_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
         blocks | parent | discovered_from | addresses.
     """
     s = _srv()
-    result = _fn(s.task_unlink)(from_slug=from_slug, to_slug=to_slug, kind=kind)
+    result = _fn(s.task_link)(
+        from_slug=from_slug, to_slug=to_slug, kind=kind, remove=True
+    )
     if result.get("removed"):
         console.print(f"[green]Unlinked[/green] {from_slug} —[{kind}]→ {to_slug}")
     else:

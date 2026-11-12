@@ -198,7 +198,7 @@ unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
 | `repo` | str? | `null` | Canonical repo URI to (re)assign this task to. Pass an explicit value to<br>correct tasks that were created without proper repo context. |
 | `assignee` | str? | `null` | Holder identity to reassign the task to. Prefer ``task_claim`` to take a<br>task for yourself — it checks nobody else holds it, which this does not. |
 | `project_slug` | str? | `null` | ``wp-`` slug of the WorkflowProject this task rolls up to. |
-| `parent` | str? | `null` | ``tk-`` slug of the parent task/epic. Written as both the<br>``parent_slug`` field and the ``ParentOf`` edge in one commit, so a<br>concurrent reader never sees the task parented one way and not the<br>other. **Re-parenting does not retract the previous edge**: the field<br>moves to the new parent while the old ``ParentOf`` remains, so a task<br>re-parented this way is reachable from both. Call<br>``task_unlink(kind="parent")`` on the old pair first if the edge<br>matters to you. |
+| `parent` | str? | `null` | ``tk-`` slug of the parent task/epic. Written as both the<br>``parent_slug`` field and the ``ParentOf`` edge in one commit, so a<br>concurrent reader never sees the task parented one way and not the<br>other. **Re-parenting does not retract the previous edge**: the field<br>moves to the new parent while the old ``ParentOf`` remains, so a task<br>re-parented this way is reachable from both. Call<br>``task_link(kind="parent", remove=True)`` on the old pair first if the edge<br>matters to you. |
 | `external_uri` | str? | `null` | Reference URI — e.g. the GitHub issue or PR this task tracks. |
 | `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns.<br>Replaces the existing list. |
 | `tags` | list[str]? | `null` | Free-form tags. Replaces the existing list rather than merging into it. |
@@ -338,7 +338,7 @@ cut-off run can resume. And not for reusable repo knowledge (that is
 
 ## `task_link`
 
-Link two tasks (or a task to a memory).
+Link two tasks (or a task to a memory), or with ``remove=True`` unlink them.
 
 The meaning of ``from``/``to`` depends on ``kind``:
 - ``blocks``          — ``from`` is the blocker, ``to`` is the blocked task.
@@ -352,38 +352,22 @@ The meaning of ``from``/``to`` depends on ``kind``:
 For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
 fields on the affected task are kept in sync so ``task_ready`` stays correct.
 
-Reversible: ``task_unlink`` removes any of these, including one recorded in
-the wrong direction.
+Reversible: ``remove=True`` removes any of these, including one recorded in
+the wrong direction. Pass the endpoints as the link was written, not
+reversed. Removing a ``blocks`` link is how a task wrongly marked blocked
+becomes ready again, and for ``blocks`` and ``parent`` the denormalized
+fields are updated to match: unblocking a task whose remaining blockers
+are all closed returns it from ``blocked`` to ``open``. A removal returns
+``{"from", "to", "kind", "removed"}``, where ``removed`` is ``False`` when
+the edge was not there. That is not an error, so removing twice, or
+removing a link that never existed, is a safe no-op.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `from_slug` | str | **required** | The ``tk-`` slug the edge points **from**. Its meaning depends on<br>``kind`` — see above; for ``blocks`` this is the blocker, for ``parent``<br>the epic, for ``discovered_from`` the newly-found task. |
 | `to_slug` | str | **required** | The slug the edge points **to** — the blocked task, the child, the task<br>the work was discovered during, or (for ``addresses``) a ``Memory``<br>slug. |
 | `kind` | `blocks` \| `parent` \| `discovered_from` \| `addresses` | **required** | ``blocks`` \| ``parent`` \| ``discovered_from`` \| ``addresses``. Getting<br>the direction wrong is the common mistake here, and it matters: for<br>``blocks`` it decides which task ``task_ready`` withholds. |
-
-## `task_unlink`
-
-Remove a link between two tasks (or a task and a memory) — the inverse of
-``task_link``, with the same ``from``/``to`` meanings.
-
-Use it when a link was recorded the wrong way round or against the wrong
-slug. Removing a ``blocks`` link is how a task wrongly marked blocked
-becomes ready again.
-
-For ``blocks`` and ``parent`` the denormalized ``blocked_by`` /
-``parent_slug`` fields are updated to match, so ``task_ready`` stays
-correct. Unblocking a task whose remaining blockers are all closed returns
-it from ``blocked`` to ``open`` — the mirror of what ``task_link`` does.
-
-Returns ``{"from", "to", "kind", "removed"}``. ``removed`` is ``False``
-when the edge was not there, which is not an error: calling this twice, or
-on a link that never existed, is a safe no-op.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `from_slug` | str | **required** | The ``tk-`` slug the edge points **from** — the same direction it was<br>written with. Pass the endpoints as ``task_link`` received them, not<br>reversed. |
-| `to_slug` | str | **required** | The slug the edge points **to**, or a ``Memory`` slug for<br>``kind="addresses"``. |
-| `kind` | `blocks` \| `parent` \| `discovered_from` \| `addresses` | **required** | Which edge to remove: ``blocks`` \| ``parent`` \| ``discovered_from`` \|<br>``addresses``. |
+| `remove` | bool | `False` | Remove the ``from -> to`` edge of ``kind`` instead of adding it. |
 
 ## `task_for_branch`
 

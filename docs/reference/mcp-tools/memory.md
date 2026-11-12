@@ -157,7 +157,7 @@ behind. Topic nodes on the far end of a ``Tagged`` edge survive and may be
 left with no memories.
 
 That is not the only way to remove an edge — edges are deletable on their
-own (``task_unlink``, ``_unlink_edge``). Deleting the node is still the
+own (``task_link(remove=True)``, ``_unlink_edge``). Deleting the node is still the
 only route for a *memory* edge, since no unlink tool covers those yet.
 
 | Parameter | Type | Default | Description |

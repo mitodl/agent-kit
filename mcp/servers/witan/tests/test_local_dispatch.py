@@ -215,7 +215,7 @@ def test_search_reads_from_an_unmatched_directory_are_allowed(
     _stderr(monkeypatch)
     server = _srv()
 
-    for name in ("task_search", "workflow_project_search"):
+    for name in ("task_search", "workflow_project_list"):
         assert getattr(server, name) is not None
 
 
@@ -289,7 +289,6 @@ def test_writes_the_cli_dispatches_are_all_refused(
         "task_claim",
         "task_release",
         "task_link",
-        "task_unlink",
         "memory_store",
         "memory_update",
         "memory_delete",
@@ -297,8 +296,6 @@ def test_writes_the_cli_dispatches_are_all_refused(
         "workflow_project_update",
         "workflow_project_advance",
         "workflow_project_complete",
-        "workflow_project_block",
-        "workflow_project_unblock",
         "workflow_session_start",
         "workflow_session_end",
         "workflow_trace_mine",

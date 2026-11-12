@@ -4768,7 +4768,7 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
     left with no memories.
 
     That is not the only way to remove an edge — edges are deletable on their
-    own (``task_unlink``, ``_unlink_edge``). Deleting the node is still the
+    own (``task_link(remove=True)``, ``_unlink_edge``). Deleting the node is still the
     only route for a *memory* edge, since no unlink tool covers those yet.
 
     Parameters
@@ -8176,7 +8176,7 @@ def task_update(
         other. **Re-parenting does not retract the previous edge**: the field
         moves to the new parent while the old ``ParentOf`` remains, so a task
         re-parented this way is reachable from both. Call
-        ``task_unlink(kind="parent")`` on the old pair first if the edge
+        ``task_link(kind="parent", remove=True)`` on the old pair first if the edge
         matters to you.
     external_uri:
         Reference URI — e.g. the GitHub issue or PR this task tracks.
@@ -8833,9 +8833,11 @@ def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
 
 
 @_tool
-def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
+def task_link(
+    from_slug: str, to_slug: str, kind: TaskLinkKind, remove: bool = False
+) -> dict:
     """
-    Link two tasks (or a task to a memory).
+    Link two tasks (or a task to a memory), or with ``remove=True`` unlink them.
 
     The meaning of ``from``/``to`` depends on ``kind``:
     - ``blocks``          — ``from`` is the blocker, ``to`` is the blocked task.
@@ -8849,8 +8851,15 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
     fields on the affected task are kept in sync so ``task_ready`` stays correct.
 
-    Reversible: ``task_unlink`` removes any of these, including one recorded in
-    the wrong direction.
+    Reversible: ``remove=True`` removes any of these, including one recorded in
+    the wrong direction. Pass the endpoints as the link was written, not
+    reversed. Removing a ``blocks`` link is how a task wrongly marked blocked
+    becomes ready again, and for ``blocks`` and ``parent`` the denormalized
+    fields are updated to match: unblocking a task whose remaining blockers
+    are all closed returns it from ``blocked`` to ``open``. A removal returns
+    ``{"from", "to", "kind", "removed"}``, where ``removed`` is ``False`` when
+    the edge was not there. That is not an error, so removing twice, or
+    removing a link that never existed, is a safe no-op.
 
     Parameters
     ----------
@@ -8866,7 +8875,11 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         ``blocks`` | ``parent`` | ``discovered_from`` | ``addresses``. Getting
         the direction wrong is the common mistake here, and it matters: for
         ``blocks`` it decides which task ``task_ready`` withholds.
+    remove:
+        Remove the ``from -> to`` edge of ``kind`` instead of adding it.
     """
+    if remove:
+        return _task_unlink(from_slug, to_slug, kind)
     if kind == "blocks":
         # The edge always lands; the denormalized `blocked_by`/`status` sync
         # only when there's something new to sync. Both land in ONE commit via
@@ -8951,38 +8964,8 @@ def _unlink_edge(kind: str, from_slug: str, to_slug: str) -> bool:
     return True
 
 
-@_tool
-def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
-    """
-    Remove a link between two tasks (or a task and a memory) — the inverse of
-    ``task_link``, with the same ``from``/``to`` meanings.
-
-    Use it when a link was recorded the wrong way round or against the wrong
-    slug. Removing a ``blocks`` link is how a task wrongly marked blocked
-    becomes ready again.
-
-    For ``blocks`` and ``parent`` the denormalized ``blocked_by`` /
-    ``parent_slug`` fields are updated to match, so ``task_ready`` stays
-    correct. Unblocking a task whose remaining blockers are all closed returns
-    it from ``blocked`` to ``open`` — the mirror of what ``task_link`` does.
-
-    Returns ``{"from", "to", "kind", "removed"}``. ``removed`` is ``False``
-    when the edge was not there, which is not an error: calling this twice, or
-    on a link that never existed, is a safe no-op.
-
-    Parameters
-    ----------
-    from_slug:
-        The ``tk-`` slug the edge points **from** — the same direction it was
-        written with. Pass the endpoints as ``task_link`` received them, not
-        reversed.
-    to_slug:
-        The slug the edge points **to**, or a ``Memory`` slug for
-        ``kind="addresses"``.
-    kind:
-        Which edge to remove: ``blocks`` | ``parent`` | ``discovered_from`` |
-        ``addresses``.
-    """
+def _task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
+    """``task_link(remove=True)``: delete one edge and resync the denormalized fields."""
     removed = _unlink_edge(kind, from_slug, to_slug)
 
     # Both syncs are computed from the row their write is fenced on, so a

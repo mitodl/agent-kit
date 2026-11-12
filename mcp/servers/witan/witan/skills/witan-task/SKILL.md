@@ -357,7 +357,7 @@ To add a dependency, hierarchy, or provenance link to existing tasks, use
 
 ## Undoing a link
 
-`task_unlink(from_slug, to_slug, kind)` takes the same arguments and removes
+`task_link(from_slug, to_slug, kind, remove=True)` takes the same arguments and removes
 the link. Reach for it when one was recorded the wrong way round — the usual
 tell is a task showing as blocked by something it actually blocks.
 
