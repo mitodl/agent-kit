@@ -419,7 +419,9 @@ def test_main_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, c
     with pytest.raises(SystemExit) as exit_code:
         cli_module.main()
     assert exit_code.value.code == 1
-    assert "witan is down at X" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "witan is down at X" in captured.err
+    assert captured.out == ""
 
 
 def test_main_does_not_let_rich_swallow_a_bracketed_target_name(monkeypatch, capsys):
@@ -441,7 +443,7 @@ def test_main_does_not_let_rich_swallow_a_bracketed_target_name(monkeypatch, cap
     with pytest.raises(SystemExit):
         cli_module.main()
     # Rendered output wraps, so match the fragment that markup would remove.
-    assert "[qa]" in capsys.readouterr().out
+    assert "[qa]" in capsys.readouterr().err
 
 
 def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch):

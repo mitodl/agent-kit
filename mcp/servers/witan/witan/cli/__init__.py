@@ -35,7 +35,7 @@ from . import (
     traces,  # noqa: F401
     ui,  # noqa: F401
 )
-from ._common import app, console, print_error, stderr_console
+from ._common import app, print_error, stderr_console
 from .code_routing import warn_if_code_graph_is_local
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
@@ -482,5 +482,9 @@ def main() -> None:
         # "unset `remote_url` on target [qa]" reached the user as "on target".
         # The one part of the sentence that identifies what to unset is exactly
         # the part markup ate.
-        console.print(str(exc), style="red", markup=False)
+        #
+        # stderr, because under --output-format json|toml|yaml stdout holds the
+        # document a consumer parses. That includes `witan code …`, whose own
+        # cli() handler never runs under this launcher.
+        stderr_console.print(str(exc), style="red", markup=False)
         raise SystemExit(1) from None

@@ -151,7 +151,7 @@ def test_local_cli_prints_the_refusal_instead_of_a_traceback(monkeypatch):
     # `App.meta` is a read-only property, so it is replaced on the class.
     monkeypatch.setattr(type(cli.app), "meta", property(lambda self: refuse))
     monkeypatch.setattr(
-        cli.console, "print", lambda *a, **kw: printed.append(str(a[0]))
+        cli.stderr_console, "print", lambda *a, **kw: printed.append(str(a[0]))
     )
 
     with pytest.raises(SystemExit) as exit_code:
