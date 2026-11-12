@@ -44,3 +44,8 @@
   bindings are awaited. witan-code's read tools are `async`, so
   `memory_symbols` stored an un-awaited coroutine as each `definition` and
   `memory_for_contract` returned coroutines as its `bindings`.
+- A `name:kind` topic spec whose name starts with `tp-` (e.g.
+  `tp-client:contract`) resolves as a spec on read when no Topic has that
+  literal slug. `memory_link` already created `tp-contract-tp-client` for it,
+  but `topic_get` and `recall(contract="tp-client")` looked up the literal
+  slug and found nothing.

@@ -608,6 +608,20 @@ def test_topic_seed_reports_a_missing_topic_as_null(server):
 
 
 @requires_omnigraph
+def test_a_spec_whose_name_starts_with_tp_resolves_as_a_spec(server):
+    # The write path parses `tp-client:contract` as a spec once it is not a
+    # Topic slug; the read path has to agree or the tag cannot be found.
+    m = server.memory_store(kind="pattern", title="tp", content="x")
+    server.memory_link(m["slug"], "tp-client:contract", "tagged")
+
+    by_contract = server.recall(contract="tp-client", hops=0)
+    assert by_contract["contract"]["topic"]["name"] == "tp-client"
+    assert [x["slug"] for x in by_contract["memories"]] == [m["slug"]]
+    by_topic = server.recall(topic="tp-client:contract", hops=0)
+    assert [x["slug"] for x in by_topic["memories"]] == [m["slug"]]
+
+
+@requires_omnigraph
 def test_topic_seed_lists_superseded_memories_only_when_asked(server):
     old = server.memory_store(kind="pattern", title="old", content="o", tags=["t"])
     new = server.memory_store(kind="pattern", title="new", content="n", tags=["t"])

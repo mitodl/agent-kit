@@ -1389,9 +1389,12 @@ def _resolve_topic(topic: str) -> dict | None:
     write, so a tag stored as ``UV`` is found by ``uv:topic``, and falls back to
     an exact name and kind match.
     """
+    # A spec's name can start with tp- too (``tp-client:contract``), so a miss
+    # here falls through to parsing, as the write path does.
     if topic.startswith("tp-"):
         rows = client.read("read.gq", "get_topic", {"slug": topic})
-        return rows[0] if rows else None
+        if rows:
+            return rows[0]
     name, sep, kind = topic.rpartition(":")
     if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
         return None
