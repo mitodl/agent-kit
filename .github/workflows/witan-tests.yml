@@ -204,6 +204,26 @@ jobs:
       - name: witan-code --help
         run: uv run --frozen --isolated --package witan-code witan-code --help
 
+  test-witan-code-hooks-windows:
+    # The code-graph hooks run on every edit, so a POSIX-only call on their
+    # path (fcntl, os.getuid, pass_fds) breaks every Windows session, and the
+    # Linux job above cannot see it. test_hooks.py takes the real lock
+    # (msvcrt.locking here) and exercises the no-handoff drainer path that only
+    # Windows runs. Its requires_stack tests skip: omnigraph publishes no
+    # Windows binary.
+    name: witan-code hooks (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Run hook tests
+        run: uv run --frozen --isolated --package witan-code --group test pytest mcp/servers/witan-code/tests/test_hooks.py
+
   witan-policy:
     name: witan (Cedar policy bundle)
     runs-on: ubuntu-latest

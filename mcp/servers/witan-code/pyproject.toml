@@ -218,7 +218,11 @@ dependencies = [
     # imports and runs, but batches nodes and edges apart, so every flush adds
     # a commit to the user's code branch. `_hashes_need_deferring` calls the
     # same `chunk_records`, so 0.51.0 stays correct, only slower on the graph.
-    "witan-core[cli,remote,observability,sentry]>=0.51.1,<1",
+    #
+    # ★ >=0.52 IS AN IMPORT FLOOR: hooks.py imports `witan_core._filelock`
+    # (added in witan-core 0.52.0 by #601) at module scope, so 0.51.1 cannot
+    # import the hook commands at all.
+    "witan-core[cli,remote,observability,sentry]>=0.52.0,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled

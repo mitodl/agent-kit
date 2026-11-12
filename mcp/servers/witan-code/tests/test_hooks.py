@@ -3,7 +3,10 @@
 ``indexer.index_path`` and process spawning are monkeypatched throughout:
 these tests exercise hooks.py's own orchestration (git-repo check, queueing,
 the lock handoff, stdin-JSON parsing, path resolution), not the real indexer
-or a real detached drainer. The lock itself is real: a kernel flock.
+or a real detached drainer. The lock itself is real: ``witan_core._filelock``,
+so ``flock`` on POSIX and ``msvcrt.locking`` on Windows. Every lock a test
+takes is let go with ``_filelock.release``, not ``os.close``, because Windows
+only promises to free a lock promptly when it is unlocked explicitly.
 """
 
 import itertools
@@ -13,12 +16,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
 from witan_code import context, hooks
+from witan_core import _filelock
 
 from .conftest import requires_stack
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="uids and mode bits are POSIX-only"
+)
 
 
 @pytest.fixture
@@ -93,7 +102,8 @@ def _batches(monkeypatch):
 
 
 def _payload(path) -> str:
-    return f'{{"tool_input": {{"file_path": "{path}"}}}}'
+    # json.dumps, not an f-string: a Windows path's backslashes are escapes.
+    return json.dumps({"tool_input": {"file_path": str(path)}})
 
 
 # ── session_init ──────────────────────────────────────────────────────────────
@@ -109,6 +119,7 @@ def test_session_init_noop_outside_git_repo(tmp_path, monkeypatch, _state, _spaw
     assert _spawned == []
 
 
+@pytest.mark.skipif(not hooks._HANDS_OFF_LOCK, reason="POSIX lock handoff")
 def test_session_init_queues_the_project_and_hands_the_lock_to_a_drainer(
     _repo, _spawned
 ):
@@ -120,6 +131,26 @@ def test_session_init_queues_the_project_and_hands_the_lock_to_a_drainer(
     assert kwargs["pass_fds"] == (int(argv[5]),)
     assert hooks._take_pending(_repo) == [_repo]
     # Busy from the moment the lock is taken, before the drainer is even up.
+    assert context.indexing_in_progress() is True
+
+
+def test_session_init_without_a_lock_handoff_leaves_the_drainer_to_lock(
+    _repo, monkeypatch, _spawned
+):
+    """Windows: no descriptor to pass, so the hook lets go of its probe and
+    the drainer is spawned without one."""
+    monkeypatch.setattr(hooks, "_HANDS_OFF_LOCK", False)
+
+    hooks.session_init()
+
+    assert len(_spawned) == 1
+    argv, kwargs = _spawned[0]
+    assert argv[1:] == ["-m", "witan_code", "_drain-pending", str(_repo)]
+    assert kwargs["pass_fds"] == ()
+    fd = hooks._try_lock(_repo)
+    assert fd is not None  # free for the drainer to take
+    _filelock.release(fd)
+    assert hooks._take_pending(_repo) == [_repo]
     assert context.indexing_in_progress() is True
 
 
@@ -135,7 +166,7 @@ def test_session_init_in_a_subdirectory_shares_the_toplevel_s_lock(
 
     hooks.session_init()
 
-    os.close(held)
+    _filelock.release(held)
     assert _spawned == []
     assert hooks._take_pending(_repo) == [sub]  # queued, not dropped
 
@@ -150,7 +181,7 @@ def test_session_init_survives_a_failed_spawn(_repo, monkeypatch):
 
     fd = hooks._try_lock(_repo)
     assert fd is not None  # released for the next hook
-    os.close(fd)
+    _filelock.release(fd)
     assert hooks._has_pending(_repo)  # and the refresh is still queued
     assert context.indexing_in_progress() is False
 
@@ -218,7 +249,7 @@ def test_reindex_hook_swallows_index_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(hooks.indexer, "index_path", _boom)
 
     hooks.reindex_hook(
-        f'{{"tool_input": {{"filename": "{target}"}}}}'
+        json.dumps({"tool_input": {"filename": str(target)}})
     )  # must not raise
 
 
@@ -320,7 +351,7 @@ def test_reindex_hook_leaves_the_path_to_a_running_drainer(_repo, _spawned):
 
     hooks.reindex_hook(_payload(target))
 
-    os.close(held)
+    _filelock.release(held)
     assert _spawned == []
     assert hooks._take_pending(_repo) == [target]
 
@@ -342,7 +373,36 @@ def test_drain_pending_indexes_the_queue_as_one_batch_and_releases(_repo, _batch
     assert not context._busy_path(_repo).exists()
     fd = hooks._try_lock(_repo)
     assert fd is not None
-    os.close(fd)
+    _filelock.release(fd)
+
+
+def test_drain_pending_without_a_lock_takes_it_and_drains(_repo, _batches):
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+
+    hooks.drain_pending(_repo, None)
+
+    assert _batches == [[a]]
+    assert not hooks._has_pending(_repo)
+    fd = hooks._try_lock(_repo)
+    assert fd is not None
+    _filelock.release(fd)
+
+
+def test_drain_pending_without_a_lock_leaves_the_queue_to_its_holder(_repo, _batches):
+    """The Windows drainer that loses the race to another: the holder drains
+    the queue, so this one exits without touching it."""
+    a = _repo / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(_repo, a)
+    held = hooks._try_lock(_repo)
+
+    hooks.drain_pending(_repo, None)
+
+    _filelock.release(held)
+    assert _batches == []
+    assert hooks._take_pending(_repo) == [a]
 
 
 def test_drain_pending_picks_up_a_target_queued_while_it_held_the_lock(
@@ -504,7 +564,7 @@ def test_drain_pending_releases_after_a_failing_batch(_repo, monkeypatch):
     assert not hooks._has_pending(_repo)
     fd = hooks._try_lock(_repo)
     assert fd is not None  # released despite the failure
-    os.close(fd)
+    _filelock.release(fd)
 
 
 # ── Repos the cluster does not serve ──────────────────────────────────────────
@@ -793,16 +853,17 @@ def test_a_stamp_from_the_future_waits_one_interval_at_most(_repo, _batches, _cl
 
 
 def test_a_killed_holder_does_not_leave_the_checkout_locked(_repo):
-    """The reason the lock is a flock: the kernel drops it with the process,
-    so nothing has to decide whether a recorded holder is still alive."""
+    """The reason the lock is an OS file lock: the OS drops it with the
+    process, so nothing has to decide whether a recorded holder is still
+    alive."""
     holder = subprocess.Popen(
         [
             sys.executable,
             "-c",
             (
-                "import fcntl, os, sys, time; "
-                "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); "
-                "fcntl.flock(fd, fcntl.LOCK_EX); print('held', flush=True); "
+                "import sys, time; from pathlib import Path; "
+                "from witan_core import _filelock; "
+                "_filelock.acquire(Path(sys.argv[1])); print('held', flush=True); "
                 "time.sleep(60)"
             ),
             str(context._lock_path(_repo)),
@@ -816,11 +877,16 @@ def test_a_killed_holder_does_not_leave_the_checkout_locked(_repo):
     holder.kill()
     holder.wait()
 
-    fd = hooks._try_lock(_repo)
+    # Immediate on POSIX. Windows frees a dead process's locks "depending on
+    # available system resources", so it gets a few seconds.
+    deadline = time.monotonic() + 10
+    while (fd := hooks._try_lock(_repo)) is None and time.monotonic() < deadline:
+        time.sleep(0.05)
     assert fd is not None
-    os.close(fd)
+    _filelock.release(fd)
 
 
+@posix_only
 def test_state_dir_is_private(_state):
     path = context.state_dir()
 
@@ -828,6 +894,7 @@ def test_state_dir_is_private(_state):
     assert path.stat().st_uid == os.getuid()
 
 
+@posix_only
 def test_state_dir_tightens_an_existing_directory_s_mode(_state):
     path = _state / f"witan-code-{os.getuid()}"
     path.mkdir(mode=0o777)
@@ -836,12 +903,34 @@ def test_state_dir_tightens_an_existing_directory_s_mode(_state):
     assert context.state_dir().stat().st_mode & 0o777 == 0o700
 
 
+@posix_only
 def test_state_dir_refuses_a_symlink_planted_in_its_place(_state, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (_state / f"witan-code-{os.getuid()}").symlink_to(elsewhere)
 
     with pytest.raises(PermissionError):
+        context.state_dir()
+
+
+def test_state_dir_on_windows_is_keyed_by_username(_state, monkeypatch):
+    """%TEMP% is per-user there, and there is no uid or mode to check."""
+    monkeypatch.setattr(context, "_WINDOWS", True)
+    monkeypatch.setattr(context.getpass, "getuser", lambda: "alice")
+
+    path = context.state_dir()
+
+    assert path == _state / "witan-code-alice"
+    assert path.is_dir()
+    assert context.state_dir() == path  # an existing one is reused
+
+
+def test_state_dir_on_windows_refuses_a_file_in_its_place(_state, monkeypatch):
+    monkeypatch.setattr(context, "_WINDOWS", True)
+    monkeypatch.setattr(context.getpass, "getuser", lambda: "alice")
+    (_state / "witan-code-alice").write_text("")
+
+    with pytest.raises(OSError):
         context.state_dir()
 
 
@@ -858,8 +947,8 @@ def test_sessions_with_different_witan_overrides_get_separate_drainers(
     other = hooks._try_lock(_repo)
 
     assert other is not None
-    os.close(other)
-    os.close(held)
+    _filelock.release(other)
+    _filelock.release(held)
 
 
 def test_a_path_with_a_newline_is_not_queued(_repo):

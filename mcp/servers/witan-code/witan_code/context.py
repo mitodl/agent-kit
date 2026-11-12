@@ -39,10 +39,12 @@ here are spent for the life of every session.
 from __future__ import annotations
 
 import datetime
+import getpass
 import hashlib
 import json
 import os
 import stat
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -60,6 +62,8 @@ from . import store as store_module
 # (e.g. "/tmp/a/b" and "/tmp/a_b" both sanitizing to "_tmp_a_b") and so a
 # deep/long checkout path can't blow past a filesystem's filename length limit.
 _STATE_PREFIX = "codegraph-"
+
+_WINDOWS = sys.platform == "win32"
 
 
 def _state_digest(checkout: Path) -> str:
@@ -106,7 +110,17 @@ def state_dir() -> Path:
     created first could inject paths into it or, as a symlink, redirect the
     drainer's truncate. A directory that exists but is not ours, or is not a
     real directory, is refused rather than used.
+
+    On Windows the temp dir is already per-user (``%LOCALAPPDATA%\\Temp``), and
+    there is no uid to compare or mode to set, so the directory is keyed by
+    username and only checked to be a real directory.
     """
+    if _WINDOWS:
+        path = Path(tempfile.gettempdir()) / f"witan-code-{getpass.getuser()}"
+        path.mkdir(exist_ok=True)
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            raise PermissionError(f"{path} is not a directory")
+        return path
     path = Path(tempfile.gettempdir()) / f"witan-code-{os.getuid()}"
     try:
         path.mkdir(mode=0o700)
