@@ -38,6 +38,12 @@ that" belongs in the spec — not here.
 If you catch yourself writing code blocks, type definitions, or a numbered
 build plan, you have crossed into spec territory. Cut it.
 
+**"RFC" here means this discussion — the question, posted for agreement.** It
+does not mean a numbered document in a repo's `docs/rfcs/` tree, which in
+several repositories holds decision *records* and is governed by the rules
+for those. [`record-types`](../../workflow/record-types/SKILL.md) covers the
+distinction and what each one permits.
+
 ---
 
 ## Length budget — this is a hard requirement

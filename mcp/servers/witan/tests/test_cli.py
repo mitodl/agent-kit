@@ -492,6 +492,77 @@ def test_tasks_elides_closed_by_default(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_tasks_parent_lists_children_including_closed(server, monkeypatch):
+    """`--parent` scopes to one epic's children and KEEPS the closed ones.
+
+    The plan-comment renderer reads an epic's chunk tasks to build its table,
+    and a merged chunk is a closed task. Eliding those -- which a bare listing
+    does, and should -- would report a finished epic as having no chunks.
+    """
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    epic = _fn(server.task_create)(title="the epic", description="d", type="epic")
+    merged = _fn(server.task_create)(
+        title="chunk 1", description="d", parent=epic["slug"]
+    )
+    open_chunk = _fn(server.task_create)(
+        title="chunk 2", description="d", parent=epic["slug"]
+    )
+    stranger = _fn(server.task_create)(title="unrelated", description="d")
+    _fn(server.task_close)(merged["slug"])
+
+    tasks(all_repos=True, parent=epic["slug"])
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+
+    assert merged["slug"] in slugs, "a merged chunk must still render"
+    assert open_chunk["slug"] in slugs
+    assert stranger["slug"] not in slugs
+    assert epic["slug"] not in slugs, "children only, not the parent itself"
+
+
+def test_tasks_parent_refuses_filters_the_server_cannot_apply(monkeypatch):
+    """`--parent` with --ready, a query or --project exits rather than ignoring.
+
+    `task_ready` and the search path take no parent, so honouring the flag
+    there is impossible; accepting it silently would list something other than
+    what was asked for. `task_list` does take both, but resolves `project_slug`
+    first and never reaches the parent branch -- so the pair returns a whole
+    project under a heading that calls the rows one epic's children.
+
+    Deliberately takes no `server` fixture and no `requires_omnigraph`: the
+    guard fires before `_srv()` is reached, so this runs even where the binary
+    is absent -- which is the environment the rest of this file skips in.
+    """
+    import pytest
+
+    from witan.cli import _common
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        tasks(all_repos=True, parent="tk-whatever", ready=True)
+    assert excinfo.value.code == 2, "--ready"
+
+    # `query` is positional-only (the `/` in the signature), so it cannot ride
+    # in the same **kwargs call as --ready.
+    with pytest.raises(SystemExit) as excinfo:
+        tasks("x", all_repos=True, parent="tk-whatever")
+    assert excinfo.value.code == 2, "search query"
+
+    with pytest.raises(SystemExit) as excinfo:
+        tasks(all_repos=True, parent="tk-whatever", project="wp-whatever")
+    assert excinfo.value.code == 2, "--project"
+
+
+@requires_omnigraph
 def test_tasks_query_searches_and_keeps_list_filters(server, monkeypatch):
     """`witan tasks QUERY` ranks by search but still elides closed tasks."""
     from witan.cli import _common

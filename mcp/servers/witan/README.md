@@ -16,6 +16,38 @@ for a task-oriented walkthrough (install, setup, day-to-day loop, operating
 modes, troubleshooting) and the [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md)
 for the full `witan` command surface.
 
+## Bundled Skills
+
+`witan setup` installs these into every detected agent, alongside the MCP
+server. The first six are the issue-to-completion workflow; the rest expose
+the graph directly.
+
+| Skill | What it does |
+|---|---|
+| [`scope-work`](./witan/skills/scope-work/SKILL.md) | Establish the issue, ground it in the code, and route by how much process the work deserves — trivial, a decision worth recording, a spec, a spike, or an RFC |
+| [`plan-technical-approach`](./witan/skills/plan-technical-approach/SKILL.md) | Decide how it gets built: the engineer's approach elicited first, alternatives scored blind to authorship, delivery chunked under a size budget |
+| [`write-spec`](./witan/skills/write-spec/SKILL.md) | Write the design document for work spanning several PRs, sessions or repos, in the location and shape that repo already uses |
+| [`write-adr`](./witan/skills/write-adr/SKILL.md) | Record one decision as an ADR in the repo's existing convention, scoped with `applies_to` to the files it governs |
+| [`implement-plan`](./witan/skills/implement-plan/SKILL.md) | Execute the approved plan chunk by chunk, honouring the governing ADRs, confirming and recording any deviation |
+| [`complete-project`](./witan/skills/complete-project/SKILL.md) | Close the work out: supersede the ADRs its deviations changed, consume the deviation log, close the graph and seal the corpus trace |
+| [`witan-task`](./witan/skills/witan-task/SKILL.md) | Triage, claim, create and close tasks; checkpoints and resume |
+| [`witan-workflow`](./witan/skills/witan-workflow/SKILL.md) | Link a session to a project at the start of a run |
+| [`witan-project-tracker`](./witan/skills/witan-project-tracker/SKILL.md) | Project lifecycle across sessions: phases, parallel sessions, corpus traces |
+| [`witan-memory`](./witan/skills/witan-memory/SKILL.md) | Read and write the shared agent memory graph |
+
+These workflow skills live here rather than in agent-kit's `skills/` catalog
+because they stop outright without the `task_*` and `workflow_*` tools, and
+`agent-kit apply` deliberately does not install witan — in the `universal`
+profile they were four skills that refused to run. Anyone who installed witan
+for memories already has the tools the six need.
+
+One companion does not ship here. [`record-types`](https://github.com/mitodl/agent-kit/blob/main/skills/workflow/record-types/SKILL.md)
+— which record is which, and what each permits — needs no witan tool, so it
+stays in the agent-kit catalog and `witan setup` does not install it. The six
+name it where it is load-bearing and each carries the resolution rule inline,
+so they work without it; install agent-kit's `universal` profile to get the
+full version.
+
 ## Quick Start
 
 `witan setup` installs the omnigraph binary, copies hooks/skills, and wires the
