@@ -13,6 +13,17 @@ from .conftest import requires_omnigraph
 # ── throttle logic (no omnigraph needed) ─────────────────────────────────────
 
 
+def test_stamps_live_in_the_private_state_dir(tmp_path):
+    """Not the bare temp dir, where another user could create the name first."""
+    from witan_code import maintenance
+    from witan_code.context import state_dir
+
+    store = tmp_path / "g.omni"
+
+    assert maintenance._stamp_file(store).parent == state_dir()
+    assert maintenance._stamp_file(store, "cleanup").parent == state_dir()
+
+
 def test_optimize_interval_env_override(monkeypatch):
     from witan_code import maintenance
 

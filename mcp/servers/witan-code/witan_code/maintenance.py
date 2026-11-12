@@ -30,7 +30,8 @@ age past :data:`CLEANUP_OLDER_THAN`.
 
 The throttle window, atomic last-run stamp, and due-check live in
 ``witan_core.maintenance``; this module supplies witan-code's own env var,
-stamp-file location (a temp-dir digest), and detached command.
+stamp-file location (a store digest under :func:`witan_code.context.state_dir`),
+and detached command.
 """
 
 from __future__ import annotations
@@ -39,12 +40,13 @@ import hashlib
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from witan_core import maintenance as _throttle
 from witan_core import popen_detached
+
+from .context import state_dir
 
 # Opportunistic optimize runs at most once per this window per store. Override
 # with WITAN_CODE_OPTIMIZE_INTERVAL (seconds; 0 disables).
@@ -76,8 +78,10 @@ def cleanup_interval() -> float:
 
 
 def _stamp_file(store: str | Path, op: str = "optimize") -> Path:
+    # In this user's private state dir, not the bare temp dir: a predictable
+    # name in a shared TMPDIR can be created first by another user.
     digest = hashlib.sha256(str(store).encode()).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"witan-code-{op}-{digest}.json"
+    return state_dir() / f"witan-code-{op}-{digest}.json"
 
 
 def _last_run(store: str | Path) -> float:
@@ -124,8 +128,10 @@ def spawn_background_optimize(store: str | Path, now: float | None = None) -> bo
     Best-effort and non-blocking: the throttle stamps are written *before*
     spawning (so a failing run can't hot-loop every session), and the
     child is fully detached (its own session, no inherited stdio) so it
-    outlives the Stop hook. Never raises — a maintenance failure must not fail
-    the hook.
+    outlives the Stop hook. The one exception it lets through is from
+    :func:`witan_code.context.state_dir` (the stamps' directory is not ours, or
+    cannot be made), so a caller that must not fail wraps it, as the Stop hook
+    does.
     """
     now = time.time() if now is None else now
     if not due(store, now):
