@@ -2,7 +2,7 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastmcp import Context, FastMCP
 
@@ -16,6 +16,9 @@ from . import identity as identity_module
 from . import repo as repo_module
 from . import store as store_module
 from .graph import OmnigraphClient
+
+if TYPE_CHECKING:
+    from .remote.store import RemoteStoreClient
 
 # ── Startup ───────────────────────────────────────────────────────
 
@@ -670,7 +673,9 @@ _NO_FTS_INDEX = "T27:"
 _DOCSTRING_ONLY = "_docstring_only"
 
 
-def _docstring_search(client: OmnigraphClient, name: str, params: dict) -> list[dict]:
+def _docstring_search(
+    client: "OmnigraphClient | RemoteStoreClient", name: str, params: dict
+) -> list[dict]:
     """The docstring BM25 run, or no rows from a store or tier that cannot run it.
 
     Two cases answer with no rows instead of failing the search. A store whose
@@ -752,7 +757,7 @@ def code_search_symbol(
     suffix = "_by_kind" if kind else ""
     params = {"query": query, "kind": kind} if kind else {"query": query}
 
-    def _query(client: OmnigraphClient) -> list[dict]:
+    def _query(client: "OmnigraphClient | RemoteStoreClient") -> list[dict]:
         names = client.read("code_read.gq", f"search_symbols{suffix}", params)
         docstrings = _docstring_search(
             client, f"search_symbols_docstring{suffix}", params
