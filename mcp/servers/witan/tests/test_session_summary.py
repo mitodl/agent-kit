@@ -12,6 +12,7 @@ import os
 import subprocess
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -385,17 +386,23 @@ def test_memories_can_be_read_for_one_session(server):
 def test_auto_close_survives_a_deleted_working_directory(
     server, hook, monkeypatch, tmp_path
 ):
-    """`Path.cwd()` raises once the directory is gone; the close must still land."""
+    """`Path.cwd()` raises once the directory is gone; the close must still land.
+
+    The failure is simulated rather than produced by deleting the directory,
+    because some omnigraph builds can't start from a deleted cwd either, and
+    then the local store is what fails rather than the hook.
+    """
     proj = server.workflow_project_create(title="gone", description="d")
     handle = server.workflow_session_start(
         project_slug=proj["slug"], session_id=SID, phase="spec"
     )
-    doomed = tmp_path / "doomed"
-    doomed.mkdir()
-    monkeypatch.chdir(doomed)
-    doomed.rmdir()
 
-    hook.session_checkpoint()
+    def _gone(_cls):
+        raise FileNotFoundError("working directory was deleted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "cwd", classmethod(_gone))
+        hook.session_checkpoint()
 
     last = _handoff(server, proj["slug"])
     assert last["slug"] == handle["session_slug"]
