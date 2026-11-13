@@ -328,6 +328,10 @@ def test_change_many_composes_against_the_real_witan_mutations():
                     "confidence": None,
                     "created_at": now,
                     "updated_at": now,
+                    "screen_verdict": None,
+                    "screen_reason": None,
+                    "screen_version": None,
+                    "screen_digest": None,
                 },
             ),
             (

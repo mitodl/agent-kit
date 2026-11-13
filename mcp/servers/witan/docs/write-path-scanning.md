@@ -325,3 +325,58 @@ of `repos`) param — see `ScanConfig.for_repo` in `witan/config.py` and the
 for the full design rationale, including why the detector set itself (as
 opposed to enforcement policy) is not overlay-able in this version. Everything
 else in this doc applies as-is to local, single-user witan today.
+
+## Prompt-injection screening
+
+Secret and PII scanning keeps sensitive values out of the store. Screening
+answers a different question: whether a record's text tries to instruct the
+agent that later reads it. Anyone on the team can write a memory, task or
+comment, and witan hands that text to other people's agents, so a line planted
+in a memory could otherwise read as part of an agent's assignment.
+
+It runs at the same `change()` choke point, after the scanners, so it
+classifies the text that is actually stored. For memories, tasks and task
+comments it asks a classifier whether the text is `clean` or `flagged`, and
+stores that verdict on the record with the classifier version and a sha256 of
+the text it covers (`screen_verdict`, `screen_reason`, `screen_version`,
+`screen_digest` in `schema.pg`). The system prompt is in
+`witan/screen/prompt.py`. It names each source label the classifier sees
+(teammate memory, task, comment, code-graph symbol, GitHub text) and what each
+implies about trust.
+
+witan ships no classifier, so screening is off until a deployment configures
+one:
+
+```toml
+[screen]
+provider = "acme-classifier"   # an entry point in the witan.classifiers group,
+                               # or a "module.path:Attr" dotted path
+model = "acme-fast-1"
+```
+
+(or `WITAN_SCREEN_PROVIDER` / `WITAN_SCREEN_MODEL`). The provider is a factory
+called once at startup as `factory(model=...)`, returning anything with a
+`version` string and a `classify(system_prompt, payload) -> str` method (the
+`witan.screen.Classifier` protocol). It returns the model's raw text, and witan
+parses it with `parse_verdict`, which fails closed: empty output, no JSON
+object, a missing or non-string `decision`, and any decision other than
+`clean` or `flagged` all resolve to `flagged`. A provider that cannot be
+loaded, or a provider named without a model, fails startup. A classifier that
+raises at write time does not fail the write; the record is stored unscreened.
+
+Reads attach a `screening` value to the record (`memory_get`, `task_get` and
+its comments, and the memories a first `task_claim` surfaces). A verdict counts
+only while its digest matches the record's current text. A record written
+before screening existed, written with no classifier configured, written while
+the classifier failed, or rewritten by a path that skipped the screener (a
+merge, a load) reads as:
+
+```json
+{"verdict": "unscreened", "notice": "[NOT security-screened: ...]"}
+```
+
+The notice sits beside the text rather than prefixed to it, because agents edit
+a record by reading it and writing it back. Not yet done: labelling the
+multi-record reads (`recall`, searches, listings) and the context hook,
+re-screening stored records when the classifier version changes, and a backfill
+for records written before this.

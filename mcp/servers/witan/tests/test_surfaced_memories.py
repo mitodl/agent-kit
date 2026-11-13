@@ -40,7 +40,9 @@ def test_a_first_claim_carries_the_memories_its_title_matches(server, no_floor):
         "title",
         "author",
         "excerpt",
+        "screening",
     }
+    assert claimed["memories"][0]["screening"]["verdict"] == "unscreened"
     assert claimed["memories_note"] == provenance.TEAMMATE_NOTES
 
 
@@ -278,7 +280,7 @@ def test_the_log_carries_the_scores_the_floors_were_applied_to(
     assert line["title_scores"] == [None, title]
     assert content > 0 and title > 0
     assert all(
-        set(m) == {"slug", "kind", "title", "author", "excerpt"}
+        set(m) == {"slug", "kind", "title", "author", "excerpt", "screening"}
         for m in claimed["memories"]
     )
 
