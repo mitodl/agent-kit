@@ -54,11 +54,11 @@ mcp = FastMCP(
         "explicitly to target another view. `symbol_id` does not encode a "
         "branch, so the id-routed tools follow the same default, reading the "
         "checkout's branch view when the id's repo is the current detected repo "
-        "and that store's main view otherwise. code_impact and "
+        "and that store's main view otherwise. code_callers, code_impact and "
         "code_cross_repo_impact also accept `branch` for the id's repo (pass "
         "the default branch, e.g. `main`, to read main from a checkout whose "
         "own branch is indexed — where a symbol the branch removed no longer "
-        "exists); code_find_references and code_callers take none.\n\n"
+        "exists); code_find_references takes none.\n\n"
         "min_precision (`heuristic` default | `precise`) on the interface and "
         "cross-repo tools: `precise` keeps only edges also confirmed by a "
         "canonical-symbol join, suppressing false positives.\n\n"
@@ -543,6 +543,7 @@ CallDirection = Literal["callers", "callees"]
 async def code_callers(
     symbol_id: str,
     direction: CallDirection = "callers",
+    branch: str | None = None,
     ctx: Context | None = None,
 ) -> list[dict]:
     """
@@ -563,8 +564,16 @@ async def code_callers(
         ``callees`` returns the symbols ``symbol_id`` calls. The indexer
         resolves a call only to a symbol defined in the same file, so a call
         into another module (in this repo or a library) is not listed.
+    branch:
+        Git branch (or a view name from code_indexed_branches) whose view of
+        ``symbol_id``'s repo to read, as for code_find_definition. A deployed
+        server has no checkout, so this is how a remote caller reads a
+        branch's edges. Pass the default branch (e.g. ``main``) to read the
+        default view from a checkout whose own branch is indexed. Omitted,
+        follows the checkout's branch when the id's repo is the current
+        detected repo and reads main otherwise.
     """
-    client = _client_for_symbol(symbol_id)
+    client = _client_for_symbol(symbol_id, branch)
     if client is None:
         client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
         if client is None:
