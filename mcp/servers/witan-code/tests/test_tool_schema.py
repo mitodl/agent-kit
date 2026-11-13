@@ -72,3 +72,17 @@ def test_every_tool_carries_annotations():
     )
     assert not unannotated, f"tools missing MCP annotations: {unannotated}"
     assert all(annotations[n].read_only_hint for n in _READ_ONLY_STORE_TOOLS)
+
+
+def test_reindex_is_destructive_and_store_open_is_not():
+    """``code_reindex`` deletes a changed file's rows before loading their
+    replacements, so a load that fails part-way leaves them missing; opening a
+    branch view deletes nothing."""
+    from witan_code import server as code_server
+
+    annotations = {
+        t.name: t.annotations for t in asyncio.run(code_server.mcp._list_tools())
+    }
+    annotations |= {tool.__name__: hints for tool, hints in code_server._STORE_TOOLS}
+    assert annotations["code_reindex"].destructive_hint is True
+    assert annotations["code_store_open"].destructive_hint is False
