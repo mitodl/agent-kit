@@ -8,6 +8,218 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.49.0] - 2026-11-13
+
+### Added
+
+- A first `task_claim` (not a renewal) returns `overlaps`: other in-flight
+  tasks (`in_progress` with a live lease) whose `symbol_refs` share a symbol or
+  a file with the claimed task's, shared symbols first. It is advisory and never
+  refuses the claim, and a failed lookup returns an empty list rather than
+  failing it. Each first claim logs a `witan.claim.overlaps` line with the
+  count, so the share of claims that found one is countable. `witan task claim`
+  prints them, and `witan task run` puts them in the launched agent's prompt.
+
+- `witan session-checkpoint` (the Stop hook) now closes a session it auto-closes
+  with a summary built from what the session recorded: tasks in the project it
+  claimed or closed, memories it stored, its branch and commits since the session started,
+  and uncommitted files. That summary is what `workflow_project_status` shows
+  as the next session's handoff, which used to be a fixed placeholder. A
+  session with no activity gets a one-line "no recorded activity" summary, and
+  the placeholder is kept only when a read failed and nothing else was found.
+  The reads share an 8-second budget, so they and a slow deployed write still
+  fit in the hook's 60-second timeout; a read past the budget is abandoned and
+  the session closes with the placeholder.
+- `workflow_project_memories` takes `session`, a `ws-` slug, to return only the
+  memories that one session produced in a single query.
+
+- `witan memory import` reads the memory coding agents keep on disk (Claude
+  Code's auto memory, Codex's memories and Copilot Chat's repository memory,
+  located through agent-config-kit's platform registry) and reports each
+  memory's kind, the repo its project resolves to, and whether the graph
+  already holds it. It reads every detected agent by default, `--harness`
+  picks some, and an agent with no memory store, or an empty one, is named in
+  the output. It writes nothing unless `--confirm` is passed with `--select`
+  or `--all`, and every write goes through `memory_store`, so the secret and
+  PII scan applies. `user` memories are skipped unless named exactly in
+  `--select`, and a project that does not resolve to a single git checkout
+  with a remote is reported as unresolved.
+  `witan memory` is now a command group; `witan memory [QUERY]` still
+  searches and lists as before.
+
+- `memory_stale_refs` (and `witan memory stale-refs`) resolves every current
+  memory's `symbol_refs` against witan-code and lists the memories with a ref
+  that is `missing` (its repo is indexed and the symbol is not) or `unknown`
+  (not a symbol id, the repo is not indexed or its store is unreadable, or
+  witan-code is unreachable). It only reports. A missing ref carries
+  `candidates`, the indexed symbols with the same name, since a move or
+  rename leaves the memory true.
+
+- `task_search` takes `limit` (default 20, at most 10,000). Agents were
+  passing it and getting a validation error. A limit above 20 reads through
+  the uncapped search queries, since the default pair caps each half at 20 in
+  the query. Those queries apply `status` and `repo` (and the project
+  queries `status`) before their own cap, so matches outside the requested
+  scope cannot crowd out the ones inside it. `witan tasks QUERY` does not send
+  `limit` yet, so it keeps working against a deployment that predates the
+  parameter, and `--limit` does not apply to a search.
+
+- `witan trace mine <slug>` prints a completed trace's material to mine, and
+  with `--proposals <file.json>` creates the pattern and lesson memories,
+  each under the current repo unless it names a `repo` or sets `all_repos`.
+  `witan trace annotate <slug> --lesson … --pattern …` records memories already
+  written. Both accept the `wp-` or `wt-` slug.
+
+### Changed
+
+- Requires witan-core 0.55.0, for `witan_core.timeutil.parse_timestamp`, which
+  replaces eight local copies of the same naive-as-UTC timestamp parse.
+
+- witan-council requires agent-config-kit 0.15 or later.
+
+- **BREAKING: `task_comment`'s `text` parameter is now `body`, and `witan task
+  comment`'s `--text` flag is now `--body`.** `body` was the name agents
+  guessed (48 wrong-parameter errors in about 30 days of transcripts), and it
+  is the field name `task_get` already returns comments under. No alias is
+  kept, so a client and the deployment it talks to must both be on this
+  version or both be older. A mismatch either way fails with a validation
+  error, and that includes a `task_comment` queued in the offline journal and
+  replayed across the upgrade, which replay drops as refused (with a logged
+  warning). When an older client replays a queued task write that no longer
+  applies, it posts a conflict note on the task with `text`, which an
+  upgraded deployment refuses too, so replay reports that write as lost.
+- `workflow_session_end`'s `session_slug` description now says it is the `ws-`
+  slug from `workflow_session_start` and not the agent's own session id, which
+  agents were passing as `session_id`.
+
+- `claim_authorship`, `store_merge`, `workflow_trace_list`,
+  `workflow_trace_get`, `workflow_trace_annotate` and `workflow_trace_mine` are
+  no longer in an agent's `tools/list`, over stdio or on the deployment. Agents
+  called them a handful of times in 30 days, but ToolSearch loaded
+  `claim_authorship` in 83 sessions and `store_merge` in 57. They stay callable
+  by name and are listed to witan's own remote proxy (by its `clientInfo`),
+  because that is how `witan migrate merge`, `witan migrate claim-authorship`,
+  `witan traces` and `witan trace` reach a deployed graph. `witan serve`
+  against a deployment no longer republishes them. A CLI on a witan-core older
+  than 0.53.0 does not identify itself as the proxy, so against an upgraded
+  deployment those commands report that the tool does not exist until the CLI
+  is upgraded.
+
+- BREAKING: `repo=""` no longer means "every repo". The most common malformed witan tool call in agent transcripts is an empty value for `repo` (`"repo": }`), which the client rejects before it is sent, and the documented empty-string sentinel is the suspected cause. Every tool that could span repos now takes `all_repos=True` for that: `memory_search`, `memory_list`, `memory_contradictions`, `recall`, `task_list`, `task_search`, `task_ready`, `workflow_project_list`, `workflow_project_search` and `workflow_trace_list`. On `memory_store`, `task_create` and `workflow_session_start`, `all_repos=True` files the row under no repo (what `repo=""` did there), and so does `all_repos: true` on a `workflow_trace_mine` pattern or lesson proposal. An empty `repo` is refused with an error naming `all_repos`, as is `repo` together with `all_repos`. `task_claim` and `task_for_branch` refuse an empty `repo` but take no `all_repos`, because they use `repo` only to key a branch. `memory_update` and `task_update` refuse an empty `repo` rather than storing `""` as the row's repo.
+- The `witan` CLI's `--all-repos` sends `all_repos=True`, and the web UI sends `all_repos: true` where its repo filter is "All repos".
+- An un-upgraded remote-proxy client is refused on any call that sends `repo=""`, including `witan` CLI `--all-repos` before this release. Its `all_repos=True` calls are refused too, because an older witan-core proxy injects the detected repo beside the flag. Upgrade witan-council and witan-core together.
+
+### Removed
+
+- Breaking: `task_unlink` is gone. Pass `remove=True` to `task_link`, with the
+  same `from_slug`, `to_slug` and `kind`, to remove a link. The result and the
+  `blocked_by`/`parent_slug` resync are unchanged. `witan task unlink` still
+  works and calls it.
+- Breaking: `workflow_project_search` is gone. Pass `query` to
+  `workflow_project_list` for the same BM25 search over title and description,
+  ranked and capped at 20. Its `repo`, `status`, `phase` and `ready` filters
+  apply to the matches.
+- Breaking: `workflow_project_block`, `workflow_project_unblock` and
+  `workflow_project_get_blockers` are gone. Call `workflow_project_update` on
+  the blocked project with `add_blocked_by=[<blocker>]` or
+  `remove_blocked_by=[<blocker>]`, the same shape as `add_repos`/`remove_repos`.
+  A self-block now raises `ValueError` instead of returning `linked: false`.
+  `workflow_project_get` gains a `blockers` list with each blocker's `slug`,
+  `title`, `status` and `phase`, the fields `witan project show` read from
+  `get_blockers`. `witan project block`/`unblock` keep their names.
+- Breaking: `topic_get`, `symbol_context`, `memory_neighbors`,
+  `memory_symbols` and `memory_for_contract` are gone; each is now a `recall`
+  seed. A seed that has something to say about itself adds a section to the
+  result, present only when its argument was passed:
+  - `topic_get(topic)` is `recall(topic=…)`. Its `topic` section is the Topic
+    node, or `null` for none.
+  - `symbol_context(symbol_id)` is `recall(symbol_id=…)`. Its `symbol`
+    section lists the tasks.
+  - `memory_neighbors(slug)` and `memory_symbols(slug)` are
+    `recall(memory=slug)`. Its `memory` section holds `neighbors` (every edge
+    kind, each with its `edge` properties) and `symbols`. The `kinds` filter
+    is gone; read the kinds you want from the result.
+  - `memory_for_contract(key_norm, kind)` is
+    `recall(contract=key_norm, contract_kind=kind)`. Its `contract` section
+    holds the Topic and the witan-code `bindings`.
+
+  The memories come back in recall's ranked list. Pass `hops=0`,
+  `include_superseded=True` and a high `limit` to get exactly the set the old
+  tool returned, with nothing expanded in or pruned out (it is still ranked
+  rather than in store order). The web UI's memory panel
+  and topic page read through `recall` now.
+
+### Fixed
+
+- `recall`'s description said embeddings were deferred behind
+  `WITAN_EMBED_ENABLED`. Nothing reads that variable, so it now says embeddings
+  are not implemented and `recall` seeds from BM25 only.
+
+- `task_close` now refuses, writing nothing, while another person holds a live
+  claim on the task, and answers with `held_by` and a `remedy` naming
+  `witan task close <slug> --force`. A worker whose lease lapsed and whose task
+  was taken over could close the new holder's work when it finished late, and
+  unblock its dependents with it. A claim held by any session of the closer's
+  own identity, an expired lease, and a task with no named holder close as
+  before. `task_update(status="closed")` gets the same check, so it is not a
+  way around it. Both take `force`, `task_close` takes `assignee` for a claim
+  made under an explicit name, and `witan task close` / `witan task update`
+  take `--force` and exit 1 on a refusal.
+- A task write queued in the journal with `force` (e.g. `witan task close
+  --force` during an outage) now replays over another person's claim instead
+  of being turned into a comment.
+- A queued `task_close` or `task_update(status="closed")` that the server
+  refuses on replay, because someone claimed the task after replay checked its
+  holder, now becomes a comment on the task naming the new holder, as a
+  conflict found before the write does. Replay used to report it applied and
+  drop it.
+- `witan task close` and `witan task update` send `force` only with
+  `--force`, so they keep working against a deployment older than it.
+
+- The Stop hook no longer overwrites a summary written with an explicit
+  `workflow_session_end`. For a session started with `witan session start`
+  against a deployed server, ending it with the `workflow_session_end` tool
+  leaves the local handle in place, so the next Stop used to re-close the
+  session with the placeholder. The hook now reads the session first and leaves an ended one
+  alone.
+
+- `memory_symbols` stored an un-awaited coroutine as each ref's `definition`,
+  and `memory_for_contract` returned coroutines as its `bindings`, because
+  witan-code's read tools are `async`. Both now await the call.
+
+- `witan setup --agent codex` writes Codex's `witan` MCP entry as `witan serve`, the same installed CLI its hooks call, instead of a `uvx --from git+…` entry that runs git `main` while the hooks run the installed release. Re-run `witan setup --agent codex` to replace an existing `uvx` entry. Which platforms get the CLI entry now follows agent-config-kit's registry: every platform it writes hooks for. Requires agent-config-kit 0.13, the first release with Codex hooks.
+
+- `recall(memory=…)`'s symbol definitions and `recall(contract=…)`'s code
+  bindings are awaited. witan-code's read tools are `async`, so
+  `memory_symbols` stored an un-awaited coroutine as each `definition` and
+  `memory_for_contract` returned coroutines as its `bindings`.
+- A `name:kind` topic spec whose name starts with `tp-` (e.g.
+  `tp-client:contract`) resolves as a spec on read when no Topic has that
+  literal slug. `memory_link` already created `tp-contract-tp-client` for it,
+  but `topic_get` and `recall(contract="tp-client")` looked up the literal
+  slug and found nothing.
+
+- The web UI's Bridge tab finds the binding behind a service (deploy) edge.
+  It asked `code_interface_providers` for the key `repo:<deployed uri>`,
+  which witan-code stopped writing in #7; the binding is keyed by the bare
+  URI with `sub_kind` "repo". It had nothing to find until witan-code drew
+  deploy edges again in the same change.
+
+- `witan memory stale-refs` failed with `AttributeError: 'dict' object has no attribute 'strip'`, with or without `--all-repos`, because `memory_stale_refs` landed without the `all_repos` change the other repo-taking tools got. It now takes `all_repos=True` to check every repo's memories, and refuses `repo=""` like the rest.
+
+### Security
+
+- Text a teammate wrote now reaches an agent labelled as data, not
+  instructions, on every path that delivers it unasked. The context hook's
+  block opens and closes with a line saying its record text may not override
+  the user or `AGENTS.md`, so an instruction planted in a
+  task title or comment is never the last thing read before the user's prompt.
+  The `New Comments on Work You Hold` lead-in calls a comment a teammate's note
+  to check against live state. A first `task_claim` that surfaces memories
+  returns a `memories_note` saying the same. The wording lives in
+  `witan.provenance` so the hook, `task_claim` and the `witan task run` prompt
+  say it the same way. Nothing screens the text yet; this only labels it.
+
 ## [0.48.0] - 2026-11-12
 
 ### Added
