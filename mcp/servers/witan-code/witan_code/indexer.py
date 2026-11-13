@@ -589,7 +589,10 @@ def index_paths(
     # call for the rest of the batch. The rules see the file under the name
     # the walk lists it by, not where a symlink to it points: the walk keeps
     # `alias.py -> build/real.py` (stored under the resolved id), so the hook
-    # must too. A link from outside the repo has no such name.
+    # must too when the edit names the link. An edit naming `build/real.py`
+    # itself still drops those rows until the next full index, since finding
+    # the links to a file would mean scanning the repo. A link from outside
+    # the repo has no walk name.
     left_out: frozenset[Path] = frozenset()
     if repo_root is not None:
         names: dict[Path, Path] = {}
