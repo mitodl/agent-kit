@@ -71,3 +71,37 @@ def test_parameters_carry_the_names_agents_guess():
     assert (
         "session_id" in params[("workflow_session_end", "session_slug")]["description"]
     )
+
+
+def test_every_tool_carries_annotations():
+    """Clients decide auto-approval from ``readOnlyHint``/``destructiveHint``;
+    a tool without them is treated as an unknown, possibly destructive write.
+    ``_tool`` requires annotations, and this covers anything registered
+    around it."""
+    from witan import server as witan_server
+
+    tools = asyncio.run(witan_server.mcp._list_tools())
+    assert len(tools) > 30
+    unannotated = sorted(
+        tool.name
+        for tool in tools
+        if tool.annotations is None
+        or tool.annotations.read_only_hint is None
+        or (
+            not tool.annotations.read_only_hint
+            and tool.annotations.destructive_hint is None
+        )
+    )
+    assert not unannotated, f"tools missing MCP annotations: {unannotated}"
+
+
+def test_the_local_read_allowlist_is_annotated_read_only():
+    """``READ_TOOLS`` lets the CLI fall back to a local store; a tool on it that
+    is annotated as a write means one of the two is wrong."""
+    from witan import server as witan_server
+    from witan.cli.local_dispatch import READ_TOOLS
+
+    tools = {t.name: t for t in asyncio.run(witan_server.mcp._list_tools())}
+    assert (
+        sorted(n for n in READ_TOOLS if not tools[n].annotations.read_only_hint) == []
+    )
