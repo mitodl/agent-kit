@@ -71,6 +71,7 @@ from . import (
     ui_widgets,
 )
 from . import repo as repo_module
+from .cli_only import CliOnlyToolsMiddleware
 from .graph import (
     OmnigraphClient,
     OmnigraphConflict,
@@ -447,7 +448,7 @@ mcp = FastMCP(
         "  it contains a secret → rotate the credential. memory_delete removes it "
         "from the current graph but not from history, and no tool can erase "
         "that.\n\n"
-        "Found a problem with someone else's task? task_comment(slug, text) "
+        "Found a problem with someone else's task? task_comment(slug, body) "
         "leaves an attributed, append-only note ON it. Do NOT reach for "
         "task_update (it overwrites their description) or task_create (it puts "
         "an item that is not work into everyone's ready-work list). Comments "
@@ -482,6 +483,10 @@ mcp.add_middleware(
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.
 mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
+# Admin and corpus-mining tools stay callable but are listed only to witan's
+# own CLI, which reaches a deployment through them (`witan.cli_only`).
+mcp.add_middleware(CliOnlyToolsMiddleware())
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -7056,7 +7061,10 @@ def workflow_session_end(
     Parameters
     ----------
     session_slug:
-        The ``ws-`` slug returned by ``workflow_session_start``.
+        The ``ws-`` slug returned by ``workflow_session_start`` (its
+        ``session_slug`` field). Not the agent's own session id
+        (``$CLAUDE_SESSION_ID`` and the like): this tool takes no
+        ``session_id`` parameter.
     summary:
         Description of what was accomplished and what remains.
     tools_used:
@@ -7823,7 +7831,7 @@ def _task_comments(slug: str) -> list[dict]:
 
 
 @_tool
-def task_comment(slug: str, text: str) -> dict:
+def task_comment(slug: str, body: str) -> dict:
     """
     Leave an attributed, append-only comment ON a task without changing it.
 
@@ -7848,13 +7856,13 @@ def task_comment(slug: str, text: str) -> dict:
     ----------
     slug:
         The ``tk-`` slug to comment on.
-    text:
-        The comment body. Say the thing itself, with evidence — the holder is
+    body:
+        The comment text. Say the thing itself, with evidence — the holder is
         mid-execution and will act on this instead of the description.
     """
-    body = text.strip()
+    body = body.strip()
     if not body:
-        return {"commented": False, "reason": "comment text is empty"}
+        return {"commented": False, "reason": "comment body is empty"}
     task_rows = client.read("read.gq", "get_task", {"slug": slug})
     if not task_rows:
         return {"commented": False, "reason": f"no task {slug!r}"}
@@ -8067,17 +8075,22 @@ def _similar_task_query(title: str, description: str) -> str:
 
 
 def _search_task_rows(
-    query: str, detected: str | None, status: str | None
+    query: str,
+    detected: str | None,
+    status: str | None,
+    name: str = "search_tasks",
 ) -> list[dict]:
     """BM25 candidate rows in score-desc order — the Task twin of
     ``_search_rows``; `description` stands in for Memory's `content` as the
     primary matched field. ``detected`` is resolved by :func:`_scope`.
+    ``name`` picks the query pair: the capped default, or
+    ``search_tasks_all_uncapped`` for a limit above it.
     """
     global_params = {"query": query, "repo": None, "status": status or None}
     if not detected:
-        return _search_task_bm25(global_params)
+        return _search_task_bm25(global_params, name)
 
-    rows = _search_task_bm25(global_params | {"repo": detected})
+    rows = _search_task_bm25(global_params | {"repo": detected}, name)
 
     # Merge in unscoped (repo=None) matches — task_list's convention:
     # unscoped tasks were created without git context and should stay visible
@@ -8085,7 +8098,7 @@ def _search_task_rows(
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in _search_task_bm25(global_params)
+        for r in _search_task_bm25(global_params, name)
         if not r.get("repo") and r["slug"] not in seen
     )
     return rows
@@ -8102,25 +8115,20 @@ def _filtered_task_search_rows(
 
     Reads through the uncapped query pairs, because the capped ones return the
     top 20 of the UNFILTERED query and filtering those afterwards loses every
-    match ranked below them. A project scope replaces the repo scope, as in
-    ``task_list``: a project spans repos. ``detected`` is resolved by
-    :func:`_scope`.
+    match ranked below them. Project, repo and status filter in the query,
+    ahead of its cap; only the assignee match runs here. A project scope
+    replaces the repo scope, as in ``task_list``: a project spans repos.
+    ``detected`` is resolved by :func:`_scope`.
     """
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
     if project_slug:
         rows = _search_task_bm25(
-            {"query": query, "project_slug": project_slug}, "search_tasks_by_project"
+            {"query": query, "project_slug": project_slug, "status": status or None},
+            "search_tasks_by_project",
         )
     else:
-        rows = _search_task_bm25({"query": query}, "search_tasks_all_uncapped")
-        if detected:
-            # This repo's matches, then unscoped ones, as in _search_task_rows.
-            rows = [r for r in rows if r.get("repo") == detected] + [
-                r for r in rows if not r.get("repo")
-            ]
-    if status:
-        rows = [r for r in rows if r.get("status") == status]
+        rows = _search_task_rows(query, detected, status, "search_tasks_all_uncapped")
     if assignee:
         rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
     return rows
@@ -8133,12 +8141,13 @@ def task_search(
     status: TaskStatus | None = None,
     project_slug: str | None = None,
     assignee: str | None = None,
+    limit: int = _SEARCH_LIMIT,
     all_repos: bool = False,
 ) -> list[dict]:
     """
     Plain BM25 text search over tasks (no graph expansion).
 
-    Returns up to 20 tasks ranked by BM25 relevance, matched against
+    Returns up to ``limit`` tasks ranked by BM25 relevance, matched against
     ``description`` and ``title`` (description matches are seeded ahead of
     title-only matches — see ``memory_search``'s doc for why). Run this
     before ``task_create`` to check whether the work is already tracked;
@@ -8150,9 +8159,10 @@ def task_search(
     ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
     every task in it.
 
-    With ``project_slug`` or ``assignee``, the 20-hit cap applies after the
-    filters, so a match that ranks below 20 on the unfiltered query is still
-    returned.
+    The ``limit`` applies after every filter, so a match that ranks below it
+    on the unfiltered query is still returned. The one exception is the
+    unscoped half of a repo-scoped search: those tasks are picked out of the
+    all-repos read, so other repos' matches can still crowd them out.
 
     Parameters
     ----------
@@ -8172,18 +8182,26 @@ def task_search(
     assignee:
         Search only tasks held by this owner, matched as ``task_list``
         matches it; ``"@me"`` is the calling identity.
+    limit:
+        Maximum hits to return, 1 to 10,000.
     all_repos:
         Search every repo's tasks instead of the detected repo's — see
         instructions.
     """
+    if not 1 <= limit <= _MAX_TASK_LIMIT:
+        msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
+        raise ValueError(msg)
     detected = _scope(repo, all_repos)
-    if project_slug or assignee:
+    # The default read pair caps each half at 20 in the query, so a larger
+    # limit goes through the uncapped pair, as task_list swaps in its uncapped
+    # twin when asked for more than its query cap.
+    if project_slug or assignee or limit > _SEARCH_LIMIT:
         rows = _filtered_task_search_rows(
             query, detected, status, project_slug, assignee
         )
     else:
         rows = _search_task_rows(query, detected, status)
-    return rows[:_SEARCH_LIMIT]
+    return rows[:limit]
 
 
 @_tool

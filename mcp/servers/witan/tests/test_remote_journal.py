@@ -17,6 +17,7 @@ from fastmcp import Client
 
 from witan.config import RemoteConfig
 from witan.remote.proxy import RemoteServerProxy
+from witan_core.remote.proxy import proxy_client_info
 
 from .conftest import requires_omnigraph
 
@@ -42,7 +43,11 @@ def proxy(server, monkeypatch):
         srv, "cfg", srv.cfg.model_copy(update={"author": "ada@example.org"})
     )
     p = RemoteServerProxy(REMOTE_CFG, lambda: "tok")
-    monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
+    monkeypatch.setattr(
+        p,
+        "_new_client",
+        lambda _token: Client(srv.mcp, client_info=proxy_client_info()),
+    )
     return p
 
 
@@ -243,7 +248,7 @@ def test_a_queued_release_naming_its_assignee_is_compared_as_that_holder(proxy):
 @requires_omnigraph
 def test_a_queued_comment_replays_as_is(proxy):
     slug = _new_task(proxy)
-    _queue(proxy, "task_comment", {"slug": slug, "text": "from the outage"})
+    _queue(proxy, "task_comment", {"slug": slug, "body": "from the outage"})
 
     task = proxy.task_get(slug=slug)
 
@@ -271,7 +276,7 @@ def test_an_agent_on_witan_serve_gets_the_buffered_result():
             description="from the deployment",
             parameters={
                 "type": "object",
-                "properties": {"slug": {"type": "string"}, "text": {"type": "string"}},
+                "properties": {"slug": {"type": "string"}, "body": {"type": "string"}},
             },
             fn=_echo,
         )
@@ -291,12 +296,12 @@ def test_an_agent_on_witan_serve_gets_the_buffered_result():
 
     async def _call():
         async with Client(local) as client:
-            return await client.call_tool("task_comment", {"slug": "s", "text": "t"})
+            return await client.call_tool("task_comment", {"slug": "s", "body": "t"})
 
     result = asyncio.run(_call())
 
     assert result.data["buffered"] is True
-    assert [e.args for e in p.journal.entries()] == [{"slug": "s", "text": "t"}]
+    assert [e.args for e in p.journal.entries()] == [{"slug": "s", "body": "t"}]
 
 
 def test_a_queued_cli_write_says_queued_not_failed(monkeypatch):

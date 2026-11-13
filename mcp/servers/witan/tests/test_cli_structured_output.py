@@ -150,7 +150,7 @@ def test_task_show_prints_task_get_record(cli, capsys):
     task = _fn(cli.task_create)(
         title="the task", description="body", blocked_by=[blocker["slug"]]
     )
-    _fn(cli.task_comment)(slug=task["slug"], text="a note")
+    _fn(cli.task_comment)(slug=task["slug"], body="a note")
     _as("json")
 
     _task_show(task["slug"])

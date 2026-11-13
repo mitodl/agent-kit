@@ -106,9 +106,10 @@ def tasks(
     ----------
     query:
         Free-text search over title and description, ranked by relevance.
-        The server caps a search at 20 hits after ``--status``, ``--project``
-        and ``--assignee`` apply, and before ``--ready`` and the default
-        closed-task elision.
+        A search returns at most 20 hits, counted after ``--status``,
+        ``--project`` and ``--assignee`` apply, and before ``--ready`` and the
+        default closed-task elision. ``--limit`` can trim those hits but
+        cannot raise a search past 20 yet.
     repo:
         Scope to a specific repo URI (default: the current git repo).
     status:
@@ -123,7 +124,9 @@ def tasks(
     all_repos:
         Span every repo in the graph.
     limit:
-        Max rows.
+        Max rows. A search (``QUERY``) is trimmed to it but not sent it yet,
+        so it stays capped at 20: sending it would break against a server
+        that predates ``task_search``'s ``limit``.
     """
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
@@ -404,7 +407,7 @@ def task_create_cmd(
 
 
 @task_app.command(name="comment")
-def task_comment_cmd(slug: str, text: str) -> None:
+def task_comment_cmd(slug: str, body: str) -> None:
     """Leave an attributed, append-only comment on a task.
 
     For saying something *about* a task — typically someone else's in-flight
@@ -414,10 +417,10 @@ def task_comment_cmd(slug: str, text: str) -> None:
     ----------
     slug:
         The ``tk-`` slug to comment on.
-    text:
-        The comment body.
+    body:
+        The comment text.
     """
-    result = _fn(_srv().task_comment)(slug=slug, text=text)
+    result = _fn(_srv().task_comment)(slug=slug, body=body)
     if _queued(result):
         return
     if not result.get("commented"):

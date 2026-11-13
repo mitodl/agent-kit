@@ -247,7 +247,7 @@ List tasks for the current repo (or filtered).
 | `--assignee` | str \| None | — | Filter by owner |
 | `--ready` | bool | `False` | Show only ready-to-work tasks (open, all blockers closed) |
 | `--all-repos` | bool | `False` | Span every repo in the graph |
-| `--limit` | int | `50` | Max rows |
+| `--limit` | int | `50` | Max rows (not applied to a `QUERY` search yet) |
 
 ```bash
 witan tasks --ready --project wp-migrate-auth-oauth2
@@ -303,7 +303,7 @@ holder's injected session context if they are actively working it.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `SLUG` (positional) | str | required | The `tk-` slug to comment on |
-| `TEXT` (positional) | str | required | The comment body |
+| `BODY` (positional) | str | required | The comment text |
 
 ```bash
 witan task comment tk-fix-flaky-retry-abc123 \
@@ -450,6 +450,42 @@ witan trace wt-migrate-auth-oauth2
 
 Alias of `witan traces` (same flags as above), reachable as a `trace`
 subcommand for symmetry with `task`/`project`.
+
+### `trace mine <slug>`
+
+Turns a completed trace into reusable pattern and lesson memories. Run it
+without `--proposals` first to print the trace and every session summary from
+its project, then again with a JSON file of the memories worth keeping. Each
+becomes a memory linked back to the trace's project and recorded on the trace.
+Accepts the `wp-` or `wt-` slug.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--proposals` | Path \| None | — | `{"patterns": [...], "lessons": [...]}`; each entry needs `title` and `content` |
+| `--session-slug` | str \| None | — | `ws-` session recorded as the provenance of every mined memory |
+
+```bash
+witan trace mine wp-migrate-auth-oauth2
+witan trace mine wp-migrate-auth-oauth2 --proposals proposals.json
+```
+
+### `trace annotate <slug>`
+
+Records lesson/pattern memory slugs a trace produced, for memories written some
+other way. Unions with what the trace already records.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--lesson` | list[str] | — | `les-` slug to add; repeatable |
+| `--pattern` | list[str] | — | `pat-` slug to add; repeatable |
+
+```bash
+witan trace annotate wp-migrate-auth-oauth2 --lesson les-... --pattern pat-...
+```
+
+`traces`, `trace` and these two are the supported route to the
+`workflow_trace_*` tools: the server lists those tools to the `witan` CLI and
+to no other client.
 
 ## Graph
 

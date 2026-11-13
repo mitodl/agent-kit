@@ -25,6 +25,19 @@ reused. Codex parses ``timeout`` as a whole number of seconds and drops the
 whole file on a float, so timeouts are rounded up. Codex keeps hook trust
 (``trusted_hash``) in its own config and runs a hook only once the user has
 trusted it there; nothing here writes that state.
+
+Memories (the ``memories`` feature, stable but off by default) live under
+``$CODEX_HOME/memories/``, global rather than per project (codex-rs
+``memories/write``: ``memory_root``, ``storage.rs``, read at commit 69231e1,
+2026-11-13). Each eligible session is distilled into one raw memory, and
+``raw_memories.md`` holds them all as ``## Thread `<id>``` blocks: a header
+Codex writes itself (``updated_at``, ``cwd``, ``rollout_path``,
+``rollout_summary_file``), then the model-written memory, whose frontmatter
+has ``description``, ``task``, ``task_group``, ``task_outcome``, ``cwd`` and
+``keywords``. Those blocks are what ``read_memory`` returns, each scoped to
+its session's ``cwd``. ``MEMORY.md`` and ``memory_summary.md`` beside them are
+a consolidation agent's free-form handbook across every project, with no
+per-entry project to scope by, so they are not read.
 """
 
 from __future__ import annotations
@@ -32,8 +45,10 @@ from __future__ import annotations
 import math
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 
+from ..memory import MemoryEntry, split_frontmatter
 from ..models import DeclarativeHook, McpServer, RemoteServer, StdioServer
 from . import claude as claude_adapter
 
@@ -111,3 +126,53 @@ def remove_hooks(hooks_file: dict, hooks: list[DeclarativeHook]) -> bool:
                 group["hooks"] = remaining
                 changed = True
     return changed
+
+
+RAW_MEMORIES_FILE = "raw_memories.md"
+
+_THREAD = re.compile(r"^## Thread `([^`]+)`[ \t]*$", re.MULTILINE)
+
+
+def _raw_memory(path: Path, thread_id: str, block: str) -> MemoryEntry:
+    """One ``## Thread`` block of ``raw_memories.md``."""
+    header, _, text = block.strip("\n").partition("\n\n")
+    fields = dict(line.split(": ", 1) for line in header.splitlines() if ": " in line)
+    cwd = fields.get("cwd", "").strip()
+    key = fields.get("rollout_summary_file", "").strip().removesuffix(".md")
+    base = MemoryEntry(
+        path,
+        key or thread_id,
+        cwd,
+        (Path(cwd),) if cwd and Path(cwd).is_dir() else (),
+    )
+    split = split_frontmatter(text.strip())
+    if isinstance(split, str):
+        return replace(base, error=split)
+    meta, body = split
+    name = str(meta.get("task") or meta.get("description") or "").strip()
+    if not name:
+        return replace(base, error="frontmatter has no task or description")
+    # A raw memory is what one session taught: the user's corrections, the
+    # reusable knowledge and the failures to avoid.
+    return replace(
+        base,
+        name=name,
+        description=str(meta.get("description") or "").strip(),
+        type="feedback",
+        body=body,
+    )
+
+
+def read_memory(root: Path) -> list[MemoryEntry]:
+    """Every session's raw memory in ``<root>/raw_memories.md``."""
+    path = root / RAW_MEMORIES_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    parts = _THREAD.split(text)
+    # [preamble, id1, block1, id2, block2, ...]
+    return [
+        _raw_memory(path, thread_id, block)
+        for thread_id, block in zip(parts[1::2], parts[2::2], strict=True)
+    ]

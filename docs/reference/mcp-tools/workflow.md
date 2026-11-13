@@ -317,7 +317,7 @@ For best corpus quality, write a summary that includes:
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start``. |
+| `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start`` (its<br>``session_slug`` field). Not the agent's own session id<br>(``$CLAUDE_SESSION_ID`` and the like): this tool takes no<br>``session_id`` parameter. |
 | `summary` | str | **required** | Description of what was accomplished and what remains. |
 | `tools_used` | list[str]? | `null` | List of tool names used. e.g. ``["Edit", "Bash", "Read"]``. |
 | `files_changed` | list[str]? | `null` | List of file paths modified in this session. |
@@ -342,79 +342,3 @@ Use ``witan session sweep`` to close them in bulk.
 | `open_only` | bool | `False` | Only sessions with no ``ended_at``. Superseded sessions (deduped by<br>``witan migrate dedupe-sessions``) are always excluded — they are<br>already skipped by every aggregate read and are not leaks. |
 | `include_superseded` | bool | `False` | Keep superseded rows instead of dropping them. For ``witan session<br>list``, the one caller that wants to see what<br>``migrate dedupe-sessions`` did rather than the leaked-session view. |
 | `since` | str? | `null` | ISO timestamp. Keep only sessions that ended at or after it, plus<br>every still-open one — an open session has no ``ended_at`` to compare<br>and is current by definition, so a window must not drop it. Without<br>this an unscoped read returns every session ever recorded, and a view<br>showing the last two weeks pays for all of it on every poll.<br>Raises ``ValueError`` if it does not parse, the empty string<br>included. Tolerating either would mean ``since="last week"`` or<br>``since=""`` silently returning every session, which is the same<br>unsignalled no-op this parameter exists to remove.<br>The filter runs in Python: ``read.gq`` has no comparison on a<br>``DateTime``, so this bounds the response, not the store read. |
-
-## `workflow_trace_list`
-
-List corpus WorkflowTrace records, optionally filtered by repo, tags, or author.
-
-Traces are otherwise only reachable by slug (``wt-<project-slug>``) via
-``get_trace`` — this is the discovery path for browsing or mining across
-many completed projects (e.g. as onboarding case studies of how a project
-went end to end).
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each trace's<br>repo set). Auto-detected from ``.git/config`` if omitted. |
-| `tags` | list[str]? | `null` | Only return traces that carry ALL of these tags. |
-| `author` | str? | `null` | Only return traces created by this author. |
-| `limit` | int | `50` | Max rows to return (applied after filtering). |
-| `all_repos` | bool | `False` | List traces across all repos instead of filtering to one. |
-
-## `workflow_trace_get`
-
-Retrieve a single corpus WorkflowTrace by slug.
-
-Slug handling is simple: a slug already starting with ``wt-`` is used as-is;
-**any other** slug is prefixed with ``wt-``. So the trace slug
-(``wt-<project-slug>``) and the project slug (``wp-<project-slug>``, which
-becomes ``wt-wp-<project-slug>``) both resolve to the same trace, and callers
-never have to hand-construct the ``wt-`` slug (the fragile step the
-``witan-project-tracker`` skill used to instruct). Returns the full trace
-node (title/description/outcome, ``session_count``, ``phases``, ``duration``,
-and any mined ``lessons_slug``/``patterns_slug``) or ``None`` if no trace
-exists — a project only has a trace once ``workflow_project_complete`` has
-sealed it.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `slug` | str | **required** | The ``wt-`` trace slug, or the ``wp-`` project slug it was minted from<br>(anything not already ``wt-``-prefixed gets the prefix added). |
-
-## `workflow_trace_annotate`
-
-Append lesson/pattern memory slugs to an existing WorkflowTrace.
-
-Lets an agent (or ``workflow_trace_mine``) record which Memory nodes a completed
-project's trace produced without re-running ``workflow_project_complete``
-(traces are otherwise immutable after creation). Unions with whatever is
-already recorded, so it's safe to call repeatedly as more lessons/patterns
-are mined over time.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `trace_slug` | str | **required** | The ``wt-`` slug of the trace to annotate. |
-| `lessons_slug` | list[str]? | `null` | ``les-`` memory slugs to add to the trace's ``lessons_slug`` field. |
-| `patterns_slug` | list[str]? | `null` | ``pat-`` memory slugs to add to the trace's ``patterns_slug`` field. |
-
-## `workflow_trace_mine`
-
-Turn a completed WorkflowTrace into reusable Pattern/Lesson Memory nodes.
-
-Call with no ``patterns``/``lessons`` first — returns the trace itself
-(title, description, outcome) plus every session summary from its project,
-the raw material to mine for reusable knowledge. Review that, then call
-again with the patterns/lessons you propose to persist them: each becomes
-a ``Memory`` node, gets an ``Informed`` edge back to the trace's project,
-and its slug is appended to the trace's ``lessons_slug``/``patterns_slug``
-fields.
-
-These mined memories are read by other agents for self-improvement, but
-are equally a corpus of worked examples for people onboarding onto this
-system — write ``title``/``content`` so a newcomer unfamiliar with the
-project can follow the reasoning, not just a terse note for a future agent.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `trace_slug` | str | **required** | The ``wt-`` slug of the trace to mine. |
-| `patterns` | list[object]? | `null` | Proposed pattern memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``language``,<br>``tags``, and ``all_repos`` (``true`` stores it under no repo, as on<br>``memory_store``; not with ``repo``). |
-| `lessons` | list[object]? | `null` | Proposed lesson memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``severity``,<br>``tags``, and ``all_repos`` (as for ``patterns``). |
-| `session_slug` | str? | `null` | The ``ws-`` handle from ``workflow_session_start``, recorded as the<br>provenance of every memory mined on this call — see ``memory_store``. |

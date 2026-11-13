@@ -1001,15 +1001,17 @@ query search_tasks_title($query: String, $repo: String?, $status: String?) {
     limit 20
 }
 
-// Filtered task search (`project_slug` / `assignee`). Status, repo and
-// assignee are applied in Python, after the read, so these must not cap at
-// 20: a cap before the filter drops every match ranked below the 20th hit of
-// the unfiltered query. The project pair filters in the match instead, so a
-// project's own hits are never crowded out by other projects'.
+// Filtered or long task search (`project_slug`, `assignee`, or a `limit`
+// above 20). Assignee is applied in Python, after the read, so these must not
+// cap at 20: a cap before the filter drops every match ranked below the 20th
+// hit of the unfiltered query. Project, repo and status filter in the match
+// instead, before the `limit 10000`, so the requested scope's own hits are
+// never crowded out by higher-ranked ones outside it.
 
-query search_tasks_by_project($query: String, $project_slug: String) {
+query search_tasks_by_project($query: String, $project_slug: String, $status: String?) {
     match {
         $t: Task { project_slug: $project_slug }
+        $status is null or $t.status = $status
         search($t.description, $query)
     }
     return {
@@ -1021,9 +1023,10 @@ query search_tasks_by_project($query: String, $project_slug: String) {
     limit 10000
 }
 
-query search_tasks_by_project_title($query: String, $project_slug: String) {
+query search_tasks_by_project_title($query: String, $project_slug: String, $status: String?) {
     match {
         $t: Task { project_slug: $project_slug }
+        $status is null or $t.status = $status
         search($t.title, $query)
     }
     return {
@@ -1035,9 +1038,11 @@ query search_tasks_by_project_title($query: String, $project_slug: String) {
     limit 10000
 }
 
-query search_tasks_all_uncapped($query: String) {
+query search_tasks_all_uncapped($query: String, $repo: String?, $status: String?) {
     match {
         $t: Task
+        $repo is null or $t.repo = $repo
+        $status is null or $t.status = $status
         search($t.description, $query)
     }
     return {
@@ -1049,9 +1054,11 @@ query search_tasks_all_uncapped($query: String) {
     limit 10000
 }
 
-query search_tasks_all_uncapped_title($query: String) {
+query search_tasks_all_uncapped_title($query: String, $repo: String?, $status: String?) {
     match {
         $t: Task
+        $repo is null or $t.repo = $repo
+        $status is null or $t.status = $status
         search($t.title, $query)
     }
     return {

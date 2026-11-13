@@ -43,7 +43,10 @@ dependencies = [
   # `cli_hook_platforms()` reads them from the registry, so an older
   # resolution writes Codex a uvx MCP entry, and `--agent codex` raises
   # KeyError on the missing platform.
-  "agent-config-kit>=0.13,<1",
+  # >=0.15: witan/cli/memory.py and witan/memory_import.py import
+  # `MemoryEntry` and read `AgentPlatform.memory`, both added in 0.15.0, at
+  # module scope, so an older resolution fails `witan` at import.
+  "agent-config-kit>=0.15,<1",
   # >=0.13: witan/graph.py imports witan_core.omnigraph.StoreUnavailable at
   # module scope, which 0.12 does not export. A looser floor lets an external
   # install resolve a witan-core the server cannot even import — the failure
@@ -278,6 +281,11 @@ dependencies = [
   # server refuses on replay (a claim landed after replay checked the holder)
   # is reported applied and dropped instead of becoming a comment. It imports
   # fine, so `just check-core-floor` cannot see it.
+  #
+  # `witan/cli_only.py` also imports
+  # `witan_core.remote.proxy.proxy_client_info`, added in witan-core 0.53.0.
+  # It is also what makes the CLI's proxy name itself, and the server lists
+  # the CLI-only tools only to a client that does.
   #
   # ★ >=0.55 IS AN IMPORT FLOOR: server.py, readiness.py, context.py,
   # session_summary.py, cli/session.py and remote/proxy.py import

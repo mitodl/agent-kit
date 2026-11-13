@@ -21,6 +21,7 @@ from .adapters import codex as codex_adapter
 from .adapters import copilot as copilot_adapter
 from .adapters import opencode as opencode_adapter
 from .adapters import pi as pi_adapter
+from .memory import MemoryStore
 from .models import AgentPlatform, CapabilityScope, ScopeTarget
 from .paths import vscode_user_dir
 
@@ -64,6 +65,10 @@ def _registry() -> dict[str, AgentPlatform]:
                     "global": ScopeTarget(path=Path.home() / ".claude" / "skills"),
                     "project": ScopeTarget(path=Path(".claude") / "skills"),
                 }
+            ),
+            memory=MemoryStore(
+                root=claude_adapter.config_dir() / "projects",
+                read=claude_adapter.read_memory,
             ),
         ),
         "pi": AgentPlatform(
@@ -123,6 +128,9 @@ def _registry() -> dict[str, AgentPlatform]:
                     "project": ScopeTarget(path=Path(".agents") / "skills"),
                 }
             ),
+            # No memory: Pi core has no agent-written memory store
+            # (pi-mono packages/coding-agent at 3e23dd9, 2026-11-13); its
+            # sessions are transcripts, not memory.
         ),
         "copilot": AgentPlatform(
             name="GitHub Copilot",
@@ -146,6 +154,10 @@ def _registry() -> dict[str, AgentPlatform]:
             # with no equivalent per-user global directory surveyed.
             skills=CapabilityScope(
                 project=ScopeTarget(path=Path(".github") / "skills")
+            ),
+            memory=MemoryStore(
+                root=vscode_user_dir() / "workspaceStorage",
+                read=copilot_adapter.read_memory,
             ),
         ),
         "opencode": AgentPlatform(
@@ -175,6 +187,9 @@ def _registry() -> dict[str, AgentPlatform]:
                 project=ScopeTarget(path=Path(".opencode") / "skill")
             ),
             skill_dest_dirs=opencode_adapter.skill_dest_dirs,
+            # No memory: OpenCode has no agent-written memory store (no
+            # memory tool or memory directory in v1.19.4 or the 2.x line at
+            # sst/opencode f6e0c2d, 2026-11-13).
         ),
         "codex": AgentPlatform(
             name="Codex CLI",
@@ -216,6 +231,10 @@ def _registry() -> dict[str, AgentPlatform]:
                     "global": ScopeTarget(path=Path.home() / ".agents" / "skills"),
                     "project": ScopeTarget(path=Path(".agents") / "skills"),
                 }
+            ),
+            memory=MemoryStore(
+                root=codex_adapter.codex_home() / "memories",
+                read=codex_adapter.read_memory,
             ),
         ),
     }

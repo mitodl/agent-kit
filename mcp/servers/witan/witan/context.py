@@ -810,7 +810,7 @@ def _render_context_block(
             "",
             (
                 "Full threads (and any older comments elided here) are in "
-                "`task_get(slug=...)`. Reply with `task_comment(slug=..., text=...)`."
+                "`task_get(slug=...)`. Reply with `task_comment(slug=..., body=...)`."
             ),
             "",
         ]

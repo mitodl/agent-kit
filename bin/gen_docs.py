@@ -260,11 +260,6 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "memory_link",
             "memory_contradictions",
             "memory_stale_refs",
-            "store_merge",
-            # The repair half of `store_merge`: it restamps rows a migration
-            # already landed under a local identity, which `store_merge`'s own
-            # `claim_from_author` can only do on arrival.
-            "claim_authorship",
         ],
     ),
     (
@@ -316,10 +311,6 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "workflow_session_start",
             "workflow_session_end",
             "workflow_session_list",
-            "workflow_trace_list",
-            "workflow_trace_get",
-            "workflow_trace_annotate",
-            "workflow_trace_mine",
         ],
     ),
     (
@@ -339,11 +330,16 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
 async def _collect_tools() -> dict[str, Any]:
     import witan.server as witan_server
     import witan_code.server as code_server
+    from witan.cli_only import CLI_ONLY_TOOLS
 
+    # `_list_tools` skips middleware, so it still returns the tools
+    # `witan.cli_only` keeps out of an agent's tools/list. Those are documented
+    # with the CLI commands that call them, not here.
     tools = {}
     for mcp in (witan_server.mcp, code_server.mcp):
         for tool in await mcp._list_tools():
-            tools[tool.name] = tool
+            if tool.name not in CLI_ONLY_TOOLS:
+                tools[tool.name] = tool
     return tools
 
 

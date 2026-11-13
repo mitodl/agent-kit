@@ -134,7 +134,7 @@ async def _seed(srv) -> dict[str, str]:
     await call(
         "task_comment",
         slug=blocker["slug"],
-        text="Counting one past the cap is not the same as counting.",
+        body="Counting one past the cap is not the same as counting.",
     )
 
     session = await call(

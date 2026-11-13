@@ -44,6 +44,7 @@ from fastmcp import FastMCP
 from fastmcp.tools import FunctionTool
 
 from .. import live_pr
+from ..cli_only import CLI_ONLY_TOOLS
 from ..config import RemoteConfig
 from .oidc import default_token_provider, default_token_refresher
 from .proxy import RemoteServerProxy
@@ -125,7 +126,9 @@ async def build_remote_server(
     proxy = proxy or make_proxy(remote)
     mcp: FastMCP = FastMCP("witan")
     for tool in await proxy.remote_tools():
-        if tool.name.startswith(_LOCAL_PREFIX):
+        # The deployment lists CLI-only tools to this proxy because the CLI
+        # needs them; republishing them here would hand them back to the agent.
+        if tool.name.startswith(_LOCAL_PREFIX) or tool.name in CLI_ONLY_TOOLS:
             continue
         schema = getattr(tool, "input_schema", None)
         if schema is None:

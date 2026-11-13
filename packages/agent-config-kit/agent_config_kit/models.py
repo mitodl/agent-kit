@@ -17,6 +17,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .memory import MemoryStore
+
 # ── Capability 1: MCP servers ────────────────────────────────────────────────
 
 
@@ -293,5 +295,9 @@ class AgentPlatform(BaseModel):
     skills_also_reads: CapabilityScope | None = None
 
     lsp: CapabilityScope | None = None
+
+    # Where the platform's agent keeps memory it writes for itself, read-only.
+    # None when the platform keeps none on disk.
+    memory: MemoryStore | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
