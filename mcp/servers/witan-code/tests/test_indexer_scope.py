@@ -644,6 +644,57 @@ def test_a_file_named_through_a_link_from_outside_the_repo_is_indexed(
 
 
 @requires_stack
+def test_an_excluded_link_keeps_the_rows_of_a_file_the_walk_collects(
+    tmp_path, monkeypatch
+):
+    """`build/alias.py` is skipped, but the walk collects `a.py` under its own
+    name, so the edit must not drop the rows the next full index writes back."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "build").mkdir()
+    (src / "build" / "alias.py").symlink_to(Path("..") / "a.py")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py"}
+
+    stats = indexer.index_paths([src / "build" / "alias.py"], config=cfg, force=True)
+
+    assert (stats.indexed, stats.purged) == (0, 0)
+    assert _files(store, cfg) == {"a.py"}
+
+
+@pytest.mark.parametrize("through_alias", [False, True])
+@requires_stack
+def test_a_file_named_below_a_symlinked_directory_is_skipped(
+    tmp_path, monkeypatch, through_alias
+):
+    """The walk never descends `link/`, so `link/mod.py` is not a name it
+    collects, also when the checkout itself is reached through a link from
+    outside. The rows `src/mod.py` has under its own name stay."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "src").mkdir()
+    (src / "src" / "mod.py").write_text("def mod():\n    return 1\n")
+    (src / "link").symlink_to("src")
+    (tmp_path / "checkout").symlink_to(src)
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "src/mod.py"}
+
+    named = (tmp_path / "checkout" if through_alias else src) / "link" / "mod.py"
+    stats = indexer.index_paths([named], config=cfg, force=True)
+
+    assert (stats.indexed, stats.purged) == (0, 0)
+    assert _files(store, cfg) == {"a.py", "src/mod.py"}
+
+
+@requires_stack
 def test_an_excluded_file_named_directly_drops_rows_it_already_has(
     tmp_path, monkeypatch
 ):
