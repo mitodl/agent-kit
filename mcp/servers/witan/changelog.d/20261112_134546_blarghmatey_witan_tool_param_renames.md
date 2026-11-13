@@ -19,7 +19,9 @@
   version or both be older. A mismatch either way fails with a validation
   error, and that includes a `task_comment` queued in the offline journal and
   replayed across the upgrade, which replay drops as refused (with a logged
-  warning).
+  warning). When an older client replays a queued task write that no longer
+  applies, it posts a conflict note on the task with `text`, which an
+  upgraded deployment refuses too, so replay reports that write as lost.
 - `workflow_session_end`'s `session_slug` description now says it is the `ws-`
   slug from `workflow_session_start` and not the agent's own session id, which
   agents were passing as `session_id`.
