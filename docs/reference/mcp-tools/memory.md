@@ -318,7 +318,8 @@ or supersede the memory.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Repo scoping — see instructions. ``""`` checks every repo's memories. |
+| `repo` | str? | `null` | Repo scoping — see instructions. |
+| `all_repos` | bool | `False` | Check every repo's memories instead of the detected repo's — see<br>instructions. |
 
 ## `store_merge`
 

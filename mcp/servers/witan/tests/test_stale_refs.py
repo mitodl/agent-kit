@@ -265,7 +265,7 @@ def test_all_repos_checks_every_repo(server, code):
     here = _lesson(server, "here", [DELETED])
     there = _lesson(server, "there", [f"{UNINDEXED}#a.py::f"], repo=UNINDEXED)
 
-    flagged = _by_slug(server.memory_stale_refs(repo=""))
+    flagged = _by_slug(server.memory_stale_refs(all_repos=True))
 
     assert {here, there} <= set(flagged)
 
@@ -299,3 +299,23 @@ def test_stale_refs_cli_lists_the_flagged_refs(server, code, monkeypatch, capsys
     payload = json.loads(capsys.readouterr().out)
     assert [m["slug"] for m in payload["rows"]] == [stale]
     assert live not in {m["slug"] for m in payload["rows"]}
+
+
+@requires_omnigraph
+def test_stale_refs_cli_all_repos_checks_every_repo(server, code, monkeypatch, capsys):
+    from witan.cli import _common
+    from witan.cli.memory import stale_refs
+    from witan.cli.output import set_output_format
+
+    monkeypatch.setattr(_common, "_server", server)
+    code(_fake_code({LIVE}, {INDEXED: 10}))
+    here = _lesson(server, "here", [DELETED])
+    there = _lesson(server, "there", [f"{UNINDEXED}#a.py::f"], repo=UNINDEXED)
+    set_output_format("json")
+    try:
+        stale_refs(all_repos=True)
+    finally:
+        set_output_format("txt")
+
+    payload = json.loads(capsys.readouterr().out)
+    assert {here, there} <= {m["slug"] for m in payload["rows"]}

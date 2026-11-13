@@ -9353,7 +9353,7 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
 
 
 @_tool
-def memory_stale_refs(repo: str | None = None) -> dict:
+def memory_stale_refs(repo: str | None = None, all_repos: bool = False) -> dict:
     """
     Memories whose ``symbol_refs`` no longer resolve in the code graph.
 
@@ -9369,14 +9369,17 @@ def memory_stale_refs(repo: str | None = None) -> dict:
     Parameters
     ----------
     repo:
-        Repo scoping — see instructions. ``""`` checks every repo's memories.
+        Repo scoping — see instructions.
+    all_repos:
+        Check every repo's memories instead of the detected repo's — see
+        instructions.
 
     Returns ``{"repo", "checked", "counts", "memories"}``. ``checked`` is how
     many memories carry refs; ``counts`` tallies refs by status. ``memories``
     holds only those with a ref that is not live, each with ``status``
     (``stale`` when any ref is missing, else ``unknown``) and its ``refs``.
     """
-    detected = repo_module.detect(override=repo)
+    detected = _scope(repo, all_repos)
     rows = [
         r
         for r in client.read("read.gq", "current_memory_refs", {"repo": detected})
