@@ -256,6 +256,15 @@ policy, and this is the policy. Within each group, BM25 ranking is
 per-store, and a cross-repo fan-out concatenates each store's ranked
 results. Each group holds up to 50 results per store.
 
+Only the first 500 characters of a docstring are indexed, so a phrase that
+appears later in a long docstring does not match.
+
+Returns ``{"symbols": [...]}``. When a store could not run the docstring
+search (its schema has no docstring index, or the deployed tier predates
+the query), the result also carries a ``note`` starting with ``docstring
+search unavailable`` that says why. Results from that store are then name
+matches only, so a symbol findable only by its docstring is missing.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Search terms matched against ``qualified_name`` and ``docstring``. |
