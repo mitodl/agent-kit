@@ -229,6 +229,41 @@ def test_a_callee_defined_after_its_caller_is_linked(two_modules):
 
 
 @requires_stack
+def test_a_dotted_import_keeps_its_caller_through_a_callee_reindex(two_modules):
+    """`import pkg.b` binds `pkg`, so nothing about the import names b.py
+    except the module word the relink searches for."""
+    (two_modules / "d.py").write_text(
+        "import pkg.b\n\n\ndef dotted():\n    return pkg.b.target()\n"
+    )
+    _index(two_modules / "d.py")
+    assert "d.py::dotted" in _callers("pkg/b.py::target")
+    (two_modules / "pkg" / "b.py").write_text(B_PY.replace("return 1", "return 3"))
+    _index(two_modules / "pkg" / "b.py")
+    assert "d.py::dotted" in _callers("pkg/b.py::target")
+
+
+@requires_stack
+def test_a_caller_written_before_its_module_is_linked(two_modules):
+    (two_modules / "e.py").write_text(
+        "from pkg.new import made\n\n\ndef early():\n    return made()\n"
+    )
+    _index(two_modules / "e.py")
+    (two_modules / "pkg" / "new.py").write_text("def made():\n    return 0\n")
+    _index(two_modules / "pkg" / "new.py")
+    assert _callers("pkg/new.py::made") == {"e.py::early"}
+
+
+@requires_stack
+def test_a_method_of_the_same_name_does_not_shadow_an_import(two_modules):
+    (two_modules / "f.py").write_text(
+        "from pkg.b import target\n\n\nclass Store:\n    def target(self):\n"
+        "        return 0\n\n\ndef bare():\n    return target()\n"
+    )
+    _index(two_modules / "f.py")
+    assert "f.py::bare" in _callers("pkg/b.py::target")
+
+
+@requires_stack
 def test_removing_a_called_function_does_not_fail_the_index(two_modules):
     (two_modules / "pkg" / "b.py").write_text("class Thing:\n    pass\n")
     _index(two_modules / "pkg" / "b.py")

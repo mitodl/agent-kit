@@ -117,15 +117,6 @@ def resolve_call(
     return None
 
 
-def resolve_module(
-    binding: ImportBinding, modules: "ModuleIndex", language: str, importer: str
-) -> str | None:
-    """The file an import names: the submodule for ``from pkg import mod``,
-    else the module the name is imported from."""
-    module = _submodule(binding, modules, language, importer) or binding.module
-    return modules.find(language, module, importer)
-
-
 def _submodule(
     binding: ImportBinding, modules: "ModuleIndex", language: str, importer: str
 ) -> ModuleRef | None:

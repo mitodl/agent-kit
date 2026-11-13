@@ -422,3 +422,30 @@ def ignored(repo_root: Path, paths: list[Path]) -> frozenset[Path]:
     return frozenset(
         Path(os.fsdecode(name)) for name in result.stdout.split(b"\0") if name
     )
+
+
+def files_mentioning(
+    repo_root: Path, words: list[str], globs: tuple[str, ...]
+) -> list[str]:
+    """Repo-relative paths of the work tree's files matching ``globs`` that
+    contain any of ``words`` as a whole word, in one ``git grep`` call.
+
+    Tracked files plus untracked ones git does not ignore, as on disk. Empty
+    when ``words`` is, or when git cannot answer.
+    """
+    if not words:
+        return []
+    patterns = [arg for word in words for arg in ("-e", word)]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "grep", "-l", "-z", "-w", "-F"]
+            + ["--untracked", "--full-name", *patterns, "--", *globs],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    # 0: matches; 1: none; anything else is a fatal error.
+    if result.returncode != 0:
+        return []
+    return [os.fsdecode(name) for name in result.stdout.split(b"\0") if name]

@@ -499,10 +499,12 @@ def build_report(
             "here; a consumer in an unindexed repo is not shown."
         )
     notes.append(
-        "Tests to run: test files among the callers. For a method, or a symbol "
-        "in a language without import resolution, test files naming it are "
-        "added as a stand-in, so a test reaching it without naming it is not "
-        "listed."
+        "Tests to run: test files among the callers, which needs a graph "
+        "indexed with cross-file call resolution (run `witan-code reindex` "
+        "once if it predates that). For a method, a symbol in a language "
+        "without import resolution, or an unindexed repo, test files naming it "
+        "are added as a stand-in, so a test reaching it without naming it is "
+        "not listed."
     )
 
     # Every symbol, removed ones included, is checked against the same view its
