@@ -581,17 +581,10 @@ def why(path: Path, *, repo: str | None = None) -> None:
             state = f"not indexed: {rule}"
             detail = explained
         else:
-            # `index_paths` checks a file named directly against git's ignore
-            # rules, but not against the path rules.
-            cause = (
-                "before the rule applied to it"
-                if rule is indexer.Exclusion.GITIGNORED
-                else "by indexing the file by name, or before the rule applied to it"
-            )
             state = f"in the graph, but excluded: {rule}"
             detail = (
-                f"{explained} Its rows were written {cause}; a full index of "
-                "the repo drops them."
+                f"{explained} Its rows were written before the rule applied to "
+                "it; indexing the file or the repo drops them."
             )
     elif found["store"] is None:
         state = f"not indexed: {slug} has no code graph"

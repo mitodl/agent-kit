@@ -278,19 +278,39 @@ def test_a_file_not_indexed_yet_points_at_the_index_command(
 
 
 @requires_stack
-def test_rows_a_rule_now_excludes_are_called_out(checkout, monkeypatch, capsys):
-    """A file indexed by name keeps its rows until a full index purges them,
-    so the graph can hold a file the rules exclude."""
+def test_a_file_indexed_by_name_is_held_to_the_path_rules(
+    checkout, monkeypatch, capsys
+):
+    """The edit hook names files, and naming one under `build/` must not put
+    in the graph what the next full index would purge."""
     _fresh_server(monkeypatch)
     (checkout / "build").mkdir()
     (checkout / "build" / "gen.py").write_text("x = 1\n")
+    indexer.index_path(checkout)
     indexer.index_path(checkout / "build" / "gen.py")
 
     row = _why("build/gen.py", capsys)
 
+    assert row["indexed"] is False
+    assert row["state"] == "not indexed: excluded path"
+
+
+@requires_stack
+def test_rows_a_rule_now_excludes_are_called_out(checkout, monkeypatch, capsys):
+    """Rows written before a rule applied stay until the file or the repo is
+    indexed again, so the graph can hold a file the rules exclude."""
+    _fresh_server(monkeypatch)
+    (checkout / "lib").mkdir()
+    (checkout / "lib" / "dep.py").write_text("x = 1\n")
+    indexer.index_path(checkout)
+    (checkout / "lib" / ".git").mkdir()
+
+    row = _why("lib/dep.py", capsys)
+
     assert row["indexed"] is True
-    assert row["rule"] == "excluded path"
-    assert row["state"] == "in the graph, but excluded: excluded path"
+    assert row["rule"] == "nested checkout"
+    assert row["state"] == "in the graph, but excluded: nested checkout"
+    assert row["detail"].endswith("indexing the file or the repo drops them.")
 
 
 @requires_stack

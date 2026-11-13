@@ -563,6 +563,110 @@ def test_an_ignored_file_named_directly_drops_rows_it_already_has(
     assert _files(store, cfg) == {"a.py"}
 
 
+@requires_stack
+def test_a_file_named_directly_is_held_to_the_walks_path_rules(tmp_path, monkeypatch):
+    """An edit under `build/` or a nested checkout writes nothing, so the next
+    full index has nothing of it to purge. The `.git` here is one git cannot
+    open: a file in a real nested repository has that repository as its root,
+    so indexes into its own graph."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "build").mkdir()
+    (src / "build" / "gen.py").write_text("def gen():\n    return 1\n")
+    (src / "vendored").mkdir()
+    (src / "vendored" / ".git").mkdir()
+    (src / "vendored" / "dep.py").write_text("def dep():\n    return 1\n")
+    (src / ".gitignore").write_text("scratch/\n")
+    (src / "scratch").mkdir()
+    (src / "scratch" / "s.py").write_text("def s():\n    return 1\n")
+    cfg = cfg_mod.load()
+
+    stats = indexer.index_paths(
+        [
+            src / "build" / "gen.py",
+            src / "vendored" / "dep.py",
+            src / "scratch" / "s.py",
+            src / "a.py",
+        ],
+        config=cfg,
+    )
+
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert (stats.indexed, stats.purged) == (1, 0)
+    assert _files(store, cfg) == {"a.py"}
+    assert indexer.index_path(src, config=cfg).purged == 0
+
+
+@requires_stack
+def test_a_symlink_into_an_excluded_path_is_named_as_the_walk_names_it(
+    tmp_path, monkeypatch
+):
+    """The walk collects `alias.py` though it points into `build/`, and stores
+    it under the resolved id. Checking the resolved path instead would drop on
+    every edit the rows each full index writes back."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "build").mkdir()
+    (src / "build" / "real.py").write_text("def real():\n    return 1\n")
+    (src / "alias.py").symlink_to(src / "build" / "real.py")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "build/real.py"}
+
+    stats = indexer.index_paths([src / "alias.py"], config=cfg, force=True)
+
+    assert (stats.indexed, stats.purged) == (1, 0)
+    assert _files(store, cfg) == {"a.py", "build/real.py"}
+
+
+@requires_stack
+def test_a_file_named_through_a_link_from_outside_the_repo_is_indexed(
+    tmp_path, monkeypatch
+):
+    """The link's own name is not in the repo, so the rules see the file."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (tmp_path / "link.py").symlink_to(src / "a.py")
+    cfg = cfg_mod.load()
+
+    stats = indexer.index_paths([tmp_path / "link.py"], config=cfg)
+
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert stats.indexed == 1
+    assert _files(store, cfg) == {"a.py"}
+
+
+@requires_stack
+def test_an_excluded_file_named_directly_drops_rows_it_already_has(
+    tmp_path, monkeypatch
+):
+    """Rows written before a path rule applied go on the file's next edit, as
+    the next full index would drop them."""
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "lib").mkdir()
+    (src / "lib" / "dep.py").write_text("def dep():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "lib/dep.py"}
+
+    (src / "lib" / ".git").mkdir()
+    stats = indexer.index_paths([src / "lib" / "dep.py"], config=cfg)
+
+    assert (stats.indexed, stats.purged) == (0, 1)
+    assert _files(store, cfg) == {"a.py"}
+
+
 # ── _may_purge: the gate on the one destructive step ─────────────────────────
 
 

@@ -584,18 +584,29 @@ def index_paths(
     # "missing from the collected set" as "no longer part of the repo".
     walk_errors: list[OSError] = []
     gone = [t for t in resolved if not t.exists()]
-    # A file named directly (the edit hook's case) is held to the same ignore
-    # rule a directory's listing applies, in one git call for the whole batch.
-    ignored = (
-        repo_module.ignored(repo_root, [t for t in resolved if t.is_file()])
-        if repo_root is not None
-        else frozenset()
-    )
+    # A file named directly (the edit hook's case) is held to the rules a full
+    # walk of the repo applies: the path rules, then git's ignore rules in one
+    # call for the rest of the batch. The rules see the file under the name
+    # the walk lists it by, not where a symlink to it points: the walk keeps
+    # `alias.py -> build/real.py` (stored under the resolved id), so the hook
+    # must too. A link from outside the repo has no such name.
+    left_out: frozenset[Path] = frozenset()
+    if repo_root is not None:
+        names: dict[Path, Path] = {}
+        for p in (t.absolute() for t in targets):
+            if p.is_file():
+                name = p.parent.resolve() / p.name
+                names[name if name.is_relative_to(repo_root) else p.resolve()] = (
+                    p.resolve()
+                )
+        by_path = [n for n in names if _exclusion_below(repo_root, n) is None]
+        kept = set(by_path) - repo_module.ignored(repo_root, by_path)
+        left_out = frozenset(names.values()) - {names[n] for n in kept}
     collected = list(
         dict.fromkeys(
             path
             for t in resolved
-            if t.exists() and t not in ignored
+            if t.exists() and t not in left_out
             for path in _collect_files(t, on_error=walk_errors.append)
         )
     )
@@ -681,11 +692,13 @@ def index_paths(
     # Skipped under `can_purge`: a batch holding the repo root as well already
     # purged every stored file missing from disk above.
     #
-    # An ignored file named directly is treated the same way: it is on disk,
-    # but its rows (written before ignored files were left out) are no more
-    # the repo's than a deleted file's, and an edit is the cheapest place to
-    # drop them on a view no full run purges.
-    for vanished in [*gone, *sorted(ignored)]:
+    # An excluded or ignored file named directly is treated the same way: it
+    # is on disk, but its rows (written before the hook applied the walk's
+    # rules) are no more the repo's than a deleted file's. A full run would
+    # purge them, so dropping them here keeps the hook and the walk agreeing,
+    # and an edit is the cheapest place to drop them on a view no full run
+    # purges.
+    for vanished in [*gone, *sorted(left_out)]:
         if repo_root is None or not indexable(vanished):
             continue
         rel = _relative_path(vanished, base)
