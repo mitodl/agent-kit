@@ -13,3 +13,18 @@ def now_iso() -> str:
     ("fractional-second digits past the third must be zero").
     """
     return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def parse_timestamp(value: str) -> datetime:
+    """An ISO-8601 timestamp as an aware datetime, reading a naive one as UTC.
+
+    The graph hands ``DateTime`` columns back without an offset (omnigraph
+    drops it) while ``now_iso()`` writes ``+00:00``; both are UTC, and
+    comparing the two shapes raises ``TypeError`` unless the naive one is
+    given its zone. An offset that is present is kept, not converted.
+
+    Raises ``ValueError`` for a string that won't parse and ``TypeError`` for
+    a non-string, so each caller decides what an unreadable value means.
+    """
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

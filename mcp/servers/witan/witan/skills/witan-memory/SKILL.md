@@ -88,6 +88,7 @@ Reach for a narrower read only for a specific need:
 | Memories + code for a contract key | `memory_for_contract` |
 | Memories/tasks for a code symbol | `symbol_context` |
 | The code symbols a memory concerns | `memory_symbols` |
+| Memories whose symbol refs no longer resolve | `memory_stale_refs` |
 | Memories a project produced | `workflow_project_memories` |
 
 ### `memory_list` — browse a kind without a query
@@ -97,7 +98,8 @@ memory_list(kind="project_fact")  # structural facts, this repo
 memory_list(kind="pattern", language="python")  # conventions before coding
 ```
 
-Scoping: auto-detects the current repo; pass `repo=""` for all repos. With no
+Scoping: auto-detects the current repo; pass `all_repos=True` for all repos
+(never an empty `repo`, which is refused). With no
 repo detected and none passed it returns slim records (slug, kind, title, tags —
 no content); `memory_get` a slug for its full content.
 
@@ -179,6 +181,9 @@ To go the other way — "what lessons or tasks concern this symbol?" — call
 whose `symbol_refs` include that id. The forward direction — "what code does this
 memory concern?" — is `memory_symbols(slug)`. (Both require the witan-code server;
 symbol ids are soft references, so a stale one simply resolves to nothing.)
+`memory_stale_refs()` lists the memories whose refs no longer resolve, with
+same-named symbols as rename candidates. It only reports: fix the refs with
+`memory_update`, or supersede the memory if the code it described is gone.
 
 ## Quality Guidelines
 

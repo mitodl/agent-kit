@@ -508,3 +508,61 @@ This still does not make witan an authorization server — no DCR, no
 client where the real one is, which is the gap that broke Claude Desktop's
 connector flow and would break any other client that does the same-origin
 guessing.
+
+## Addendum (2026-11-12) — Enterprise-Managed Authorization deferred, agentgateway declined
+
+Two things that matured during 2026 looked like they could replace part of this
+ADR with something adopted rather than built. One is MCP's Enterprise-Managed
+Authorization (EMA), a stable official extension (revision 2026-07-28) built on
+the IETF ID-JAG draft. The other is agentgateway's per-user, per-tool MCP
+authorization. Neither changes D1-D5 today. Tracked as
+`tk-evaluate-mcp-enterprise-managed-authorization-id-1e9be3`.
+
+EMA is deferred. What it would buy witan: a client already signed in to the
+organization's IdP gets a witan access token without a per-server OAuth flow,
+and an administrator can enable witan for an IdP group in one place. That is a
+token-issuance policy only. A token still reaches the graph only through D3's
+pre-provisioned per-user actor token and the Cedar bundle's membership rules
+(ADR-0002), and EMA replaces neither. The IdP
+issues an ID-JAG to the client, and witan's authorization server (Keycloak, the
+`authorization_servers` entry `RemoteAuthProvider` advertises, 2026-09-10
+addendum) validates it and issues the access token. witan would still validate
+a Keycloak access token and derive the actor from `sub`, so D1 and D2 stand and
+the change sits at Keycloak, not in witan. That is my reading of the extension,
+not something tested against a running flow.
+
+Two things have to exist first. Keycloak has to accept ID-JAGs as witan's
+authorization server. It does so only as an experimental feature behind
+`identity-assertion-jwt` since 26.7, and promotion to preview
+(keycloak/keycloak#49003) and to supported (#49004) are open issues with no
+milestone. And some client we use has to be signed in to an IdP that issues
+ID-JAGs for witan's audience. If that IdP is Keycloak itself, it also needs the
+issuing side (keycloak/keycloak#49998, an open PR). Then the whole exchange
+happens inside one Keycloak and buys little over today's auth-code flow, so the
+case for EMA rests on an upstream enterprise IdP. Which IdP our clients would
+sign in to is not established. All of this was checked 2026-11-12, when 26.8.2
+was the latest Keycloak release. Revisit when the receiving role reaches
+preview and a client we use is configured against an ID-JAG-issuing IdP.
+fastmcp's `identity_assertion` module (still beta) does not gate this, because
+it attaches to `OAuthProxy`, and witan uses `RemoteAuthProvider` and is not an
+authorization server.
+
+agentgateway is declined. Its documented MCP authorization is CEL rules over
+`jwt.*` and `mcp.tool.*` claims
+([agentgateway docs](https://agentgateway.dev/docs/standalone/latest/configuration/security/mcp-authz/)),
+and Cedar reaches it only through third-party integrations. The deciding reason
+is the number of policy surfaces, not the language. The 2026-07-10 resolution
+declined ToolHive's Cedar authorizer because a second, coarser policy surface
+has to be kept in sync with the Cedar bundle (ADR-0002), and that would hold
+even if both were Cedar. CEL makes it a second language as well. witan sits
+behind APISIX with no MCP proxy (2026-09-01 addendum), so agentgateway would be
+a component added in front of witan, not one replacing an existing proxy.
+
+The rest of the 2026-07-28 revision needs nothing here:
+
+- witan uses none of roots, sampling or MCP logging (ADR-0009).
+- It does no dynamic client registration, so DCR's deprecation does not touch it.
+- It is not an authorization server. RFC 9207's `iss` is a SHOULD on
+  Keycloak's authorization response and a MUST-validate on the client.
+- The `Mcp-Method` and `Mcp-Name` headers matter only to a gateway that routes
+  or authorizes on them, and this addendum adopts none.

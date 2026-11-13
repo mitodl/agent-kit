@@ -26,9 +26,8 @@ from witan import readiness
 from .conftest import requires_omnigraph
 
 # `server` sets WITAN_REPO, so an unpassed `repo` resolves to it and takes the
-# repo-scoped branch. `repo=""` is the documented spelling for "every repo",
-# and it is the only way to reach the branch that was capped at 50.
-ALL_REPOS = ""
+# repo-scoped branch. `all_repos=True` is the spelling for "every repo", and it
+# is the only way to reach the branch that was capped at 50.
 
 
 def _iso(seconds_ago: int) -> str:
@@ -44,7 +43,7 @@ def test_unscoped_list_still_stops_at_fifty_without_a_limit(server):
     for i in range(51):
         server.task_create(title=f"task {i}", description="x")
 
-    assert len(server.task_list(repo=ALL_REPOS)) == 50
+    assert len(server.task_list(all_repos=True)) == 50
 
 
 @requires_omnigraph
@@ -57,7 +56,7 @@ def test_an_explicit_limit_reads_past_the_fifty_row_cap(server):
     for i in range(51):
         server.task_create(title=f"task {i}", description="x")
 
-    assert len(server.task_list(repo=ALL_REPOS, limit=51)) == 51
+    assert len(server.task_list(all_repos=True, limit=51)) == 51
 
 
 @requires_omnigraph
@@ -66,7 +65,7 @@ def test_an_explicit_limit_reads_past_the_cap_with_a_status_filter(server):
     for i in range(51):
         server.task_create(title=f"task {i}", description="x")
 
-    rows = server.task_list(repo=ALL_REPOS, status="open", limit=51)
+    rows = server.task_list(all_repos=True, status="open", limit=51)
 
     assert len(rows) == 51
     assert {r["status"] for r in rows} == {"open"}
@@ -117,7 +116,7 @@ def test_a_limit_outside_the_range_is_refused(server, limit):
     """Loudly, not by clamping. 10,000 is what the uncapped queries can return,
     so a larger limit would otherwise come back short with nothing saying so."""
     with pytest.raises(ValueError, match="between 1 and 10000"):
-        server.task_list(repo=ALL_REPOS, limit=limit)
+        server.task_list(all_repos=True, limit=limit)
 
 
 # ── §3.2 list rows carried no created_at or closed_at ──────────────

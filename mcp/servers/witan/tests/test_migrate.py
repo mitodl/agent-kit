@@ -2309,7 +2309,7 @@ def test_claim_authorship_makes_a_migrated_trace_match_its_author_filter(
     monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
 
     def mine() -> set[str]:
-        traces = server.workflow_trace_list(repo="", author="me@example.org")
+        traces = server.workflow_trace_list(all_repos=True, author="me@example.org")
         return {t["slug"] for t in traces}
 
     assert trace_slug not in mine()

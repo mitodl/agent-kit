@@ -64,12 +64,13 @@ taken); the import path, console command, and every tool/CLI name are still
 Two install shapes, depending on whether your agent platform needs the
 `witan` binary on `PATH`:
 
-- **Persistent CLI** — required for **Claude Code** and **Pi** (their
-  hooks/extensions shell out to `witan` directly):
+- **Persistent CLI** — required for **Claude Code**, **Pi**, and **Codex**
+  (their hooks/extensions shell out to `witan` directly, and their MCP entry
+  is `witan serve`):
 
   ```bash
   uv tool install witan-council
-  witan setup --agent claude   # or: pi | all
+  witan setup --agent claude   # or: pi | codex | all
   ```
 
   To track pre-release/unreleased code instead of the latest PyPI release,
@@ -77,7 +78,7 @@ Two install shapes, depending on whether your agent platform needs the
 
   ```bash
   uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
-  witan setup --agent claude   # or: pi | all
+  witan setup --agent claude   # or: pi | codex | all
   ```
 
 - **MCP-only** — sufficient for **Copilot**, **OpenCode**, and **Kilo**,

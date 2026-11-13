@@ -2,6 +2,7 @@
 
 import pytest
 
+from witan import provenance
 from witan.config import RankConfig
 
 from .conftest import requires_omnigraph
@@ -15,22 +16,6 @@ def no_floor(server, monkeypatch):
         "rank_cfg",
         RankConfig(surface_min_content_score=0.0, surface_min_title_score=0.0),
     )
-
-
-@pytest.fixture
-def logged(server, monkeypatch):
-    """The fields of each ``info`` line the server logs, by event name."""
-    events: dict[str, list[dict]] = {}
-
-    class Recorder:
-        def info(self, event, **fields):
-            events.setdefault(event, []).append(fields)
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
-    monkeypatch.setattr(server._module, "logger", Recorder())
-    return events
 
 
 def _task(server, title="frobnicate the widget cache"):
@@ -56,6 +41,7 @@ def test_a_first_claim_carries_the_memories_its_title_matches(server, no_floor):
         "author",
         "excerpt",
     }
+    assert claimed["memories_note"] == provenance.TEAMMATE_NOTES
 
 
 @requires_omnigraph
@@ -75,7 +61,9 @@ def test_a_weak_match_shows_nothing(server):
     _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
     task = _task(server)
 
-    assert server.task_claim(task["slug"])["memories"] == []
+    claimed = server.task_claim(task["slug"])
+    assert claimed["memories"] == []
+    assert "memories_note" not in claimed
 
 
 @requires_omnigraph

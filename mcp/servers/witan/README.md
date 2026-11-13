@@ -39,7 +39,7 @@ standalone (without `witan`), `witan-code` has its own equivalent `witan-code
 setup` (or the mounted `witan code setup`) — see its
 [README](../witan-code/README.md#install).
 
-**With persistent CLI** — required for **Claude Code** and **Pi** (and `--agent all`),
+**With persistent CLI** — required for **Claude Code**, **Pi**, and **Codex** (and `--agent all`),
 whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`.
 Install `witan-code` alongside it with `--with` so its `witan code …` hooks
 work too (omit `--with` for a witan-only install):
@@ -54,16 +54,17 @@ uv tool install --with git+https://github.com/mitodl/agent-kit#subdirectory=mcp/
 uv tool install --editable --with ./mcp/servers/witan-code mcp/servers/witan
 
 # then run setup:
-witan setup --agent claude   # or: pi | all
+witan setup --agent claude   # or: pi | codex | all
 ```
 
-On these two platforms the MCP server entry `witan setup` writes is `witan
+On these platforms the MCP server entry `witan setup` writes is `witan
 serve` — the same install the hooks use. The MCP-only agents below get a
 self-contained `uvx --from …` entry instead, since they have no CLI to point
 at. That difference is deliberate: registering the `uvx` form here would leave
-Claude Code and Pi running two witan installs from two different sources (the
+these agents running two witan installs from two different sources (the
 hooks on your PATH install, the MCP server on git `main`), which skew silently
-as those lineages diverge.
+as those lineages diverge. Re-running `witan setup` replaces an existing
+`witan` MCP entry, so it also moves an older `uvx` entry onto the CLI.
 
 **Pi needs Pi 0.99 or later for the MCP half.** The entry
 `witan setup --agent pi` writes to `~/.pi/agent/mcp.json` is read by Pi's

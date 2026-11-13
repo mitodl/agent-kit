@@ -120,7 +120,7 @@ no session state, so the handle is the only thing tying those calls together.
 
 Confirm to the user: "Session linked to **{title}** (`{session_slug}`). Call
 `/witan-workflow end` before you stop, or the Stop hook will auto-close it with a
-placeholder summary."
+summary derived from the tasks, memories and commits it recorded."
 
 ---
 

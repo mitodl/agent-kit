@@ -18,7 +18,9 @@ from fastmcp import Client
 from witan import readiness
 from witan.config import RemoteConfig
 from witan.remote.proxy import (
+    _REPO_TOOLS,
     RemoteServerProxy,
+    RemoteToolFailed,
     RemoteToolUnavailable,
     RemoteUnreachable,
 )
@@ -54,13 +56,13 @@ def proxy(server, monkeypatch):
 def test_list_return_is_unwrapped_to_raw_list(proxy):
     # FastMCP wraps list returns as {"result": [...]}; .data unwraps it, so the
     # proxy hands back the same raw list an in-process call would.
-    out = proxy.task_ready(repo="")
+    out = proxy.task_ready(all_repos=True)
     assert isinstance(out, list)
 
 
 def test_token_provider_is_called_per_invocation(proxy):
-    proxy.task_ready(repo="")
-    proxy.task_ready(repo="")
+    proxy.task_ready(all_repos=True)
+    proxy.task_ready(all_repos=True)
     assert proxy._token_calls == ["tok", "tok"]
 
 
@@ -96,7 +98,7 @@ def test_schema_property_order_is_not_a_contract(proxy):
     ``test_positional_arg_is_refused``; this test exists to stop anyone
     "restoring" positional support after observing that it works in-process.
     """
-    proxy.task_ready(repo="")  # force a tools/list so _param_names is populated
+    proxy.task_ready(all_repos=True)  # force a tools/list so _param_names is populated
     props = proxy._param_names["memory_store"]
     assert "kind" in props and "category" in props
     # Do NOT assert an order here — asserting either one would bless a
@@ -117,23 +119,122 @@ def test_repo_none_is_resolved_client_side(proxy, monkeypatch):
     assert any(t["repo"] == REPO for t in ready)
 
 
-def test_repo_empty_string_sentinel_is_preserved(proxy, monkeypatch):
-    # repo="" (all repos) must NOT be replaced by detection.
+# Minimal arguments for each tool that takes `all_repos`. Keyed by tool so
+# `test_every_all_repos_tool_is_covered` fails on a new one until it is added.
+_ALL_REPOS_CALLS = {
+    "memory_contradictions": {},
+    "memory_list": {},
+    "memory_search": {"query": "anything"},
+    "memory_store": {"kind": "pattern", "title": "everywhere", "content": "c"},
+    "recall": {"query": "anything"},
+    "task_create": {"title": "everywhere", "description": "d"},
+    "task_list": {},
+    "task_ready": {},
+    "task_search": {"query": "anything"},
+    "workflow_project_list": {},
+    "workflow_project_search": {"query": "anything"},
+    "workflow_session_start": {"session_id": "s-1", "phase": "discovery"},
+    "workflow_trace_list": {},
+}
+
+# Rows these write, and return, are filed under no repo with `all_repos`.
+# (`workflow_session_start` writes one too, but its handle carries no `repo`.)
+_ALL_REPOS_STAMPS = {"memory_store", "task_create"}
+
+
+def _declaring(param: str) -> set[str]:
+    """Tools declaring ``param``, as listed to the CLI's proxy, which includes
+    ``witan.cli_only``'s tools: the proxy still scopes and dispatches those."""
+    import witan.server as srv
+    from witan_core.remote.proxy import _tool_input_schema
+
+    async def _names() -> set[str]:
+        async with Client(srv.mcp, client_info=proxy_client_info()) as client:
+            return {
+                t.name
+                for t in await client.list_tools()
+                if param in (_tool_input_schema(t).get("properties") or {})
+            }
+
+    return asyncio.run(_names())
+
+
+def test_every_all_repos_tool_is_covered(server):
+    from witan.remote.proxy import _REPO_IS_SCOPE_OR_STAMP
+
+    declared = _declaring("all_repos")
+    assert declared == set(_ALL_REPOS_CALLS)
+    # The scope tools that do not take it. `task_claim` and `task_for_branch`
+    # use `repo` only to key a branch, which has no every-repo form.
+    assert _REPO_IS_SCOPE_OR_STAMP - declared == {"task_claim", "task_for_branch"}
+
+
+def _call_args(proxy, tool: str) -> dict:
+    args = dict(_ALL_REPOS_CALLS[tool])
+    if tool == "workflow_session_start":
+        args["project_slug"] = proxy.workflow_project_create(
+            title="everywhere", description="d"
+        )["slug"]
+    return args
+
+
+@requires_omnigraph
+@pytest.mark.parametrize("tool", sorted(_ALL_REPOS_CALLS))
+def test_all_repos_reaches_the_server_without_an_injected_repo(
+    proxy, monkeypatch, tool
+):
+    # Over the proxy, an omitted `repo` is filled in client-side. With
+    # `all_repos` it must not be: the server refuses the two together, and the
+    # caller asked for no repo.
     monkeypatch.setattr(
         "witan.remote.proxy.repo_module.detect",
-        lambda override=None: "https://other/repo",
+        lambda override=None: override or REPO,
     )
-    captured = {}
+    sent = {}
     orig = proxy._map_args
 
     def spy(name, args, kwargs):
-        result = orig(name, args, kwargs)
-        captured[name] = result
-        return result
+        sent[name] = orig(name, args, kwargs)
+        return sent[name]
 
     monkeypatch.setattr(proxy, "_map_args", spy)
-    proxy.task_ready(repo="")
-    assert captured["task_ready"]["repo"] == ""
+
+    result = getattr(proxy, tool)(all_repos=True, **_call_args(proxy, tool))
+
+    assert sent[tool]["all_repos"] is True
+    assert "repo" not in sent[tool]
+    if tool in _ALL_REPOS_STAMPS:
+        assert result["repo"] is None
+
+
+def _empty_repo_args(proxy, tool: str) -> dict:
+    if tool in _ALL_REPOS_CALLS:
+        return _call_args(proxy, tool)
+    if tool == "task_for_branch":
+        return {"branch": "main"}
+    if tool == "memory_update":
+        return {
+            "slug": proxy.memory_store(kind="pattern", title="t", content="c")["slug"]
+        }
+    # task_claim, task_update
+    return {"slug": proxy.task_create(title="t", description="d")["slug"]}
+
+
+@requires_omnigraph
+@pytest.mark.parametrize("tool", sorted(_REPO_TOOLS))
+def test_an_empty_repo_is_refused_naming_all_repos(proxy, tool):
+    # An un-upgraded client still sends an empty repo for "every repo". It is
+    # refused on every tool taking `repo`, rather than read as every repo, as
+    # no repo given, or (on an update) written as the stored value.
+    args = _empty_repo_args(proxy, tool)
+    with pytest.raises(RemoteToolFailed, match="all_repos=true"):
+        getattr(proxy, tool)(repo="", **args)
+
+
+@requires_omnigraph
+def test_repo_and_all_repos_together_are_refused(proxy):
+    with pytest.raises(RemoteToolFailed, match="not both"):
+        proxy.task_list(repo=REPO, all_repos=True)
 
 
 def test_session_handle_is_threaded_from_the_client(
@@ -342,7 +443,7 @@ def test_cli_only_tools_dispatch_through_the_proxy(proxy, server):
     done = server.workflow_project_complete(proj["slug"], outcome="shipped")
     trace_slug = done["trace_slug"]
 
-    assert trace_slug in {t["slug"] for t in proxy.workflow_trace_list(repo="")}
+    assert trace_slug in {t["slug"] for t in proxy.workflow_trace_list(all_repos=True)}
     assert proxy.workflow_trace_get(slug=proj["slug"])["slug"] == trace_slug
     assert proxy.workflow_trace_mine(trace_slug=trace_slug)["trace"]["slug"] == (
         trace_slug
@@ -374,7 +475,7 @@ def test_memory_repair_tools_are_not_admin_only(server):
 
 def test_unknown_tool_is_refused(proxy):
     with pytest.raises(RemoteToolUnavailable):
-        proxy.definitely_not_a_tool(repo="")
+        proxy.definitely_not_a_tool(all_repos=True)
 
 
 # ── an unreachable deployment ─────────────────────────────────────────────
@@ -795,19 +896,9 @@ def test_every_repo_tool_is_classified(server):
     moment to decide whether an omitted `repo` scopes the call or leaves a
     stored field alone.
     """
-    import witan.server as srv
     from witan.remote.proxy import _REPO_TOOLS
-    from witan_core.remote.proxy import _tool_input_schema
 
-    async def _declaring_repo() -> set[str]:
-        async with Client(srv.mcp, client_info=proxy_client_info()) as client:
-            return {
-                t.name
-                for t in await client.list_tools()
-                if "repo" in (_tool_input_schema(t).get("properties") or {})
-            }
-
-    declared = asyncio.run(_declaring_repo())
+    declared = _declaring("repo")
 
     assert declared, "expected some tool to declare a `repo` parameter"
     assert declared == _REPO_TOOLS, (

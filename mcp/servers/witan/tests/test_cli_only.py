@@ -56,7 +56,7 @@ def test_an_unlisted_tool_is_still_callable_by_name(server):
 
     async def _call():
         async with Client(srv.mcp) as client:
-            return await client.call_tool("workflow_trace_list", {"repo": ""})
+            return await client.call_tool("workflow_trace_list", {"all_repos": True})
 
     assert asyncio.run(_call()).is_error is False
 
