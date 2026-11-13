@@ -151,6 +151,7 @@ def memory_import(
     *,
     harness: list[str] | None = None,
     repo: str | None = None,
+    map_: Annotated[list[str] | None, cyclopts.Parameter(name="--map")] = None,
     select: list[str] | None = None,
     all_: Annotated[bool, cyclopts.Parameter(name="--all")] = False,
     confirm: bool = False,
@@ -181,6 +182,19 @@ def memory_import(
     repo:
         Only consider memories whose project resolves to this repo, given as a
         URI or as org/name.
+    map_:
+        Give a project the repo it belongs to, as
+        --map=<project-dir>=<repo-uri>, in place of resolving it from disk:
+        for a checkout that was deleted or moved, or a project that resolves
+        to the wrong repo. <project-dir> is the project as the unresolved
+        report names it (a Claude Code project directory under
+        ~/.claude/projects such as -home-me-code-app, a Codex session's cwd, a
+        Copilot workspace folder), or the absolute path it stood for, which
+        also matches the Claude Code directory that path encodes to. Write it
+        with "=" after --map, because a Claude Code directory starts with "-"
+        and would otherwise read as an option. <repo-uri> is the repo's remote
+        (https or SSH), not org/name. Applies to every agent whose project it
+        names. Repeatable; a --map that names no project is refused.
     select:
         Memories to store, by the id shown in the dry run, by the memory's own
         name in its store (a file stem), or by a glob over either. Repeatable
@@ -202,13 +216,33 @@ def memory_import(
     if confirm and not (patterns or all_):
         print_error("--confirm writes only what --select or --all chooses.")
         raise SystemExit(1)
+    try:
+        maps = local.parse_maps(map_ or [])
+    except ValueError as exc:
+        print_error(str(exc))
+        raise SystemExit(1) from None
 
     harnesses = [local.harness(name) for name in dict.fromkeys(names)]
     found = [(h, mem) for h in harnesses for mem in h.entries]
     resolutions: dict[tuple[str, str], local.Resolution] = {}
+    used: set[str] = set()
     for h, mem in found:
-        if (h.name, mem.project) not in resolutions:
-            resolutions[(h.name, mem.project)] = local.resolve(mem)
+        if (h.name, mem.project) in resolutions:
+            continue
+        hits = local.mapped(mem.project, maps)
+        used.update(hits)
+        if len(set(hits.values())) > 1:
+            print_error(
+                f"--map gives {mem.project} more than one repo: "
+                + ", ".join(f"{k}={r}" for k, r in hits.items())
+            )
+            raise SystemExit(1)
+        resolutions[(h.name, mem.project)] = (
+            local.Resolution(next(iter(hits.values()))) if hits else local.resolve(mem)
+        )
+    if unused := [k for k in maps if k not in used]:
+        print_error(f"--map matched no project: {', '.join(unused)}")
+        raise SystemExit(1)
 
     def resolution(h: local.Harness, mem: MemoryEntry) -> local.Resolution:
         return resolutions[(h.name, mem.project)]
@@ -345,14 +379,21 @@ def memory_import(
     for h in harnesses:
         if h.missing:
             print_notice(f"[dim]{esc(h.label)}: {esc(h.missing)}.[/dim]")
+    unresolved = False
     for (name, project), res in resolutions.items():
         if res.repo is None and any(
             h.name == name and mem.project == project for h, mem in found
         ):
+            unresolved = True
             print_notice(
                 f"[yellow]unresolved[/yellow] {esc(name)} {esc(project)}: "
                 f"{esc(res.reason)}"
             )
+    if unresolved:
+        print_notice(
+            "[dim]Give an unresolved project its repo with "
+            "--map=<project-dir>=<repo-uri>.[/dim]"
+        )
     counts = Counter(str(r["status"]) for r in rows)
     summary = ", ".join(f"{n} {status}" for status, n in sorted(counts.items()))
     print_notice(f"{len(rows)} memories: {esc(summary or 'none')}.")

@@ -8,6 +8,7 @@ resolving a project to a repo, and the command against a real graph.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -110,6 +111,45 @@ def test_a_moved_directory_is_unresolved(tmp_path):
     resolved = _resolve(tmp_path / "gone")
     assert resolved.repo is None
     assert resolved.reason == "no directory on disk matches this project"
+
+
+# ── --map: a project's repo given on the command line ───────────────────────
+
+
+def test_a_map_canonicalises_its_repo_like_any_explicit_repo():
+    assert local.parse_maps(
+        ["-home-me-gone=git@github.com:Test/Repo.git", "/srv/old=" + OTHER_REPO + "/"]
+    ) == {"-home-me-gone": REPO, "/srv/old": OTHER_REPO}
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("no-equals-sign", "is not <project-dir>=<repo-uri>"),
+        (f"={REPO}", "is not <project-dir>=<repo-uri>"),
+        ("-home-me-gone=", "'' is not a repo URI"),
+        ("-home-me-gone=test/repo", "'test/repo' is not a repo URI"),
+        ("-home-me-gone=https://github.com", "is not a repo URI"),
+    ],
+)
+def test_a_map_without_a_repo_uri_is_refused(value, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        local.parse_maps([value])
+
+
+def test_one_project_mapped_to_two_repos_is_refused():
+    with pytest.raises(ValueError, match="two repos"):
+        local.parse_maps([f"-x={REPO}", f"-x={OTHER_REPO}"])
+
+
+def test_a_map_names_a_project_by_its_label_or_the_path_it_stood_for(tmp_path):
+    gone = tmp_path / "code" / "app.worktrees" / "wt_1"
+    label = claude.encode_project(str(gone))
+    maps = {label: REPO, f"{gone}/": OTHER_REPO, "relative/dir": REPO}
+    assert local.mapped(label, maps) == {label: REPO, f"{gone}/": OTHER_REPO}
+    # Codex records the cwd itself.
+    assert local.mapped(str(gone), maps) == {f"{gone}/": OTHER_REPO}
+    assert local.mapped(claude.encode_project(str(tmp_path)), maps) == {}
 
 
 @pytest.mark.parametrize(
@@ -381,6 +421,74 @@ def test_refusals_go_to_stderr_under_structured_output(
 
 
 @requires_omnigraph
+def test_a_mapped_project_lists_its_memories_under_that_repo(
+    cli, tmp_path, projects, capsys
+):
+    gone = tmp_path / "gone"
+    _memory(projects, gone, "orphan")
+    moved = claude.encode_project(str(tmp_path / "moved"))
+
+    from witan.cli.memory import memory_import
+
+    capsys.readouterr()
+    memory_import(map_=[f"{moved}=git@github.com:test/other.git"])
+    out, err = capsys.readouterr()
+    rows = {row["id"]: row for row in json.loads(out)["rows"]}
+    # Long paths wrap at the pinned terminal width.
+    err = "".join(err.split())
+
+    assert (rows["test/other/lost"]["repo"], rows["test/other/lost"]["status"]) == (
+        OTHER_REPO,
+        "new",
+    )
+    orphan = rows[f"{claude.encode_project(str(gone)).strip('-')}/orphan"]
+    assert (orphan["repo"], orphan["status"]) == (None, "unresolved")
+    assert f"unresolvedclaude{claude.encode_project(str(gone))}:" in err
+    assert moved not in err
+    assert "--map=<project-dir>=<repo-uri>" in err
+
+
+@requires_omnigraph
+def test_a_map_by_absolute_path_overrides_a_resolved_checkout(
+    cli, tmp_path, projects, server
+):
+    rows = cli(map_=[f"{tmp_path / 'src' / 'repo'}={OTHER_REPO}"])
+    assert rows["test/other/fact"]["repo"] == OTHER_REPO
+    assert rows["test/other/fact"]["status"] == "new"
+    assert _titles(server) == []
+
+
+@requires_omnigraph
+def test_a_mapped_project_is_stored_under_that_repo(cli, tmp_path, projects, server):
+    moved = tmp_path / "moved"
+    rows = cli(map_=[f"{moved}={OTHER_REPO}"], select=["lost"], confirm=True)
+    assert rows["test/other/lost"]["status"] == "stored"
+    assert server.memory_get(rows["test/other/lost"]["slug"])["repo"] == OTHER_REPO
+
+
+@requires_omnigraph
+@pytest.mark.parametrize(
+    ("maps", "message"),
+    [
+        (["-x=test/repo"], "'test/repo' is not a repo URI"),
+        ([f"-nowhere={REPO}"], "--map matched no project: -nowhere"),
+    ],
+)
+def test_a_bad_map_is_refused_before_anything_is_listed(
+    cli, projects, capsys, maps, message
+):
+    from witan.cli.memory import memory_import
+
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        memory_import(map_=maps)
+    out, err = capsys.readouterr()
+    assert exc.value.code == 1
+    assert out == ""
+    assert message in err
+
+
+@requires_omnigraph
 def test_a_stem_with_glob_characters_is_selectable_by_name(
     cli, tmp_path, projects, server
 ):
@@ -492,6 +600,13 @@ def test_other_agents_memories_are_stored_and_a_rerun_stores_nothing(
     second = cli(harness=["codex,copilot"], all_=True, confirm=True)
     assert second["test/repo/s-flaky"]["status"] == "duplicate"
     assert second["test/repo/build"]["status"] == "duplicate"
+
+
+@requires_omnigraph
+def test_a_map_applies_to_another_agents_project(cli, tmp_path, projects, codex_store):
+    rows = cli(harness=["codex"], map_=[f"{tmp_path / 'moved'}={OTHER_REPO}"])
+    assert rows["test/other/s-docs"]["repo"] == OTHER_REPO
+    assert rows["test/repo/s-flaky"]["repo"] == REPO
 
 
 @requires_omnigraph

@@ -9,10 +9,12 @@ remote; anything else is reported as unresolved rather than guessed at.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from agent_config_kit import MemoryEntry, get_platform
+from agent_config_kit.adapters.claude import encode_project
 from witan_core.repo_key import normalise
 
 from . import repo as repo_module
@@ -49,6 +51,64 @@ class Resolution:
     repo: str | None
     checkout: Path | None = None
     reason: str | None = None
+
+
+#: What ``normalise`` returns for a value it recognised as a remote: anything
+#: else it hands back unchanged.
+_REPO_URI = re.compile(r"https://[^/\s]+/\S+")
+
+
+def parse_maps(values: list[str]) -> dict[str, str]:
+    """``<project>=<repo>`` pairs, as ``{project: canonical repo URI}``.
+
+    The repo goes through ``normalise``, the canonicaliser every write path's
+    explicit ``repo`` goes through, and must come out of it as a repo URI: a
+    write path would store anything that does not, and a typo here would file
+    every memory of the directory under a repo that does not exist.
+
+    :param values: The ``--map`` arguments.
+    :returns: Each project label or path, with the repo it maps to.
+    :rtype: dict[str, str]
+    :raises ValueError: On a value without ``=``, an empty project, a repo that
+        is not a remote URI, or one project given two repos.
+    """
+    maps: dict[str, str] = {}
+    for value in values:
+        project, sep, repo = value.rpartition("=")
+        project = project.strip()
+        if not sep or not project:
+            msg = f"--map {value!r} is not <project-dir>=<repo-uri>."
+            raise ValueError(msg)
+        canonical = normalise(repo)
+        if not _REPO_URI.fullmatch(canonical):
+            msg = (
+                f"--map {value!r}: {repo.strip()!r} is not a repo URI; pass its "
+                "remote (e.g. https://github.com/mitodl/agent-kit)."
+            )
+            raise ValueError(msg)
+        if maps.setdefault(project, canonical) != canonical:
+            msg = f"--map gives {project} two repos: {maps[project]}, {canonical}."
+            raise ValueError(msg)
+    return maps
+
+
+def mapped(project: str, maps: dict[str, str]) -> dict[str, str]:
+    """The ``maps`` entries that name ``project``, an entry's project label.
+
+    A key names the project when it is the label itself (what the unresolved
+    report prints), or an absolute path whose label it is: the path itself for
+    a store that records one (Codex, Copilot), or its encoding for Claude Code,
+    whose project directory is named after the path with every character but
+    letters and digits turned to ``-``.
+    """
+    found = {}
+    for key, repo in maps.items():
+        path = Path(key).expanduser()
+        if key == project or (
+            path.is_absolute() and project in (str(path), encode_project(str(path)))
+        ):
+            found[key] = repo
+    return found
 
 
 def kind(entry: MemoryEntry) -> str | None:
