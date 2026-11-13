@@ -517,6 +517,20 @@ describe("stale symbol refs", () => {
 		expect(outside?.textContent).not.toContain(unchecked.title);
 	});
 
+	it("says the facets do not narrow the stale memories past the list", () => {
+		const recent = listed.filter((m) => m.slug !== moved.slug);
+		draw(
+			{ mode: "browse", memories: recent, inbox: [] },
+			{ ...route, facets: { ...DEFAULT_ROUTE.facets, language: "go" } },
+			vi.fn(),
+			landed(report),
+		);
+
+		expect(root.querySelector(".stale-outside")?.textContent).toContain(
+			"not narrowed by the facets above",
+		);
+	});
+
 	it("leaves out a stale memory the Kind select excludes", () => {
 		const recent = listed.filter((m) => m.slug !== moved.slug);
 		draw(

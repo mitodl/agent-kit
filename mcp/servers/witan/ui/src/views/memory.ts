@@ -271,10 +271,13 @@ function staleOutsideList(
 	if (outside.length === 0) {
 		return nothing;
 	}
+	// The report has no language, category, severity, tag or author, so the
+	// facets cannot narrow these; say so rather than imply they did.
+	const faceted = MEMORY_FACETS.some((facet) => route.facets[facet] !== null);
 	return html`<div class="stale-summary stale-outside">
     <p>
       ${outside.length} stale ${outside.length === 1 ? "memory is" : "memories are"}
-      older than this list reaches:
+      older than this list reaches${faceted ? ", not narrowed by the facets above" : ""}:
     </p>
     <ul>
       ${outside.map(
