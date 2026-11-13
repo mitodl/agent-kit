@@ -1128,7 +1128,7 @@ describe("App", () => {
 			.map((row) => row.querySelector("a")?.textContent?.trim());
 		expect(marked).toEqual(["Service.run retries twice before it raises"]);
 
-		// A kind or a query changes the list, not the refs in scope.
+		// A kind changes the list, not the refs in scope.
 		window.location.hash = `#memory?repo=${encodeURIComponent(repo)}&kind=pattern`;
 		await vi.waitFor(() =>
 			expect(mcp.memoryList).toHaveBeenCalledWith(
@@ -1145,6 +1145,25 @@ describe("App", () => {
 		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
 
 		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo: "" });
+	});
+
+	it("checks every repo's refs on a recall query, whose expansion spans repos", async () => {
+		const repo = encodeURIComponent("https://github.com/mitodl/agent-kit");
+		await open(`#memory?repo=${repo}&q=retries`);
+		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
+
+		expect(mcp.recall).toHaveBeenCalledWith(
+			expect.objectContaining({ repo: "https://github.com/mitodl/agent-kit" }),
+		);
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo: "" });
+	});
+
+	it("keeps a plain search's check in the repo filter, as the search is", async () => {
+		const repo = "https://github.com/mitodl/agent-kit";
+		await open(`#memory?repo=${encodeURIComponent(repo)}&q=retries&plain=1`);
+		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
+
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo });
 	});
 
 	it("keeps the list when the stale check fails, and says nothing is marked", async () => {

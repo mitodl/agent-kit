@@ -379,9 +379,12 @@ export class App {
 		this.memoryPage.sync(memoryScope && JSON.stringify(memoryScope), () =>
 			readMemoryPage(memoryScope as MemoryScope),
 		);
-		// A topic spans repos (see `readMemoryPage`), so its check does too.
+		// A topic spans repos (see `readMemoryPage`), and so does `recall`'s
+		// graph expansion from a repo-scoped query, so their check does too.
+		// Only plain search and the browse list stay inside the repo filter.
+		const spansRepos = route.topic !== null || (route.q !== "" && !route.plain);
 		const staleRepo =
-			route.view === "memory" ? (route.topic ? "" : route.repo) : null;
+			route.view === "memory" ? (spansRepos ? "" : route.repo) : null;
 		this.staleRefs.sync(staleRepo, () =>
 			memoryStaleRefs({ repo: staleRepo as string }),
 		);

@@ -543,6 +543,26 @@ describe("stale symbol refs", () => {
 		expect(root.querySelector(".stale-outside")).toBeNull();
 	});
 
+	it("names the repo the report checked, not the repo filter", () => {
+		const agentKit = "https://github.com/mitodl/agent-kit";
+		draw(browse, route, vi.fn(), landed({ ...report, repo: agentKit }));
+		expect(root.querySelector(".stale-summary")?.textContent).toMatch(
+			/1 memory in mitodl\/agent-kit\s+cites/,
+		);
+
+		// A recall from inside one repo is checked across every repo, since its
+		// expansion reaches past the filter.
+		draw(
+			{ mode: "recall", memories: listed, pairs: [] },
+			{ ...route, repo: agentKit, q: "retries" },
+			vi.fn(),
+			landed(report),
+		);
+		expect(root.querySelector(".stale-summary")?.textContent).toMatch(
+			/1 memory in any repo\s+cites/,
+		);
+	});
+
 	it("draws no note when every checked ref resolves", () => {
 		draw(
 			browse,

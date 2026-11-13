@@ -225,7 +225,9 @@ function staleNote(
 	if (stales === 0 && unknown === 0) {
 		return nothing;
 	}
-	const scope = route.repo && !route.topic ? repoLabel(route.repo) : "any repo";
+	// The report names the scope it checked, which a topic or a recall widens
+	// past the repo filter.
+	const scope = report.repo ? repoLabel(report.repo) : "any repo";
 	return html`<p class="stale-summary">
     ${
 			stales
