@@ -8094,7 +8094,7 @@ def _search_task_rows(
     primary matched field. ``detected`` is resolved by :func:`_scope`.
     ``name`` picks the query pair: the capped default, or
     ``search_tasks_all_uncapped`` for a limit above it. ``filters`` holds any
-    further params the pair declares (the uncapped pair's ``assignee``).
+    further params the pair declares (the uncapped pair's assignee filter).
     """
     params = {"query": query, "status": status or None} | (filters or {})
     if not detected:
@@ -8122,14 +8122,23 @@ def _filtered_task_search_rows(
     Reads through the uncapped query pairs, because the capped ones return the
     top 20 of the UNFILTERED query and filtering those afterwards loses every
     match ranked below them. Project, repo, status and assignee filter in the
-    query, ahead of its cap. The query's assignee match is a substring one, so
-    ``_holder_matches`` still narrows its rows here to the exact selection. A
-    project scope replaces the repo scope, as in ``task_list``: a project spans
-    repos. ``detected`` is resolved by :func:`_scope`.
+    query, ahead of its cap. The query selects the assignee's holder exactly,
+    plus, when it is unqualified, the ``[assignee#, assignee$)`` range that
+    holds its sessions; ``_holder_matches`` still narrows the rows here,
+    because that range also admits a ``#`` suffix that is not a session
+    qualifier. A project scope replaces the repo scope, as in ``task_list``: a
+    project spans repos. ``detected`` is resolved by :func:`_scope`.
     """
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
-    filters = {"assignee": assignee or None}
+    filters = {"assignee": None, "sessions_from": None, "sessions_to": None}
+    if assignee:
+        sessions = f"{assignee}#"
+        filters = {
+            "assignee": assignee,
+            "sessions_from": sessions,
+            "sessions_to": sessions if _is_qualified(assignee) else f"{assignee}$",
+        }
     if project_slug:
         rows = _search_task_bm25(
             {"query": query, "project_slug": project_slug, "status": status or None}

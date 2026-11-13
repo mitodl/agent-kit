@@ -1041,16 +1041,17 @@ query search_tasks_unscoped_title($query: String, $status: String?) {
 // Filtered or long task search (`project_slug`, `assignee`, or a `limit`
 // above 20). Project, repo, status and assignee filter in the match, before
 // the `limit 10000`, so the requested scope's own hits are never crowded out
-// by higher-ranked ones outside it. `contains` over-matches the assignee
-// (`alice` also selects `malice`), and `_filtered_task_search_rows` narrows
-// the rows to `_holder_matches` afterwards; an exact match cannot go here,
-// because an unqualified `alice` has to select `alice#<session>` too.
+// by higher-ranked ones outside it. The assignee selects its holder exactly
+// or, unqualified, every `alice#<session>` too. GQ has no starts-with, so the
+// sessions are the range [`alice#`, `alice$`) (`$` follows `#`), which
+// `contains` would widen to `malice` and `alice2`, enough of them to fill the
+// cap. A qualified assignee passes an empty range.
 
-query search_tasks_by_project($query: String, $project_slug: String, $status: String?, $assignee: String?) {
+query search_tasks_by_project($query: String, $project_slug: String, $status: String?, $assignee: String?, $sessions_from: String?, $sessions_to: String?) {
     match {
         $t: Task { project_slug: $project_slug }
         $status is null or $t.status = $status
-        $assignee is null or $t.assignee contains $assignee
+        $assignee is null or $t.assignee = $assignee or ($t.assignee >= $sessions_from and $t.assignee < $sessions_to)
         search($t.description, $query)
     }
     return {
@@ -1062,11 +1063,11 @@ query search_tasks_by_project($query: String, $project_slug: String, $status: St
     limit 10000
 }
 
-query search_tasks_by_project_title($query: String, $project_slug: String, $status: String?, $assignee: String?) {
+query search_tasks_by_project_title($query: String, $project_slug: String, $status: String?, $assignee: String?, $sessions_from: String?, $sessions_to: String?) {
     match {
         $t: Task { project_slug: $project_slug }
         $status is null or $t.status = $status
-        $assignee is null or $t.assignee contains $assignee
+        $assignee is null or $t.assignee = $assignee or ($t.assignee >= $sessions_from and $t.assignee < $sessions_to)
         search($t.title, $query)
     }
     return {
@@ -1078,12 +1079,12 @@ query search_tasks_by_project_title($query: String, $project_slug: String, $stat
     limit 10000
 }
 
-query search_tasks_all_uncapped($query: String, $repo: String?, $status: String?, $assignee: String?) {
+query search_tasks_all_uncapped($query: String, $repo: String?, $status: String?, $assignee: String?, $sessions_from: String?, $sessions_to: String?) {
     match {
         $t: Task
         $repo is null or $t.repo = $repo
         $status is null or $t.status = $status
-        $assignee is null or $t.assignee contains $assignee
+        $assignee is null or $t.assignee = $assignee or ($t.assignee >= $sessions_from and $t.assignee < $sessions_to)
         search($t.description, $query)
     }
     return {
@@ -1095,12 +1096,12 @@ query search_tasks_all_uncapped($query: String, $repo: String?, $status: String?
     limit 10000
 }
 
-query search_tasks_all_uncapped_title($query: String, $repo: String?, $status: String?, $assignee: String?) {
+query search_tasks_all_uncapped_title($query: String, $repo: String?, $status: String?, $assignee: String?, $sessions_from: String?, $sessions_to: String?) {
     match {
         $t: Task
         $repo is null or $t.repo = $repo
         $status is null or $t.status = $status
-        $assignee is null or $t.assignee contains $assignee
+        $assignee is null or $t.assignee = $assignee or ($t.assignee >= $sessions_from and $t.assignee < $sessions_to)
         search($t.title, $query)
     }
     return {
@@ -1112,12 +1113,12 @@ query search_tasks_all_uncapped_title($query: String, $repo: String?, $status: S
     limit 10000
 }
 
-query search_tasks_unscoped_uncapped($query: String, $status: String?, $assignee: String?) {
+query search_tasks_unscoped_uncapped($query: String, $status: String?, $assignee: String?, $sessions_from: String?, $sessions_to: String?) {
     match {
         $t: Task
         $t.repo is null
         $status is null or $t.status = $status
-        $assignee is null or $t.assignee contains $assignee
+        $assignee is null or $t.assignee = $assignee or ($t.assignee >= $sessions_from and $t.assignee < $sessions_to)
         search($t.description, $query)
     }
     return {
@@ -1129,12 +1130,12 @@ query search_tasks_unscoped_uncapped($query: String, $status: String?, $assignee
     limit 10000
 }
 
-query search_tasks_unscoped_uncapped_title($query: String, $status: String?, $assignee: String?) {
+query search_tasks_unscoped_uncapped_title($query: String, $status: String?, $assignee: String?, $sessions_from: String?, $sessions_to: String?) {
     match {
         $t: Task
         $t.repo is null
         $status is null or $t.status = $status
-        $assignee is null or $t.assignee contains $assignee
+        $assignee is null or $t.assignee = $assignee or ($t.assignee >= $sessions_from and $t.assignee < $sessions_to)
         search($t.title, $query)
     }
     return {

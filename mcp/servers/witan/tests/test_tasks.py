@@ -64,6 +64,9 @@ def test_task_search_bm25_ranked(server):
     assert hits and hits[0]["title"] == "uv usage"
 
 
+_NO_ASSIGNEE = {"assignee": None, "sessions_from": None, "sessions_to": None}
+
+
 @requires_omnigraph
 def test_nullable_filters_match_every_combination(server):
     """Each optional-filter task read returns exactly the rows its filters select.
@@ -103,7 +106,7 @@ def test_nullable_filters_match_every_combination(server):
                 "search_tasks_all_uncapped",
                 "search_tasks_all_uncapped_title",
             ):
-                rows = srv.client.read("read.gq", name, params | {"assignee": None})
+                rows = srv.client.read("read.gq", name, params | _NO_ASSIGNEE)
                 assert {r["slug"] for r in rows} == expected, (name, params)
             if repo is not None:
                 rows = srv.client.read(
@@ -130,7 +133,7 @@ def test_nullable_filters_match_every_combination(server):
             "search_tasks_unscoped_uncapped",
             "search_tasks_unscoped_uncapped_title",
         ):
-            rows = srv.client.read("read.gq", name, params | {"assignee": None})
+            rows = srv.client.read("read.gq", name, params | _NO_ASSIGNEE)
             assert {r["slug"] for r in rows} == unscoped, (name, status)
 
 
@@ -417,14 +420,6 @@ def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
         project_slug=proj["slug"],
     )
     server.task_claim(held["slug"], assignee="agentA#5e313f6d")
-    lookalike = server.task_create(
-        title="a third unrelated title",
-        description="a long description that mentions a quokka only once, "
-        "somewhere among a great many other words about compaction",
-        repo="https://github.com/test/crowd",
-        project_slug=proj["slug"],
-    )
-    server.task_claim(lookalike["slug"], assignee="xagentA")
 
     by_repo = server.task_search("quokka", repo="https://github.com/test/a", limit=21)
     assert [h["slug"] for h in by_repo] == [unscoped["slug"]]
@@ -436,6 +431,54 @@ def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
         "quokka", project_slug=proj["slug"], assignee="agentA", limit=21
     )
     assert [h["slug"] for h in by_project] == [held["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_assignee_lookalikes_cannot_fill_the_uncapped_cap(
+    server, uncapped_search_cap
+):
+    """The uncapped pairs select the assignee's own holders (the identity
+    itself, or it plus a `#<session>` qualifier) ahead of the cap, so
+    higher-ranked tasks held by identities that merely contain it cannot fill
+    the cap before `_holder_matches` narrows the rows."""
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
+    lookalikes = ("xagentA", "agentAx", "agentA x")
+    for i in range(uncapped_search_cap):
+        for scope in (
+            {"repo": "https://github.com/test/crowd", "project_slug": proj["slug"]},
+            {"all_repos": True},
+        ):
+            crowd = server.task_create(
+                title=f"quokka narwhal {i}",
+                description="quokka narwhal quokka",
+                **scope,
+            )
+            server.task_claim(crowd["slug"], assignee=lookalikes[i % len(lookalikes)])
+    buried = (
+        "a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction"
+    )
+    scoped = server.task_create(
+        title="unrelated title",
+        description=buried,
+        repo="https://github.com/test/crowd",
+        project_slug=proj["slug"],
+    )
+    server.task_claim(scoped["slug"], assignee="agentA#5e313f6d")
+    unscoped = server.task_create(
+        title="another unrelated title", description=buried, all_repos=True
+    )
+    server.task_claim(unscoped["slug"], assignee="agentA")
+
+    def hits(**kwargs):
+        return {
+            h["slug"]
+            for h in server.task_search("quokka", assignee="agentA", limit=21, **kwargs)
+        }
+
+    assert hits(all_repos=True) == {scoped["slug"], unscoped["slug"]}
+    assert hits(project_slug=proj["slug"]) == {scoped["slug"]}
+    assert hits(repo="https://github.com/test/a") == {unscoped["slug"]}
 
 
 @requires_omnigraph
