@@ -72,8 +72,10 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
-- Requires witan-core 0.55.0, for `witan_core.timeutil.parse_timestamp`, which
-  replaces eight local copies of the same naive-as-UTC timestamp parse.
+- Requires witan-core 0.56.0. 0.55.0 added `witan_core.timeutil.parse_timestamp`,
+  which replaces eight local copies of the same naive-as-UTC timestamp parse,
+  and 0.56.0's remote proxy stops sending the detected repo beside
+  `all_repos`, which this server now refuses.
 
 - witan-council requires agent-config-kit 0.15 or later.
 
