@@ -278,8 +278,8 @@ def _seed_bridge() -> None:
             ),
             ParsedBinding(
                 kind="service",
-                key=f"repo:{_WEB}",
-                key_norm=f"repo:{_WEB}",
+                key=_WEB,
+                key_norm=_WEB,
                 role="provider",
                 file="src/web/__main__.py",
                 sub_kind="repo",

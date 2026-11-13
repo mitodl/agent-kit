@@ -1402,14 +1402,15 @@ describe("the Bridge tab", () => {
 
 	it("drills a service edge to the deploying repo's binding", async () => {
 		// witan-code draws "infra depends on web" from infra's provider binding
-		// keyed `repo:<web>`, and names the contract only `example/web`.
+		// keyed by web's URI (sub_kind "repo"), and names the contract only
+		// `example/web`.
 		await open(
 			`#bridge?edge=${edge(INFRA, WEB)}&binding=${encodeURIComponent("service:example/web")}`,
 		);
 		await vi.waitFor(() =>
 			expect(mcp.codeInterfaceProviders).toHaveBeenCalledWith({
 				kind: "service",
-				key: `repo:${WEB}`,
+				key: WEB,
 				in_repo: INFRA,
 			}),
 		);

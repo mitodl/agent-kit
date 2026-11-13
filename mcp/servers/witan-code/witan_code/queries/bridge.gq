@@ -35,7 +35,7 @@ query all_bindings() {
         $b: InterfaceBinding
     }
     return {
-        $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.kind, $b.sub_kind, $b.key, $b.key_norm, $b.role, $b.repo,
         $b.file, $b.symbol_id, $b.framework, $b.generic, $b.confidence,
         $b.symbol, $b.line
     }
