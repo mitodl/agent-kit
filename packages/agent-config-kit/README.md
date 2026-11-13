@@ -21,6 +21,25 @@ apply_all(bundle)
 
 See `docs/internals/design/agent-config-kit-spec.md` in this repo for the full design.
 
+## Reading agent memory
+
+The registry also knows where each platform's agent keeps memory it writes
+for itself. `get_platform(name).memory` is a read-only `MemoryStore` (its
+`root`, and `entries()` returning `MemoryEntry` objects), or `None` for a
+platform with no memory on disk. Each entry carries the project it belongs to
+and the existing directories that project can be, so a caller can map it to a
+repository. Nothing here writes into a platform's store.
+
+| Platform | Store | Entry | Project |
+| --- | --- | --- | --- |
+| Claude Code | `$CLAUDE_CONFIG_DIR/projects` (else `~/.claude/projects`) | one `<project>/memory/*.md` file | the encoded `<project>` directory name |
+| Codex CLI | `$CODEX_HOME/memories` (`memories` feature) | one `## Thread` block of `raw_memories.md` | the session's `cwd` |
+| GitHub Copilot | `<VS Code user dir>/workspaceStorage` | one repository-memory file of a workspace | that workspace's folder |
+| Pi, OpenCode | none | | |
+
+Entries are typed in Claude Code's vocabulary (`user`, `feedback`, `project`,
+`reference`); the other readers pick the closest one.
+
 ## CLI (`agent-kit`)
 
 A project without its own Python tooling (a plain Node repo, a
