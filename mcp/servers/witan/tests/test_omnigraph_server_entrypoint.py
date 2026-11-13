@@ -943,6 +943,53 @@ def test_sigterm_before_the_drop_stops_the_boot_before_any_delete(code_cli, tmp_
     assert "apply" not in fake.commands
 
 
+def converge_under_sigterm(fake, tmp_path, monkeypatch, sigterm_after) -> None:
+    """Converge, raising SIGTERM once the views are gone and ``sigterm_after``
+    matches a command that just finished."""
+
+    def run(args, lease, **kwargs):
+        result = fake(args, lease, **kwargs)
+        if sigterm_after(args) and not any(fake.branches.values()):
+            signal.raise_signal(signal.SIGTERM)
+        return result
+
+    monkeypatch.setattr(entrypoint, "run_omnigraph", run)
+    env = {"OMNIGRAPH_BRANCH_DROP_ALLOWLIST": DROPPABLE}
+    with entrypoint.sigterm_noted() as terminated:
+        entrypoint.converge(
+            tmp_path, env, entrypoint.NoPeers(may_unlock=True), terminated
+        )
+
+
+@pytest.mark.parametrize("command", ["delete", "force-unlock"])
+def test_sigterm_as_the_last_delete_ends_stops_the_boot_before_the_apply(
+    code_cli, tmp_path, monkeypatch, command
+):
+    """A delete that finished before the interrupt poll saw SIGTERM, or a
+    SIGTERM during its lock's removal, leaves nothing for the drop to stop."""
+    fake = code_cli()
+    with pytest.raises(BootRefused, match="SIGTERM after dropping the branch views"):
+        converge_under_sigterm(
+            fake, tmp_path, monkeypatch, lambda args: command in args
+        )
+    assert fake.branches == {CODE_GRAPH: [], "code-bridge": []}
+    assert fake.lock is None
+    assert "apply" not in fake.commands
+
+
+def test_sigterm_during_the_plan_after_the_drop_stops_the_boot_before_the_apply(
+    code_cli, tmp_path, monkeypatch
+):
+    fake = code_cli()
+    with pytest.raises(BootRefused, match="SIGTERM while planning after the drop"):
+        converge_under_sigterm(
+            fake, tmp_path, monkeypatch, lambda args: args[:2] == ["cluster", "plan"]
+        )
+    assert fake.commands[-1] == "plan"
+    assert fake.lock is None
+    assert "apply" not in fake.commands
+
+
 def test_the_cleanup_budget_is_the_grace_less_the_margin():
     margin = entrypoint.SIGTERM_CLEANUP_MARGIN_SECONDS
     assert entrypoint.sigterm_cleanup_seconds({}) == (

@@ -56,6 +56,7 @@ BOOT SEQUENCE
                              budget that ends inside the pod's termination
                              grace: `Termination`)
         plan again -> exit 1 on any plan error
+        SIGTERM by now (after the drop, or during this plan): exit 1
     apply
     lock    -> force-unlock the deployment lock apply left
     exec omnigraph-server
@@ -1321,7 +1322,7 @@ def sigterm_noted(
 
     As PID 1 with no handler the entrypoint ignores SIGTERM, and the kill
     comes as SIGKILL at the end of the grace period. Only the branch-view
-    drop acts on it (``drop_branch_views``). It is installed
+    drop acts on it (``drop_branch_views``, ``converge``). It is installed
     before the Lease is taken, so a SIGTERM that arrives while the boot is
     still planning stops it before its first delete.
 
@@ -1334,6 +1335,17 @@ def sigterm_noted(
         yield terminated
     finally:
         signal.signal(signal.SIGTERM, previous)
+
+
+def refuse_on_sigterm(terminated: Termination, when: str) -> None:
+    """End the boot before the apply once SIGTERM has arrived.
+
+    The kubelet's SIGKILL could cut the apply off and leave an outstanding
+    deployment, which every later boot refuses.
+    """
+    if terminated.is_set():
+        msg = f"SIGTERM {when}; not applying, the next boot does"
+        raise BootRefused(msg)
 
 
 def drop_branch_views(
@@ -1476,12 +1488,16 @@ def converge(
     release_previous_lock(cluster)
     if views:
         drop_branch_views(cluster, views, terminated)
+        # A last delete that finished before its SIGTERM was polled, or a
+        # SIGTERM during its lock's removal, ends the drop without raising.
+        refuse_on_sigterm(terminated, "after dropping the branch views")
         # The first plan saw only the branch refusal, which can hide another
         # one behind it, so the apply waits for a plan with no refusal at all.
         remaining = planned_views(cluster, config_dir, env)
         if remaining:
             msg = f"branch views remain after dropping them: {remaining}"
             raise BootRefused(msg)
+        refuse_on_sigterm(terminated, "while planning after the drop")
     log(f"converging cluster catalog at {config_dir}")
     cluster.apply()
     release_apply_lock(cluster)

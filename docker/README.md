@@ -178,8 +178,10 @@ stub in tests). See `witan_code/github_app.py`.
   finish in one boot. From SIGTERM on, stopping the delete (at most 10s),
   `cluster status` and `force-unlock` share one budget, the pod's
   termination grace less 20s, so the lock is gone before the kubelet's
-  SIGKILL. A failed or timed-out delete ends the boot the same way. A lost
-  Lease, or a `cluster status` or `force-unlock` that fails or
+  SIGKILL. A SIGTERM that lands after the last delete, or during the plan
+  after the drop, ends the boot before the apply, which the SIGKILL could
+  otherwise cut off. A failed or timed-out delete ends the boot the same
+  way. A lost Lease, or a `cluster status` or `force-unlock` that fails or
   runs out of that budget, leaves the delete's `graph_operation` lock, which
   the boot logs and the next boot refuses (runbook: clear the lock).
 - **Speaks the 0.13 and the 0.14 CLI.** The scripts read `omnigraph version
