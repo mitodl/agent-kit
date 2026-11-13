@@ -1291,7 +1291,9 @@ def _cross_file_records(
     the module it calls has no edge to keep in the first place. With
     ``relink`` set to the git root, the stored files that mention a parsed
     file's module name as a word are parsed again and their edges into the
-    parsed files written back, which covers both. Their own rows are left as
+    parsed files written back, which covers both. A package entrypoint is
+    reachable without its name (``from . import f``, ``from './index'``), so
+    for one the names it defines count too (see :func:`_relink_words`). Their own rows are left as
     stored. One
     that changed on disk since it was indexed is skipped: its stored symbols no
     longer match a fresh parse, and its own reindex links it. A forced
@@ -1302,7 +1304,10 @@ def _cross_file_records(
     linking = list(parsed_files)
     if relink is not None:
         words = {
-            _module_word(p.path) for p in parsed_files if p.language in xref.LANGUAGES
+            word
+            for p in parsed_files
+            if p.language in xref.LANGUAGES
+            for word in _relink_words(p)
         }
         for rel in repo_module.files_mentioning(relink, sorted(words), _XREF_GLOBS):
             file_id = prefix + rel
@@ -1336,11 +1341,7 @@ def _cross_file_records(
         by_qualified = {s.qualified_name: s for s in parsed.symbols}
         # Only a module-level def can shadow an import for a bare-name call; a
         # method of the same name is never reached that way.
-        top_level = {
-            s.name
-            for s in parsed.symbols
-            if s.kind != "module" and "." not in s.qualified_name
-        }
+        top_level = _top_level_names(parsed)
         fallback = _reference_origin(parsed)
         for origin_qn, chain in parsed.call_chains:
             # A bare name defined in the file is the same-file pass's to link.
@@ -1376,15 +1377,33 @@ _XREF_GLOBS = tuple(
 )
 
 
-def _module_word(rel: str) -> str:
-    """The word an import of ``rel`` has to contain: its module's own name.
+def _relink_words(parsed: ParsedFile) -> set[str]:
+    """Words one of a file's callers has to contain, for the relink's search.
 
-    A package's ``__init__.py`` or an ``index.ts`` is imported by its directory.
+    A module's own name, which a package's ``__init__.py`` or an
+    ``index.ts`` takes from its directory. An entrypoint is also reached from
+    beside it without that name (``from . import f``, ``from './index'``,
+    ``from '.'``), and then the call names what it defines instead. The
+    resolver drops the candidates these words over-select.
     """
-    path = Path(rel)
-    if path.stem in ("__init__", "index") and path.parent.name:
-        return path.parent.name
-    return path.stem
+    path = Path(parsed.path)
+    if path.stem not in ("__init__", "index"):
+        return {path.stem}
+    words = _top_level_names(parsed)
+    # Not `__init__`, which every class's constructor would match.
+    if path.stem == "index":
+        words.add("index")
+    if path.parent.name:
+        words.add(path.parent.name)
+    return words
+
+
+def _top_level_names(parsed: ParsedFile) -> set[str]:
+    return {
+        s.name
+        for s in parsed.symbols
+        if s.kind != "module" and "." not in s.qualified_name
+    }
 
 
 # ── Parsing ───────────────────────────────────────────────────────
