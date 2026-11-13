@@ -230,10 +230,10 @@ def test_changed_symbols_reports_files_the_indexer_does_not_parse():
 # ── the report, against stubbed tools ─────────────────────────────
 
 
-def _changed(n):
+def _changed(n, kind="function"):
     return [
         diff_impact.ChangedSymbol(
-            f"{REPO}#m.py::f{i}", "m.py", f"f{i}", "function", i, "modified"
+            f"{REPO}#m.py::f{i}", "m.py", f"f{i}", kind, i, "modified"
         )
         for i in range(n)
     ]
@@ -256,7 +256,8 @@ def test_report_bounds_every_list_and_says_so():
         "modified",
     )
     report = diff_impact.build_report(
-        [*_changed(5), test_change],
+        # Methods, whose tests the graph cannot reach, so the name search runs.
+        [*_changed(5, kind="method"), test_change],
         [],
         renamed=["old.py -> m.py"],
         repo=REPO,
@@ -281,11 +282,48 @@ def test_report_bounds_every_list_and_says_so():
     text = diff_impact.render_text(report, header="h")
     assert "Showing 2 of 5 changed symbols" in text
     assert "callers (30, showing 3)" in text
-    assert "m.py::f1 (function, modified) [not in index]" in text
+    assert "m.py::f1 (method, modified) [not in index]" in text
     assert "witan (council) is not installed" in text
     # A rename moves every id in the file, so it must not vanish from the report.
     assert "Renamed files (1): old.py -> m.py" in text
     assert "A renamed file moves every symbol id" in text
+
+
+def test_a_functions_tests_come_from_its_callers_not_a_name_search():
+    """Python calls resolve across files, so a test calling the function is
+    one of its callers, and naming it without calling it is not a test of it."""
+
+    def no_search(name):
+        raise AssertionError(f"searched for {name!r} by name")
+
+    tools = {
+        "code_indexed_repos": lambda: [{"repo": REPO}],
+        "code_symbols_in_file": lambda **_: [{"symbol_id": f"{REPO}#m.py::f0"}],
+        "code_impact": lambda **_: {
+            "impacted": [
+                {"symbol_id": f"{REPO}#tests/test_m.py::test_f0", "depth": 1},
+                {"symbol_id": f"{REPO}#app.py::serve", "depth": 1},
+            ],
+            "truncated": False,
+        },
+        "code_cross_repo_impact": lambda **_: {"cross_repo": []},
+    }
+    report = diff_impact.build_report(
+        _changed(1),
+        [],
+        renamed=[],
+        repo=REPO,
+        branch=None,
+        code=tools.__getitem__,
+        work=None,
+        test_mentions=no_search,
+        view=None,
+        limit=10,
+        max_items=10,
+    )
+    row = report["changed_symbols"]["shown"][0]
+    assert row["tests_to_run"]["shown"] == ["tests/test_m.py"]
+    assert row["callers"]["shown"] == ["app.py::serve"]
 
 
 def test_test_mentions_match_across_one_language_family():
@@ -524,8 +562,7 @@ def test_diff_impact_on_a_fixture_graph(fixture_graph, monkeypatch, capsys):
     helper = rows["helper"]
     assert helper["in_index"] is True
     assert "svc.py::Service.run" in helper["callers"]["shown"]
-    # Calls edges stop at the file boundary, so the test that calls helper is
-    # found by name: the stand-in for "tests to run".
+    # The test file imports and calls helper, so it is one of helper's callers.
     assert helper["tests_to_run"]["shown"] == ["tests/test_svc.py"]
     assert helper["tasks"]["shown"][0]["slug"] == "tk-fix-helper"
     assert helper["memories"]["shown"][0]["slug"] == "les-helper-is-hot"
@@ -558,7 +595,7 @@ def test_diff_impact_without_witan_says_what_it_skipped(
 
     assert "svc.py::helper (function, modified)" in out
     assert "callers (2): svc.py::Service.run, svc.py::main" in out
-    assert "tests to run (stand-in) (1): tests/test_svc.py" in out
+    assert "tests to run (1): tests/test_svc.py" in out
     assert "tasks (" not in out
     assert "witan (council) is not installed" in out
 

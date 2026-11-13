@@ -4,9 +4,10 @@ Walks a repo, extracts symbols (functions, methods, classes, modules) and
 best-effort relationship edges, and writes them to a per-repo Omnigraph store.
 
 Call/Reference/Import/Inherits resolution is HEURISTIC: identifiers are matched
-to known Symbol names within the same repo, preferring same-file definitions,
-then imported modules, then any repo-wide match. It is intentionally syntactic
-and will miss dynamic dispatch and produce occasional false links.
+to Symbol names defined in the same file, and, for Python and TS/JS calls and
+imports, to symbols in other files of the repo through the file's imports
+(:mod:`witan_code.xref`). It is intentionally syntactic and will miss dynamic
+dispatch and produce occasional false links.
 """
 
 import contextlib
@@ -24,7 +25,7 @@ from witan_core import chunking, now_iso
 from witan_core.observability import get_logger
 
 from . import bridge as bridge_module
-from . import bridge_extractors, package_map, views
+from . import bridge_extractors, package_map, views, xref
 from . import config as cfg_module
 from . import identity as identity_module
 from . import repo as repo_module
@@ -285,6 +286,10 @@ class ParsedFile:
     inherits: dict[str, list[str]] = field(default_factory=dict)
     # imported identifier names
     imports: set[str] = field(default_factory=set)
+    # local name -> what it imports, for the languages xref resolves
+    import_bindings: dict[str, xref.ImportBinding] = field(default_factory=dict)
+    # (enclosing_qualified_name, callee name chain), for the same languages
+    call_chains: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
     # cross-repo interface bindings (env vars, packages, endpoints) in this file
     bindings: list[ParsedBinding] = field(default_factory=list)
 
@@ -575,6 +580,7 @@ def index_paths(
             existing[row["slug"]] = row.get("content_hash")
 
     records: list[dict] = []
+    parsed_files: list[ParsedFile] = []
     reindexed_file_ids: list[str] = []
     bindings: list[ParsedBinding] = []
     touched_files: list[str] = []
@@ -632,6 +638,7 @@ def index_paths(
         parsed, was_existing = result
         if was_existing:
             reindexed_file_ids.append(parsed.file_id)
+        parsed_files.append(parsed)
         records.extend(_file_records(parsed, slug, stats))
         bindings.extend(parsed.bindings)
         touched_files.append(parsed.path)
@@ -654,6 +661,8 @@ def index_paths(
     # reindex the single largest fragmentation source in the store, which is
     # exactly what the bulk load below exists to avoid on the insert side.
     delete_steps: list[tuple[str, str, dict]] = []
+    # Files whose rows the deletes remove for good, so no edge may point into them.
+    dropped: set[str] = set()
     for file_id in reindexed_file_ids:
         delete_steps += _delete_file_steps(file_id)
 
@@ -671,6 +680,7 @@ def index_paths(
             rel = file_id[len(prefix) :] if file_id.startswith(prefix) else None
             if rel is not None and rel not in indexed_rel:
                 delete_steps += _delete_file_steps(file_id)
+                dropped.add(file_id)
                 stats.purged += 1
 
     # A vanished single file: the one id that file had, and its bindings, which
@@ -691,8 +701,20 @@ def index_paths(
         rel = _relative_path(vanished, base)
         if not can_purge and f"{slug}#{rel}" in existing:
             delete_steps += _delete_file_steps(f"{slug}#{rel}")
+            dropped.add(f"{slug}#{rel}")
             stats.purged += 1
         touched_files.append(rel)
+
+    records += _cross_file_records(
+        client,
+        parsed_files,
+        base=base,
+        slug=slug,
+        existing=existing,
+        dropped=dropped,
+        relink=not (force and full_repo),
+        stats=stats,
+    )
 
     with _write_phase(
         "delete of stale rows",
@@ -1185,6 +1207,7 @@ def _file_records(parsed: ParsedFile, slug: str, stats: IndexStats) -> list[dict
     # qualified name of its nearest enclosing definition (computed at parse
     # time) and resolved to a same-file symbol by name. Falls back to a stable
     # file-level origin when the enclosing def isn't itself a known symbol.
+    # Calls into other files are `_cross_file_records`' job.
     fallback = _reference_origin(parsed)
     seen_calls: set[tuple[str, str]] = set()
     for origin_qn, cname in parsed.calls:
@@ -1213,7 +1236,7 @@ def _file_records(parsed: ParsedFile, slug: str, stats: IndexStats) -> list[dict
                 stats.edges += 1
 
     # Heuristic Imports: resolve imported names to same-file symbols (best-effort;
-    # cross-file resolution is left to query-time lookups by name).
+    # an import of another file is `_cross_file_records`' job).
     for iname in parsed.imports:
         target = _resolve_local(iname, by_name)
         if target is not None:
@@ -1241,6 +1264,120 @@ def _resolve_local(
 ) -> ParsedSymbol | None:
     matches = by_name.get(name)
     return matches[0] if matches else None
+
+
+def _cross_file_records(
+    client: OmnigraphClient,
+    parsed_files: list[ParsedFile],
+    *,
+    base: Path,
+    slug: str,
+    existing: dict[str, str],
+    dropped: set[str],
+    relink: bool,
+    stats: IndexStats,
+) -> list[dict]:
+    """Calls/References and Imports edges from these files into other files.
+
+    Resolved through each file's imports (:mod:`witan_code.xref`) against
+    every file the store holds once this run lands: the ones parsed here, plus
+    the stored ones it does not drop. Each target is checked against the
+    symbols the load can see, because one edge to a missing node fails the
+    whole load (see ``chunking.chunk_records``).
+
+    WHY THE RELINK. Re-indexing a file deletes its symbols, and with them every
+    edge into them from files this run does not touch, so editing a module
+    would silently drop all of its cross-file callers. With ``relink`` set, the
+    stored files that import a re-indexed one (found through the Imports edges
+    an earlier run wrote) are parsed again and their cross-file edges written
+    back. Their own rows are left as stored. An importer that changed on disk
+    since it was indexed is skipped instead: its stored symbols no longer match
+    a fresh parse, and its own reindex links it. A forced full-repo run turns
+    ``relink`` off, since it parses every importer anyway.
+    """
+    prefix = f"{slug}#"
+    batch = {p.path: p for p in parsed_files}
+    linking = list(parsed_files)
+    if relink:
+        reindexed = [p.file_id for p in parsed_files if p.file_id in existing]
+        for file_id in sorted(_importer_files(client, reindexed)):
+            rel = file_id.removeprefix(prefix)
+            path = base / rel
+            if rel in batch or file_id in dropped or not path.is_file():
+                continue
+            result = _parse_for_index(path, base, slug, existing, force=True)
+            if result is not None and result[0].content_hash == existing.get(file_id):
+                linking.append(result[0])
+
+    modules = xref.ModuleIndex(
+        {fid.removeprefix(prefix) for fid in existing if fid not in dropped}
+        | batch.keys()
+    )
+    batch_ids = {s.id for p in parsed_files for s in p.symbols}
+    stored_ids: dict[str, set[str]] = {}
+
+    def defined(rel: str, symbol_id: str) -> bool:
+        if rel in batch:
+            return symbol_id in batch_ids
+        if rel not in stored_ids:
+            rows = client.read(
+                "code_read.gq", "symbol_ids_in_file", {"file_id": prefix + rel}
+            )
+            stored_ids[rel] = {row["slug"] for row in rows}
+        return symbol_id in stored_ids[rel]
+
+    records: list[dict] = []
+    for parsed in linking:
+        if not parsed.import_bindings:
+            continue
+        for binding in parsed.import_bindings.values():
+            target = xref.resolve_module(binding, modules, parsed.language, parsed.path)
+            module_id = f"{prefix}{target}::<module>"
+            if (
+                target is not None
+                and target != parsed.path
+                and defined(target, module_id)
+            ):
+                records.append(_edge("Imports", parsed.file_id, module_id))
+
+        by_qualified = {s.qualified_name: s for s in parsed.symbols}
+        local_names = {s.name for s in parsed.symbols if s.kind != "module"}
+        fallback = _reference_origin(parsed)
+        for origin_qn, chain in parsed.call_chains:
+            # A bare name defined in the file is the same-file pass's to link.
+            if len(chain) == 1 and chain[0] in local_names:
+                continue
+            resolved = xref.resolve_call(
+                chain, parsed.import_bindings, modules, parsed.language, parsed.path
+            )
+            origin = by_qualified.get(origin_qn) or fallback
+            if resolved is None or resolved[0] == parsed.path or origin is None:
+                continue
+            target_id = f"{prefix}{resolved[0]}::{resolved[1]}"
+            if defined(resolved[0], target_id):
+                records.append(_edge("Calls", origin.id, target_id))
+                records.append(_edge("References", origin.id, target_id))
+    records = _dedupe(records)
+    stats.edges += len(records)
+    return records
+
+
+def _importer_files(client: OmnigraphClient, file_ids: list[str]) -> set[str]:
+    """Stored files with an Imports edge into any of ``file_ids``, those excluded."""
+    from .remote.store import RemoteToolFailed
+
+    out: set[str] = set()
+    for file_id in file_ids:
+        try:
+            rows = client.read("code_read.gq", "importer_files", {"file_id": file_id})
+        except RemoteToolFailed as exc:
+            # A deployment older than this client has no `importer_files` query.
+            # Its callers lose their edges into the re-indexed files until they
+            # are indexed themselves, which is what every edit did before.
+            logger.warning("witan.code.index.relink_skipped", error=str(exc))
+            return set()
+        out.update(row["slug"] for row in rows)
+    return out - set(file_ids)
 
 
 # ── Parsing ───────────────────────────────────────────────────────
@@ -1299,6 +1436,8 @@ def _parse_file(
     for cap_name, node in def_capture_nodes:
         if cap_name.startswith("import."):
             parsed.imports.add(_node_text(node, raw))
+    if spec.name in xref.LANGUAGES:
+        parsed.import_bindings = xref.imports(spec.name, root, raw, rel)
 
     # Cross-repo interface bindings (env vars, packages, endpoint consumers).
     # Attribute each to its enclosing symbol by line containment.
@@ -1445,6 +1584,10 @@ def _walk_defs(
             if q is not None:
                 origin_qn = q[2]
         parsed.calls.append((origin_qn, cname))
+        if spec.name in xref.LANGUAGES:
+            chain = xref.callee_chain(node, raw)
+            if chain is not None:
+                parsed.call_chains.append((origin_qn, chain))
 
 
 def _class_bases(def_node, raw: bytes, captures) -> list[str]:
