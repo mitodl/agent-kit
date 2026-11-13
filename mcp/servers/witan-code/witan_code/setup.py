@@ -18,6 +18,8 @@ from agent_config_kit import (
     RegistrationBundle,
     SkillSource,
     StdioServer,
+    get_platform,
+    known_platforms,
 )
 
 _WITAN_CODE_ARGS = [
@@ -27,11 +29,18 @@ _WITAN_CODE_ARGS = [
     "serve",
 ]
 
-# See ``witan.setup._CLI_HOOK_PLATFORMS`` — same reasoning, same platform set:
-# these are the platforms whose hooks already invoke ``binary`` directly, so
-# their MCP entry runs that same install instead of a second one resolved from
-# git `main`.
-_CLI_HOOK_PLATFORMS = ("claude", "pi")
+
+def cli_hook_platforms() -> list[str]:
+    """The platforms whose MCP entry runs ``binary`` rather than uvx.
+
+    Every platform agent-config-kit writes hooks for gets this bundle's hooks,
+    which invoke ``binary`` directly, so their MCP entry runs that same install
+    instead of a second one resolved from git `main`. Same reasoning and same
+    registry lookup as ``witan.setup.cli_hook_platforms``; witan-code can't
+    import witan, so the lookup is repeated here.
+    """
+    return [name for name in known_platforms() if get_platform(name).hooks is not None]
+
 
 # How long the prompt-path `witan-code inject-context` may run before its
 # output is abandoned — the Claude `UserPromptSubmit` hook below AND the Pi
@@ -128,7 +137,7 @@ def witan_code_bundle(
                     env={"WITAN_AUTHOR": author},
                 )
             }
-            for name in _CLI_HOOK_PLATFORMS
+            for name in cli_hook_platforms()
         },
         skills=skills,
         hooks=hooks,

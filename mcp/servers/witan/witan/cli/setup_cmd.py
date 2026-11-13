@@ -99,7 +99,9 @@ def setup(
     if not shutil.which("witan") and not dry_run:
         console.print(
             "[yellow]Warning:[/yellow] witan not on PATH. "
-            "Hooks calling [bold]witan inject-context[/bold] will fail until:\n"
+            "Hooks calling [bold]witan inject-context[/bold], and the "
+            "[bold]witan serve[/bold] MCP server registered alongside them, "
+            "will fail until:\n"
             "  [bold]uv tool install "
             "git+https://github.com/mitodl/agent-kit"
             "#subdirectory=mcp/servers/witan[/bold]"

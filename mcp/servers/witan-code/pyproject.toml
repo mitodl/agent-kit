@@ -30,7 +30,11 @@ dependencies = [
     # pi-mcp-adapter is missing when Pi's built-in MCP will load the entry
     # from 0.12.0. Older resolutions import and run, and print the false
     # warning.
-    "agent-config-kit>=0.12,<1",
+    # >=0.13: Codex hooks (and the codex platform itself) arrive in 0.13.0.
+    # `cli_hook_platforms()` reads them from the registry, so an older
+    # resolution writes Codex a uvx MCP entry, and `--agent codex` raises
+    # KeyError on the missing platform.
+    "agent-config-kit>=0.13,<1",
     # `remote`: the ADR-0005 client stack (OIDC device grant + MCP-client
     # proxy) behind `witan-code login` and the read commands' remote mode.
     # Costs nothing extra in practice — fastmcp is already required here and

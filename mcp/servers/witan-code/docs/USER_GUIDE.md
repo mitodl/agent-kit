@@ -55,9 +55,10 @@ index. See the main [README](../README.md) for the full two-layer table.
 
 ## Installation
 
-witan-code is usually installed as part of the `witan` umbrella package —
-`witan setup` wires both servers together and installs the shared
-`omnigraph` binary in one step. See the [witan README](../../witan/README.md)
+witan-code is usually installed as part of the `witan` umbrella package: one
+`witan serve` mounts witan-code's `code_*` tools whenever witan-code is
+installed alongside it, and `witan setup` registers that one server and
+installs the shared `omnigraph` binary in one step. See the [witan README](../../witan/README.md)
 for that one-step setup.
 
 To use witan-code **standalone** (code graph only, no memory/task tools):
