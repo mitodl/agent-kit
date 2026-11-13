@@ -29,6 +29,7 @@ from witan_code.remote.store import (
     RemoteWriteIndeterminate,
     StoreSession,
 )
+from witan_core.graph_ids import BRIDGE_GRAPH_ID
 
 from .conftest import SAMPLE, requires_stack
 
@@ -182,7 +183,7 @@ def test_the_transport_decides_the_address(monkeypatch, tmp_path):
     assert ref.stats() == (None, None)
 
     bridge = store_module.bridge_store(cfg_module.load())
-    assert bridge.via_mcp == cfg_module.BRIDGE_GRAPH_ID
+    assert bridge.via_mcp == BRIDGE_GRAPH_ID
 
 
 def test_label_names_the_graph_a_row_is(monkeypatch, tmp_path):
@@ -201,9 +202,7 @@ def test_label_names_the_graph_a_row_is(monkeypatch, tmp_path):
     ref = store_module.store_for_repo(REPO, cfg_module.load())
     assert ref.label == "test/cg"
     assert str(ref).endswith("(via https://witan.example.org/mcp)")
-    assert store_module.bridge_store(cfg_module.load()).label == (
-        cfg_module.BRIDGE_GRAPH_ID
-    )
+    assert store_module.bridge_store(cfg_module.load()).label == BRIDGE_GRAPH_ID
 
 
 def test_label_falls_back_to_the_store_name_off_the_mcp_path(monkeypatch, tmp_path):

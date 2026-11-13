@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from witan_code import indexer
+from witan_core.graph_ids import BRIDGE_GRAPH_ID, code_graph_id
 
 from .conftest import requires_stack
 
@@ -703,7 +704,7 @@ def _cluster_cfg(monkeypatch, repo: str, **env: str):
     monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    declared = frozenset({cfg_module.graph_id(repo), cfg_module.BRIDGE_GRAPH_ID})
+    declared = frozenset({code_graph_id(repo), BRIDGE_GRAPH_ID})
 
     def _list_branches(self):
         if self.graph_id not in declared:
@@ -725,7 +726,6 @@ def test_index_path_addresses_the_provisioned_cluster_graph(tmp_path, monkeypatc
     addressing a graph the cluster never declared is the failure this whole
     resolution path exists to prevent.
     """
-    from witan_code import config as cfg_module
     from witan_code import store as store_mod
     from witan_core import omnigraph as og
 
@@ -747,7 +747,7 @@ def test_index_path_addresses_the_provisioned_cluster_graph(tmp_path, monkeypatc
         "--server",
         "https://omnigraph.test",
         "--graph",
-        cfg_module.graph_id("https://github.com/test/cg"),
+        code_graph_id("https://github.com/test/cg"),
     ]
     assert client.token == "s3cret"
     # CI owns the default view, so the guard that refused above lets this pass.

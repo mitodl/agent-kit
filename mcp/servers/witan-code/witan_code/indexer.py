@@ -21,6 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from witan_core import chunking, now_iso
+from witan_core.graph_ids import code_graph_id
 from witan_core.observability import get_logger
 
 from . import bridge as bridge_module
@@ -471,7 +472,7 @@ def cluster_serves(target: Path) -> bool:
     except Exception:  # cannot tell, so index as before
         logger.debug("witan.code.index.served_check_failed", exc_info=True)
         return True
-    if not served or cfg_module.graph_id(slug) in served:
+    if not served or code_graph_id(slug) in served:
         return True
     logger.debug("witan.code.index.repo_not_served", repo=slug)
     return False
