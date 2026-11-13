@@ -7,11 +7,15 @@
   the verdict, classifier version and a digest of the screened text stored on
   the record. witan ships no provider, so this is off by default. Classifier
   output is parsed fail-closed: anything but `{"decision":"clean"}` or
-  `{"decision":"flagged"}` resolves to `flagged`.
+  `{"decision":"flagged"}` resolves to `flagged`. Long text is classified in
+  chunks and stops at the first flag; text needing more than 16 classifier
+  calls is stored flagged ("too long to screen") without one.
 - `memory_get`, `task_get` (and each of its comments) and the memories a first
   `task_claim` surfaces carry a `screening` value. A record with no verdict for
   its current text reads as `unscreened` with a "[NOT security-screened ...]"
-  notice.
+  notice. A flagged label names only reasons witan wrote itself; the
+  classifier's own reason stays in `screen_reason` for operators. `witan task
+  show` and the `witan run` launch prompt print the notices too.
 
 ### Notes
 
