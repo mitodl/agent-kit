@@ -9375,8 +9375,8 @@ def recall(
     ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
     With no edges in the graph the result equals ``memory_search`` — expansion is
-    additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
-    (default off); ``recall`` works with BM25 only and needs no embedding provider.
+    additive, never lossy. Embeddings are not implemented: ``recall`` seeds from
+    BM25 only and needs no embedding provider.
 
     Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
     Past a total content budget a memory's ``content`` is cut, marked by
