@@ -71,6 +71,7 @@ from urllib.request import url2pathname
 
 from witan_core import _filelock
 from witan_core import omnigraph_http as _http
+from witan_core.graph_ids import GRAPH_ID_RE
 from witan_core.group_commit import (
     ConditionFailed,
     GroupCommitter,
@@ -556,10 +557,6 @@ _DELETE_STATEMENT_RE = re.compile(r"^\s*delete\b", re.MULTILINE)
 # split. s3:// is a direct store, which only a pre-0.14 CLI can open.
 _SERVER_SCHEMES = ("http://", "https://")
 _CLOUD_SCHEMES = ("s3://", "az://")
-# omnigraph graph ids: letters, digits, hyphens; 1-64 chars. NO underscores
-# (the engine reserves them) and no path separators — see the naming decision
-# in memory pf-decision-cluster-graph-names-track-package.
-_GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
 
 
 # ── Mutation batching ────────────────────────────────────────────────────────
@@ -1426,10 +1423,10 @@ def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
             "(e.g. WITAN_MEMORY_GRAPH / WITAN_CODE_GRAPH) or encode it in the URI "
             "as .../graphs/<id>"
         )
-    if not _GRAPH_ID_RE.match(resolved):
+    if not GRAPH_ID_RE.match(resolved):
         raise ValueError(
             f"invalid omnigraph graph id {resolved!r}: must match "
-            f"{_GRAPH_ID_RE.pattern} (letters, digits, hyphens; no underscores)"
+            f"{GRAPH_ID_RE.pattern} (letters, digits, hyphens; no underscores)"
         )
     return server_url, resolved
 
