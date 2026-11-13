@@ -34,7 +34,7 @@ prek = [{ name = "prek", specifier = "==0.5.9" }]
 
 [[package]]
 name = "agent-config-kit"
-version = "0.14.1"
+version = "0.15.0"
 source = { editable = "packages/agent-config-kit" }
 dependencies = [
     { name = "pydantic" },
