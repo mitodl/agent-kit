@@ -28,7 +28,7 @@ from witan_core.observability import get_logger
 from ..config import ScreenConfig
 from . import prompt
 from .classifier import Classifier, load_classifier
-from .verdict import Verdict, combine, parse_verdict
+from .verdict import OVERSIZE_REASON, Verdict, combine, parse_verdict
 
 logger = get_logger("witan.screen")
 
@@ -61,6 +61,11 @@ UNSCREENED: dict[str, None] = dict.fromkeys(SCREEN_FIELDS)
 MAX_PAYLOAD_CHARS = 16_000
 CHUNK_CHARS = 7_500
 CHUNK_OVERLAP = 500
+#: The most classifier calls one write may cost (about 110,000 characters of
+#: plain text). Text needing more is stored flagged without a call, so one
+#: huge record can neither hold a worker for minutes nor run up the provider's
+#: bill.
+MAX_PAYLOADS = 16
 _CACHE_SIZE = 512
 
 
@@ -121,7 +126,8 @@ def payloads(parts: list[dict]) -> list[str]:
     Whole parts are packed together while they fit. A part too long to fit on
     its own is split into overlapping chunks, so an instruction straddling a
     boundary still appears whole in one of them. Nothing is dropped: a long
-    record costs more classifier calls, never less coverage.
+    record costs more classifier calls, never less coverage, up to
+    :data:`MAX_PAYLOADS`, past which the Screener flags it unread.
     """
     out: list[str] = []
     group: list[dict] = []
@@ -200,11 +206,12 @@ class Screener:
     def _classify(self, parts: list[dict]) -> Verdict:
         if not parts:
             return Verdict(decision="clean")
+        chunks = payloads(parts)
+        if len(chunks) > MAX_PAYLOADS:
+            return Verdict(decision="flagged", reason=OVERSIZE_REASON)
         return combine(
-            [
-                parse_verdict(self._classifier.classify(prompt.SYSTEM_PROMPT, payload))
-                for payload in payloads(parts)
-            ]
+            parse_verdict(self._classifier.classify(prompt.SYSTEM_PROMPT, payload))
+            for payload in chunks
         )
 
 

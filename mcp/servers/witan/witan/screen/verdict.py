@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -20,10 +21,11 @@ from pydantic import BaseModel, ConfigDict
 Decision = Literal["clean", "flagged"]
 
 MALFORMED_REASON = "invalid classifier verdict"
+OVERSIZE_REASON = "too long to screen"
 #: The reasons witan writes itself. Only these reach an agent: a classifier's
 #: own reason is free-form model output that the record being screened can
 #: steer, so it stays on the row for operators (:mod:`.label`).
-HOST_REASONS = frozenset({MALFORMED_REASON})
+HOST_REASONS = frozenset({MALFORMED_REASON, OVERSIZE_REASON})
 REASON_MAX_CHARS = 160
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -87,9 +89,16 @@ def parse_verdict(output: str | None) -> Verdict:
     return _malformed()
 
 
-def combine(verdicts: list[Verdict]) -> Verdict:
+def combine(verdicts: Iterable[Verdict]) -> Verdict:
     """One verdict for a record screened in several chunks: the first
-    ``flagged`` one, else ``clean``. An empty list is malformed, not clean."""
-    if not verdicts:
-        return _malformed()
-    return next((v for v in verdicts if v.decision == "flagged"), verdicts[0])
+    ``flagged`` one, else ``clean``. No verdicts is malformed, not clean.
+
+    Stops at the first flag, so given a generator it makes no further
+    classifier calls, and a later call that raises cannot turn an established
+    flag into "unscreened"."""
+    first = None
+    for verdict in verdicts:
+        if verdict.decision == "flagged":
+            return verdict
+        first = first or verdict
+    return first or _malformed()

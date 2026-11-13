@@ -12,7 +12,12 @@ from witan.config import ScreenConfig, load_screen_config
 from witan.graph import OmnigraphClient
 from witan.screen import guard as guard_mod
 from witan.screen.label import UNSCREENED_NOTICE
-from witan.screen.verdict import MALFORMED_REASON, REASON_MAX_CHARS, combine
+from witan.screen.verdict import (
+    MALFORMED_REASON,
+    OVERSIZE_REASON,
+    REASON_MAX_CHARS,
+    combine,
+)
 
 from .conftest import requires_omnigraph
 
@@ -269,6 +274,39 @@ def test_escape_heavy_text_still_fits_the_cap():
     content = '"\\' * 20_000
     chunks = screen.payloads([{"source": "memory", "content": content}])
     assert all(len(c) <= guard_mod.MAX_PAYLOAD_CHARS for c in chunks)
+
+
+def test_classification_stops_at_the_first_flagged_chunk():
+    """A later chunk's failure must not turn an established flag into
+    unscreened, and the rest of the record costs no more calls."""
+    outputs = iter(['{"decision":"flagged","reason":"r"}'])
+
+    class OneAnswer(FakeClassifier):
+        def classify(self, system_prompt, payload):
+            self.calls.append((system_prompt, payload))
+            return next(outputs)  # StopIteration past the first call
+
+    classifier = OneAnswer()
+    content = "x" * (guard_mod.CHUNK_CHARS * 3)
+    written = screen.Screener(classifier)(
+        "insert_memory", {"slug": "pat-x", "title": "t", "content": content}
+    )
+    assert written["screen_verdict"] == "flagged"
+    assert len(classifier.calls) == 1
+
+
+def test_text_past_the_payload_cap_is_flagged_without_a_call():
+    classifier = FakeClassifier()
+    params = {
+        "slug": "pat-x",
+        "title": "t",
+        "content": "x" * (guard_mod.CHUNK_CHARS * (guard_mod.MAX_PAYLOADS + 2)),
+    }
+    written = screen.Screener(classifier)("insert_memory", params)
+    assert classifier.calls == []
+    assert written["screen_verdict"] == "flagged"
+    assert written["screen_reason"] == OVERSIZE_REASON
+    assert screen.screening("Memory", params, written)["reason"] == OVERSIZE_REASON
 
 
 def test_small_parts_share_one_payload():

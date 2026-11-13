@@ -374,6 +374,11 @@ object, a missing or non-string `decision`, and any decision other than
 loaded, or a provider named without a model, fails startup. A classifier that
 raises at write time does not fail the write; the record is stored unscreened.
 
+Long text is classified in overlapping chunks, and the first flagged chunk
+flags the record without classifying the rest. Text that would take more than
+`MAX_PAYLOADS` (16) classifier calls, about 110,000 characters, is stored
+flagged ("too long to screen") without calling the classifier at all.
+
 Reads attach a `screening` value to the record (`memory_get`, `task_get` and
 its comments, and the memories a first `task_claim` surfaces). A verdict counts
 only while its digest matches the record's current text. A record written
