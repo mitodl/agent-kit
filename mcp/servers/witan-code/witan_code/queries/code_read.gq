@@ -219,8 +219,21 @@ query indexed_repo() {
     limit 1
 }
 
-// Symbol ids defined by a file — needed to delete their outgoing edges
-// before reindexing the file.
+// Files importing anything $file_id defines (the importing file itself
+// included, through its same-file Imports edges). Re-indexing $file_id deletes
+// its symbols and every edge into them, so the indexer re-links these files.
+
+query importer_files($file_id: String) {
+    match {
+        $s: Symbol { file_id: $file_id }
+        $f: CodeFile
+        $f imports $s
+    }
+    return { $f.slug }
+}
+
+// Symbol ids defined by a file. The indexer checks a cross-file edge's target
+// against them, since an edge to a missing node fails the whole load.
 
 query symbol_ids_in_file($file_id: String) {
     match {
