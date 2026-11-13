@@ -949,3 +949,35 @@ def test_callers_reads_a_branch_from_a_server_with_no_checkout(
     default, on_branch = callers(), callers(branch="feature/x")
     assert "retired" in default and "fresh" not in default
     assert "fresh" in on_branch and "retired" not in on_branch
+
+
+@requires_stack
+def test_callers_keeps_the_branch_after_the_reindex_offer(
+    removal_on_an_indexed_branch, monkeypatch
+):
+    """The missing-store fallback indexes the checkout, then must still read
+    the view `branch` names, not the checkout's own (feature/x here)."""
+    from witan_code import indexer
+
+    from .test_elicit import _AcceptCtx
+
+    srv = removal_on_an_indexed_branch
+    indexed = []
+    real_client_for_symbol = srv._client_for_symbol
+    monkeypatch.setattr(
+        srv,
+        "_client_for_symbol",
+        lambda sid, branch=None: (
+            real_client_for_symbol(sid, branch) if indexed else None
+        ),
+    )
+    monkeypatch.setattr(
+        indexer, "index_path", lambda *args, **kwargs: indexed.append(True)
+    )
+    helper = f"{REPO}#svc.py::helper"
+
+    rows = _fn(srv.code_callers)(helper, branch="main", ctx=_AcceptCtx(True))
+
+    assert indexed
+    names = {c["qualified_name"] for c in rows}
+    assert "retired" in names and "fresh" not in names

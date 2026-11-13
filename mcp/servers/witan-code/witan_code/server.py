@@ -575,9 +575,11 @@ async def code_callers(
     """
     client = _client_for_symbol(symbol_id, branch)
     if client is None:
-        client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
-        if client is None:
+        # The fallback's client reads the checkout's view; re-resolve so an
+        # explicit `branch` still applies on this first call.
+        if await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0]) is None:
             return []
+        client = _client_for_symbol(symbol_id, branch)
     return _as_symbol_id(client.read("code_read.gq", direction, {"id": symbol_id}))
 
 
