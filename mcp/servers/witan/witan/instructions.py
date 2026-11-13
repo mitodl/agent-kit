@@ -112,6 +112,11 @@ INSTRUCTIONS = (
 )
 
 
-def with_code_instructions(instructions: str | None, code_instructions: str) -> str:
-    """What ``witan serve`` sends once witan-code is mounted: witan's, then its."""
-    return f"{instructions}\n\n{code_instructions}"
+def with_code_instructions(
+    instructions: str | None, code_instructions: str | None
+) -> str:
+    """What ``witan serve`` sends once witan-code is mounted: witan's, then its.
+
+    Both come from ``FastMCP.instructions``, which is ``None`` when unset.
+    """
+    return "\n\n".join(part for part in (instructions, code_instructions) if part)

@@ -853,6 +853,15 @@ def test_serve_carries_the_mounted_code_servers_instructions(monkeypatch):
     assert fake.instructions == "WITAN\n\nCODE"
 
 
+def test_code_instructions_skip_an_unset_side():
+    """A server with no instructions reports ``None``, which must not reach the
+    agent as the word "None"."""
+    from witan.instructions import with_code_instructions
+
+    assert with_code_instructions(None, "CODE") == "CODE"
+    assert with_code_instructions("WITAN", None) == "WITAN"
+
+
 def test_ui_carries_the_mounted_code_servers_instructions(monkeypatch):
     """`witan ui` serves the same /mcp an agent can connect to, so it needs the
     code_* guidance that `witan serve` appends, not only the tools."""
