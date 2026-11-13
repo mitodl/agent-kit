@@ -222,6 +222,22 @@ def server(tmp_path, monkeypatch, tmp_state_dir, no_background_optimize):
     return _Tools(srv)
 
 
+@pytest.fixture
+def logged(server, monkeypatch):
+    """The fields of each ``info`` line the server logs, by event name."""
+    events: dict[str, list[dict]] = {}
+
+    class Recorder:
+        def info(self, event, **fields):
+            events.setdefault(event, []).append(fields)
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_fields: None
+
+    monkeypatch.setattr(server._module, "logger", Recorder())
+    return events
+
+
 # ── a real omnigraph-server ───────────────────────────────────────────
 SERVED_GRAPH = "council"
 SERVED_REPO = "https://github.com/test/repo"

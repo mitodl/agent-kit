@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withInRepo } from "./mcp.js";
+import { scoped, withInRepo } from "./mcp.js";
 
 describe("withInRepo", () => {
 	const args = {
@@ -21,5 +21,19 @@ describe("withInRepo", () => {
 
 	it("leaves it off before the tool list has been read", () => {
 		expect(withInRepo(args, undefined)).not.toHaveProperty("in_repo");
+	});
+});
+
+describe("scoped", () => {
+	it("sends every repo as all_repos, never an empty repo the tools refuse", () => {
+		expect(scoped({ repo: "", limit: 5 })).toEqual({
+			all_repos: true,
+			limit: 5,
+		});
+	});
+
+	it("sends a chosen repo as repo", () => {
+		const repo = "https://github.com/example/web";
+		expect(scoped({ repo, limit: 5 })).toEqual({ repo, limit: 5 });
 	});
 });

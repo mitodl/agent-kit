@@ -895,10 +895,12 @@ query list_all_sessions_key() {
 }
 
 // Memories produced during a session (provenance walk). Edge predicate is the
-// type name lowercased with underscores stripped: `sessionproduced`.
-query session_produced_memories($session_slug: String) {
+// type name lowercased with underscores stripped: `sessionproduced`. Keyed on
+// the project too, so a session slug from another project matches nothing
+// rather than returning that project's memories under this one's slug.
+query session_produced_memories($project_slug: String, $session_slug: String) {
     match {
-        $s: WorkflowSession { slug: $session_slug }
+        $s: WorkflowSession { slug: $session_slug, project_slug: $project_slug }
         $m: Memory
         $s sessionproduced $m
     }
@@ -1257,12 +1259,39 @@ query memories_with_refs() {
     limit 200
 }
 
+// Every current memory's symbol_refs, for the stale-ref review. Uncapped:
+// the filter to memories that carry refs runs in Python, after any limit, so
+// a cap would let newer memories without refs push the older ones that have
+// them out of the read, and the review would report nothing stale. The rows
+// carry no content, so the full read stays small.
+query current_memory_refs($repo: String?) {
+    match {
+        $m: Memory
+        $repo is null or $m.repo = $repo
+        not { $_ supersedes $m }
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
+}
+
 query tasks_with_refs() {
     match {
         $t: Task
     }
     return { $t.slug, $t.title, $t.type, $t.status, $t.repo, $t.symbol_refs }
     limit 200
+}
+
+// Every `in_progress` Task, for the overlap advisory on a first claim. The
+// lease fields are here because a lapsed claim is not in flight. No `limit`:
+// a live task this read leaves out is an overlap the advisory cannot report.
+query in_progress_tasks_with_refs() {
+    match {
+        $t: Task { status: "in_progress" }
+    }
+    return {
+        $t.slug, $t.title, $t.status, $t.assignee, $t.symbol_refs,
+        $t.claimed_at, $t.updated_at
+    }
 }
 
 // ── Code Branches ───────────────────────────────────────────────────

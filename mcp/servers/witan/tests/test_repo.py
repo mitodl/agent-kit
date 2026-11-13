@@ -37,10 +37,10 @@ def test_detect_env_is_normalised(monkeypatch):
     assert repo.detect() == "https://github.com/mitodl/ol-django"
 
 
-def test_detect_empty_override_means_no_scope(monkeypatch):
-    # An explicit empty string is "all repos" (None), overriding env/git.
+def test_detect_empty_override_is_not_an_override(monkeypatch):
+    # "" used to mean "all repos". That is `all_repos` now, so "" names nothing.
     monkeypatch.setenv("WITAN_REPO", "https://env/repo")
-    assert repo.detect(override="") is None
+    assert repo.detect(override="") == "https://env/repo"
 
 
 def _git(base, *args):

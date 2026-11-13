@@ -307,8 +307,7 @@ class ScanConfig(BaseModel):
     Sourced from ``WITAN_SCAN_*`` env vars and the ``[scan]`` table in
     config.toml, defaulting to the constants below. Ships **enabled** —
     opt-out (set ``WITAN_SCAN_ENABLED=false`` or ``[scan] enabled = false`` to
-    turn it off), unlike the ``WITAN_EMBED_ENABLED`` opt-in precedent this
-    package originally followed.
+    turn it off).
 
     ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist``/
     ``allowlist_hashes`` accept a TOML list or a comma-separated string

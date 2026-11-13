@@ -346,7 +346,7 @@ def test_memory_prints_an_unscoped_repo_as_null(cli, capsys):
     from witan.cli.memory import memory
 
     unscoped = _fn(cli.memory_store)(
-        title="unscoped", content="c", kind="pattern", repo=""
+        title="unscoped", content="c", kind="pattern", all_repos=True
     )
     _as("json")
 

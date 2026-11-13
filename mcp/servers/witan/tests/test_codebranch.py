@@ -313,7 +313,7 @@ def test_an_explicit_branch_wins_over_the_servers_own_checkout(
 
 @requires_omnigraph
 def test_an_explicit_empty_branch_means_do_not_track(server, tmp_path, monkeypatch):
-    """`branch=""` is the "no branch" sentinel, matching `repo=""`, and must not
+    """`branch=""` is the "no branch" sentinel, and must not
     fall back to the server's own checkout.
 
     `_map_args` passes an explicitly-empty branch through untouched — only an

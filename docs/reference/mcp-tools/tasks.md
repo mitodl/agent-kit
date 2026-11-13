@@ -42,6 +42,7 @@ building one.
 | `external_uri` | str? | `null` | A reference URI — e.g. a GitHub issue or PR. |
 | `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns. |
 | `tags` | list[str]? | `null` | Optional free-form tags. |
+| `all_repos` | bool | `False` | Create the task under no repo. Repo-scoped task reads include<br>unscoped tasks, so every repo sees it — see instructions. |
 
 ## `task_get`
 
@@ -108,7 +109,8 @@ the field existed — there is no backfill.
 | `project_slug` | str? | `null` | List the tasks of a WorkflowProject. |
 | `parent` | str? | `null` | List the direct children of a parent task/epic. |
 | `assignee` | str? | `null` | Filter to a single owner. ``"@me"`` resolves to the calling identity<br>(every session of it) — the only spelling that works from a client<br>that cannot know the identity a deployment resolves from its token. |
-| `limit` | int? | `null` | Maximum rows to return, 1 to 10,000. Omitted, every scope behaves as<br>it always has: 50 rows unscoped, uncapped when scoped by repo, project<br>or parent. That asymmetry is why this is nullable rather than<br>``limit: int = 50`` — a plain default would either cap the scoped<br>reads that are uncapped today, or, applied only to the unscoped ones,<br>make an explicit ``limit=50`` indistinguishable from not asking.<br>On the repo-detected branch (the default, since ``repo`` is inferred)<br>the rows are this repo's followed by the unscoped ones, two<br>``updated_at`` runs concatenated rather than merged. So a limit there<br>keeps this repo's tasks and may return no unscoped ones at all, even<br>if an unscoped task was touched more recently. Pass ``repo=""`` for a<br>single ``updated_at`` ordering across everything. |
+| `limit` | int? | `null` | Maximum rows to return, 1 to 10,000. Omitted, every scope behaves as<br>it always has: 50 rows unscoped, uncapped when scoped by repo, project<br>or parent. That asymmetry is why this is nullable rather than<br>``limit: int = 50`` — a plain default would either cap the scoped<br>reads that are uncapped today, or, applied only to the unscoped ones,<br>make an explicit ``limit=50`` indistinguishable from not asking.<br>On the repo-detected branch (the default, since ``repo`` is inferred)<br>the rows are this repo's followed by the unscoped ones, two<br>``updated_at`` runs concatenated rather than merged. So a limit there<br>keeps this repo's tasks and may return no unscoped ones at all, even<br>if an unscoped task was touched more recently. Pass ``all_repos=True``<br>for a single ``updated_at`` ordering across everything. |
+| `all_repos` | bool | `False` | List every repo's tasks instead of the detected repo's — see<br>instructions. |
 
 ## `task_search`
 
@@ -139,6 +141,7 @@ all-repos read, so other repos' matches can still crowd them out.
 | `project_slug` | str? | `null` | Search only the tasks of this WorkflowProject (``wp-`` slug), in<br>every repo. |
 | `assignee` | str? | `null` | Search only tasks held by this owner, matched as ``task_list``<br>matches it; ``"@me"`` is the calling identity. |
 | `limit` | int | `20` | Maximum hits to return, 1 to 10,000. |
+| `all_repos` | bool | `False` | Search every repo's tasks instead of the detected repo's — see<br>instructions. |
 
 ## `task_ready`
 
@@ -162,6 +165,7 @@ ordered by priority (``p0`` first).
 | `project_slug` | str? | `null` | Restrict to a single WorkflowProject. |
 | `assignee` | str? | `null` | Restrict to a single owner (or pass to find your own ready work). |
 | `limit` | int | `20` | Maximum tasks to return. Defaults to 20. |
+| `all_repos` | bool | `False` | Return every repo's ready tasks instead of the detected repo's — see<br>instructions. |
 
 ## `task_update`
 
@@ -215,7 +219,16 @@ A successful claim that is not a renewal also returns ``memories``: up to
 three that the task links to or its title closely matches, each with an
 excerpt. Read them before the first edit; ``memory_get`` has the full text.
 The list is often empty, because a weak match is left out, which does not
-mean nothing exists: ``recall(query=...)`` searches more widely.
+mean nothing exists: ``recall(query=...)`` searches more widely. A
+non-empty list comes with ``memories_note``, which says they are teammates'
+notes rather than instructions.
+
+It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
+share a symbol (``symbols``) or only a file (``files``) with this task's,
+shared symbols first. It is advisory, never a refusal, since work in the
+same file often merges cleanly. A shared symbol is a likely merge conflict:
+read the other task before editing that code, and ``task_comment`` it if
+the two plans collide. Empty when this task has no ``symbol_refs``.
 
 The coordination primitive for parallel/multi-user agents — call it before
 starting a ready task so others see it is taken. Returns ``{"claimed": true,

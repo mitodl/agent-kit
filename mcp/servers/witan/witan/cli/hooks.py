@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import sys
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from witan_core.observability import get_logger
 
 from .. import config as cfg_module
-from ._common import app
+from .. import session_summary
+from ._common import _fn, app
 from .selected_target import selected_target
 
 logger = get_logger("witan.hook")
+
+T = TypeVar("T")
 
 
 @app.command(name="inject-context")
@@ -120,9 +126,16 @@ def session_checkpoint() -> None:
 
     Under Codex, whose hooks get no session variable, the session id comes
     from the hook's stdin payload instead.
+
+    The summary is derived from what the session left behind (see
+    ``witan.session_summary``), because the next session's handoff shows it
+    and agents rarely write one. A session already ended, by an explicit
+    ``workflow_session_end`` or an earlier Stop, is not closed again: its
+    summary stands and only the stale handle is dropped.
     """
+    from .. import context as ctx_module
     from .. import maintenance, session_state
-    from ._common import _fn, _srv
+    from ._common import _srv
 
     # $CLAUDE_SESSION_ID under Claude Code's Stop hook; $PI_SESSION_ID under
     # Pi, whose workflow extension sets it on this process at session_shutdown;
@@ -136,15 +149,33 @@ def session_checkpoint() -> None:
             # nothing reached from here may print there. Errors already go to
             # stderr; this also covers any notice a dispatch path adds later.
             with contextlib.redirect_stdout(sys.stderr):
-                _fn(_srv().workflow_session_end)(
-                    session_slug=session_slug,
-                    summary=(
-                        "Session ended (auto-closed by Stop hook — "
-                        "call workflow_session_end explicitly for a better summary)"
-                    ),
-                    tools_used=None,
-                    files_changed=_changed_files() or None,
-                )
+                server = _srv()
+                deadline = time.monotonic() + SUMMARY_READ_BUDGET_SECONDS
+                session = _within(deadline, lambda: _read_session(server, handle), None)
+                # An ended session was closed by an explicit
+                # `workflow_session_end` that left this handle behind (one
+                # called through the remote proxy clears nothing locally), or
+                # by an earlier Stop whose response was lost. Either way its
+                # summary wins over anything derived here, so only the handle
+                # goes.
+                if session is None or not session.get("ended_at"):
+                    project_dir = ctx_module._cwd_or_dot()
+                    summary, files = _within(
+                        deadline,
+                        lambda: (
+                            _derived_summary(
+                                server, handle, session, session_id, project_dir
+                            ),
+                            session_summary.changed_files(project_dir),
+                        ),
+                        (session_summary.PLACEHOLDER, []),
+                    )
+                    _fn(server.workflow_session_end)(
+                        session_slug=session_slug,
+                        summary=summary,
+                        tools_used=None,
+                        files_changed=files or None,
+                    )
         # SystemExit is not an Exception: _srv() raises it for a half-configured
         # remote, and letting it escape would break the "never blocks" contract.
         except (Exception, SystemExit):  # noqa: BLE001, S110 — never fail the agent
@@ -153,7 +184,8 @@ def session_checkpoint() -> None:
             # or an expired token needing `witan login`. Dropping the handle would
             # discard the only pointer to the session and leak it open forever;
             # keeping it lets the next Stop, or `witan session end`, finish the job.
-            # Re-closing an already-ended session just re-stamps ended_at.
+            # A close that landed but whose response was lost is found ended by
+            # that next Stop and left as it is.
             pass
         else:
             session_state.clear_handle(session_id)
@@ -207,16 +239,91 @@ def _codex_session_id(payload: dict) -> str | None:
     return payload["session_id"]
 
 
-def _changed_files() -> list[str]:
-    """Files dirty in the agent's checkout, for the auto-close record."""
-    import subprocess
+# Everything the Stop hook reads before its close shares this budget. The hook
+# is registered with a 60s timeout (see `witan.setup`) because one write to a
+# deployment has been measured at up to 51s, so the reads get what is left,
+# with a margin. A read still running when the budget runs out is abandoned
+# and the session closes with the placeholder: a late summary is worth less
+# than a session left open because the hook was killed mid-write.
+SUMMARY_READ_BUDGET_SECONDS = 8.0
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path.cwd()))
+
+def _within(deadline: float, fn: Callable[[], T], default: T) -> T:
+    """``fn()``'s result, or ``default`` when it hasn't returned by ``deadline``.
+
+    ``deadline`` is a ``time.monotonic()`` value. The call runs on a daemon
+    thread, so one that never returns is left behind rather than joined and
+    can't hold the hook open past its timeout. ``fn`` must not raise; the
+    callers here already turn every failure into a value.
+    """
+    result: list[T] = []
+    worker = threading.Thread(target=lambda: result.append(fn()), daemon=True)
+    worker.start()
+    worker.join(max(0.0, deadline - time.monotonic()))
+    if result:
+        return result[0]
+    logger.debug("witan.hook.read_budget_exhausted")
+    return default
+
+
+def _read_session(server, handle: dict) -> dict | None:
+    """The handle's session row, or ``None`` when it can't be read.
+
+    ``None`` covers a handle with no ``project_slug`` (one parked by hand or by
+    an older client) and a failed read. The caller then closes the session as
+    it always did, rather than refusing to close what it can't see.
+    """
+    project_slug = handle.get("project_slug")
+    if not project_slug:
+        return None
     try:
-        return subprocess.check_output(
-            ["git", "-C", project_dir, "diff", "--name-only", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).splitlines()[:50]
-    except (subprocess.CalledProcessError, OSError):
-        return []
+        rows = _fn(server.workflow_session_list)(project_slug=project_slug)
+    except Exception:  # a failed read must not stop the close
+        logger.debug("witan.hook.session_read_failed", exc_info=True)
+        return None
+    return next((r for r in rows if r.get("slug") == handle["session_slug"]), None)
+
+
+def _derived_summary(
+    server, handle: dict, session: dict | None, session_id: str, project_dir: str
+) -> str:
+    """The auto-close summary, built from what this session left in the graph and git.
+
+    Each source is read separately and a failed one is named in the summary
+    rather than read as "nothing happened". Without a start time there is no
+    window to attribute anything to, so the placeholder is all that's true.
+    Never raises: anything unexpected also falls back to the placeholder,
+    because the close itself matters more than what it says.
+    """
+    try:
+        started_at = (session or {}).get("started_at") or handle.get("started_at")
+        since = session_summary.parse_or_none(started_at)
+        project_slug = handle.get("project_slug")
+        if since is None or not project_slug:
+            return session_summary.PLACEHOLDER
+        activity = session_summary.Activity()
+        try:
+            rows = _fn(server.task_list)(project_slug=project_slug)
+        except Exception:
+            logger.debug("witan.hook.task_read_failed", exc_info=True)
+            activity.unread.append("tasks")
+        else:
+            activity.closed_tasks, activity.claimed_tasks = (
+                session_summary.session_tasks(
+                    rows, handle.get("session_id") or session_id, since
+                )
+            )
+        try:
+            produced = _fn(server.workflow_project_memories)(
+                project_slug=project_slug, session=handle["session_slug"]
+            )
+        except Exception:
+            logger.debug("witan.hook.memory_read_failed", exc_info=True)
+            activity.unread.append("memories")
+        else:
+            activity.memories = produced["memories"]
+        session_summary.git_activity(activity, project_dir, since)
+        return session_summary.render(activity)
+    except Exception:
+        logger.debug("witan.hook.summary_failed", exc_info=True)
+        return session_summary.PLACEHOLDER

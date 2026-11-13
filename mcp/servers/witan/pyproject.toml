@@ -39,7 +39,11 @@ dependencies = [
   # >=0.12: `witan setup --agent pi` only stops warning that pi-mcp-adapter
   # is missing when Pi's built-in MCP will load the entry from 0.12.0. Older
   # resolutions import and run, and print the false warning.
-  "agent-config-kit>=0.12,<1",
+  # >=0.13: Codex hooks (and the codex platform itself) arrive in 0.13.0.
+  # `cli_hook_platforms()` reads them from the registry, so an older
+  # resolution writes Codex a uvx MCP entry, and `--agent codex` raises
+  # KeyError on the missing platform.
+  "agent-config-kit>=0.13,<1",
   # >=0.13: witan/graph.py imports witan_core.omnigraph.StoreUnavailable at
   # module scope, which 0.12 does not export. A looser floor lets an external
   # install resolve a witan-core the server cannot even import — the failure
@@ -274,7 +278,12 @@ dependencies = [
   # server refuses on replay (a claim landed after replay checked the holder)
   # is reported applied and dropped instead of becoming a comment. It imports
   # fine, so `just check-core-floor` cannot see it.
-  "witan-core[cli,remote,observability,sentry]>=0.54.0,<1",
+  #
+  # ★ >=0.55 IS AN IMPORT FLOOR: server.py, readiness.py, context.py,
+  # session_summary.py, cli/session.py and remote/proxy.py import
+  # `witan_core.timeutil.parse_timestamp` at module scope, added in witan-core
+  # 0.55.0 in the same change (#629), so 0.54 cannot import the server.
+  "witan-core[cli,remote,observability,sentry]>=0.55.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

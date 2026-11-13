@@ -474,9 +474,8 @@ async def code_find_definition(
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
-        detected at all. Note this differs from the witan memory/task tools:
-        ``repo=""`` does **not** force a fan-out here — it is falsy, so it
-        behaves exactly like omitting the argument.
+        detected at all. ``repo=""`` does **not** force a fan-out — it is
+        falsy, so it behaves exactly like omitting the argument.
     branch:
         Git branch whose indexed view to query (e.g. another agent's in-flight
         branch). Defaults to the checkout's branch when querying the current
@@ -804,8 +803,8 @@ def code_search_symbol(
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
-        detected at all — ``repo=""`` does **not** force that, unlike the witan
-        memory/task tools; it is falsy and behaves like omitting the argument.
+        detected at all — ``repo=""`` does **not** force that; it is falsy and
+        behaves like omitting the argument.
         BM25 ranking is per-store, so a fan-out concatenates each store's
         ranked results rather than producing one global ordering.
     branch:
@@ -1277,6 +1276,54 @@ def code_store_health() -> dict:
         "ok": all(h.ok for h in report),
         "stale_schema": [str(h.ref) for h in report if h.stale_schema],
     }
+
+
+def use_config(config: cfg_module.Config) -> None:
+    """Read ``config``'s stores from here on, instead of the import-time load.
+
+    For the CLI commands that call this module in-process (``doctor``,
+    ``why``): the import-time :func:`config.load` takes no target, so a
+    ``--target`` forwarded into :mod:`witan_code.selected_target` never
+    reaches it. Clients and branch listings cached under the old config are
+    dropped with it.
+    """
+    global cfg
+    cfg = config
+    _clients.clear()
+    _store_branches.clear()
+
+
+def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:
+    """``rel_path``'s row in the view the ``code_*`` tools read for ``checkout``.
+
+    The view is the one :func:`_resolve_branch` picks for a read from inside
+    ``checkout``: this actor's view of its branch, else anyone's, else main.
+    Resolved from ``checkout`` rather than the cwd, so a file in another
+    checkout is looked up where that checkout's reads go.
+
+    Returns ``{"store", "view", "file"}``: the store's label (``None`` with
+    ``view`` when the repo has no code graph at all), the view name (``None``
+    for main), and the ``CodeFile`` row, or ``None`` when the view has none.
+
+    :raises store.ClusterUnreachable: when a cluster graph cannot be asked
+        about at all (a rejected token, a closed port), which
+        :meth:`StoreRef.exists` would report as an absent graph.
+    """
+    absent = {"store": None, "view": None, "file": None}
+    store = store_module.store_for_repo(repo, cfg)
+    if store.is_remote:
+        try:
+            store_module.probe_cluster_graph(store, f"{repo}'s code graph", cfg)
+        except store_module.ClusterGraphMissing:
+            return absent
+    elif not store.exists(cfg):
+        return absent
+    branch = repo_module.store_branch(checkout)
+    view = _view_for_branch(store, branch) if branch else None
+    rows = _client_for_ref(store, view).read(
+        "code_read.gq", "get_file", {"id": f"{repo}#{rel_path}"}
+    )
+    return {"store": store.label, "view": view, "file": rows[0] if rows else None}
 
 
 @mcp.tool

@@ -162,7 +162,8 @@ together are usually relevant together.
 ## Repo scoping
 
 Almost everything is scoped by repo, detected from `.git/config`. Pass `repo`
-explicitly to override, or `repo=""` to operate across every repo in the store.
+explicitly to override, or `all_repos=True` to operate across every repo in the
+store. An empty `repo` is refused rather than read as either.
 
 Scoping is a default rather than a boundary. A pattern learned in one repo is
 often exactly what another needs, so cross-repo reads are one flag away — and

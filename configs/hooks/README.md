@@ -115,12 +115,19 @@ so it adds no noise to untracked sessions.
 
 Runs when Claude Code stops. If `workflow_session_start` was called during
 the session, a state file exists in `/tmp`. This hook reads it and calls
-`update_workflow_session_end` with a placeholder summary so the session is
-cleanly closed in the graph even if the agent forgot to call
-`workflow_session_end` explicitly.
+`workflow_session_end` with a summary derived from the session's recorded
+activity (tasks in the project claimed or closed, memories stored, commits,
+uncommitted files),
+so the session is closed in the graph and the next session's handoff says what
+happened even if the agent forgot to call `workflow_session_end` explicitly. If
+a read fails and nothing else was found, the summary falls back to a fixed
+placeholder.
 
-If `workflow_session_end` was already called, the state file is already gone
-and this hook exits without doing anything.
+If `workflow_session_end` was already called, the session keeps that summary:
+either the state file is already gone and this hook exits without doing
+anything, or (after an explicit end through a deployed server, which can't
+clear the local file) the hook finds the session ended and only removes the
+file.
 
 ### `witan-code session-init` (SessionStart)
 

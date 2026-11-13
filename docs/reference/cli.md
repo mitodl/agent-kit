@@ -26,6 +26,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`optimize`](#witan-optimize)
 - [`cleanup`](#witan-cleanup)
 - [`memory`](#witan-memory)
+    - [`stale-refs`](#witan-memory-stale-refs)
 - [`projects`](#witan-projects)
 - [`project`](#witan-project)
     - [`status`](#witan-project-status)
@@ -80,6 +81,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`index`](#witan-code-index)
     - [`reindex`](#witan-code-reindex)
     - [`doctor`](#witan-code-doctor)
+    - [`why`](#witan-code-why)
     - [`deps`](#witan-code-deps)
     - [`symbols`](#witan-code-symbols)
     - [`diff-impact`](#witan-code-diff-impact)
@@ -301,6 +303,12 @@ sessions open forever.
 Under Codex, whose hooks get no session variable, the session id comes
 from the hook's stdin payload instead.
 
+The summary is derived from what the session left behind (see
+``witan.session_summary``), because the next session's handoff shows it
+and agents rarely write one. A session already ended, by an explicit
+``workflow_session_end`` or an earlier Stop, is not closed again: its
+summary stands and only the stale handle is dropped.
+
 **Parameters**:
 
 * `--output-format CHOICE`: txt | json | toml | yaml.
@@ -427,10 +435,14 @@ Stop hook and the deployed maintenance job use.
 ## witan memory
 
 ```console
-witan memory [OPTIONS] [ARGS]
+witan memory COMMAND [OPTIONS] [ARGS]
 ```
 
 Search memory (BM25), or with no query list memories (filtered by --kind).
+
+**Commands**:
+
+* [`stale-refs`](#witan-memory-stale-refs): List memories whose symbol_refs no longer resolve in the code graph.
 
 **Parameters**:
 
@@ -448,6 +460,24 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 * `--repo STR`:
 * `--all-repos, --no-all-repos`: *[default: False]*
 * `--limit INT`: *[default: 20]*
+
+### witan memory stale-refs
+
+```console
+witan memory stale-refs [OPTIONS]
+```
+
+List memories whose symbol_refs no longer resolve in the code graph.
+
+A review list, never an edit. ``missing`` means the repo is indexed and the
+symbol is not, which may be a rename: the detail column lists indexed
+symbols with the same name. ``unknown`` means the ref could not be checked
+(the repo is not indexed, or witan-code is unreachable).
+
+**Parameters**:
+
+* `--repo STR`:
+* `--all-repos, --no-all-repos`: *[default: False]*
 
 ## witan projects
 
@@ -1685,6 +1715,26 @@ witan code doctor
 Check that every code graph — per-repo and the shared bridge — can be read.
 
 Exits non-zero when any store is unreadable, so it is usable as a check.
+
+### witan code why
+
+```console
+witan code why [OPTIONS] PATH
+```
+
+Say whether a file is in the code graph and, if not, which rule left it out.
+
+An empty `code_*` result reads the same for an unused symbol and for a file
+the indexer never wrote. This replays the indexer's own file filter on
+PATH (unsupported language, skipped directory, nested checkout, symlinked
+directory, gitignored) and looks the file up in the view the `code_*` tools read from its
+checkout.
+
+**Parameters**:
+
+* `PATH, --path`: The file to explain, as part of the checkout this runs from when it is
+    inside it, else as part of its own. **[required]**
+* `--repo STR`: Canonical repo URI, when the checkout has no remote to detect it from.
 
 ### witan code deps
 

@@ -89,6 +89,15 @@ def test_witan_code_bundle_honors_binary_override(tmp_path):
     assert (cli_entry.command, cli_entry.args) == ("witan", ["code", "serve"])
 
 
+def test_cli_entry_goes_to_every_platform_that_gets_hooks(tmp_path):
+    """Pinned as a literal so a platform gaining hooks in agent-config-kit
+    fails here and gets a deliberate look, instead of silently changing
+    which MCP entry its users get."""
+    bundle = setup.witan_code_bundle(tmp_path, "tester")
+
+    assert set(bundle.mcp_servers_by_platform) == {"claude", "pi", "codex"}
+
+
 def test_witan_code_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):
     pkg_dir = tmp_path / "pkg"
     ext_dir = pkg_dir / "extensions" / "pi"

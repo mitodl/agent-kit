@@ -33,7 +33,7 @@ def test_task_create_names_the_missing_slug(server, kwargs, node_type, slug):
 
     assert str(excinfo.value) == f"task_create: no {node_type} with slug '{slug}'"
     # The batch commits whole, so the task node did not land without its edge.
-    assert server.task_list(repo="") == []
+    assert server.task_list(all_repos=True) == []
 
 
 @requires_omnigraph

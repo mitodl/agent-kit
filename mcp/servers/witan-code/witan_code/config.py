@@ -360,8 +360,8 @@ def sanitize_slug(slug: str) -> str:
 # repo-URI → graph-id function.
 #
 # SHARED CONTRACT — this exact algorithm is mirrored by ol-infrastructure's
-# Pulumi provisioning (applications/omnigraph/data_tier.py, which declares each
-# `code-<repo>` graph in the cluster.yaml ConfigMap). witan-code selects the
+# Pulumi provisioning (`code_graph_id` in applications/omnigraph/cluster_config.py,
+# which declares each `code-<repo>` graph in the cluster.yaml ConfigMap). witan-code selects the
 # `--graph` id and provisioning declares the same id; they MUST agree
 # byte-for-byte or a client will address a graph the cluster never created. Any
 # change here has to land in lockstep on both sides — see task

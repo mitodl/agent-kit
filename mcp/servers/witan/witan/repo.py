@@ -17,17 +17,18 @@ def detect(override: str | None = None) -> str | None:
     code graph — so they must all derive it the same way.
 
     Resolution order:
-      1. ``override`` parameter — a non-empty value is canonicalized the same
-         way an auto-detected remote is (see ``normalise``); an explicit empty
-         string means "no repo scope" (callers use this for all-repos)
+      1. ``override`` parameter, when non-empty — canonicalized the same way
+         an auto-detected remote is (see ``normalise``). An empty string is not
+         a repo, so it is not an override either; the MCP tools refuse it
+         before it gets here (``server._scope``)
       2. ``WITAN_REPO`` environment variable — canonicalized the same way
       3. the ``origin`` remote URL from the nearest ``.git/config``, else the
          first remote of any name (a repo cloned/added under a different remote
          name still gets context)
       4. ``None`` — no repo context available
     """
-    if override is not None:
-        return normalise(override) if override else None
+    if override:
+        return normalise(override)
 
     env_repo = os.environ.get("WITAN_REPO")
     if env_repo is not None:

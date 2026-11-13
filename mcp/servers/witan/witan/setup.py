@@ -19,6 +19,8 @@ from agent_config_kit import (
     RegistrationBundle,
     SkillSource,
     StdioServer,
+    get_platform,
+    known_platforms,
 )
 
 _WITAN_ARGS = [
@@ -30,20 +32,31 @@ _WITAN_ARGS = [
     "serve",
 ]
 
-# Platforms whose witan hooks shell out to the bare `witan` command, so the CLI
-# is already a hard requirement there (the setup command warns when it is
-# missing). Pointing their MCP entry at that same CLI keeps both surfaces on one
-# install: with the uvx form, the hooks run the PyPI release while the MCP server
-# runs git `main`, and the two lineages skew silently — the agent's injected
-# context and the tools it calls end up on different code with no error saying
-# so. It also drops a cold-start `uvx` resolve (~90 packages) from server
-# startup. The uvx form stays the default for MCP-only platforms, which have no
-# persistent CLI to point at.
-#
-# `witan serve` mounts witan-code's `code_*` tools in-process whenever
-# witan-code is importable, so the single entry still exposes everything the
-# `--with`-bearing uvx form does.
-_CLI_HOOK_PLATFORMS = ("claude", "pi")
+
+def cli_hook_platforms() -> list[str]:
+    """The platforms whose MCP entry runs the installed ``witan`` CLI.
+
+    Every hook witan registers shells out to the bare ``witan`` command, so on
+    any platform agent-config-kit writes hooks for, the CLI is already a hard
+    requirement (the setup command warns when it is missing). Pointing those
+    platforms' MCP entry at that same CLI keeps both surfaces on one install:
+    with the uvx form, the hooks run the PyPI release while the MCP server runs
+    git `main`, and the two lineages skew silently — the agent's injected
+    context and the tools it calls end up on different code with no error
+    saying so. It also drops a cold-start `uvx` resolve (~90 packages) from
+    server startup. The uvx form stays the default for MCP-only platforms,
+    which have no persistent CLI to point at.
+
+    Read from the registry rather than listed by hand: a hand-kept list looks
+    equivalent but goes stale without any error when a platform gains hook
+    support, leaving it with CLI hooks and a uvx server.
+
+    `witan serve` mounts witan-code's `code_*` tools in-process whenever
+    witan-code is importable, so the single entry still exposes everything the
+    `--with`-bearing uvx form does.
+    """
+    return [name for name in known_platforms() if get_platform(name).hooks is not None]
+
 
 # How long the prompt-path `witan inject-context` may run before its output is
 # abandoned — the Claude `UserPromptSubmit` hook below AND the Pi extension's
@@ -90,7 +103,9 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     # credential-refresh note in `witan_core.remote.proxy._invoke`. Killing it
     # is not a dropped block but a session left open with no handoff summary,
     # which is invisible until someone resumes and finds nothing recorded. 60s
-    # covers that recorded worst case.
+    # covers that recorded worst case. The reads that build the summary run
+    # before the write and are capped at `SUMMARY_READ_BUDGET_SECONDS` (8s, in
+    # `witan.cli.hooks`) so the two together still fit.
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
@@ -122,7 +137,7 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
                     command="witan", args=["serve"], env={"WITAN_AUTHOR": author}
                 )
             }
-            for name in _CLI_HOOK_PLATFORMS
+            for name in cli_hook_platforms()
         },
         skills=skills,
         hooks=hooks,
