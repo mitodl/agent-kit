@@ -45,8 +45,13 @@ BOOT SEQUENCE
     wait until no other live pod matches the selector  (else exit 1)
     render policy group membership from the token map
     plan    -> exit 1 on an outstanding deployment, on a graph removal that
-               is not allow-listed, or on any other plan error
+               is not allow-listed, or on any other plan error, except a
+               schema change refused only because allow-listed graphs have
+               non-main branches
     lock    -> serve / deployment lock: force-unlock; anything else: exit 1
+    if that schema change is pending:
+        per non-main branch: delete it, force-unlock the lock it left
+        plan again -> exit 1 on any plan error
     apply
     lock    -> force-unlock the deployment lock apply left
     exec omnigraph-server
@@ -71,6 +76,18 @@ A 0.15 server that loses the S3 cluster lock's lease stops writing and exits
 with code 2 (upstream #1221). Nothing here handles that specially: the server
 is exec'd, so the code is the container's, and the restart boots through the
 Lease and the pod check above like any other.
+
+BRANCH VIEWS AND SCHEMA CHANGES
+
+omnigraph 0.15 refuses a schema change on a graph that has any branch but
+`main`. The code graphs always carry branch views, one per writer and git
+branch (mcp/servers/witan-code/docs/BRANCH_INDEXING.md), so every change to
+their schema would stall the deploy. Those views are caches the next branch
+index rebuilds, so the boot deletes them, with no server serving and before
+the apply, on the graphs OMNIGRAPH_BRANCH_DROP_ALLOWLIST names and only when
+the plan is refused for that reason alone. The council graph is never listed:
+its branches may hold what people wrote. The pre-deploy gate passes the same
+plan, because the boot will clear it.
 
 Outside Kubernetes (a local `docker run`) there is no API to ask, so the Lease
 and the pod check are skipped. Nothing then shows that a lock's owner has
@@ -135,6 +152,18 @@ KUBERNETES_TIMEOUT_SECONDS = 5
 EXITED_POD_PHASES = frozenset({"Failed", "Succeeded"})
 
 OUTSTANDING_DEPLOYMENT = "cluster_deployment_outstanding"
+
+# How 0.15's `cluster plan` reports a schema change refused because the graph
+# has branches besides main. The diagnostic names no graph and lists only the
+# first refused graph's branches, while every graph with a schema change is
+# marked blocked with this reason, so the branches are read per graph.
+SCHEMA_PREFLIGHT_FAILED = "schema_preflight_failed"
+# The code is shared by every schema preflight refusal, and the message is the
+# only thing that says which one this is.
+NON_MAIN_BRANCHES_MESSAGE = "schema apply requires a graph with only main"
+MAIN_BRANCH = "main"
+# A branch delete writes one graph's branch manifest and the cluster lock.
+BRANCH_DELETE_TIMEOUT_SECONDS = 120
 
 # `omnigraph version --json` reports this for 0.14's `--target` addressing.
 # Upstream: clients selecting a CLI must require the exact protocol, because
@@ -807,6 +836,92 @@ class Cluster:
             scope = ["--cluster", cluster_layout(Path(self._config_dir))[0]]
         return [command, *scope, "--graph", graph, *args]
 
+    def branches(self, graph: str) -> list[str]:
+        """``graph``'s branches other than main.
+
+        A read, so it runs beside a serving server and takes no lock.
+
+        :raises BootRefused: if the branches cannot be listed.
+        """
+        try:
+            result = run_omnigraph(
+                self.graph_command("branch", graph, "list", "--json"),
+                self._lease,
+                timeout_seconds=LOCK_COMMAND_TIMEOUT_SECONDS,
+            )
+            if result.returncode != 0:
+                msg = f"`branch list` on {graph} failed (exit {result.returncode})"
+                raise BootRefused(msg)
+            listed = result.json()["branches"]
+        except CommandTimedOut as exc:
+            raise BootRefused(str(exc)) from exc
+        except (ValueError, KeyError) as exc:
+            msg = (
+                f"`branch list` on {graph} printed no branches: {result.stdout[:200]!r}"
+            )
+            raise BootRefused(msg) from exc
+        return sorted(branch for branch in listed if branch != MAIN_BRANCH)
+
+    def delete_branch(self, graph: str, branch: str) -> None:
+        """Delete one branch, then remove the lock the delete left.
+
+        A direct `branch delete` keeps its `graph_operation` lock after it
+        exits, whether it deleted anything or not, so the next delete would be
+        refused. The lock is removed even when the delete fails or is stopped
+        on its timeout, so a refused boot leaves the root as it found it. It
+        is not removed when the Lease was lost (``run_omnigraph`` raises
+        ``BootRefused`` before that).
+
+        :raises BootRefused: if the delete failed, outlived its timeout, or
+            its lock could not be removed.
+        """
+        args = self.graph_command(
+            "branch", graph, *self._as, "--yes", "delete", branch, "--json"
+        )
+        try:
+            result = run_omnigraph(
+                args, self._lease, timeout_seconds=BRANCH_DELETE_TIMEOUT_SECONDS
+            )
+        except CommandTimedOut as exc:
+            self.release_own_lock()
+            raise BootRefused(str(exc)) from exc
+        self.release_own_lock()
+        if result.returncode != 0:
+            sys.stdout.write(result.stdout)
+            msg = (
+                f"`branch delete {branch}` on {graph} failed (exit {result.returncode})"
+            )
+            raise BootRefused(msg)
+
+    def release_own_lock(self) -> None:
+        """Remove the lock the direct command this boot just ran left.
+
+        Called only once the root was unlocked before that command, with the
+        Lease held and no other server pod live, so a lock found now is that
+        command's: the same reasoning as the maintenance window's. The id
+        comes from `cluster status`, which reads the lock without scanning
+        graphs, because this runs once per deleted branch and 0.14's lock
+        read is a whole `cluster plan`.
+
+        :raises BootRefused: if the lock cannot be read or removed.
+        """
+        if not self._targets:
+            lock = self.lock()
+            if lock["locked"]:
+                self.force_unlock(lock["lock_id"])
+            return
+        result = self._run_lock_command("status", *self._target, "--json")
+        if result.returncode != 0:
+            msg = f"`cluster status` failed (exit {result.returncode})"
+            raise BootRefused(msg)
+        try:
+            lock_id = result.json()["lock_id"]
+        except (ValueError, KeyError) as exc:
+            msg = f"`cluster status` printed no lock id: {result.stdout[:200]!r}"
+            raise BootRefused(msg) from exc
+        if lock_id:
+            self.force_unlock(lock_id)
+
 
 # ── Boot sequence ────────────────────────────────────────────────────────────
 
@@ -842,7 +957,12 @@ def render_policy_groups(config_dir: Path, tokens_file: str | None) -> bool:
     return True
 
 
-def check_plan(plan: dict[str, Any], removable_graphs: frozenset[str]) -> None:
+def check_plan(
+    plan: dict[str, Any],
+    removable_graphs: frozenset[str],
+    *,
+    views_pending: bool = False,
+) -> None:
     """Refuse a plan the apply must not act on.
 
     :param removable_graphs: graph ids the deployment has explicitly allowed
@@ -850,6 +970,8 @@ def check_plan(plan: dict[str, Any], removable_graphs: frozenset[str]) -> None:
         declares a graph deletes its storage and history, and the generated
         `cluster.yaml` reaches this pod through a ConfigMap that a failed
         deploy does not roll back.
+    :param views_pending: the plan was refused only because of branch views
+        the boot will drop (``views_to_drop``), so its refusal is not one.
     :raises BootRefused: on an outstanding deployment, a graph removal that
         is not allow-listed, or any other plan error.
     """
@@ -876,9 +998,122 @@ def check_plan(plan: dict[str, Any], removable_graphs: frozenset[str]) -> None:
         raise BootRefused(msg)
     if removed:
         log(f"this apply deletes allow-listed graphs: {removed}")
-    if not plan.get("ok"):
+    if not plan.get("ok") and not views_pending:
         msg = f"`cluster plan` refused the configuration: {json.dumps(diagnostics)}"
         raise BootRefused(msg)
+
+
+def graph_list(env: dict[str, str], name: str) -> frozenset[str]:
+    """The comma-separated graph ids in the environment variable ``name``."""
+    return frozenset(
+        graph.strip() for graph in env.get(name, "").split(",") if graph.strip()
+    )
+
+
+def branch_drop_allowlist(
+    env: dict[str, str], declared_graphs: list[str]
+) -> frozenset[str]:
+    """The graphs whose non-main branches a boot may delete.
+
+    :raises BootRefused: on an id `cluster.yaml` does not declare. A typo
+        would otherwise allow nothing, and the schema change it was meant to
+        let through would stall the deploy again.
+    """
+    allowed = graph_list(env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST")
+    unknown = sorted(allowed - set(declared_graphs))
+    if unknown:
+        msg = (
+            f"OMNIGRAPH_BRANCH_DROP_ALLOWLIST names {unknown}, which "
+            "cluster.yaml does not declare"
+        )
+        raise BootRefused(msg)
+    return allowed
+
+
+def branch_blocked_graphs(plan: dict[str, Any]) -> list[str]:
+    """The graphs whose schema change the plan refused for non-main branches.
+
+    Empty unless that is the plan's only error. The plan marks every graph
+    with a schema change blocked, including ones with no branches, so the
+    branches themselves are read afterwards (``views_to_drop``).
+    """
+    errors = [d for d in plan.get("diagnostics") or [] if d.get("severity") == "error"]
+    if not errors or not all(
+        d.get("code") == SCHEMA_PREFLIGHT_FAILED
+        and d.get("message", "").startswith(NON_MAIN_BRANCHES_MESSAGE)
+        for d in errors
+    ):
+        return []
+    return sorted(
+        change["resource"].removeprefix("schema.")
+        for change in plan.get("changes") or []
+        if change["resource"].startswith("schema.")
+        and change.get("reason") == SCHEMA_PREFLIGHT_FAILED
+    )
+
+
+def views_to_drop(
+    cluster: Cluster, plan: dict[str, Any], droppable_graphs: frozenset[str]
+) -> dict[str, list[str]]:
+    """The branches to delete so the plan's schema changes can apply.
+
+    :param droppable_graphs: graphs whose non-main branches are derived
+        views (``OMNIGRAPH_BRANCH_DROP_ALLOWLIST``).
+    :returns: each blocked graph's non-main branches, empty when the plan was
+        not refused for that reason or no blocked graph has any.
+    :raises BootRefused: when a graph that is not allow-listed has a schema
+        change and non-main branches. Its branches may hold data nothing
+        re-derives, so they are left for a person to resolve.
+    """
+    if plan.get("ok"):
+        return {}
+    branched = {
+        graph: branches
+        for graph in branch_blocked_graphs(plan)
+        if (branches := cluster.branches(graph))
+    }
+    kept = {
+        graph: branches
+        for graph, branches in branched.items()
+        if graph not in droppable_graphs
+    }
+    if kept:
+        listed = "; ".join(
+            f"{graph}: {len(branches)} ({', '.join(branches[:5])}"
+            f"{', ...' if len(branches) > 5 else ''})"
+            for graph, branches in kept.items()
+        )
+        msg = (
+            "omnigraph applies a schema change only to a graph with no branch "
+            f"but main, and these have others: {listed}. They are not in "
+            "OMNIGRAPH_BRANCH_DROP_ALLOWLIST, so their branches may hold data "
+            "nothing re-derives; merge or delete them first (runbook)"
+        )
+        raise BootRefused(msg)
+    return branched
+
+
+def drop_branch_views(cluster: Cluster, views: dict[str, list[str]]) -> None:
+    """Delete every branch in ``views``, logging what went.
+
+    A failure stops the boot with the deletes so far kept. The views are
+    caches, so a graph left with some of them loses nothing, and the next
+    boot plans again and deletes the rest.
+
+    :raises BootRefused: see ``Cluster.delete_branch``.
+    """
+    for graph, branches in views.items():
+        log(
+            f"dropping {len(branches)} branch views on {graph} so its schema "
+            f"change can apply: {', '.join(branches)}"
+        )
+        for dropped, branch in enumerate(branches):
+            try:
+                cluster.delete_branch(graph, branch)
+            except BootRefused:
+                log(f"dropped {dropped} of {len(branches)} branch views on {graph}")
+                raise
+        log(f"dropped {len(branches)} branch views on {graph}")
 
 
 def release_previous_lock(cluster: Cluster) -> None:
@@ -930,14 +1165,16 @@ def release_apply_lock(cluster: Cluster) -> None:
 
 def checked_plan(
     config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
-) -> Cluster:
+) -> tuple[Cluster, dict[str, list[str]]]:
     """Plan the baked configuration against the root, refusing a bad plan.
 
     Reads the root and changes nothing in it, so the pre-deploy gate
     (omnigraph_plan_gate.py) runs exactly this beside a serving pod.
 
-    :returns: the cluster the plan was made for, ready to apply.
-    :raises BootRefused: see ``check_plan`` and ``render_policy_groups``.
+    :returns: the cluster the plan was made for, ready to apply, and the
+        branch views to drop before the apply (``views_to_drop``).
+    :raises BootRefused: see ``check_plan``, ``views_to_drop`` and
+        ``render_policy_groups``.
     """
     has_policy = render_policy_groups(
         config_dir, env.get("OMNIGRAPH_SERVER_BEARER_TOKENS_FILE")
@@ -951,22 +1188,36 @@ def checked_plan(
             "policy installed, omnigraph refuses schema changes that name no actor"
         )
         raise BootRefused(msg)
-    removable = frozenset(
-        graph.strip()
-        for graph in env.get("OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST", "").split(",")
-        if graph.strip()
-    )
     cluster = Cluster(config_dir, actor, lease)
-    check_plan(cluster.plan(), removable)
-    return cluster
+    return cluster, planned_views(cluster, config_dir, env)
+
+
+def planned_views(
+    cluster: Cluster, config_dir: Path, env: dict[str, str]
+) -> dict[str, list[str]]:
+    """Plan, refuse a bad plan, and return the branch views to drop first."""
+    removable = graph_list(env, "OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST")
+    droppable = branch_drop_allowlist(env, cluster_layout(config_dir)[1])
+    plan = cluster.plan()
+    views = views_to_drop(cluster, plan, droppable)
+    check_plan(plan, removable, views_pending=bool(views))
+    return views
 
 
 def converge(
     config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
 ) -> None:
     """Bring the cluster root to the baked configuration, unlocked."""
-    cluster = checked_plan(config_dir, env, lease)
+    cluster, views = checked_plan(config_dir, env, lease)
     release_previous_lock(cluster)
+    if views:
+        drop_branch_views(cluster, views)
+        # The first plan saw only the branch refusal, which can hide another
+        # one behind it, so the apply waits for a plan with no refusal at all.
+        remaining = planned_views(cluster, config_dir, env)
+        if remaining:
+            msg = f"branch views remain after dropping them: {remaining}"
+            raise BootRefused(msg)
     log(f"converging cluster catalog at {config_dir}")
     cluster.apply()
     release_apply_lock(cluster)

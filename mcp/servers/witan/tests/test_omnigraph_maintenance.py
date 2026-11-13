@@ -30,10 +30,13 @@ from .test_omnigraph_server_entrypoint import (
     ROOT,
     FakeKubernetes,
     FakeOmnigraph,
+    change_stub_schema,
     cluster_dir,  # noqa: F401  (fixture)
     dialect,  # noqa: F401  (fixture)
     entrypoint,
     pod,
+    real_branch,
+    real_branches,
     real_env,
     real_lock,
     requires_omnigraph_server,
@@ -646,6 +649,29 @@ def test_the_gate_fails_on_a_graph_removal_that_is_not_allow_listed(gate_cli, tm
     assert fake.commands == ["plan", "plan"]
 
 
+def test_the_gate_passes_views_the_boot_will_drop(monkeypatch, dialect, tmp_path):  # noqa: F811
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {"council": {}, "code-a": {}}})
+    )
+    fake = FakeOmnigraph(
+        dialect,
+        lock={"id": "01SERVE", "operation": "serve"},
+        branches={"code-a": ["act-1/feat"]},
+        schema_changes=["code-a"],
+    )
+    monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
+    env = {"OMNIGRAPH_CLUSTER_DIR": str(tmp_path)}
+    assert plan_gate.main(env) == 1
+    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a"}) == 0
+    # A read beside the serving server: nothing deleted, its lock untouched.
+    assert fake.branches == {"code-a": ["act-1/feat"]}
+    assert fake.lock == {"id": "01SERVE", "operation": "serve"}
+
+    fake.branches["council"] = ["wip"]
+    fake.schema_changes = ["council", "code-a"]
+    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a"}) == 1
+
+
 # ── The real binary ──────────────────────────────────────────────────────────
 
 
@@ -679,6 +705,25 @@ def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
     # The server boots on the root the window left.
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     serve_until_locked_then_stop(cluster_dir, env)
+
+
+@requires_persisted_locks
+def test_real_gate_passes_code_graph_views_and_fails_a_memory_branch(
+    cluster_dir,  # noqa: F811
+):
+    env = {**real_env(cluster_dir), "OMNIGRAPH_CLUSTER_DIR": str(cluster_dir)}
+    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
+    real_branch(cluster_dir, "code-example", "act-alice/feat_x")
+    change_stub_schema(cluster_dir)
+    droppable = {**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-example,bridge"}
+
+    assert plan_gate.main(env) == 1
+    assert plan_gate.main(droppable) == 0
+    assert real_branches(cluster_dir, "code-example") == ["act-alice/feat_x"]
+
+    real_branch(cluster_dir, "memory", "wip")
+    assert plan_gate.main(droppable) == 1
+    assert real_lock(cluster_dir)["locked"] is False
 
 
 @requires_persisted_locks

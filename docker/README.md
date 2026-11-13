@@ -154,6 +154,22 @@ stub in tests). See `witan_code/github_app.py`.
   (D3, D4) has the reasoning. On 0.14 a server that shut down cleanly leaves
   no lock, so the unlock only runs after a crash or a kill; the boot's direct
   apply still refuses any held lock, and CLI writers still keep theirs.
+- **Drops code-graph branch views before a schema change that needs it.**
+  omnigraph 0.15 applies a schema change only to a graph whose sole branch is
+  `main`, and the code graphs always carry per-writer branch views
+  ([BRANCH_INDEXING.md](../mcp/servers/witan-code/docs/BRANCH_INDEXING.md)).
+  When the plan is refused for that reason alone, and only on graphs listed in
+  `OMNIGRAPH_BRANCH_DROP_ALLOWLIST`, the boot deletes their non-main branches
+  after taking over the lock and before the apply, logging each graph's
+  views, then plans again and refuses on anything left. A boot that plans no
+  schema change keeps every view. A graph with a schema change and branches
+  that is not on the list (the council graph) still refuses the boot. Each
+  view costs three CLI calls (`branch delete`, `cluster status` for the lock
+  id the delete keeps, `cluster force-unlock`), so a boot that drops hundreds
+  of views runs well past the default startup budget; size
+  `omnigraph:boot_budget_seconds` for it. A failed or timed-out delete stops
+  the boot with its lock removed and the earlier deletes kept, and the next
+  boot deletes the rest.
 - **Speaks the 0.13 and the 0.14 CLI.** The scripts read `omnigraph version
   --json` (0.13 has no `--json`) and pick the argument shapes: 0.13's
   `--config <dir>` and `--cluster <root>`, or 0.14's `--config <dir> --target
@@ -171,8 +187,11 @@ stub in tests). See `witan_code/github_app.py`.
     entrypoint's plan check and nothing else. As a pre-deploy Job it fails a
     deploy on a schema or policy change the next boot would refuse, while the
     old pod is still serving. It reads the entrypoint's
-    `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`, `OMNIGRAPH_APPLY_ACTOR` and
-    `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST`, and needs no Kubernetes access.
+    `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`, `OMNIGRAPH_APPLY_ACTOR`,
+    `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` and `OMNIGRAPH_BRANCH_DROP_ALLOWLIST`,
+    and needs no Kubernetes access. It passes a schema change refused only
+    because allow-listed graphs have branch views, which it lists without
+    deleting, since the boot drops them.
   - [`omnigraph_maintenance.py`](./omnigraph_maintenance.py) is the nightly
     maintenance window. `optimize` and `cleanup` are refused while the server
     holds its lock, so it scales the server Deployment to 0, takes over the
@@ -196,6 +215,7 @@ The entrypoint reads these from the environment:
 | `POD_NAME` | no | This pod's name. Defaults to `HOSTNAME`. |
 | `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default 50). |
 | `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
+| `OMNIGRAPH_BRANCH_DROP_ALLOWLIST` | no | Comma-separated graph ids whose non-main branches are derived views the boot may delete so a schema change can apply: the code graphs and the bridge, never the council graph. An id `cluster.yaml` does not declare fails the plan. Unset, a schema change on a graph with branches refuses the boot as before. |
 | `OMNIGRAPH_UNLOCK_WITHOUT_PEERS` | outside Kubernetes | `1` allows force-unlock with no Lease or pod check. Ignored in Kubernetes. |
 
 The maintenance window reads `OMNIGRAPH_UNLOCK_LEASE` and `POD_NAME` as above,
