@@ -18,6 +18,7 @@ import pytest
 
 from witan_code import store as store_module
 from witan_core import omnigraph_http as http_module
+from witan_core.graph_ids import BRIDGE_GRAPH_ID, code_graph_id
 from witan_core.omnigraph import store_cli_args
 
 from .conftest import requires_stack
@@ -596,7 +597,7 @@ def test_the_existence_probe_is_graph_scoped_not_server_scoped(monkeypatch):
     from witan_code import config as cfg_module
 
     repo = "https://github.com/mitodl/ol-django"
-    _cluster(monkeypatch, cfg_module.graph_id(repo))
+    _cluster(monkeypatch, code_graph_id(repo))
     # Enumerating must not even be attempted on the write path — the deployed
     # server cannot answer it.
     monkeypatch.setattr(
@@ -608,9 +609,7 @@ def test_the_existence_probe_is_graph_scoped_not_server_scoped(monkeypatch):
 
     store_module.ensure_store(repo, cfg)
 
-    assert _FakeClient.calls == [
-        ("https://omnigraph.test", cfg_module.graph_id(repo), True)
-    ]
+    assert _FakeClient.calls == [("https://omnigraph.test", code_graph_id(repo), True)]
 
 
 def test_the_write_path_probe_waits_out_a_restarting_server(monkeypatch):
@@ -619,7 +618,7 @@ def test_the_write_path_probe_waits_out_a_restarting_server(monkeypatch):
     from witan_code import config as cfg_module
 
     repo = "https://github.com/mitodl/ol-django"
-    _cluster(monkeypatch, cfg_module.graph_id(repo))
+    _cluster(monkeypatch, code_graph_id(repo))
     cfg = cfg_module.load()
 
     store_module.ensure_store(repo, cfg)
@@ -857,7 +856,7 @@ def test_per_repo_stores_lists_the_clusters_code_graphs(monkeypatch):
         monkeypatch,
         "code-github-com-mitodl-ol-django",
         "code-github-com-mitodl-agent-kit",
-        cfg_module.BRIDGE_GRAPH_ID,
+        BRIDGE_GRAPH_ID,
         "council",  # witan's own memory graph, on the same server
     )
     cfg = cfg_module.load()
@@ -894,20 +893,20 @@ def test_ensure_store_accepts_a_declared_graph(monkeypatch):
     from witan_code import config as cfg_module
 
     repo = "https://github.com/mitodl/ol-django"
-    _cluster(monkeypatch, cfg_module.graph_id(repo))
+    _cluster(monkeypatch, code_graph_id(repo))
     cfg = cfg_module.load()
 
     # No init, no schema apply — provisioning declares and applies both.
-    assert store_module.ensure_store(repo, cfg).graph_id == cfg_module.graph_id(repo)
+    assert store_module.ensure_store(repo, cfg).graph_id == code_graph_id(repo)
 
 
 def test_bridge_store_uses_the_fixed_cluster_graph_id(monkeypatch):
     from witan_code import config as cfg_module
 
-    _cluster(monkeypatch, cfg_module.BRIDGE_GRAPH_ID)
+    _cluster(monkeypatch, BRIDGE_GRAPH_ID)
     cfg = cfg_module.load()
 
-    assert store_module.ensure_bridge_store(cfg).graph_id == cfg_module.BRIDGE_GRAPH_ID
+    assert store_module.ensure_bridge_store(cfg).graph_id == BRIDGE_GRAPH_ID
 
 
 def test_repo_for_store_asks_a_cluster_graph_what_it_holds(monkeypatch):

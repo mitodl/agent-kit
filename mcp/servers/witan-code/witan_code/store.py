@@ -2,11 +2,11 @@
 
 A code graph is a local ``<slug>.omni`` directory under ``code_dir``, or a
 graph on the deployed omnigraph-server — reached either directly (``--server
-<url> --graph <id>``, the id from :func:`config.graph_id`) or through the
-deployed witan MCP tier, which is the only one of the two that is reachable
-from outside the cluster. All three are deployment questions, answered once by
-``code_server`` / ``code_transport`` (:mod:`witan_code.config`), so every
-caller resolves a :class:`StoreRef` and asks *it* rather than branching on
+<url> --graph <id>``, the id from :func:`witan_core.graph_ids.code_graph_id`)
+or through the deployed witan MCP tier, which is the only one of the two that
+is reachable from outside the cluster. All three are deployment questions,
+answered once by ``code_server`` / ``code_transport`` (:mod:`witan_code.config`),
+so every caller resolves a :class:`StoreRef` and asks *it* rather than branching on
 config.
 
 The distinction is not cosmetic: a cluster graph has no directory, so the
@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from witan_core import omnigraph_http as _http
+from witan_core.graph_ids import BRIDGE_GRAPH_ID, CODE_GRAPH_PREFIX, code_graph_id
 from witan_core.observability import get_logger
 from witan_core.omnigraph import (
     init_cli_args,
@@ -110,11 +111,11 @@ class StoreRef:
     ``via_mcp`` marks the third form: a cluster graph reached through the witan
     MCP tier, whose ``uri`` is that endpoint and whose value is the *name* the
     deployment resolves — a canonical repo URI, or
-    :data:`config.BRIDGE_GRAPH_ID` for the bridge, which has no repo of its
-    own. A per-repo graph travels as the repo URI rather than as a graph id
+    :data:`witan_core.graph_ids.BRIDGE_GRAPH_ID` for the bridge, which has no
+    repo of its own. A per-repo graph travels as the repo URI rather than as a graph id
     because the deployment maps repo to graph with its own configuration; a
     client that sent an id would be asserting one it derived, and
-    :func:`config.graph_id` does not invert.
+    :func:`witan_core.graph_ids.code_graph_id` does not invert.
     """
 
     uri: str
@@ -416,7 +417,7 @@ def store_for_repo(slug: str, config: cfg_module.Config | None = None) -> StoreR
     if _via_mcp(cfg):
         return StoreRef(_endpoint(cfg).url, via_mcp=slug)
     if cfg.code_server:
-        return StoreRef(cfg.code_server, cfg_module.graph_id(slug), cfg.code_token)
+        return StoreRef(cfg.code_server, code_graph_id(slug), cfg.code_token)
     return StoreRef(str(cfg_module.store_path(slug, cfg.code_dir)))
 
 
@@ -424,9 +425,9 @@ def bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     """Where the shared cross-repo bridge graph lives. Creates nothing."""
     cfg = config or cfg_module.load()
     if _via_mcp(cfg):
-        return StoreRef(_endpoint(cfg).url, via_mcp=cfg_module.BRIDGE_GRAPH_ID)
+        return StoreRef(_endpoint(cfg).url, via_mcp=BRIDGE_GRAPH_ID)
     if cfg.code_server:
-        return StoreRef(cfg.code_server, cfg_module.BRIDGE_GRAPH_ID, cfg.code_token)
+        return StoreRef(cfg.code_server, BRIDGE_GRAPH_ID, cfg.code_token)
     return StoreRef(str(cfg_module.bridge_store_path(cfg.code_dir)))
 
 
@@ -524,8 +525,9 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
 
     Mirrors :func:`ensure_store` — including its cluster behavior, where the
     bridge graph is declared by provisioning under the fixed
-    :data:`config.BRIDGE_GRAPH_ID` and this only verifies it. ``schema apply``
-    builds the FTS index on ``key_norm`` that ``search_bindings`` needs.
+    :data:`witan_core.graph_ids.BRIDGE_GRAPH_ID` and this only verifies it.
+    ``schema apply`` builds the FTS index on ``key_norm`` that
+    ``search_bindings`` needs.
 
     A local store whose schema omnigraph cannot migrate in place (e.g. the drop
     of ``InterfaceBinding.repo_file``) is deleted and recreated, because the
@@ -750,8 +752,7 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
         return [
             StoreRef(cfg.code_server, gid, cfg.code_token)
             for gid in sorted(safe_cluster_graphs(cfg.code_server, cfg.code_token))
-            if gid.startswith(cfg_module.CODE_GRAPH_PREFIX)
-            and gid != cfg_module.BRIDGE_GRAPH_ID
+            if gid.startswith(CODE_GRAPH_PREFIX) and gid != BRIDGE_GRAPH_ID
         ]
     if not cfg.code_dir.is_dir():
         return []
@@ -764,7 +765,7 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
 
 def served_graph_ids(config: cfg_module.Config) -> frozenset[str]:
     """Graph id of every graph the cluster serves, for a membership test
-    against :func:`config.graph_id`.
+    against :func:`witan_core.graph_ids.code_graph_id`.
 
     Raises when the cluster could not be asked, unlike :func:`per_repo_stores`,
     so a caller can tell "not served" from "could not tell". Through the MCP
@@ -775,7 +776,7 @@ def served_graph_ids(config: cfg_module.Config) -> frozenset[str]:
         names = mcp_session(config).call("code_store_graphs")
     else:
         names = cluster_graphs(config.code_server, config.code_token)
-    return frozenset(names) | {cfg_module.graph_id(name) for name in names}
+    return frozenset(names) | {code_graph_id(name) for name in names}
 
 
 def map_refs(refs: list[StoreRef], fn, *, max_workers: int = 8) -> list:
@@ -828,11 +829,12 @@ def repo_for_store(ref: StoreRef, config: cfg_module.Config | None = None) -> st
     Locally: the exact sidecar if present, else a best-effort reconstruction
     from the (lossily) sanitized filename.
 
-    On the cluster there is nowhere to put a sidecar and :func:`config.graph_id`
-    does not invert (it collapses runs of non-alphanumerics and may truncate),
-    so the graph is asked what it holds — one row, ``indexed_repo``. A graph
-    with no files has no answer and falls back to its id, which is at least
-    unambiguous even though it is not a URI.
+    On the cluster there is nowhere to put a sidecar and
+    :func:`witan_core.graph_ids.code_graph_id` does not invert (it collapses
+    runs of non-alphanumerics and may truncate), so the graph is asked what it
+    holds — one row, ``indexed_repo``. A graph with no files has no answer and
+    falls back to its id, which is at least unambiguous even though it is not a
+    URI.
 
     A ref reached through the MCP tier already carries the repo URI: it is what
     the deployment was asked to resolve, so there is nothing to ask back.

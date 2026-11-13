@@ -353,8 +353,8 @@ class RemoteStoreClient:
     """An ``OmnigraphClient`` stand-in that writes through the MCP tier.
 
     ``graph`` names what the deployment should resolve — a canonical repo URI,
-    or ``config.BRIDGE_GRAPH_ID`` — and ``branch`` the view, exactly as the
-    subprocess client's ``--branch`` does. ``is_remote`` is True by
+    or ``witan_core.graph_ids.BRIDGE_GRAPH_ID`` — and ``branch`` the view,
+    exactly as the subprocess client's ``--branch`` does. ``is_remote`` is True by
     construction: this transport exists only for shared cluster graphs, and
     the write guard (``graph.check_writable``) reads it to decide whether view
     ownership applies.
