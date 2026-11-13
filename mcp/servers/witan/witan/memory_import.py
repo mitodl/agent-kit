@@ -69,8 +69,9 @@ def parse_maps(values: list[str]) -> dict[str, str]:
     :param values: The ``--map`` arguments.
     :returns: Each project label or path, with the repo it maps to.
     :rtype: dict[str, str]
-    :raises ValueError: On a value without ``=``, an empty project, a repo that
-        is not a remote URI, or one project given two repos.
+    :raises ValueError: On a value without ``=``, an empty project, a ``~user``
+        path for an unknown user, a repo that is not a remote URI, or one
+        project given two repos.
     """
     maps: dict[str, str] = {}
     for value in values:
@@ -79,6 +80,12 @@ def parse_maps(values: list[str]) -> dict[str, str]:
         if not sep or not project:
             msg = f"--map {value!r} is not <project-dir>=<repo-uri>."
             raise ValueError(msg)
+        try:
+            Path(project).expanduser()
+        except RuntimeError as exc:
+            # ``~user`` for a user this machine does not have.
+            msg = f"--map {value!r}: {exc}"
+            raise ValueError(msg) from None
         canonical = normalise(repo)
         if not _REPO_URI.fullmatch(canonical):
             msg = (

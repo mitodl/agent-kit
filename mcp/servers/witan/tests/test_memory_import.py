@@ -130,6 +130,7 @@ def test_a_map_canonicalises_its_repo_like_any_explicit_repo():
         ("-home-me-gone=", "'' is not a repo URI"),
         ("-home-me-gone=test/repo", "'test/repo' is not a repo URI"),
         ("-home-me-gone=https://github.com", "is not a repo URI"),
+        (f"~no-such-user-5a8c0f/app={REPO}", "home directory"),
     ],
 )
 def test_a_map_without_a_repo_uri_is_refused(value, message):
