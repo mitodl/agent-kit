@@ -100,6 +100,7 @@ a `docker run` pointed at a served root would unlock the live server.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import http.client
 import json
@@ -114,7 +115,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -1187,47 +1188,63 @@ def views_to_drop(
     return branched
 
 
-def drop_branch_views(cluster: Cluster, views: dict[str, list[str]]) -> None:
+@contextlib.contextmanager
+def sigterm_noted() -> Iterator[threading.Event]:
+    """Record SIGTERM in an event for as long as the boot runs.
+
+    As PID 1 with no handler the entrypoint ignores SIGTERM, and the kill
+    comes as SIGKILL at the end of the grace period. Only the branch-view
+    drop acts on the event (``drop_branch_views``). It is installed before
+    the Lease is taken, so a SIGTERM that arrives while the boot is still
+    planning stops it before its first delete.
+    """
+    terminated = threading.Event()
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: terminated.set())
+    try:
+        yield terminated
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def drop_branch_views(
+    cluster: Cluster, views: dict[str, list[str]], terminated: threading.Event
+) -> None:
     """Delete every branch in ``views``, logging what went.
 
     A failure stops the boot with the deletes so far kept. The views are
     caches, so a graph left with some of them loses nothing, and the next
     boot plans again and deletes the rest. SIGTERM (the startupProbe giving
     up on a long drop, a rollout, a drain) stops the running delete and ends
-    the boot the same way, with that delete's lock removed: without the
-    handler the kill would come mid-delete and leave a `graph_operation`
-    lock that every later boot refuses.
+    the boot the same way, with that delete's lock removed: without that the
+    kill would come mid-delete and leave a `graph_operation` lock that every
+    later boot refuses.
 
+    :param terminated: set once SIGTERM has arrived (``sigterm_noted``).
     :raises BootRefused: see ``Cluster.delete_branch``.
     """
-    terminated = threading.Event()
 
     def interrupt() -> None:
         if terminated.is_set():
             raise DropInterrupted
 
-    previous = signal.signal(signal.SIGTERM, lambda signum, frame: terminated.set())
-    try:
-        for graph, branches in views.items():
-            log(
-                f"dropping {len(branches)} branch views on {graph} so its "
-                f"schema change can apply: {', '.join(branches)}"
-            )
-            for dropped, branch in enumerate(branches):
-                try:
-                    if terminated.is_set():
-                        msg = "SIGTERM while dropping branch views"
-                        raise BootRefused(msg)
-                    cluster.delete_branch(graph, branch, interrupt)
-                except BootRefused:
-                    log(
-                        f"dropped {dropped} of {len(branches)} branch views on "
-                        f"{graph}; the next boot drops the rest"
-                    )
-                    raise
-            log(f"dropped {len(branches)} branch views on {graph}")
-    finally:
-        signal.signal(signal.SIGTERM, previous)
+    for graph, branches in views.items():
+        log(
+            f"dropping {len(branches)} branch views on {graph} so its "
+            f"schema change can apply: {', '.join(branches)}"
+        )
+        for dropped, branch in enumerate(branches):
+            try:
+                if terminated.is_set():
+                    msg = "SIGTERM while dropping branch views"
+                    raise BootRefused(msg)
+                cluster.delete_branch(graph, branch, interrupt)
+            except BootRefused:
+                log(
+                    f"dropped {dropped} of {len(branches)} branch views on "
+                    f"{graph}; the next boot drops the rest"
+                )
+                raise
+        log(f"dropped {len(branches)} branch views on {graph}")
 
 
 def release_previous_lock(cluster: Cluster) -> None:
@@ -1319,13 +1336,19 @@ def planned_views(
 
 
 def converge(
-    config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
+    config_dir: Path,
+    env: dict[str, str],
+    lease: UnlockLease | NoPeers,
+    terminated: threading.Event | None = None,
 ) -> None:
-    """Bring the cluster root to the baked configuration, unlocked."""
+    """Bring the cluster root to the baked configuration, unlocked.
+
+    :param terminated: set once SIGTERM has arrived (``sigterm_noted``).
+    """
     cluster, views = checked_plan(config_dir, env, lease)
     release_previous_lock(cluster)
     if views:
-        drop_branch_views(cluster, views)
+        drop_branch_views(cluster, views, terminated or threading.Event())
         # The first plan saw only the branch refusal, which can hide another
         # one behind it, so the apply waits for a plan with no refusal at all.
         remaining = planned_views(cluster, config_dir, env)
@@ -1382,9 +1405,10 @@ def main(argv: list[str]) -> NoReturn:
         log(f"--cluster is a storage URI ({cluster_arg}); skipping cluster bootstrap")
     else:
         try:
-            lease = take_over(env)
-            converge(Path(cluster_arg), env, lease)
-            lease.hand_over()
+            with sigterm_noted() as terminated:
+                lease = take_over(env)
+                converge(Path(cluster_arg), env, lease, terminated)
+                lease.hand_over()
         except BootRefused as refusal:
             print(f"omnigraph-server: refusing to start: {refusal}", file=sys.stderr)
             sys.exit(1)

@@ -902,8 +902,13 @@ def test_sigterm_mid_delete_stops_the_drop_with_the_root_unlocked(code_cli, tmp_
     fake = code_cli()
     fake.sigterm_during = {"act-0ebb3a7b/_detached"}
     previous = signal.getsignal(signal.SIGTERM)
-    with pytest.raises(BootRefused, match="SIGTERM"):
-        converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
+    env = {"OMNIGRAPH_BRANCH_DROP_ALLOWLIST": DROPPABLE}
+    lease = entrypoint.NoPeers(may_unlock=True)
+    with (
+        pytest.raises(BootRefused, match="SIGTERM"),
+        entrypoint.sigterm_noted() as terminated,
+    ):
+        entrypoint.converge(tmp_path, env, lease, terminated)
     assert signal.getsignal(signal.SIGTERM) is previous
     assert fake.lock is None
     assert fake.branches["code-bridge"] == []
@@ -914,6 +919,22 @@ def test_sigterm_mid_delete_stops_the_drop_with_the_root_unlocked(code_cli, tmp_
     converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
     assert fake.branches == {CODE_GRAPH: [], "code-bridge": []}
     assert "apply" in fake.commands
+
+
+def test_sigterm_before_the_drop_stops_the_boot_before_any_delete(code_cli, tmp_path):
+    """A rollout or drain that lands while the boot is still planning."""
+    fake = code_cli()
+    env = {"OMNIGRAPH_BRANCH_DROP_ALLOWLIST": DROPPABLE}
+    lease = entrypoint.NoPeers(may_unlock=True)
+    with (
+        pytest.raises(BootRefused, match="SIGTERM"),
+        entrypoint.sigterm_noted() as terminated,
+    ):
+        signal.raise_signal(signal.SIGTERM)
+        entrypoint.converge(tmp_path, env, lease, terminated)
+    assert fake.deleted == []
+    assert fake.lock is None
+    assert "apply" not in fake.commands
 
 
 @pytest.mark.parametrize("graph", ["council", "bridge"])
