@@ -9,6 +9,9 @@ import memoryGetFixture from "../../fixtures/memory_get.json" with {
 import memoryListFixture from "../../fixtures/memory_list.json" with {
 	type: "json",
 };
+import staleRefsFixture from "../../fixtures/memory_stale_refs.json" with {
+	type: "json",
+};
 import recallFixture from "../../fixtures/recall.json" with { type: "json" };
 import neighborsFixture from "../../fixtures/recall.memory.json" with {
 	type: "json",
@@ -16,12 +19,14 @@ import neighborsFixture from "../../fixtures/recall.memory.json" with {
 import supersededFixture from "../../fixtures/recall.memory.superseded.json" with {
 	type: "json",
 };
+import type { Snapshot } from "../live.js";
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import type {
 	Memory,
 	MemoryContradiction,
 	MemoryNeighbors,
 	RecallResult,
+	StaleRefsReport,
 } from "../types.js";
 import { unwrap } from "../unwrap.js";
 import {
@@ -33,6 +38,7 @@ import {
 	type MemoryPage,
 	memoryDetail,
 	memoryView,
+	staleBySlug,
 	TOPIC_ROW_CAP,
 } from "./memory.js";
 
@@ -47,6 +53,7 @@ const pairs = unwrap<MemoryContradiction[]>(
 	contradictionsFixture,
 );
 const recalled = unwrap<RecallResult>("recall", recallFixture);
+const report = unwrap<StaleRefsReport>("memory_stale_refs", staleRefsFixture);
 
 const route: Route = { ...DEFAULT_ROUTE, view: "memory" };
 
@@ -61,9 +68,18 @@ function text(): string {
 	return root.textContent ?? "";
 }
 
-function draw(page: MemoryPage, at: Route = route, onNavigate = vi.fn()) {
-	render(memoryView(page, at, onNavigate), root);
+function draw(
+	page: MemoryPage,
+	at: Route = route,
+	onNavigate = vi.fn(),
+	stale: Snapshot<StaleRefsReport> | null = null,
+) {
+	render(memoryView(page, at, onNavigate, stale), root);
 	return onNavigate;
+}
+
+function landed(data: StaleRefsReport): Snapshot<StaleRefsReport> {
+	return { data, error: null, loadedAt: 1, loading: false };
 }
 
 describe("the contradictions inbox", () => {
@@ -347,6 +363,161 @@ describe("a topic at its limits", () => {
 		draw({ mode: "topic", topic, memories: [memory], readAtLimit: false }, at);
 
 		expect(root.querySelector(".note")).toBeNull();
+	});
+});
+
+describe("stale symbol refs", () => {
+	const browse: MemoryPage = { mode: "browse", memories: listed, inbox: [] };
+	const byTitle = (title: string) => {
+		const found = listed.find((m) => m.title === title);
+		if (!found) {
+			throw new Error(`no memory titled ${title} in the fixture`);
+		}
+		return found;
+	};
+	// The seed: one memory citing a moved symbol, one citing a repo nobody
+	// indexed. Both are in the report; only the first is stale.
+	const moved = byTitle("Service.run retries twice before it raises");
+	const unchecked = byTitle("The index view renders without a login");
+
+	function rowOf(slug: string): Element | null | undefined {
+		return root.querySelector(`tbody a[href$="slug=${slug}"]`)?.closest("tr");
+	}
+
+	it("marks a memory with a missing ref, and not one with only unknown refs", () => {
+		draw(browse, route, vi.fn(), landed(report));
+
+		expect(
+			rowOf(moved.slug)?.querySelector(".badge.stale-refs"),
+		).not.toBeNull();
+		expect(rowOf(unchecked.slug)).not.toBeNull();
+		expect(rowOf(unchecked.slug)?.querySelector(".badge")?.textContent).toBe(
+			"pattern",
+		);
+		expect(
+			rowOf(unchecked.slug)?.querySelector(".badge.stale-refs"),
+		).toBeNull();
+		expect(root.querySelectorAll("tbody .badge.stale-refs")).toHaveLength(1);
+	});
+
+	it("names the missing ref and where the symbol may have gone", () => {
+		draw(browse, route, vi.fn(), landed(report));
+
+		const title =
+			rowOf(moved.slug)
+				?.querySelector(".badge.stale-refs")
+				?.getAttribute("title") ?? "";
+		expect(title).toContain("lib/old_service.py::Service.run");
+		expect(title).toContain("same name at");
+		expect(title).toContain("lib/service.py::Service.run");
+	});
+
+	it("counts the unknown refs apart from the stale memories", () => {
+		draw(browse, route, vi.fn(), landed(report));
+
+		const note = root.querySelector(".stale-summary")?.textContent ?? "";
+		expect(note).toMatch(/1 memory in any repo\s+cites a symbol/);
+		expect(note).toMatch(/1 ref could not be\s+checked/);
+	});
+
+	it("narrows to stale memories only when asked", () => {
+		draw(browse, { ...route, stale: true }, vi.fn(), landed(report));
+
+		const rows = root.querySelectorAll("tbody tr");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.textContent).toContain(moved.title);
+	});
+
+	it("toggles the filter through the route", () => {
+		const onNavigate = draw(browse, route, vi.fn(), landed(report));
+
+		const box = [...root.querySelectorAll("label")]
+			.find((label) => label.textContent?.includes("Stale refs only"))
+			?.querySelector("input");
+		box?.click();
+
+		expect(onNavigate).toHaveBeenCalledWith({ stale: true });
+	});
+
+	it("says the check is pending rather than showing an empty filter as clean", () => {
+		draw(browse, { ...route, stale: true }, vi.fn(), {
+			data: null,
+			error: null,
+			loadedAt: null,
+			loading: true,
+		});
+
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Checking symbol refs",
+		);
+		expect(root.querySelector("tbody")).toBeNull();
+	});
+
+	it("says no memory is marked when the check failed", () => {
+		draw(browse, route, vi.fn(), {
+			data: null,
+			error: new Error("code graph unreachable"),
+			loadedAt: null,
+			loading: false,
+		});
+
+		expect(root.querySelector(".stale-summary")?.textContent).toMatch(
+			/no memory is\s+marked stale/,
+		);
+		expect(root.querySelectorAll("tbody tr")).toHaveLength(listed.length);
+	});
+
+	it("draws no note when every checked ref resolves", () => {
+		draw(
+			browse,
+			route,
+			vi.fn(),
+			landed({
+				repo: null,
+				checked: 1,
+				counts: { live: 1, missing: 0, unknown: 0 },
+				memories: [],
+			}),
+		);
+
+		expect(root.querySelector(".stale-summary")).toBeNull();
+	});
+
+	it("marks each ref in the panel: missing with its candidate, unknown with its reason", () => {
+		const flagged = staleBySlug(report);
+		// `memory_list` rows carry no refs; the panel's `memory_get` does.
+		const withRefs = (m: Memory): Memory => ({
+			...m,
+			symbol_refs: flagged.get(m.slug)?.refs.map((ref) => ref.symbol_ref),
+		});
+		render(
+			memoryDetail(
+				{ memory: withRefs(moved), neighbors },
+				route,
+				flagged.get(moved.slug),
+			),
+			root,
+		);
+		expect(root.querySelector(".crumbs .badge.stale-refs")).not.toBeNull();
+		const missing = root.querySelector("li.ref-missing");
+		expect(missing?.textContent).toContain("lib/old_service.py::Service.run");
+		expect(missing?.textContent).toContain("Same name in the code graph");
+		// The live ref is the bare id.
+		expect(root.querySelectorAll("ul.symbols li")).toHaveLength(2);
+
+		render(
+			memoryDetail(
+				{ memory: withRefs(unchecked), neighbors },
+				route,
+				flagged.get(unchecked.slug),
+			),
+			root,
+		);
+		expect(root.querySelector(".crumbs .badge.stale-refs")).toBeNull();
+		const unknown = root.querySelector("li.ref-unknown");
+		expect(unknown?.querySelector(".badge.unchecked")).not.toBeNull();
+		expect(unknown?.textContent).toContain("is not indexed");
+		expect(root.querySelector("li.ref-missing")).toBeNull();
 	});
 });
 

@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit-html";
 import { absolute, ago, repoLabel } from "../format.js";
+import type { Snapshot } from "../live.js";
 import { markdown } from "../markdown.js";
 import {
 	DEFAULT_ROUTE,
@@ -19,6 +20,9 @@ import {
 	NEIGHBOR_KINDS,
 	type NeighborKind,
 	type RecallResult,
+	type ResolvedSymbolRef,
+	type StaleMemory,
+	type StaleRefsReport,
 	type Topic,
 } from "../types.js";
 
@@ -160,15 +164,100 @@ export function facetOptions(
 	) as Record<MemoryFacet, string[]>;
 }
 
+// ── Stale symbol refs ──────────────────────────────────────────────
+
+/**
+ * `memory_stale_refs`'s flagged memories by slug.
+ *
+ * ★ ONLY `stale` IS A MARK. A memory whose refs are merely `unknown` (its
+ * repo has no index, or witan-code is absent) is in the report too, and
+ * marking it would flag every memory in a repo nobody indexed. Those are
+ * counted in the summary note and explained per ref in the panel instead.
+ */
+export function staleBySlug(
+	report: StaleRefsReport | null,
+): Map<string, StaleMemory> {
+	return new Map(report?.memories.map((memory) => [memory.slug, memory]));
+}
+
+function hasMissingRef(entry: StaleMemory | undefined): boolean {
+	return entry?.status === "stale";
+}
+
+/** The marker's tooltip: which refs are gone, and where each may have gone. */
+function staleTitle(entry: StaleMemory): string {
+	return entry.refs
+		.filter((ref) => ref.status === "missing")
+		.map((ref) =>
+			ref.candidates?.length
+				? `${ref.symbol_ref} is not in the code graph; same name at ${ref.candidates.join(", ")}`
+				: `${ref.symbol_ref} is not in the code graph`,
+		)
+		.join("\n");
+}
+
+/**
+ * What the stale check found, or why it has not: drawn above the table.
+ *
+ * Without a report no row is marked, so the note says the check is pending or
+ * failed rather than letting an unmarked list read as "every ref resolves".
+ */
+function staleNote(
+	stale: Snapshot<StaleRefsReport> | null,
+	route: Route,
+): TemplateResult | typeof nothing {
+	const report = stale?.data ?? null;
+	if (report === null) {
+		if (stale?.error) {
+			return html`<p class="stale-summary" title=${stale.error.message}>
+        Could not check symbol refs against the code graph, so no memory is
+        marked stale.
+      </p>`;
+		}
+		return route.stale
+			? html`<p class="stale-summary" aria-busy="true">
+            Checking symbol refs against the code graph…
+          </p>`
+			: nothing;
+	}
+	const stales = report.memories.filter((m) => m.status === "stale").length;
+	const unknown = report.counts.unknown;
+	if (stales === 0 && unknown === 0) {
+		return nothing;
+	}
+	const scope = route.repo && !route.topic ? repoLabel(route.repo) : "any repo";
+	return html`<p class="stale-summary">
+    ${
+			stales
+				? html`${stales} ${stales === 1 ? "memory" : "memories"} in ${scope}
+          ${stales === 1 ? "cites" : "cite"} a symbol the code graph no longer
+          has, marked <span class="badge stale-refs">stale refs</span>.`
+				: nothing
+		}
+    ${
+			unknown
+				? html`${unknown} ${unknown === 1 ? "ref" : "refs"} could not be
+          checked (the repo is not indexed, or there is no code graph), so
+          ${unknown === 1 ? "its memory is" : "their memories are"} not marked.`
+				: nothing
+		}
+  </p>`;
+}
+
 // ── The main area ──────────────────────────────────────────────────
 
 export function memoryView(
 	page: MemoryPage,
 	route: Route,
 	onNavigate: (patch: Partial<Route>) => void,
+	stale: Snapshot<StaleRefsReport> | null = null,
 	now = Date.now(),
 ): TemplateResult {
-	const matching = applyFacets(page.memories, route.facets);
+	const flagged = staleBySlug(stale?.data ?? null);
+	const faceted = applyFacets(page.memories, route.facets);
+	const matching = route.stale
+		? faceted.filter((memory) => hasMissingRef(flagged.get(memory.slug)))
+		: faceted;
 	const shown =
 		page.mode === "topic" ? matching.slice(0, TOPIC_ROW_CAP) : matching;
 	return html`
@@ -177,11 +266,12 @@ export function memoryView(
       ${page.mode === "browse" ? inbox(page.inbox, route, now) : nothing}
       ${page.mode === "recall" ? recallPairs(page.pairs, page.memories, route) : nothing}
       ${page.mode === "topic" ? topicHeading(page.topic, route) : nothing}
+      ${staleNote(stale, route)}
       ${limitNotes(page, matching.length)}
       ${
 				page.mode === "topic" && page.topic === null
 					? nothing
-					: memoryTable(page, shown, route, now)
+					: memoryTable(page, shown, route, now, flagged)
 			}
     </div>
   `;
@@ -270,6 +360,17 @@ function toolbar(
 						onNavigate({ plain: (event.target as HTMLInputElement).checked })}
         />
         Plain search
+      </label>
+      <label
+        title="Memories citing a symbol whose repo is indexed and the symbol is not. A ref in an unindexed repo does not count."
+      >
+        <input
+          type="checkbox"
+          .checked=${route.stale}
+          @change=${(event: Event) =>
+						onNavigate({ stale: (event.target as HTMLInputElement).checked })}
+        />
+        Stale refs only
       </label>
       ${
 				// `topicGet` always includes superseded memories, so in a topic the
@@ -476,7 +577,7 @@ export function recallResults(
 	return html`
     <div class="memory-view">
       ${recallPairs(page.pairs, page.memories, route)}
-      ${memoryTable(page, page.memories, route, now)}
+      ${memoryTable(page, page.memories, route, now, new Map())}
     </div>
   `;
 }
@@ -505,6 +606,7 @@ function memoryTable(
 	shown: Memory[],
 	route: Route,
 	now: number,
+	flagged: Map<string, StaleMemory>,
 ): TemplateResult {
 	if (shown.length === 0) {
 		return html`<p class="empty">${emptyMessage(page, route)}</p>`;
@@ -547,6 +649,7 @@ function memoryTable(
 											? html`<span class="badge contradicted">contradicted</span>`
 											: nothing
 									}
+                  ${staleMark(flagged.get(memory.slug))}
                 </td>
                 <td title=${memory.repo ?? ""}>${repoLabel(memory.repo)}</td>
                 ${full ? html`<td>${memory.author ?? "—"}</td>` : nothing}
@@ -563,6 +666,17 @@ function memoryTable(
   `;
 }
 
+function staleMark(
+	entry: StaleMemory | undefined,
+): TemplateResult | typeof nothing {
+	if (!entry || !hasMissingRef(entry)) {
+		return nothing;
+	}
+	return html`<span class="badge stale-refs" title=${staleTitle(entry)}
+    >stale refs</span
+  >`;
+}
+
 function tableHeading(page: MemoryPage): string {
 	switch (page.mode) {
 		case "browse":
@@ -577,6 +691,9 @@ function tableHeading(page: MemoryPage): string {
 }
 
 function emptyMessage(page: MemoryPage, route: Route): string {
+	if (route.stale && page.memories.length > 0) {
+		return "No memories here cite a symbol the code graph no longer has.";
+	}
 	if (page.memories.length > 0) {
 		return "No memories match these filters.";
 	}
@@ -601,9 +718,11 @@ function emptyMessage(page: MemoryPage, route: Route): string {
 export function memoryDetail(
 	panel: MemoryPanel & { memory: Memory },
 	route: Route,
+	stale: StaleMemory | undefined = undefined,
 	now = Date.now(),
 ): TemplateResult {
 	const { memory, neighbors } = panel;
+	const checked = new Map(stale?.refs.map((ref) => [ref.symbol_ref, ref]));
 	const replacedBy = neighbors.neighbors.superseded_by ?? [];
 	return html`
     <div class="memory-detail">
@@ -622,6 +741,7 @@ export function memoryDetail(
 						? html`<span class="badge superseded">superseded</span>`
 						: nothing
 				}
+        ${staleMark(stale)}
       </p>
 
       ${
@@ -671,13 +791,50 @@ export function memoryDetail(
 					? html`<section class="edges">
               <h3>Symbols</h3>
               <ul class="symbols">
-                ${memory.symbol_refs.map((ref) => html`<li><code>${ref}</code></li>`)}
+                ${memory.symbol_refs.map((ref) => symbolRef(ref, checked.get(ref)))}
               </ul>
             </section>`
 					: nothing
 			}
     </div>
   `;
+}
+
+/**
+ * One symbol ref, with what the stale check said about it when it said
+ * anything. A live ref, or one the check never covered, is the bare id.
+ */
+function symbolRef(
+	ref: string,
+	resolved: ResolvedSymbolRef | undefined,
+): TemplateResult {
+	if (resolved?.status === "missing") {
+		return html`<li class="ref-missing">
+      <code>${ref}</code>
+      <span class="badge stale-refs">missing</span>
+      ${
+				resolved.candidates?.length
+					? html`<p class="muted">
+              Same name in the code graph:
+              ${resolved.candidates.map(
+								(candidate, index) =>
+									html`${index > 0 ? ", " : ""}<code>${candidate}</code>`,
+							)}
+            </p>`
+					: html`<p class="muted">Nothing by that name in the code graph.</p>`
+			}
+    </li>`;
+	}
+	if (resolved?.status === "unknown") {
+		return html`<li class="ref-unknown">
+      <code>${ref}</code>
+      <span class="badge unchecked" title=${resolved.reason ?? ""}
+        >unchecked</span
+      >
+      ${resolved.reason ? html`<p class="muted">${resolved.reason}</p>` : nothing}
+    </li>`;
+	}
+	return html`<li><code>${ref}</code></li>`;
 }
 
 function fact(

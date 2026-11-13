@@ -52,6 +52,13 @@ _INFRA = "https://github.com/example/infra"
 _WEB = "https://github.com/example/web"
 _API = "https://github.com/example/api"
 
+# The stale-refs seed's repos: one with a code graph, one nobody indexed.
+_LIB = "https://github.com/example/lib"
+_UNINDEXED = "https://github.com/example/unindexed"
+_LIVE_REF = f"{_LIB}#lib/service.py::Service.run"
+_MOVED_REF = f"{_LIB}#lib/old_service.py::Service.run"
+_UNCHECKED_REF = f"{_UNINDEXED}#app/views.py::index"
+
 
 class _NoElicitCtx:
     """A Context whose ``elicit`` always errors.
@@ -207,6 +214,25 @@ async def _seed(srv) -> dict[str, str]:
         to_slug=replaced["slug"],
         kind="supersedes",
         role="the shape test misreads a bare dict",
+    )
+    # Symbol refs in each state `memory_stale_refs` reports, for the memory
+    # view's stale marker. Patterns, so `memory_list`'s recording has them too.
+    # One cites a live symbol and the file it moved out of (missing, with the
+    # live one as its candidate); the other cites a repo nobody indexed, which
+    # is unknown rather than stale.
+    await call(
+        "memory_store",
+        kind="pattern",
+        title="Service.run retries twice before it raises",
+        content="The retry count lives on the class, not the call site.",
+        symbol_refs=[_LIVE_REF, _MOVED_REF],
+    )
+    await call(
+        "memory_store",
+        kind="pattern",
+        title="The index view renders without a login",
+        content="Anonymous readers get the cached page.",
+        symbol_refs=[_UNCHECKED_REF],
     )
 
     return {
@@ -364,6 +390,23 @@ def _seed_bridge() -> None:
         )
 
 
+def _seed_code_graph(checkout: Path) -> None:
+    """Index a one-file ``_LIB`` so ``memory_stale_refs`` has a graph to check.
+
+    A real index rather than written rows, because liveness is read through
+    ``code_symbols_in_file`` and ``code_find_definition`` and the ids they
+    return are the indexer's to mint.
+    """
+    from witan_code import config as code_cfg
+    from witan_code import indexer
+
+    (checkout / "lib").mkdir(parents=True)
+    (checkout / "lib" / "service.py").write_text(
+        "class Service:\n    def run(self):\n        return 1\n"
+    )
+    indexer.index_path(checkout, repo_override=_LIB, config=code_cfg.load())
+
+
 def _jsonable(value):
     """Round-trip through JSON before normalizing.
 
@@ -418,6 +461,7 @@ def _calls(slugs: dict[str, str]) -> dict[str, dict]:
         "memory_list": {"kind": "pattern", "all_repos": True},
         "memory_search": {"query": "wrap flag", "all_repos": True},
         "memory_contradictions": {"all_repos": True},
+        "memory_stale_refs": {"all_repos": True},
         # `repo` explicit: a substring filter in this witan-code tool, where
         # "" matches every repo.
         "code_repo_dependencies": {"repo": ""},
@@ -451,6 +495,7 @@ async def _collect(store: Path) -> dict[str, str]:
 
     srv.mcp.mount(code_mcp)
     _seed_bridge()
+    _seed_code_graph(store.parent / "lib-checkout")
 
     slugs = await _seed(srv)
     written: dict[str, str] = {}
