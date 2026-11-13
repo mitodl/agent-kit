@@ -39,6 +39,10 @@ dependencies = [
   # >=0.12: `witan setup --agent pi` only stops warning that pi-mcp-adapter
   # is missing when Pi's built-in MCP will load the entry from 0.12.0. Older
   # resolutions import and run, and print the false warning.
+  # >=0.13: Codex hooks (and the codex platform itself) arrive in 0.13.0.
+  # `cli_hook_platforms()` reads them from the registry, so an older
+  # resolution writes Codex a uvx MCP entry, and `--agent codex` raises
+  # KeyError on the missing platform.
   # >=0.15: witan/cli/memory.py and witan/memory_import.py import
   # `MemoryEntry` and read `AgentPlatform.memory`, both added in 0.15.0, at
   # module scope, so an older resolution fails `witan` at import.
