@@ -17,32 +17,27 @@ sub-issue to an ``epic`` (or any parent task); use ``blocked_by`` to record
 dependencies so ``task_ready`` can withhold the task until its blockers
 close.
 
-Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
-BM25 matches for the title and the start of the description against
-existing tasks in every repo (any status), each with its ``slug``,
-``title``, ``status`` and ``repo``: a soft duplicate check. It never
-blocks creation; review it and close this task as a duplicate
-(``task_close``) if one of them is really the same work.
+Returns ``{"slug", "status", "repo", "similar"}``; ``similar`` is up to 3
+existing tasks in any repo and status that match, a soft duplicate check.
+If one is the same work, close this task as a duplicate.
 
-Against a deployment that serves the web UI, it also carries ``ui_url``:
-the link that opens the task there. Hand a person that link rather than
-building one.
+*Writes (non-destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `title` | str | **required** | Short label and full text of the work. |
 | `description` | str | **required** | Short label and full text of the work. |
-| `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic` | `'task'` | ``bug`` \| ``feature`` \| ``task`` \| ``chore`` \| ``epic``. |
-| `priority` | `p0` \| `p1` \| `p2` \| `p3` | `'p2'` | ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering. |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
+| `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic` | `'task'` | The kind of work; ``epic`` for a parent of sub-issues. |
+| `priority` | `p0` \| `p1` \| `p2` \| `p3` | `'p2'` | ``p0`` is highest. Drives ``task_ready`` ordering. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
 | `project_slug` | str? | `null` | ``wp-`` slug of the WorkflowProject this task rolls up to. |
 | `parent` | str? | `null` | ``tk-`` slug of the parent task/epic. Sets the hierarchy edge. |
 | `blocked_by` | list[str]? | `null` | ``tk-`` slugs that must close before this task is ready. |
 | `discovered_from` | list[str]? | `null` | ``tk-`` slugs of tasks during which this work was discovered. |
 | `external_uri` | str? | `null` | A reference URI — e.g. a GitHub issue or PR. |
-| `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns. |
+| `symbol_refs` | list[str]? | `null` | Symbol ids this task concerns. |
 | `tags` | list[str]? | `null` | Optional free-form tags. |
-| `all_repos` | bool | `False` | Create the task under no repo. Repo-scoped task reads include<br>unscoped tasks, so every repo sees it — see instructions. |
+| `all_repos` | bool | `False` | Create the task under no repo, so every repo's task reads include it. |
 
 ## `task_get`
 
@@ -54,25 +49,11 @@ another agent says the task's stated premise is wrong without overwriting
 your description, so it is often a correction to the very plan the
 description sets out.
 
-It also carries its edges, which the node fields alone do not give:
-``blocks`` (slugs of the tasks THIS one holds back — the inverse of the
-``blocked_by`` field), ``children`` and ``branches`` (the ``CodeBranch``es
-working it). An ``in_progress`` task also carries ``lease_expired`` (see
-``task_ready``).
+It also carries ``blocks`` (the tasks this one holds back), ``children``
+and ``branches`` (the ``CodeBranch``es working it), and may carry
+``lease_expired``, ``live_pr`` and ``ui_url`` (see instructions).
 
-``DiscoveredFrom`` is not included: it has no read query, and nothing has
-needed it.
-
-When ``external_uri`` is a GitHub PR or issue and witan runs on your
-machine, the node also carries ``live_pr``: that PR's or issue's state
-fetched from GitHub just now (``state``, ``draft``, ``review_decision``,
-``checks``, ``fetched_at``), or ``{"error": ...}`` when it could not be
-fetched. The description and comments are snapshots from when they were
-written; where ``live_pr`` disagrees with them, ``live_pr`` is current.
-
-Against a deployment that serves the web UI, the node also carries
-``ui_url``: the link that opens the task there. Hand a person that link
-rather than building one.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -82,199 +63,121 @@ rather than building one.
 
 List tasks, filtered by repo, status, project, parent, and/or assignee.
 
-``project_slug`` and ``parent`` take precedence as the primary scope; other
-filters are applied on top in Python. With no filters, lists recent tasks
-across all repos — 50 of them unless ``limit`` says otherwise.
+``project_slug`` and ``parent`` are the primary scope; other filters
+apply on top. ``closed_at`` is set exactly when status is ``closed``.
+``first_claimed_at`` is the first claim ever and survives release, close
+and reopen; ``claimed_at`` is the current lease.
 
-An ``in_progress`` row carries ``lease_expired`` (see ``task_ready``); rows
-in any other status do not.
-
-``closed_at`` is an invariant of ``status``: it is set on every row whose
-status is ``closed`` and null on every row whose status is not, whichever
-surface made the transition. Rows written before this held — a release to
-``closed``, or a reopen through ``task_update`` — are corrected the next
-time anything writes them, so a row untouched since then can still carry
-the old spelling.
-
-``first_claimed_at`` is when the task was FIRST claimed, and is never
-cleared. Unlike ``claimed_at``, which is the current lease and moves on
-every renewal, it survives a release, a close and a reopen. It is null on
-a task that has never been claimed, and on any task last claimed before
-the field existed — there is no backfill.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Filter to one status. |
 | `project_slug` | str? | `null` | List the tasks of a WorkflowProject. |
 | `parent` | str? | `null` | List the direct children of a parent task/epic. |
-| `assignee` | str? | `null` | Filter to a single owner. ``"@me"`` resolves to the calling identity<br>(every session of it) — the only spelling that works from a client<br>that cannot know the identity a deployment resolves from its token. |
-| `limit` | int? | `null` | Maximum rows to return, 1 to 10,000. Omitted, every scope behaves as<br>it always has: 50 rows unscoped, uncapped when scoped by repo, project<br>or parent. That asymmetry is why this is nullable rather than<br>``limit: int = 50`` — a plain default would either cap the scoped<br>reads that are uncapped today, or, applied only to the unscoped ones,<br>make an explicit ``limit=50`` indistinguishable from not asking.<br>On the repo-detected branch (the default, since ``repo`` is inferred)<br>the rows are this repo's followed by the unscoped ones, two<br>``updated_at`` runs concatenated rather than merged. So a limit there<br>keeps this repo's tasks and may return no unscoped ones at all, even<br>if an unscoped task was touched more recently. Pass ``all_repos=True``<br>for a single ``updated_at`` ordering across everything. |
-| `all_repos` | bool | `False` | List every repo's tasks instead of the detected repo's — see<br>instructions. |
+| `assignee` | str? | `null` | Filter to one holder; ``"@me"`` is you (every session). |
+| `limit` | int? | `null` | Max rows, 1 to 10,000. Omitted: 50 unscoped, all when scoped by repo,<br>project or parent. On the default repo scope, rows are this repo's<br>then the unscoped ones, so a limit may drop the unscoped ones. |
+| `all_repos` | bool | `False` | List every repo's tasks, in one ``updated_at`` order. |
 
 ## `task_search`
 
 Plain BM25 text search over tasks (no graph expansion).
 
-Returns up to ``limit`` tasks ranked by BM25 relevance, matched against
-``description`` and ``title`` (description matches are seeded ahead of
-title-only matches — see ``memory_search``'s doc for why). Run this
-before ``task_create`` to check whether the work is already tracked;
-``task_create`` also runs a search across every repo, with the title and
-the start of the description, and returns the top matches as ``similar``
-in its response.
+Returns up to ``limit`` tasks ranked by relevance over description and
+title. Run it before ``task_create`` to check the work is not already
+tracked. For "the next task" in a project use
+``task_ready(project_slug=...)``.
 
-To find "the next task" in a project there is no query to rank by: use
-``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
-every task in it.
-
-The ``limit`` applies after every filter, so a match that ranks below it
-on the unfiltered query is still returned. The one exception is the
-unscoped half of a repo-scoped search: those tasks are picked out of the
-all-repos read, so other repos' matches can still crowd them out.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Free-text search query. |
-| `repo` | str? | `null` | Repo scoping — see instructions. Matches against the detected repo<br>plus unscoped tasks (``repo=None``), same as ``task_list``. Ignored<br>when ``project_slug`` is given. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Optional filter: ``open``, ``in_progress``, ``blocked``, or<br>``closed``. Omit to search all statuses — a closed task is still<br>useful to surface (the work may already be done). |
-| `project_slug` | str? | `null` | Search only the tasks of this WorkflowProject (``wp-`` slug), in<br>every repo. |
-| `assignee` | str? | `null` | Search only tasks held by this owner, matched as ``task_list``<br>matches it; ``"@me"`` is the calling identity. |
-| `limit` | int | `20` | Maximum hits to return, 1 to 10,000. |
-| `all_repos` | bool | `False` | Search every repo's tasks instead of the detected repo's — see<br>instructions. |
+| `repo` | str? | `null` | Repo scoping; see instructions. Includes unscoped tasks. Ignored with<br>``project_slug``. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Filter to one status. Omit to include closed tasks, which can show the<br>work is already done. |
+| `project_slug` | str? | `null` | Search only this project's tasks, in every repo. |
+| `assignee` | str? | `null` | Filter to one holder; ``"@me"`` is you. |
+| `limit` | int | `20` | Max hits, 1 to 10,000, applied after every filter. |
+| `all_repos` | bool | `False` | Search every repo's tasks. |
 
 ## `task_ready`
 
 Return ready-to-work tasks: pickable tasks whose blockers are all closed.
 
-A task is ready when its status is ``open``/``blocked`` (nobody is on it yet
-and it is not closed), OR ``in_progress`` with an expired lease (the holder
-likely abandoned it — see ``readiness.status_pickable``), AND every task in
-its ``blocked_by`` list is closed. A returned ``in_progress`` task is
-therefore a reclaim, not fresh work — check ``assignee``/``claimed_at``
-(falling back to ``updated_at`` when ``claimed_at`` is null, e.g. a legacy
-row) before starting it, and it carries ``lease_expired: true`` saying so
-without your having to apply the lease rule yourself. This is the core
-coordination primitive — call it
-to pick the next actionable item without manual triage. Results are
-ordered by priority (``p0`` first).
+Call it to pick the next item. A task is ready when it is ``open`` or
+``blocked``, or ``in_progress`` with an expired lease, and every task in
+its ``blocked_by`` is closed. An ``in_progress`` result is a reclaim
+(``lease_expired: true``): check ``assignee`` and ``claimed_at`` first.
+Ordered by priority, ``p0`` first.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
 | `project_slug` | str? | `null` | Restrict to a single WorkflowProject. |
-| `assignee` | str? | `null` | Restrict to a single owner (or pass to find your own ready work). |
-| `limit` | int | `20` | Maximum tasks to return. Defaults to 20. |
-| `all_repos` | bool | `False` | Return every repo's ready tasks instead of the detected repo's — see<br>instructions. |
+| `assignee` | str? | `null` | Filter to one holder. |
+| `limit` | int | `20` | Maximum tasks to return. |
+| `all_repos` | bool | `False` | Return every repo's ready tasks. |
 
 ## `task_update`
 
 Update a task's mutable fields. Only non-null arguments are applied.
 
-Use this to re-prioritise, re-parent (``parent``), reassign (``assignee``),
-correct the repo association (``repo``), or attach an ``external_uri``. To
-*claim* a task for work prefer ``task_claim`` (it sets ``in_progress`` + a
-lease and refuses if someone else holds it); to close a task prefer
-``task_close``; to add dependencies use ``task_link``.
+Re-prioritise, re-parent, reassign, fix the repo, or attach an
+``external_uri``. To take a task use ``task_claim``, to finish one
+``task_close``, to add a dependency ``task_link``.
 
-The write is fenced on the read it merged from: it applies only while the
-graph is unchanged since this call read the task, and a refusal re-reads
-and merges again, up to five attempts. That is what stops an edit from
-reverting a claim that landed after its read. The cost is availability.
-The fence is the whole branch head, so writes anywhere on the graph refuse
-it. Over the 7 days to 2026-10-16 the production graph peaked at about 9
-write-tool calls a minute (5-minute rate) and averaged 0.15, with p95 tool
-durations near 5s for ``task_update`` and 10s or more for ``task_close`` and
-``task_claim``. At that peak one attempt has roughly an even chance of
-being refused and all five a few percent; off-peak it is negligible.
-Running out raises ``WriteContention`` with nothing written, and retrying
-is safe. (A row-scoped guard, a mutation matching on ``slug`` and
-``updated_at``, would avoid refusals from unrelated writes; it is
-unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
-``task_close``.
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug of the task to update. |
 | `title` | str? | `null` | New short label for the work. |
-| `description` | str? | `null` | New full description. Replaces the existing text; it is not appended to. |
-| `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | ``bug`` \| ``feature`` \| ``task`` \| ``chore`` \| ``epic``. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,<br>on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this<br>task's dependents**, exactly as ``task_close`` does. Prefer<br>``task_claim`` / ``task_close`` for those two transitions. ``closed``<br>is refused here as ``task_close`` refuses it, with the same answer,<br>while another person holds a live claim (see ``force``); nothing else<br>is written either. ``in_progress`` carries none of ``task_claim``'s<br>checks.<br>``closed_at`` follows the status whatever value you pass: set on<br>arrival at ``closed``, cleared on any move away from it, so reopening<br>a task here does not leave it carrying its old close time.<br>Setting ``in_progress`` with no ``assignee`` on a task that has none<br>recorded defaults it via ``_claim_holder`` — the same identity<br>``task_claim`` would use — rather than leaving<br>``(in_progress, claimed_at set, assignee null)`` reachable: that<br>combination is a live lease with nobody named on it, which<br>``task_claim`` correctly refuses and correctly cannot say who holds.<br>A task that already has an assignee keeps it; this only fills a gap,<br>never reassigns. |
-| `priority` | `p0` \| `p1` \| `p2` \| `p3`? | `null` | ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering. |
-| `repo` | str? | `null` | Canonical repo URI to (re)assign this task to. Pass an explicit value to<br>correct tasks that were created without proper repo context. |
-| `assignee` | str? | `null` | Holder identity to reassign the task to. Prefer ``task_claim`` to take a<br>task for yourself — it checks nobody else holds it, which this does not. |
+| `description` | str? | `null` | Replacement description (not appended). |
+| `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | The kind of work. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``in_progress`` stamps a fresh lease, filling a missing assignee with<br>you, without ``task_claim``'s checks. ``closed`` unblocks dependents<br>and is refused while another person holds a live claim (see<br>``force``). Prefer ``task_claim``/``task_close`` for those two. |
+| `priority` | `p0` \| `p1` \| `p2` \| `p3`? | `null` | ``p0`` is highest. Drives ``task_ready`` ordering. |
+| `repo` | str? | `null` | Repo URI to reassign the task to. |
+| `assignee` | str? | `null` | Reassign to this holder. Unlike ``task_claim``, does not check who<br>holds the task. |
 | `project_slug` | str? | `null` | ``wp-`` slug of the WorkflowProject this task rolls up to. |
-| `parent` | str? | `null` | ``tk-`` slug of the parent task/epic. Written as both the<br>``parent_slug`` field and the ``ParentOf`` edge in one commit, so a<br>concurrent reader never sees the task parented one way and not the<br>other. **Re-parenting does not retract the previous edge**: the field<br>moves to the new parent while the old ``ParentOf`` remains, so a task<br>re-parented this way is reachable from both. Call<br>``task_link(kind="parent", remove=True)`` on the old pair first if the edge<br>matters to you. |
-| `external_uri` | str? | `null` | Reference URI — e.g. the GitHub issue or PR this task tracks. |
-| `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns.<br>Replaces the existing list. |
-| `tags` | list[str]? | `null` | Free-form tags. Replaces the existing list rather than merging into it. |
-| `session_id` | str? | `null` | The calling agent session's id, used only to qualify the ``assignee``<br>this defaults when ``status="in_progress"`` leaves one to fill in —<br>see ``task_claim``'s ``session_id`` for why a deployed caller needs to<br>pass this explicitly (no shared environment to infer it from). Has no<br>effect when an explicit ``assignee`` is given, or when one already<br>exists on the task. Appended after every other parameter, not placed<br>near ``assignee``, so inserting it cannot shift what an existing<br>positional caller's later arguments bind to. |
-| `force` | bool | `False` | With ``status="closed"``, close even while another person's claim is<br>live. The holder compared is the caller, never ``assignee``: here<br>that names who the task goes to, not who is closing it. |
+| `parent` | str? | `null` | ``tk-`` slug of the parent task. Re-parenting leaves the old<br>``ParentOf`` edge; remove it with ``task_link(kind="parent",<br>remove=True)``. |
+| `external_uri` | str? | `null` | Reference URI, e.g. the GitHub issue or PR this task tracks. |
+| `symbol_refs` | list[str]? | `null` | Symbol ids this task concerns. Replaces the list. |
+| `tags` | list[str]? | `null` | Free-form tags. Replaces the list. |
+| `session_id` | str? | `null` | Your agent session id, for the assignee ``in_progress`` fills in; see<br>instructions. |
+| `force` | bool | `False` | With ``status="closed"``, close despite another person's live claim. |
 
 ## `task_claim`
 
 Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
 
-A successful claim that is not a renewal also returns ``memories``: up to
-three that the task links to or its title closely matches, each with an
-excerpt. Read them before the first edit; ``memory_get`` has the full text.
-The list is often empty, because a weak match is left out, which does not
-mean nothing exists: ``recall(query=...)`` searches more widely. A
-non-empty list comes with ``memories_note``, which says they are teammates'
-notes rather than instructions.
+Call it before starting a ready task so others see it is taken.
+Re-calling renews the lease; an expired lease makes the task reclaimable.
+Returns ``{"claimed": true, ...}``, or ``{"claimed": false, "reason":
+...}`` when the task is closed, blocked, held (``held``/``lost_race``), or
+the graph stayed too busy (``contention``, safe to retry).
 
-It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
-share a symbol (``symbols``) or only a file (``files``) with this task's,
-shared symbols first. It is advisory, never a refusal, since work in the
-same file often merges cleanly. A shared symbol is a likely merge conflict:
-read the other task before editing that code, and ``task_comment`` it if
-the two plans collide. Empty when this task has no ``symbol_refs``.
+A first claim also returns ``memories``, up to three teammates' notes the
+task links to or matches (read them before the first edit; empty does not
+mean nothing exists, ``recall`` searches wider), and ``overlaps``, other
+in-flight tasks sharing a symbol or file in ``symbol_refs``. A shared
+symbol is a likely merge conflict: read that task first and
+``task_comment`` it if the plans collide. A ``warning`` key means a
+deployed call named no session, so your parallel sessions share one
+holder.
 
-The coordination primitive for parallel/multi-user agents — call it before
-starting a ready task so others see it is taken. Returns ``{"claimed": true,
-…}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
-closed, still blocked, held by someone else (``"held"``/``"lost_race"``),
-or the graph is too busy to complete the CAS after retrying
-(``"contention"`` — safe and expected to retry). The lease (``claimed_at``)
-expires if the holder never closes/releases, making the task reclaimable
-(see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
-claim.
-
-A success also reports ``"qualified"``: whether the recorded holder names
-the session as well as the person. ``false`` does **not** by itself mean
-the caller omitted ``session_id`` — an explicit ``assignee`` always wins
-over it (see ``_claim_holder``) and is unqualified by design, with no
-warning. Only the presence of a ``"warning"`` key identifies the case this
-exists to flag: a deployed call whose defaulted holder names no session,
-so this person's concurrent sessions are indistinguishable to the
-contention check — the mutual exclusion this tool exists for is not in
-effect for them. It is reported rather than refused because the server has
-no way to supply the id itself, so refusing would break every caller that
-cannot send one.
-
-The claim is a compare-and-swap. It is written only while the branch head
-is still the one the task was read at, and that read is where
-claimability is decided, so a granted claim means nobody else claimed,
-closed or blocked the task first. A lost race reports ``{"claimed": false,
-"reason": "lost_race", "held_by": …}``. Every other task write is fenced
-the same way and merged from the row it read, so an edit that read the
-task before the claim is refused and re-merged rather than reverting it.
-The holder can still change afterwards by a write meant to change it:
-``force``, a ``task_update`` that sets ``assignee`` or ``status``, a
-``task_release --force``, or a claim taken once the lease lapses. An error
-whose outcome is unknown (a lost response, a client timeout) may still have
-claimed the task, because the server finishes an admitted write after its
-caller disconnects, so re-read with ``task_get`` before retrying. See
-docs/adr/0003.
+*Writes (non-destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to claim. |
-| `assignee` | str? | `null` | Holder identity. Defaults to the calling user (the JWT's<br>``preferred_username`` when deployed, the configured author locally)<br>qualified by ``session_id`` — see ``_claim_holder``. Two of one<br>person's parallel sessions must not share a holder string, or the<br>contention check passes and the second silently renews the first's<br>lease. Pass an explicit id to override (a worker name, a CI job). |
-| `session_id` | str? | `null` | The calling agent session's id, which qualifies the default holder.<br>**Pass this when calling a deployed witan** — the server cannot infer<br>it (no shared environment, and MCP 2026-07-28 carries no session<br>state), and without it every one of your concurrent sessions claims<br>under the same name. The CLI's remote proxy fills it in automatically;<br>under local stdio the server falls back to its own<br>``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``, else<br>``$CODEX_SESSION_ID``), inherited from the agent. Pi and Codex do not<br>export their ids to the MCP servers they launch, so under Pi pass the<br>value from ``echo $PI_SESSION_ID``, and under Codex from<br>``echo $CODEX_SESSION_ID``. |
+| `assignee` | str? | `null` | Holder identity; defaults to you, qualified by ``session_id``.<br>Override for a worker or CI job. |
+| `session_id` | str? | `null` | Your agent session id; see instructions. Without it, a deployed witan<br>records your parallel sessions under one holder. |
 | `force` | bool | `False` | Steal the task even if another holder's lease is still valid. |
-| `repo` | str? | `null` | Repo scoping — see instructions. Used only for the branch tracking<br>below, not to scope the claim itself. |
-| `branch` | str? | `null` | The git branch the caller is on. Together with ``repo`` this is what<br>the ``WorksOn`` link is keyed on, and both have to come from the caller<br>because a deployed server has no checkout to read them from — see<br>``_code_branch_steps``. The CLI's remote proxy fills both in<br>automatically; under local stdio they default to the server's own<br>working directory, which is the agent's. |
+| `repo` | str? | `null` | Repo scoping; used only to link your branch, not to scope the claim. |
+| `branch` | str? | `null` | Your git branch, linked to the task. witan's CLI proxy fills it in;<br>under local stdio it defaults to the server's checkout. |
 
 ## `task_release`
 
@@ -284,45 +187,34 @@ Call when stepping away from an unfinished task so others can pick it up
 (closing a finished task — use ``task_close`` — also ends the claim). Refuses
 if the task is held by a different ``assignee`` unless ``force`` is set.
 
+*Writes (non-destructive).*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to release. |
-| `assignee` | str? | `null` | Holder identity releasing the task. Defaults to the calling user, same<br>resolution as ``task_claim``'s ``assignee``. The held-by check compares<br>*identities*, ignoring the ``#<session>`` qualifier, so you can release a<br>claim one of your own other sessions took; another person's still needs<br>``force``. |
-| `session_id` | str? | `null` | The calling agent session's id, same resolution and same reason as<br>``task_claim``'s. Only affects the holder string this call is compared<br>*as*; since the comparison is identity-level, omitting it against a<br>deployed server is harmless here in a way it is not for ``task_claim``. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to (default ``open``). Passing ``closed``<br>stamps ``closed_at`` like any other transition to closed, which it did<br>not before: this surface used to write only status, assignee and<br>``claimed_at``, leaving a closed task with no close time. |
+| `assignee` | str? | `null` | Holder identity releasing it; defaults to you. Any of your sessions'<br>claims count as yours; another person's needs ``force``. |
+| `session_id` | str? | `null` | Your agent session id; see instructions. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to. |
 | `force` | bool | `False` | Release even if held by a different assignee. |
 
 ## `task_close`
 
 Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 
-Closing a blocker is what unblocks its dependents — they become visible to
-``task_ready`` once every blocker is closed.
+Closing a blocker unblocks its dependents. Refuses, writing nothing, while
+another person holds a live claim: ``{"closed": false, "reason": "held",
+"held_by", "claimed_at", "remedy"}``. Claims held by any of your own
+sessions, expired leases and unheld tasks close. A retry of a close that
+landed keeps its ``closed_at``. A ``warning`` names dependents that could
+not be reopened; ``task_ready`` lists them anyway.
 
-Refuses, writing nothing, while another person holds a live claim on the
-task: ``{"closed": false, "reason": "held", "held_by", "claimed_at",
-"remedy"}``. That stops a worker whose lease lapsed, and whose task was
-taken over, from closing the new holder's work when it finishes late. A
-claim held by any session of your own identity, an expired lease, and a
-task nobody is named as holding all close as before. The check is made on
-the row the close is fenced on, so a claim that lands first is seen.
-
-The close is fenced like ``task_update`` and has the same trade: under
-write load elsewhere on the graph it can run out of attempts and raise
-``WriteContention`` with nothing written (see ``task_update`` for the
-production rates as of 2026-10-16). Retrying is safe, and a retry of a
-close that did land keeps its original ``closed_at``. Reopening each
-dependent is a separate fenced write after the close has committed, so one
-that runs out of attempts does not fail the call: the closed task comes
-back with a ``warning`` naming the dependents still marked ``blocked``.
-``task_ready`` lists them anyway, since every blocker is closed, and the
-next close anywhere or a claim of one of them reopens it.
+*Writes (destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to close. |
-| `resolution` | str? | `null` | Short note on what was actually done. Worth writing: this is what a<br>later reader sees when asking why the task ended, and closing without<br>one leaves that unanswerable. |
-| `assignee` | str? | `null` | Holder identity closing the task. Defaults to the calling user, same<br>resolution as ``task_claim``'s ``assignee``. Compared at the identity<br>level, ignoring the ``#<session>`` qualifier, as ``task_release``<br>does; pass it when the claim was taken under an explicit name (a<br>worker, a CI job). |
+| `resolution` | str? | `null` | What was actually done: what a later reader sees when asking why the<br>task ended. |
+| `assignee` | str? | `null` | Holder identity closing it; defaults to you. Pass it when the claim<br>was taken under an explicit name (a worker, a CI job). |
 | `force` | bool | `False` | Close even while another person's claim is live. |
 
 ## `task_comment`
@@ -346,6 +238,8 @@ the witan-task skill has a holder leave after each durable step so a
 cut-off run can resume. And not for reusable repo knowledge (that is
 ``memory_store`` — a comment is read once by one executor).
 
+*Writes (non-destructive).*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to comment on. |
@@ -367,43 +261,33 @@ The meaning of ``from``/``to`` depends on ``kind``:
 For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
 fields on the affected task are kept in sync so ``task_ready`` stays correct.
 
-Reversible: ``remove=True`` removes any of these, including one recorded in
-the wrong direction. Pass the endpoints as the link was written, not
-reversed. Removing a ``blocks`` link is how a task wrongly marked blocked
-becomes ready again, and for ``blocks`` and ``parent`` the denormalized
-fields are updated to match: unblocking a task whose remaining blockers
-are all closed returns it from ``blocked`` to ``open``. A removal returns
-``{"from", "to", "kind", "removed"}``, where ``removed`` is ``False`` when
-the edge was not there. That is not an error, so removing twice, or
-removing a link that never existed, is a safe no-op.
+``remove=True`` removes a link, passing the endpoints as it was written.
+Removing a ``blocks`` link returns the task from ``blocked`` to ``open``
+once its remaining blockers are closed. Removing an absent link returns
+``removed: False``, not an error.
+
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `from_slug` | str | **required** | The ``tk-`` slug the edge points **from**. Its meaning depends on<br>``kind`` — see above; for ``blocks`` this is the blocker, for ``parent``<br>the epic, for ``discovered_from`` the newly-found task. |
-| `to_slug` | str | **required** | The slug the edge points **to** — the blocked task, the child, the task<br>the work was discovered during, or (for ``addresses``) a ``Memory``<br>slug. |
-| `kind` | `blocks` \| `parent` \| `discovered_from` \| `addresses` | **required** | ``blocks`` \| ``parent`` \| ``discovered_from`` \| ``addresses``. Getting<br>the direction wrong is the common mistake here, and it matters: for<br>``blocks`` it decides which task ``task_ready`` withholds. |
+| `from_slug` | str | **required** | The ``tk-`` slug the edge points from; see ``kind`` above. |
+| `to_slug` | str | **required** | The slug the edge points to; a Memory slug for ``addresses``. |
+| `kind` | `blocks` \| `parent` \| `discovered_from` \| `addresses` | **required** | The edge kind. Direction matters: for ``blocks`` it decides which task<br>``task_ready`` withholds. |
 | `remove` | bool | `False` | Remove the ``from -> to`` edge of ``kind`` instead of adding it. |
 
 ## `task_for_branch`
 
 Return the tasks linked to a git branch — "what is this branch already for".
 
-A ``WorksOn`` link is written by a SUCCESSFUL ``task_claim`` and by nothing
-else — losing a claim race does not link, and ``workflow_session_start``
-touches the same ``CodeBranch`` but links it ``ForProject``. So a non-empty
-result means somebody actually holds a task on this branch. Call it before
-starting fresh work on a branch you did not just create: on a shared graph
-the holder may be a different actor, in which case the answer is to
-continue or coordinate, not to open a second task.
+Only a successful ``task_claim`` writes the link, so a non-empty result
+means somebody holds a task on this branch. Call it before starting fresh
+work on a branch you did not create, and continue or coordinate rather
+than open a second task. An empty result does not mean nobody is working
+the branch. Closed tasks are included.
 
-An empty result is therefore weaker than it looks: a branch someone is
-working on without having claimed a task returns nothing.
-
-Closed tasks are included — filter on ``status`` if you only want live
-work. Returns ``[]`` for an unknown branch, an unlinked one, or when no
-repo can be resolved; none of those are errors.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `branch` | str | **required** | Git branch name. Required: the server has no checkout to infer it from,<br>unlike ``repo``. |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
+| `branch` | str | **required** | Git branch name. Required: a deployed server cannot infer it. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |

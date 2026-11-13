@@ -347,6 +347,7 @@ def render_tool(tool: Any) -> str:
     out = [f"## `{tool.name}`\n"]
     if tool.description:
         out.append(tool.description.strip() + "\n")
+    out.append(annotations_str(tool))
 
     params = tool.parameters or {}
     props: dict[str, Any] = params.get("properties", {})
@@ -449,7 +450,32 @@ def _emit_tool_index(groups: list, tools: dict) -> None:
         summary = blurb.split(". ")[0].rstrip(".") + "."
         body.append(f"| [{title}]({slug}.md) | {len(names)} | {summary} |")
     body.append("")
+    body.append("## Server instructions\n")
+    body.append(
+        "Sent to the agent once, when it connects. Parameter descriptions that "
+        'say "see instructions" refer to this text.\n'
+    )
+    body.append(f"```text\n{_served_instructions()}\n```\n")
     emit(REFERENCE / "mcp-tools" / "index.md", "\n".join(body))
+
+
+def _served_instructions() -> str:
+    """The instructions `witan serve` sends: witan's, then the mounted witan-code's."""
+    import witan_code.server as code_server
+    from witan.instructions import INSTRUCTIONS
+
+    return f"{INSTRUCTIONS}\n\n{code_server.mcp.instructions}"
+
+
+def annotations_str(tool: Any) -> str:
+    """One line saying what the tool does to the graph, from its MCP annotations."""
+    hints = tool.annotations
+    if hints.read_only_hint:
+        return "*Read-only.*\n"
+    traits = ["destructive" if hints.destructive_hint else "non-destructive"]
+    if hints.idempotent_hint:
+        traits.append("idempotent")
+    return f"*Writes ({', '.join(traits)}).*\n"
 
 
 # ── CLI reference ───────────────────────────────────────────────────
