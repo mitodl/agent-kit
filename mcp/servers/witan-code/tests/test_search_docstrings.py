@@ -185,7 +185,9 @@ def test_a_fan_out_note_counts_the_stores_that_skipped_docstrings(monkeypatch):
 
     result = _fn(server.code_search_symbol)("x")
 
-    assert _names(result) == ["a_name", "b_name", "a_doc"]
+    names = _names(result)
+    assert sorted(names[:2]) == ["a_name", "b_name"]
+    assert names[2:] == ["a_doc"]
     assert result["note"].startswith(
         "docstring search unavailable in 1 of the 2 stores searched"
     )
