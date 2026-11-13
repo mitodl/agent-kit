@@ -96,13 +96,14 @@ def test_nullable_filters_match_every_combination(server):
                 and (status is None or r["status"] == status)
             }
             params = {"query": "zorblat", "repo": repo, "status": status}
+            for name in ("search_tasks", "search_tasks_title"):
+                rows = srv.client.read("read.gq", name, params)
+                assert {r["slug"] for r in rows} == expected, (name, params)
             for name in (
-                "search_tasks",
-                "search_tasks_title",
                 "search_tasks_all_uncapped",
                 "search_tasks_all_uncapped_title",
             ):
-                rows = srv.client.read("read.gq", name, params)
+                rows = srv.client.read("read.gq", name, params | {"assignee": None})
                 assert {r["slug"] for r in rows} == expected, (name, params)
             if repo is not None:
                 rows = srv.client.read(
@@ -115,6 +116,22 @@ def test_nullable_filters_match_every_combination(server):
         for name in ("list_tasks", "list_tasks_uncapped"):
             rows = srv.client.read("read.gq", name, {"status": status})
             assert {r["slug"] for r in rows} == by_status, (name, status)
+        unscoped = {
+            r["slug"]
+            for r in every
+            if r["repo"] is None and (status is None or r["status"] == status)
+        }
+        assert unscoped
+        params = {"query": "zorblat", "status": status}
+        for name in ("search_tasks_unscoped", "search_tasks_unscoped_title"):
+            rows = srv.client.read("read.gq", name, params)
+            assert {r["slug"] for r in rows} == unscoped, (name, status)
+        for name in (
+            "search_tasks_unscoped_uncapped",
+            "search_tasks_unscoped_uncapped_title",
+        ):
+            rows = srv.client.read("read.gq", name, params | {"assignee": None})
+            assert {r["slug"] for r in rows} == unscoped, (name, status)
 
 
 @requires_omnigraph
@@ -188,6 +205,34 @@ def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
     }
     assert scoped["slug"] in hits
     assert unscoped["slug"] in hits
+
+
+@requires_omnigraph
+def test_task_search_unscoped_matches_outlast_other_repos_ranking(server):
+    """The unscoped half of a repo-scoped search reads unscoped tasks alone, so
+    more higher-ranked matches in other repos than the 20-row cap cannot push
+    an unscoped match out of the results."""
+    for i in range(21):
+        server.task_create(
+            title=f"quokka narwhal {i}",
+            description="quokka narwhal quokka",
+            repo="https://github.com/test/crowd",
+        )
+    scoped = server.task_create(
+        title="quokka in repo a", description="quokka", repo="https://github.com/test/a"
+    )
+    buried = server.task_create(
+        title="unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        all_repos=True,
+    )
+
+    hits = [
+        h["slug"]
+        for h in server.task_search("quokka", repo="https://github.com/test/a")
+    ]
+    assert hits == [scoped["slug"], buried["slug"]]
 
 
 @requires_omnigraph
@@ -270,6 +315,8 @@ _UNCAPPED_SEARCH_PAIRS = (
     "search_tasks_all_uncapped_title",
     "search_tasks_by_project",
     "search_tasks_by_project_title",
+    "search_tasks_unscoped_uncapped",
+    "search_tasks_unscoped_uncapped_title",
 )
 
 
@@ -338,6 +385,49 @@ def test_task_search_filters_apply_before_the_uncapped_cap(server, uncapped_sear
         "quokka", project_slug=proj["slug"], status="open", limit=21
     )
     assert [h["slug"] for h in by_project] == [buried["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
+    server, uncapped_search_cap
+):
+    """With a limit above 20, the unscoped half and the assignee filter also
+    run ahead of the uncapped pair's cap: higher-ranked matches in other repos,
+    or held by someone else, cannot fill it first."""
+    for i in range(uncapped_search_cap):
+        crowd = server.task_create(
+            title=f"quokka narwhal {i}",
+            description="quokka narwhal quokka",
+            repo="https://github.com/test/crowd",
+        )
+        server.task_claim(crowd["slug"], assignee="someone-else")
+    unscoped = server.task_create(
+        title="unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        all_repos=True,
+    )
+    held = server.task_create(
+        title="another unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        repo="https://github.com/test/crowd",
+    )
+    server.task_claim(held["slug"], assignee="agentA#5e313f6d")
+    lookalike = server.task_create(
+        title="a third unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        repo="https://github.com/test/crowd",
+    )
+    server.task_claim(lookalike["slug"], assignee="xagentA")
+
+    by_repo = server.task_search("quokka", repo="https://github.com/test/a", limit=21)
+    assert [h["slug"] for h in by_repo] == [unscoped["slug"]]
+    by_assignee = server.task_search(
+        "quokka", all_repos=True, assignee="agentA", limit=21
+    )
+    assert [h["slug"] for h in by_assignee] == [held["slug"]]
 
 
 @requires_omnigraph

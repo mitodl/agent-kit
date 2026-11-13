@@ -8074,34 +8074,40 @@ def _similar_task_query(title: str, description: str) -> str:
     return re.sub(r"[^\w\s]", " ", text).strip()
 
 
+# Each repo-scoped task search pair's twin for the unscoped half: the same
+# read with a repo-null predicate in place of the repo match.
+_UNSCOPED_TASK_SEARCH = {
+    "search_tasks": "search_tasks_unscoped",
+    "search_tasks_all_uncapped": "search_tasks_unscoped_uncapped",
+}
+
+
 def _search_task_rows(
     query: str,
     detected: str | None,
     status: str | None,
     name: str = "search_tasks",
+    filters: dict | None = None,
 ) -> list[dict]:
     """BM25 candidate rows in score-desc order — the Task twin of
     ``_search_rows``; `description` stands in for Memory's `content` as the
     primary matched field. ``detected`` is resolved by :func:`_scope`.
     ``name`` picks the query pair: the capped default, or
-    ``search_tasks_all_uncapped`` for a limit above it.
+    ``search_tasks_all_uncapped`` for a limit above it. ``filters`` holds any
+    further params the pair declares (the uncapped pair's ``assignee``).
     """
-    global_params = {"query": query, "repo": None, "status": status or None}
+    params = {"query": query, "status": status or None} | (filters or {})
     if not detected:
-        return _search_task_bm25(global_params, name)
+        return _search_task_bm25(params | {"repo": None}, name)
 
-    rows = _search_task_bm25(global_params | {"repo": detected}, name)
-
-    # Merge in unscoped (repo=None) matches — task_list's convention:
+    # Followed by the unscoped (repo=None) matches, task_list's convention:
     # unscoped tasks were created without git context and should stay visible
-    # regardless of which repo you're searching from.
-    seen = {r["slug"] for r in rows}
-    rows.extend(
-        r
-        for r in _search_task_bm25(global_params, name)
-        if not r.get("repo") and r["slug"] not in seen
+    # regardless of which repo you're searching from. They come from their own
+    # pair, because picking them out of the all-repos read after its cap let
+    # other repos' higher-ranked matches crowd them out.
+    return _search_task_bm25(params | {"repo": detected}, name) + _search_task_bm25(
+        params, _UNSCOPED_TASK_SEARCH[name]
     )
-    return rows
 
 
 def _filtered_task_search_rows(
@@ -8115,20 +8121,25 @@ def _filtered_task_search_rows(
 
     Reads through the uncapped query pairs, because the capped ones return the
     top 20 of the UNFILTERED query and filtering those afterwards loses every
-    match ranked below them. Project, repo and status filter in the query,
-    ahead of its cap; only the assignee match runs here. A project scope
-    replaces the repo scope, as in ``task_list``: a project spans repos.
-    ``detected`` is resolved by :func:`_scope`.
+    match ranked below them. Project, repo, status and assignee filter in the
+    query, ahead of its cap. The query's assignee match is a substring one, so
+    ``_holder_matches`` still narrows its rows here to the exact selection. A
+    project scope replaces the repo scope, as in ``task_list``: a project spans
+    repos. ``detected`` is resolved by :func:`_scope`.
     """
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
+    filters = {"assignee": assignee or None}
     if project_slug:
         rows = _search_task_bm25(
-            {"query": query, "project_slug": project_slug, "status": status or None},
+            {"query": query, "project_slug": project_slug, "status": status or None}
+            | filters,
             "search_tasks_by_project",
         )
     else:
-        rows = _search_task_rows(query, detected, status, "search_tasks_all_uncapped")
+        rows = _search_task_rows(
+            query, detected, status, "search_tasks_all_uncapped", filters
+        )
     if assignee:
         rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
     return rows
@@ -8160,9 +8171,7 @@ def task_search(
     every task in it.
 
     The ``limit`` applies after every filter, so a match that ranks below it
-    on the unfiltered query is still returned. The one exception is the
-    unscoped half of a repo-scoped search: those tasks are picked out of the
-    all-repos read, so other repos' matches can still crowd them out.
+    on the unfiltered query is still returned.
 
     Parameters
     ----------
