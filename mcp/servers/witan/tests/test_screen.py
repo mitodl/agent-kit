@@ -234,6 +234,20 @@ def test_the_same_text_is_classified_once():
     assert len(classifier.calls) == 2
 
 
+def test_the_same_text_from_another_author_is_classified_again():
+    """The author is part of what the classifier sees, so it is part of the
+    cache key, while the stored digest still covers the text alone."""
+    classifier = FakeClassifier()
+    screener = screen.Screener(classifier)
+    params = {"slug": "tc-x", "body": "b", "author": "alice"}
+    first = screener("insert_task_comment", params)
+    classifier.output = '{"decision":"flagged","reason":"r"}'
+    second = screener("insert_task_comment", {**params, "author": "mallory"})
+    assert len(classifier.calls) == 2
+    assert second["screen_verdict"] == "flagged"
+    assert second["screen_digest"] == first["screen_digest"]
+
+
 def test_a_record_with_no_text_is_clean_without_a_call():
     classifier = FakeClassifier()
     written = screen.Screener(classifier)("insert_task_comment", {"body": ""})

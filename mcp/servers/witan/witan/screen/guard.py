@@ -141,10 +141,13 @@ def payloads(parts: list[dict]) -> list[str]:
 class Screener:
     """Classifies a screened record's text and records the verdict on the write.
 
-    Verdicts are cached in process by text digest, because a task's title and
-    description ride along on every claim, release and status change, and a CAS
-    retry repeats the same write. The cache only saves classifier calls; the
-    verdict of record is the one stored on the row.
+    Verdicts are cached in process by the classifier payload (text, source
+    labels and author), because a task's title and description ride along on
+    every claim, release and status change, and a CAS retry repeats the same
+    write. The key is not :func:`text_digest`, which covers the text alone: the
+    classifier also sees the author, so the same text from another author is a
+    different input. The cache only saves classifier calls; the verdict of
+    record is the one stored on the row, with the text digest.
     """
 
     def __init__(self, classifier: Classifier) -> None:
@@ -157,11 +160,12 @@ class Screener:
         node_type = SCREENED_QUERIES.get(query_name)
         if node_type is None:
             return params
-        digest = text_digest(node_type, params)
-        verdict = self._cache.get(digest)
+        parts = _parts(node_type, params)
+        key = hashlib.sha256(_dumps(parts).encode()).hexdigest()
+        verdict = self._cache.get(key)
         if verdict is None:
             try:
-                verdict = self._classify(node_type, params)
+                verdict = self._classify(parts)
             except Exception:  # a provider's failure must not fail the write
                 logger.warning(
                     "witan.screen.classifier_failed",
@@ -184,17 +188,16 @@ class Screener:
             with self._cache_lock:
                 if len(self._cache) >= _CACHE_SIZE:
                     self._cache.pop(next(iter(self._cache)))
-                self._cache[digest] = verdict
+                self._cache[key] = verdict
         return {
             **params,
             "screen_verdict": verdict.decision,
             "screen_reason": verdict.reason,
             "screen_version": self.version,
-            "screen_digest": digest,
+            "screen_digest": text_digest(node_type, params),
         }
 
-    def _classify(self, node_type: str, params: dict) -> Verdict:
-        parts = _parts(node_type, params)
+    def _classify(self, parts: list[dict]) -> Verdict:
         if not parts:
             return Verdict(decision="clean")
         return combine(

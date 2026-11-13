@@ -4553,6 +4553,8 @@ def _update_memory(slug: str, changes: dict) -> dict | None:
         "confidence": changes.get("confidence", current.get("confidence")),
         "updated_at": now_iso(),
         **screen.UNSCREENED,
+        # For the screener, as in `_update_task_once`.
+        "author": current.get("author"),
     }
     client.change("mutations.gq", "update_memory", merged)
     rows = client.read("read.gq", "get_memory", {"slug": slug})
@@ -7538,6 +7540,10 @@ def _update_task_once(
         "first_claimed_at": merged_first_claimed_at,
         "updated_at": now_iso(),
         **screen.UNSCREENED,
+        # For the screener, not the graph (`update_task` does not declare it):
+        # the classifier sees the author, so an update must show it the same
+        # payload the insert did, or a claim re-classifies unchanged text.
+        "author": current.get("author"),
     }
     update: _Step = ("mutations.gq", "update_task", merged)
     # ★ THE PRECONDITION IS THE COMMIT FROM THIS ATTEMPT'S OWN READ, not one the
