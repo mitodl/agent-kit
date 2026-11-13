@@ -60,7 +60,7 @@ def stale_refs(*, repo: str | None = None, all_repos: bool = False) -> None:
     symbols with the same name. ``unknown`` means the ref could not be checked
     (the repo is not indexed, or witan-code is unreachable).
     """
-    result = _fn(_srv().memory_stale_refs)(repo=_repo_arg(repo, all_repos))
+    result = _fn(_srv().memory_stale_refs)(**_repo_arg(repo, all_repos))
     rows = [
         {
             "status": ref["status"],
