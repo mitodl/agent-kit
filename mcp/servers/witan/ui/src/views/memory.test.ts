@@ -417,7 +417,7 @@ describe("stale symbol refs", () => {
 
 		const note = root.querySelector(".stale-summary")?.textContent ?? "";
 		expect(note).toMatch(/1 memory in any repo\s+cites a symbol/);
-		expect(note).toMatch(/1 ref could not be\s+checked/);
+		expect(note).toMatch(/1 memory has\s+refs that could not be checked/);
 	});
 
 	it("narrows to stale memories only when asked", () => {
@@ -451,6 +451,9 @@ describe("stale symbol refs", () => {
 			"Checking symbol refs",
 		);
 		expect(root.querySelector("tbody")).toBeNull();
+		// Not the clean result: nothing has been checked yet.
+		expect(text()).toContain("symbol refs have not been checked");
+		expect(text()).not.toContain("No memories here cite");
 	});
 
 	it("says no memory is marked when the check failed", () => {
@@ -465,6 +468,65 @@ describe("stale symbol refs", () => {
 			/no memory is\s+marked stale/,
 		);
 		expect(root.querySelectorAll("tbody tr")).toHaveLength(listed.length);
+	});
+
+	it("counts a stale memory with an unchecked ref as stale only", () => {
+		const [stale] = report.memories.filter((m) => m.status === "stale");
+		if (!stale) {
+			throw new Error("the fixture has no stale memory");
+		}
+		const mixed: StaleRefsReport = {
+			...report,
+			memories: [
+				{
+					...stale,
+					refs: [
+						...stale.refs,
+						{
+							symbol_ref: "x#a.py::f",
+							status: "unknown",
+							reason: "x is not indexed",
+						},
+					],
+				},
+			],
+		};
+		draw(browse, route, vi.fn(), landed(mixed));
+
+		const note = root.querySelector(".stale-summary")?.textContent ?? "";
+		expect(note).toMatch(/1 memory in any repo/);
+		expect(note).not.toContain("could not be checked");
+	});
+
+	it("links stale memories older than the capped browse list", () => {
+		// The list holds only the most recent memories; the filter would
+		// otherwise hide a stale one past the cap.
+		const recent = listed.filter((m) => m.slug !== moved.slug);
+		draw(
+			{ mode: "browse", memories: recent, inbox: [] },
+			{ ...route, stale: true },
+			vi.fn(),
+			landed(report),
+		);
+
+		const outside = root.querySelector(".stale-outside");
+		expect(outside?.textContent).toContain("1 stale memory is");
+		expect(outside?.querySelector("a")?.getAttribute("href")).toBe(
+			`#memory?slug=${moved.slug}&stale=1`,
+		);
+		expect(outside?.textContent).not.toContain(unchecked.title);
+	});
+
+	it("leaves out a stale memory the Kind select excludes", () => {
+		const recent = listed.filter((m) => m.slug !== moved.slug);
+		draw(
+			{ mode: "browse", memories: recent, inbox: [] },
+			{ ...route, kind: "lesson" },
+			vi.fn(),
+			landed(report),
+		);
+
+		expect(root.querySelector(".stale-outside")).toBeNull();
 	});
 
 	it("draws no note when every checked ref resolves", () => {

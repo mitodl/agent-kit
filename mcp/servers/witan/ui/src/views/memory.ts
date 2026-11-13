@@ -221,7 +221,7 @@ function staleNote(
 			: nothing;
 	}
 	const stales = report.memories.filter((m) => m.status === "stale").length;
-	const unknown = report.counts.unknown;
+	const unknown = report.memories.filter((m) => m.status === "unknown").length;
 	if (stales === 0 && unknown === 0) {
 		return nothing;
 	}
@@ -236,12 +236,56 @@ function staleNote(
 		}
     ${
 			unknown
-				? html`${unknown} ${unknown === 1 ? "ref" : "refs"} could not be
-          checked (the repo is not indexed, or there is no code graph), so
-          ${unknown === 1 ? "its memory is" : "their memories are"} not marked.`
+				? html`${unknown} ${unknown === 1 ? "memory has" : "memories have"}
+          refs that could not be checked (e.g. the repo is not indexed) and
+          none that are missing, so ${unknown === 1 ? "it is" : "they are"} not
+          marked; the memory's panel says why.`
 				: nothing
 		}
   </p>`;
+}
+
+/**
+ * Stale memories the browse list does not hold.
+ *
+ * `memory_list` is capped at the most recent `MEMORY_LIST_CAP`, and older
+ * memories are the likeliest to cite a symbol that has since moved, so the
+ * filter alone would hide exactly the ones it exists for. The report carries
+ * each one's title, which is enough to link it.
+ */
+function staleOutsideList(
+	page: MemoryPage,
+	route: Route,
+	report: StaleRefsReport | null,
+): TemplateResult | typeof nothing {
+	if (page.mode !== "browse" || report === null) {
+		return nothing;
+	}
+	const loaded = new Set(page.memories.map((memory) => memory.slug));
+	const outside = report.memories.filter(
+		(memory) =>
+			memory.status === "stale" &&
+			(!route.kind || memory.kind === route.kind) &&
+			!loaded.has(memory.slug),
+	);
+	if (outside.length === 0) {
+		return nothing;
+	}
+	return html`<div class="stale-summary stale-outside">
+    <p>
+      ${outside.length} stale ${outside.length === 1 ? "memory is" : "memories are"}
+      older than this list reaches:
+    </p>
+    <ul>
+      ${outside.map(
+				(memory) =>
+					html`<li>
+            <a href=${routeHref(route, { slug: memory.slug })}>${memory.title}</a>
+            <span class="badge">${KIND_LABELS[memory.kind]}</span>
+          </li>`,
+			)}
+    </ul>
+  </div>`;
 }
 
 // ── The main area ──────────────────────────────────────────────────
@@ -267,11 +311,12 @@ export function memoryView(
       ${page.mode === "recall" ? recallPairs(page.pairs, page.memories, route) : nothing}
       ${page.mode === "topic" ? topicHeading(page.topic, route) : nothing}
       ${staleNote(stale, route)}
+      ${staleOutsideList(page, route, stale?.data ?? null)}
       ${limitNotes(page, matching.length)}
       ${
 				page.mode === "topic" && page.topic === null
 					? nothing
-					: memoryTable(page, shown, route, now, flagged)
+					: memoryTable(page, shown, route, now, flagged, stale?.data != null)
 			}
     </div>
   `;
@@ -577,7 +622,7 @@ export function recallResults(
 	return html`
     <div class="memory-view">
       ${recallPairs(page.pairs, page.memories, route)}
-      ${memoryTable(page, page.memories, route, now, new Map())}
+      ${memoryTable(page, page.memories, route, now, new Map(), false)}
     </div>
   `;
 }
@@ -607,9 +652,10 @@ function memoryTable(
 	route: Route,
 	now: number,
 	flagged: Map<string, StaleMemory>,
+	checked: boolean,
 ): TemplateResult {
 	if (shown.length === 0) {
-		return html`<p class="empty">${emptyMessage(page, route)}</p>`;
+		return html`<p class="empty">${emptyMessage(page, route, checked)}</p>`;
 	}
 	const contradicted = new Set(
 		page.mode === "recall"
@@ -690,7 +736,14 @@ function tableHeading(page: MemoryPage): string {
 	}
 }
 
-function emptyMessage(page: MemoryPage, route: Route): string {
+function emptyMessage(
+	page: MemoryPage,
+	route: Route,
+	checked: boolean,
+): string {
+	if (route.stale && !checked) {
+		return "Nothing to show: symbol refs have not been checked.";
+	}
 	if (route.stale && page.memories.length > 0) {
 		return "No memories here cite a symbol the code graph no longer has.";
 	}
