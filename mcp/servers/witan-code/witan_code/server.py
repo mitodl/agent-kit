@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from fastmcp import Context, FastMCP
+from mcp.types import ToolAnnotations
 
 from witan_core import caching
 from witan_core.observability import get_logger
@@ -41,7 +42,9 @@ mcp = FastMCP(
         "Repo scoping: tools auto-detect the current repo from `.git/config`. Pass "
         "`repo` (a canonical URI like `https://github.com/mitodl/ol-django`) to "
         "scope to one repo, or omit it when outside any repo to fan out across "
-        "every indexed repo.\n\n"
+        "every indexed repo. An empty `repo` behaves like omitting it; it does "
+        "not force a fan-out. A fan-out concatenates each store's BM25-ranked "
+        "results rather than producing one global ordering.\n\n"
         "Branch semantics: name-routed tools (code_find_definition, "
         "code_search_symbol, code_symbols_in_file) accept `branch` — either a "
         "git branch name, or a specific writer's view of one (`act-bob/feature_x`, "
@@ -451,8 +454,19 @@ def _file_id(path: str, repo: str) -> str:
 
 # ── Tools ─────────────────────────────────────────────────────────
 
+#: MCP tool annotations; every tool here carries one. A read that finds no
+#: index can offer to build it (``_confirm_and_reindex``), but only after the
+#: user accepts an elicitation, so those reads still count as read-only.
+READ = ToolAnnotations(read_only_hint=True)
+#: Writes derived data a re-run reproduces: an index, a branch view.
+REBUILD = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=True
+)
+#: Runs arbitrary named mutations or loads, which can overwrite or delete rows.
+MUTATE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
-@mcp.tool
+
+@mcp.tool(annotations=READ)
 async def code_find_definition(
     name: str,
     repo: str | None = None,
@@ -472,15 +486,9 @@ async def code_find_definition(
     name:
         Bare name (``run``) or qualified name (``Service.run``).
     repo:
-        Canonical repo URI to search. Defaults to the repo detected from the
-        checkout, and fans out across every indexed repo only when no repo is
-        detected at all. ``repo=""`` does **not** force a fan-out — it is
-        falsy, so it behaves exactly like omitting the argument.
+        Repo to search; see instructions.
     branch:
-        Git branch whose indexed view to query (e.g. another agent's in-flight
-        branch). Defaults to the checkout's branch when querying the current
-        repo; when ``repo`` names a different repo and ``branch`` is omitted,
-        reads that store's default (main) view.
+        Branch or view to read; see instructions.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:
@@ -507,7 +515,7 @@ async def code_find_definition(
     return matches
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_find_references(
     symbol_id: str, ctx: Context | None = None
 ) -> list[dict]:
@@ -520,9 +528,7 @@ async def code_find_references(
     Parameters
     ----------
     symbol_id:
-        The symbol to start from, as returned in the ``symbol_id`` field of
-        code_find_definition or code_search_symbol. Form:
-        ``<repo>#<path/to/file.py>::<QualifiedName>``.
+        The symbol to start from (a ``symbol_id`` from a name-based tool).
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
@@ -539,7 +545,7 @@ async def code_find_references(
 CallDirection = Literal["callers", "callees"]
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_callers(
     symbol_id: str,
     direction: CallDirection = "callers",
@@ -555,14 +561,10 @@ async def code_callers(
     Parameters
     ----------
     symbol_id:
-        The symbol to start from, as returned in the ``symbol_id`` field of
-        code_find_definition or code_search_symbol. Form:
-        ``<repo>#<path/to/file.py>::<QualifiedName>``.
+        The symbol to start from (a ``symbol_id`` from a name-based tool).
     direction:
-        ``callers`` (default) returns the symbols that call ``symbol_id``;
-        ``callees`` returns the symbols ``symbol_id`` calls. The indexer
-        resolves a call only to a symbol defined in the same file, so a call
-        into another module (in this repo or a library) is not listed.
+        ``callers`` (default) or ``callees``. Calls resolve only to symbols in
+        the same file, so a call into another module is not listed.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
@@ -572,7 +574,7 @@ async def code_callers(
     return _as_symbol_id(client.read("code_read.gq", direction, {"id": symbol_id}))
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_impact(
     symbol_id: str,
     max_depth: int = 5,
@@ -590,23 +592,14 @@ async def code_impact(
     Parameters
     ----------
     symbol_id:
-        The symbol to start from, as returned in the ``symbol_id`` field of
-        code_find_definition or code_search_symbol. Form:
-        ``<repo>#<path/to/file.py>::<QualifiedName>``.
-        This is the symbol you are about to change; the result is its blast
-        radius.
+        The symbol to start from (a ``symbol_id`` from a name-based tool).
     max_depth:
         Maximum BFS depth (default 5).
     max_nodes:
         Cap on total symbols returned (default 200).
     branch:
-        Git branch (or a view name from code_indexed_branches) whose view of
-        ``symbol_id``'s repo to walk, as for code_find_definition. Pass the
-        default branch (e.g. ``main``) to read the default view from a
-        checkout whose own branch is indexed, where a symbol the branch
-        removed no longer exists. Omitted, follows the checkout's branch when
-        the id's repo is the current detected repo and reads main otherwise.
-        Callers in other repos are always read from their default view.
+        Branch or view of ``symbol_id``'s repo to walk; see instructions.
+        Callers in other repos are read from their default view.
     """
     root_repo = symbol_id.split("#", 1)[0]
 
@@ -661,7 +654,7 @@ async def code_impact(
     }
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_symbols_in_file(
     path: str,
     repo: str | None = None,
@@ -679,13 +672,9 @@ async def code_symbols_in_file(
     path:
         Source file path.
     repo:
-        Canonical repo URI the file belongs to. Defaults to the current repo.
+        Repo the file belongs to. Defaults to the current repo.
     branch:
-        Git branch whose indexed view to read (e.g. another agent's in-flight
-        branch), or a view name from code_indexed_branches. Defaults to the
-        checkout's branch when querying the current repo; when ``repo`` names
-        a different repo and ``branch`` is omitted, reads that store's default
-        (main) view.
+        Branch or view to read; see instructions.
     """
     slug = repo or _cached_detect()
     if slug is None:
@@ -769,7 +758,7 @@ def _docstring_search(
         return []
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 def code_search_symbol(
     query: str,
     kind: SymbolKind | None = None,
@@ -784,33 +773,19 @@ def code_search_symbol(
     ``symbol_id`` and ``repo`` of origin.
 
     Name matches come first, then symbols whose docstring matches and whose
-    name does not. A docstring-only match never outranks a name match: BM25
-    scores the two fields on scales that cannot be compared (a short name
-    inflates under length normalisation), so the order between them is a
-    policy, and this is the policy. Within each group, BM25 ranking is
-    per-store, and a cross-repo fan-out concatenates each store's ranked
-    results. Each group holds up to 50 results per store.
+    name does not. Each group holds up to 50 results per store.
 
     Parameters
     ----------
     query:
         Search terms matched against ``qualified_name`` and ``docstring``.
     kind:
-        Optional filter to a single symbol kind: ``function``, ``method``,
-        ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
-        ``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``
-        to exclude the many YAML ``key`` symbols when searching for code.
+        Filter to one symbol kind. ``kind="function"`` leaves out the many
+        YAML ``key`` symbols when searching for code.
     repo:
-        Canonical repo URI to search. Defaults to the repo detected from the
-        checkout, and fans out across every indexed repo only when no repo is
-        detected at all — ``repo=""`` does **not** force that; it is falsy and
-        behaves like omitting the argument.
-        BM25 ranking is per-store, so a fan-out concatenates each store's
-        ranked results rather than producing one global ordering.
+        Repo to search; see instructions.
     branch:
-        Git branch whose indexed view to query. Defaults to the checkout's
-        branch when querying the current repo; when ``repo`` names a different
-        repo and ``branch`` is omitted, reads that store's default (main) view.
+        Branch or view to read; see instructions.
     """
 
     # Two runs unioned here, because the engine will not `or` two `search`
@@ -861,7 +836,7 @@ def _filter_by_precision(rows: list[dict], min_precision: str) -> list[dict]:
     return [r for r in rows if (r.get("kind"), r.get("key_norm")) in key_norms]
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_interface_providers(
     kind: BindingKind,
     key: str,
@@ -885,14 +860,14 @@ async def code_interface_providers(
         The contract value. For ``endpoint`` a raw path is accepted and
         normalized (path params collapse to ``{}``).
     min_precision:
-        ``heuristic`` (default) | ``precise`` — see server instructions.
+        See instructions.
     in_repo:
         Keep only the bindings in this exact repo URI. Omitted, every repo.
     """
     return await _bindings_by_role(kind, key, "provider", min_precision, in_repo, ctx)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_interface_consumers(
     kind: BindingKind,
     key: str,
@@ -913,7 +888,7 @@ async def code_interface_consumers(
     key:
         The contract value (``endpoint`` paths are normalized).
     min_precision:
-        ``heuristic`` (default) | ``precise`` — see server instructions.
+        See instructions.
     in_repo:
         Keep only the bindings in this exact repo URI. Omitted, every repo.
     """
@@ -956,7 +931,7 @@ async def _bindings_by_role(
     return _filter_by_precision(rows, min_precision)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_cross_repo_impact(
     symbol_id: str,
     min_precision: PrecisionTier = "heuristic",
@@ -978,18 +953,12 @@ async def code_cross_repo_impact(
     Parameters
     ----------
     symbol_id:
-        The symbol whose cross-repo surface to trace, as returned in the
-        ``symbol_id`` field of code_find_definition or code_search_symbol. Its
-        repo prefix also scopes the bridge read, so asking about another repo's
-        symbol does not pick up an unrelated overlay from your own checkout.
+        The symbol whose cross-repo surface to trace.
     min_precision:
-        ``heuristic`` (default) | ``precise`` — see server instructions.
+        See instructions.
     branch:
-        Git branch whose bridge overlay for ``symbol_id``'s repo to read. The
-        repo's default branch, or a branch with no overlay, reads bridge main,
-        so pass e.g. ``main`` to see a symbol your checkout's branch removed.
-        Omitted, reads the checkout's overlay when the id's repo is the
-        current detected repo and bridge main otherwise.
+        Branch whose bridge overlay for ``symbol_id``'s repo to read; see
+        instructions. A branch with no overlay reads bridge main.
     """
     empty = {"symbol_id": symbol_id, "bindings": [], "cross_repo": []}
     own_repo = symbol_id.split("#", 1)[0]
@@ -1035,7 +1004,7 @@ async def code_cross_repo_impact(
     return {"symbol_id": symbol_id, "bindings": own, "cross_repo": cross}
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_precise_edges(
     repo: str | None = None, ctx: Context | None = None
 ) -> list[dict]:
@@ -1071,7 +1040,7 @@ async def code_precise_edges(
     ]
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_unresolved_symbols(
     repo: str | None = None, ctx: Context | None = None
 ) -> list[dict]:
@@ -1101,7 +1070,7 @@ async def code_unresolved_symbols(
     return [r for r in unresolved if repo is None or r["repo"] == repo]
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_repo_symbols(
     repo: str | None = None,
     role: Literal["exported", "external"] | None = None,
@@ -1145,7 +1114,7 @@ async def code_repo_symbols(
     ]
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_repo_dependencies(
     kind: BindingKind | None = None,
     repo: str | None = None,
@@ -1169,7 +1138,7 @@ async def code_repo_dependencies(
     repo:
         Keep only links touching a repo whose URI contains this substring.
     min_precision:
-        ``heuristic`` (default) | ``precise`` — see server instructions.
+        See instructions.
     """
     from . import visualize
 
@@ -1194,7 +1163,7 @@ async def code_repo_dependencies(
     return visualize.as_payload(graph)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 def code_indexed_repos() -> list[dict]:
     """
     The repositories that have a code graph indexed, and how big each is.
@@ -1203,17 +1172,13 @@ def code_indexed_repos() -> list[dict]:
     search returning nothing means something different when the repo in
     question was never indexed. ``last_indexed`` is a Unix timestamp.
 
-    ``files`` is None for a store that could not be read, and ``unreadable``
-    then carries why. Read the pair together: a repo listed with ``files: null``
-    is NOT a repo with little indexed, it is one whose code graph no ``code_*``
-    tool can query at all, and treating its empty results as "nothing found"
-    is a confident wrong answer. ``unreadable`` is null on a healthy store.
-
-    ``bytes`` and ``last_indexed`` are both null for a graph on the shared
-    omnigraph-server: they describe a directory on this machine, and a client
-    of a shared graph has neither the directory nor any business reporting the
-    server's disk. ``files`` stays real — it is a query, not a walk.
+    ``files: null`` means the store could not be read (``unreadable`` says
+    why), so no ``code_*`` tool can query that repo: its empty results are not
+    "nothing found". ``bytes`` and ``last_indexed`` are null for a graph on the
+    shared omnigraph-server.
     """
+    # bytes/last_indexed describe a directory on this machine, which a client
+    # of a shared graph does not have; `files` is a query, so it stays real.
 
     def describe(ref) -> dict:
         size, mtime = ref.stats()
@@ -1229,7 +1194,7 @@ def code_indexed_repos() -> list[dict]:
     return store_module.map_refs(store_module.per_repo_stores(cfg), describe)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 def code_store_health() -> dict:
     """
     Whether every code graph — per-repo AND the shared cross-repo bridge — opens.
@@ -1238,24 +1203,20 @@ def code_store_health() -> dict:
     errors, or return nothing where you expected something, before concluding
     that a symbol or a consumer does not exist.
 
-    The bridge graph is why this is its own tool rather than a column on
-    code_indexed_repos. It belongs to no repo, so it appears in no repo
-    listing, yet ``code_interface_search`` / ``code_interface_providers`` /
-    ``code_interface_consumers`` / ``code_cross_repo_impact`` all read it and
-    nothing else does. A bridge that cannot be opened makes every one of those
-    fail while every per-repo listing still looks healthy — which is how it
-    stayed broken for six weeks.
+    Covers the cross-repo bridge graph too, which the interface and
+    cross-repo tools read and no repo listing shows.
 
     Returns ``{"stores": [{store, label, kind, ok, files, error,
-    stale_schema}], "ok": bool, "stale_schema": [store, ...]}``. ``store`` is
-    the full address; ``label`` is the short form that identifies WHICH graph a
-    row is, which for a cluster graph the address does not (it ends in the
-    endpoint, identical on every row). ``stale_schema`` names the
-    stores written by an omnigraph whose on-disk format the installed binary
-    no longer reads — the one failure with a known remedy, since a code graph
-    is derived from its checkout and is rebuilt by reindexing
-    (``witan-code reindex --rebuild``) rather than migrated.
+    stale_schema}], "ok": bool, "stale_schema": [store, ...]}``. ``label``
+    names which graph a row is. ``stale_schema`` lists stores the installed
+    omnigraph can no longer read; rebuild them with
+    ``witan-code reindex --rebuild``.
     """
+    # Its own tool, not a column on code_indexed_repos, because the bridge
+    # belongs to no repo: a bridge that would not open once broke every
+    # interface tool for six weeks while every per-repo listing looked healthy.
+    # `label` exists because a cluster graph's address ends in the endpoint,
+    # identical on every row.
     report = store_module.health_report(cfg)
     return {
         "stores": [
@@ -1326,21 +1287,15 @@ def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:
     return {"store": store.label, "view": view, "file": rows[0] if rows else None}
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 def code_indexed_branches(branch: str | None = None) -> list[dict]:
     """
     The in-flight branch views each indexed repo's store carries, and who owns each.
 
-    A non-default git branch is indexed onto its own store view, named for the
-    writer as well as the branch (docs/BRANCH_INDEXING.md), so several people
-    — or an agent and its human, or one developer in two worktrees — can each
-    have a view of the same branch without overwriting one another.
-
-    Pass ``branch`` (a raw git branch name) to see every writer's view of that
-    one branch: this is how you find a teammate's in-flight work. Feed a
-    returned ``view`` straight back as the ``branch`` argument of
-    code_find_definition / code_search_symbol / code_symbols_in_file to read
-    it. Omit ``branch`` to list everything.
+    A non-default branch is indexed onto a view per writer
+    (docs/BRANCH_INDEXING.md). Pass ``branch`` to see every writer's view of
+    it, which is how you find a teammate's in-flight work, and pass a returned
+    ``view`` back as the ``branch`` argument of the name-routed tools.
 
     Each row is ``{repo, views}``, where a view is
     ``{view, branch, actor}`` — ``view`` the name to pass back, ``branch`` the
@@ -1351,9 +1306,7 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
     Parameters
     ----------
     branch:
-        A raw git branch name (not a view name) to filter by, showing every
-        writer's view of that one branch — this is how you find a teammate's
-        in-flight work. Omit to list every view of every indexed repo.
+        A git branch name (not a view name). Omit to list every view.
     """
     wanted = repo_module.branch_store_name(branch) if branch else None
 
@@ -1379,7 +1332,7 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
     return store_module.map_refs(store_module.per_repo_stores(cfg), describe)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ)
 async def code_interface_search(
     query: str,
     kind: BindingKind | None = None,
@@ -1399,7 +1352,7 @@ async def code_interface_search(
     kind:
         Optional filter to one kind.
     min_precision:
-        ``heuristic`` (default) | ``precise`` — see server instructions.
+        See instructions.
     """
     client = _bridge_client()
     if client is None:
@@ -1415,7 +1368,7 @@ async def code_interface_search(
     return _filter_by_precision(rows, min_precision)
 
 
-@mcp.tool(task=TASKS_ENABLED)
+@mcp.tool(task=TASKS_ENABLED, annotations=REBUILD)
 async def code_reindex(path: str | None = None, force: bool = False) -> dict:
     """
     Index (or re-index) the current repo, or a subpath of it.
@@ -1424,17 +1377,13 @@ async def code_reindex(path: str | None = None, force: bool = False) -> dict:
     skipped. Lazily creates the per-repo store on first run. Returns a summary of
     files scanned/indexed/skipped and symbols/edges written.
 
-    A full rebuild runs for minutes on a large repo, so this tool accepts
-    task-augmented execution (`io.modelcontextprotocol/tasks`): a client that
-    asks for it gets a task handle back immediately and polls `tasks/get`,
-    instead of holding one tool call open for the whole index. Asking is the
-    client's choice — omit it and the call runs to completion as it always has.
+    Supports task-augmented execution (`io.modelcontextprotocol/tasks`) for a
+    client that would rather poll than hold the call open.
 
     Parameters
     ----------
     path:
-        Optional file or directory under the repo. Defaults to the repo root
-        (or cwd if not in a git repo).
+        File or directory under the repo. Defaults to the repo root.
     force:
         Re-index every file regardless of content hash.
     """
@@ -1567,13 +1516,13 @@ def code_store_graphs() -> list[str]:
 
 
 _STORE_TOOLS = (
-    code_store_read,
-    code_store_mutate,
-    code_store_mutate_many,
-    code_store_load,
-    code_store_open,
-    code_store_views,
-    code_store_graphs,
+    (code_store_read, READ),
+    (code_store_mutate, MUTATE),
+    (code_store_mutate_many, MUTATE),
+    (code_store_load, MUTATE),
+    (code_store_open, REBUILD),
+    (code_store_views, READ),
+    (code_store_graphs, READ),
 )
 _store_tools_registered = False
 
@@ -1589,8 +1538,8 @@ def register_store_tools() -> None:
     global _store_tools_registered
     if _store_tools_registered:
         return
-    for tool in _STORE_TOOLS:
-        mcp.tool(tool)
+    for tool, annotations in _STORE_TOOLS:
+        mcp.tool(tool, annotations=annotations)
     _store_tools_registered = True
 
 

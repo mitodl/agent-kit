@@ -807,6 +807,8 @@ def test_graph_command_html_output(server, monkeypatch, tmp_path):
 class _FakeMCP:
     """Records run()/mount() calls so serve() dispatch can be asserted."""
 
+    instructions = ""
+
     def __init__(self):
         self.run_calls = []
 
@@ -831,6 +833,24 @@ def test_serve_defaults_to_stdio(monkeypatch):
     fake = _patch_mcp(monkeypatch)
     serve()
     assert fake.run_calls == [{}]
+
+
+def test_serve_carries_the_mounted_code_servers_instructions(monkeypatch):
+    """`mount` brings witan-code's tools but not its instructions, and agents
+    only ever connect to witan, so serve appends them."""
+    import sys
+    import types
+
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    fake.instructions = "WITAN"
+    code_mcp = types.SimpleNamespace(instructions="CODE")
+    monkeypatch.setitem(
+        sys.modules, "witan_code.server", types.SimpleNamespace(mcp=code_mcp)
+    )
+    serve()
+    assert fake.instructions == "WITAN\n\nCODE"
 
 
 def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):
