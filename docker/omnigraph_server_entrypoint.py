@@ -47,10 +47,12 @@ BOOT SEQUENCE
     plan    -> exit 1 on an outstanding deployment, on a graph removal that
                is not allow-listed, or on any other plan error, except a
                schema change refused only because allow-listed graphs have
-               non-main branches
+               non-main branches, and whose migration `schema plan` supports
     lock    -> serve / deployment lock: force-unlock; anything else: exit 1
     if that schema change is pending:
         per non-main branch: delete it, force-unlock the lock it left
+                             (SIGTERM: stop, unlock, exit 1; the next boot
+                             carries on)
         plan again -> exit 1 on any plan error
     apply
     lock    -> force-unlock the deployment lock apply left
@@ -103,6 +105,7 @@ import http.client
 import json
 import os
 import secrets
+import signal
 import ssl
 import subprocess
 import sys
@@ -162,6 +165,10 @@ SCHEMA_PREFLIGHT_FAILED = "schema_preflight_failed"
 # only thing that says which one this is.
 NON_MAIN_BRANCHES_MESSAGE = "schema apply requires a graph with only main"
 MAIN_BRANCH = "main"
+# The prefix of every code-graph id: witan-code's `graph_id` and the
+# ol-infrastructure stack's `code_graph_id` derive them byte for byte the same
+# way (witan_code/config.py CODE_GRAPH_PREFIX), the bridge included.
+CODE_GRAPH_PREFIX = "code-"
 # A branch delete writes one graph's branch manifest and the cluster lock.
 BRANCH_DELETE_TIMEOUT_SECONDS = 120
 
@@ -603,6 +610,10 @@ class CommandResult:
         return json.loads(self.stdout)
 
 
+class DropInterrupted(Exception):
+    """SIGTERM arrived while the boot was dropping branch views."""
+
+
 class CommandTimedOut(Exception):
     """An omnigraph command outlived its timeout and was stopped."""
 
@@ -695,6 +706,12 @@ def cluster_layout(config_dir: Path) -> tuple[str, list[str]]:
     return declared.get("storage") or str(config_dir.absolute()), list(
         declared["graphs"]
     )
+
+
+def graph_schema(config_dir: Path, graph: str) -> Path:
+    """The schema file `cluster.yaml` declares for ``graph``."""
+    declared = yaml.safe_load((config_dir / "cluster.yaml").read_text())
+    return config_dir / declared["graphs"][graph]["schema"]
 
 
 def inline_target(config_dir: Path, root: str) -> str:
@@ -862,29 +879,72 @@ class Cluster:
             raise BootRefused(msg) from exc
         return sorted(branch for branch in listed if branch != MAIN_BRANCH)
 
-    def delete_branch(self, graph: str, branch: str) -> None:
+    def unsupported_schema_steps(self, graph: str, schema: Path) -> list[str]:
+        """Why ``graph`` cannot migrate to ``schema``, empty when it can.
+
+        `schema plan` judges the migration itself, where `cluster plan`
+        stops at the first preflight refusal, and a graph with branches
+        never gets past the branch check there. A read: it takes no lock and
+        does not mind branches.
+
+        :raises BootRefused: if the migration cannot be planned.
+        """
+        args = self.graph_command(
+            "schema", graph, "plan", "--schema", str(schema), "--json"
+        )
+        try:
+            result = run_omnigraph(
+                args, self._lease, timeout_seconds=LOCK_COMMAND_TIMEOUT_SECONDS
+            )
+        except CommandTimedOut as exc:
+            raise BootRefused(str(exc)) from exc
+        try:
+            planned = result.json()
+            supported = planned["supported"]
+        except (ValueError, KeyError) as exc:
+            msg = (
+                f"`schema plan` on {graph} printed no migration "
+                f"(exit {result.returncode}): {result.stdout[:300]!r}"
+            )
+            raise BootRefused(msg) from exc
+        if supported:
+            return []
+        return [
+            step.get("reason") or step.get("code") or json.dumps(step)
+            for step in planned["steps"]
+            if step.get("kind") == "unsupported_change"
+        ] or [json.dumps(planned["steps"])]
+
+    def delete_branch(
+        self, graph: str, branch: str, interrupt: Callable[[], None]
+    ) -> None:
         """Delete one branch, then remove the lock the delete left.
 
         A direct `branch delete` keeps its `graph_operation` lock after it
         exits, whether it deleted anything or not, so the next delete would be
-        refused. The lock is removed even when the delete fails or is stopped
-        on its timeout, so a refused boot leaves the root as it found it. It
-        is not removed when the Lease was lost (``run_omnigraph`` raises
-        ``BootRefused`` before that).
+        refused. The lock is removed even when the delete fails, is stopped
+        on its timeout, or is stopped by ``interrupt`` (SIGTERM), so a boot
+        that ends there leaves the root unlocked for the next one. It is not
+        removed when the Lease was lost (``run_omnigraph`` raises
+        ``BootRefused`` before that): nothing may unlock without it.
 
-        :raises BootRefused: if the delete failed, outlived its timeout, or
-            its lock could not be removed.
+        :raises BootRefused: if the delete failed, outlived its timeout, was
+            interrupted, or its lock could not be removed.
         """
         args = self.graph_command(
             "branch", graph, *self._as, "--yes", "delete", branch, "--json"
         )
         try:
             result = run_omnigraph(
-                args, self._lease, timeout_seconds=BRANCH_DELETE_TIMEOUT_SECONDS
+                args,
+                self._lease,
+                timeout_seconds=BRANCH_DELETE_TIMEOUT_SECONDS,
+                interrupt=interrupt,
             )
-        except CommandTimedOut as exc:
+        except (CommandTimedOut, DropInterrupted) as exc:
             self.release_own_lock()
-            raise BootRefused(str(exc)) from exc
+            msg = str(exc) or f"SIGTERM while deleting {branch} on {graph}"
+            raise BootRefused(msg) from exc
         self.release_own_lock()
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
@@ -1015,11 +1075,23 @@ def branch_drop_allowlist(
 ) -> frozenset[str]:
     """The graphs whose non-main branches a boot may delete.
 
-    :raises BootRefused: on an id `cluster.yaml` does not declare. A typo
-        would otherwise allow nothing, and the schema change it was meant to
-        let through would stall the deploy again.
+    :raises BootRefused: on an id that is not a code graph's, so that a
+        mistaken list cannot reach the council graph, or one `cluster.yaml`
+        does not declare. A typo would otherwise allow nothing, and the
+        schema change it was meant to let through would stall the deploy
+        again.
     """
     allowed = graph_list(env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST")
+    not_code = sorted(
+        graph for graph in allowed if not graph.startswith(CODE_GRAPH_PREFIX)
+    )
+    if not_code:
+        msg = (
+            f"OMNIGRAPH_BRANCH_DROP_ALLOWLIST names {not_code}, which are not "
+            f"code graphs ({CODE_GRAPH_PREFIX}* ids); only a code graph's "
+            "branches are derived views"
+        )
+        raise BootRefused(msg)
     unknown = sorted(allowed - set(declared_graphs))
     if unknown:
         msg = (
@@ -1053,7 +1125,10 @@ def branch_blocked_graphs(plan: dict[str, Any]) -> list[str]:
 
 
 def views_to_drop(
-    cluster: Cluster, plan: dict[str, Any], droppable_graphs: frozenset[str]
+    cluster: Cluster,
+    config_dir: Path,
+    plan: dict[str, Any],
+    droppable_graphs: frozenset[str],
 ) -> dict[str, list[str]]:
     """The branches to delete so the plan's schema changes can apply.
 
@@ -1062,15 +1137,17 @@ def views_to_drop(
     :returns: each blocked graph's non-main branches, empty when the plan was
         not refused for that reason or no blocked graph has any.
     :raises BootRefused: when a graph that is not allow-listed has a schema
-        change and non-main branches. Its branches may hold data nothing
-        re-derives, so they are left for a person to resolve.
+        change and non-main branches (its branches may hold data nothing
+        re-derives, so they are left for a person to resolve), or when a
+        blocked graph's migration is one omnigraph does not support. The
+        branch refusal hides that one, and finding it only after the views
+        are gone would stop a boot with nothing serving.
     """
     if plan.get("ok"):
         return {}
+    blocked = branch_blocked_graphs(plan)
     branched = {
-        graph: branches
-        for graph in branch_blocked_graphs(plan)
-        if (branches := cluster.branches(graph))
+        graph: branches for graph in blocked if (branches := cluster.branches(graph))
     }
     kept = {
         graph: branches
@@ -1090,6 +1167,23 @@ def views_to_drop(
             "nothing re-derives; merge or delete them first (runbook)"
         )
         raise BootRefused(msg)
+    if not branched:
+        return {}
+    unsupported = {
+        graph: reasons
+        for graph in blocked
+        if (
+            reasons := cluster.unsupported_schema_steps(
+                graph, graph_schema(config_dir, graph)
+            )
+        )
+    }
+    if unsupported:
+        msg = (
+            "omnigraph cannot migrate these graphs to their new schema, so "
+            f"dropping their branch views would not let it apply: {unsupported}"
+        )
+        raise BootRefused(msg)
     return branched
 
 
@@ -1098,22 +1192,42 @@ def drop_branch_views(cluster: Cluster, views: dict[str, list[str]]) -> None:
 
     A failure stops the boot with the deletes so far kept. The views are
     caches, so a graph left with some of them loses nothing, and the next
-    boot plans again and deletes the rest.
+    boot plans again and deletes the rest. SIGTERM (the startupProbe giving
+    up on a long drop, a rollout, a drain) stops the running delete and ends
+    the boot the same way, with that delete's lock removed: without the
+    handler the kill would come mid-delete and leave a `graph_operation`
+    lock that every later boot refuses.
 
     :raises BootRefused: see ``Cluster.delete_branch``.
     """
-    for graph, branches in views.items():
-        log(
-            f"dropping {len(branches)} branch views on {graph} so its schema "
-            f"change can apply: {', '.join(branches)}"
-        )
-        for dropped, branch in enumerate(branches):
-            try:
-                cluster.delete_branch(graph, branch)
-            except BootRefused:
-                log(f"dropped {dropped} of {len(branches)} branch views on {graph}")
-                raise
-        log(f"dropped {len(branches)} branch views on {graph}")
+    terminated = threading.Event()
+
+    def interrupt() -> None:
+        if terminated.is_set():
+            raise DropInterrupted
+
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: terminated.set())
+    try:
+        for graph, branches in views.items():
+            log(
+                f"dropping {len(branches)} branch views on {graph} so its "
+                f"schema change can apply: {', '.join(branches)}"
+            )
+            for dropped, branch in enumerate(branches):
+                try:
+                    if terminated.is_set():
+                        msg = "SIGTERM while dropping branch views"
+                        raise BootRefused(msg)
+                    cluster.delete_branch(graph, branch, interrupt)
+                except BootRefused:
+                    log(
+                        f"dropped {dropped} of {len(branches)} branch views on "
+                        f"{graph}; the next boot drops the rest"
+                    )
+                    raise
+            log(f"dropped {len(branches)} branch views on {graph}")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def release_previous_lock(cluster: Cluster) -> None:
@@ -1199,7 +1313,7 @@ def planned_views(
     removable = graph_list(env, "OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST")
     droppable = branch_drop_allowlist(env, cluster_layout(config_dir)[1])
     plan = cluster.plan()
-    views = views_to_drop(cluster, plan, droppable)
+    views = views_to_drop(cluster, config_dir, plan, droppable)
     check_plan(plan, removable, views_pending=bool(views))
     return views
 

@@ -163,13 +163,22 @@ stub in tests). See `witan_code/github_app.py`.
   after taking over the lock and before the apply, logging each graph's
   views, then plans again and refuses on anything left. A boot that plans no
   schema change keeps every view. A graph with a schema change and branches
-  that is not on the list (the council graph) still refuses the boot. Each
-  view costs three CLI calls (`branch delete`, `cluster status` for the lock
-  id the delete keeps, `cluster force-unlock`), so a boot that drops hundreds
-  of views runs well past the default startup budget; size
-  `omnigraph:boot_budget_seconds` for it. A failed or timed-out delete stops
-  the boot with its lock removed and the earlier deletes kept, and the next
-  boot deletes the rest.
+  that is not on the list (the council graph) still refuses the boot. The
+  branch refusal hides any other one in `cluster plan`, so before deleting
+  anything the boot (and the gate) runs `schema plan` on every graph with a
+  schema change and refuses a migration omnigraph does not support. Each view
+  costs three CLI calls (`branch delete`, `cluster status` for the lock id
+  the delete keeps, `cluster force-unlock`). On a local root that is about
+  0.3 to 0.9s per view, so a few hundred views outlast the default 135s
+  startup budget even before S3 latency. When the startupProbe gives up, its
+  SIGTERM stops the running delete, the boot removes that delete's lock and
+  exits, and the next container carries on from the views left, so the drop
+  finishes over several restarts (with CrashLoopBackOff delays between them)
+  and nothing serves until it does. Raise `omnigraph:boot_budget_seconds` to
+  finish in one boot. A failed or timed-out delete ends the boot the same
+  way. A lost Lease, or a `cluster status` or `force-unlock` that fails,
+  leaves the delete's `graph_operation` lock, which the next boot refuses
+  (runbook: clear the lock).
 - **Speaks the 0.13 and the 0.14 CLI.** The scripts read `omnigraph version
   --json` (0.13 has no `--json`) and pick the argument shapes: 0.13's
   `--config <dir>` and `--cluster <root>`, or 0.14's `--config <dir> --target
@@ -215,7 +224,7 @@ The entrypoint reads these from the environment:
 | `POD_NAME` | no | This pod's name. Defaults to `HOSTNAME`. |
 | `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default 50). |
 | `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
-| `OMNIGRAPH_BRANCH_DROP_ALLOWLIST` | no | Comma-separated graph ids whose non-main branches are derived views the boot may delete so a schema change can apply: the code graphs and the bridge, never the council graph. An id `cluster.yaml` does not declare fails the plan. Unset, a schema change on a graph with branches refuses the boot as before. |
+| `OMNIGRAPH_BRANCH_DROP_ALLOWLIST` | no | Comma-separated graph ids whose non-main branches are derived views the boot may delete so a schema change can apply: the code graphs and the bridge, never the council graph. An id that does not start with `code-`, or that `cluster.yaml` does not declare, fails the plan. Unset, a schema change on a graph with branches refuses the boot as before. |
 | `OMNIGRAPH_UNLOCK_WITHOUT_PEERS` | outside Kubernetes | `1` allows force-unlock with no Lease or pod check. Ignored in Kubernetes. |
 
 The maintenance window reads `OMNIGRAPH_UNLOCK_LEASE` and `POD_NAME` as above,

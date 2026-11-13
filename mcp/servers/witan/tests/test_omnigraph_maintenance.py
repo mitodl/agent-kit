@@ -651,7 +651,15 @@ def test_the_gate_fails_on_a_graph_removal_that_is_not_allow_listed(gate_cli, tm
 
 def test_the_gate_passes_views_the_boot_will_drop(monkeypatch, dialect, tmp_path):  # noqa: F811
     (tmp_path / "cluster.yaml").write_text(
-        yaml.safe_dump({"storage": ROOT, "graphs": {"council": {}, "code-a": {}}})
+        yaml.safe_dump(
+            {
+                "storage": ROOT,
+                "graphs": {
+                    "council": {"schema": "./schema.pg"},
+                    "code-a": {"schema": "./code-schema.pg"},
+                },
+            }
+        )
     )
     fake = FakeOmnigraph(
         dialect,
@@ -666,6 +674,11 @@ def test_the_gate_passes_views_the_boot_will_drop(monkeypatch, dialect, tmp_path
     # A read beside the serving server: nothing deleted, its lock untouched.
     assert fake.branches == {"code-a": ["act-1/feat"]}
     assert fake.lock == {"id": "01SERVE", "operation": "serve"}
+
+    # A migration omnigraph cannot run, hidden behind the branch refusal.
+    fake.unsupported = {"code-a": ["changing property type"]}
+    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a"}) == 1
+    fake.unsupported = {}
 
     fake.branches["council"] = ["wip"]
     fake.schema_changes = ["council", "code-a"]
@@ -715,7 +728,7 @@ def test_real_gate_passes_code_graph_views_and_fails_a_memory_branch(
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     real_branch(cluster_dir, "code-example", "act-alice/feat_x")
     change_stub_schema(cluster_dir)
-    droppable = {**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-example,bridge"}
+    droppable = {**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-example"}
 
     assert plan_gate.main(env) == 1
     assert plan_gate.main(droppable) == 0
