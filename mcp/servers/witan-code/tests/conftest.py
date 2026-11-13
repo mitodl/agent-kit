@@ -8,6 +8,8 @@ tree-sitter-<lang> wheels, not the optional tree-sitter-language-pack), not an
 optional extra — so there's nothing to gate on there.
 """
 
+import asyncio
+import inspect
 import shutil
 
 import pytest
@@ -18,6 +20,19 @@ requires_stack = pytest.mark.skipif(
     not omnigraph_available,
     reason="requires omnigraph binary",
 )
+
+
+def tool_fn(tool):
+    """A FastMCP tool as a plain callable; an ``async`` one runs to completion.
+
+    Called directly rather than through an MCP client, a tool that takes a
+    ``ctx: Context`` gets none and falls back to its non-interactive default.
+    """
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+        return lambda *a, **kw: asyncio.run(fn(*a, **kw))
+    return fn
+
 
 # Narrower than requires_stack: maintenance (optimize/cleanup) exercises the
 # omnigraph binary directly and has no tree-sitter involvement.
