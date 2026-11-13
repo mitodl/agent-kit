@@ -5,5 +5,7 @@
   filter, and the memory panel shows each ref as missing (with same-named
   candidates) or unchecked (with the reason). A ref that could not be checked,
   e.g. in a repo nobody indexed, is counted above the list and never marked
-  stale. `memory_stale_refs` joins the UI's bound read set, so the deployed
+  stale. `memory_stale_refs` checks current memories only, so where the view
+  shows superseded ones (a topic, or "Show superseded") it says they are
+  unchecked. `memory_stale_refs` joins the UI's bound read set, so the deployed
   page's read-only token may call it (ADR 0011, 2026-11-13 amendment).

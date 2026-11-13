@@ -207,6 +207,7 @@ function staleTitle(entry: StaleMemory): string {
 function staleNote(
 	stale: Snapshot<StaleRefsReport> | null,
 	route: Route,
+	supersededShown: boolean,
 	now: number,
 ): TemplateResult | typeof nothing {
 	const report = stale?.data ?? null;
@@ -235,8 +236,15 @@ function staleNote(
 		: nothing;
 	const stales = report.memories.filter((m) => m.status === "stale").length;
 	const unknown = report.memories.filter((m) => m.status === "unknown").length;
+	// `memory_stale_refs` reads current memories only, and a list row does not
+	// say whether it is superseded, so the note says which rows go unchecked.
+	const superseded = supersededShown
+		? html`Superseded memories are not checked, so none of them is marked.`
+		: nothing;
 	if (stales === 0 && unknown === 0) {
-		return refreshFailed;
+		return supersededShown
+			? html`${refreshFailed}<p class="stale-summary">${superseded}</p>`
+			: refreshFailed;
 	}
 	// The report names the scope it checked, which a topic or a recall widens
 	// past the repo filter.
@@ -257,6 +265,7 @@ function staleNote(
           marked; the memory's panel says why.`
 				: nothing
 		}
+    ${superseded}
   </p>`;
 }
 
@@ -322,19 +331,24 @@ export function memoryView(
 		: faceted;
 	const shown =
 		page.mode === "topic" ? matching.slice(0, TOPIC_ROW_CAP) : matching;
+	// `topicGet` always includes superseded memories; elsewhere the toggle does.
+	const supersededShown = page.mode === "topic" || route.superseded;
 	return html`
     <div class="memory-view">
       ${toolbar(route, facetOptions(page.memories), onNavigate)}
       ${page.mode === "browse" ? inbox(page.inbox, route, now) : nothing}
       ${page.mode === "recall" ? recallPairs(page.pairs, page.memories, route) : nothing}
       ${page.mode === "topic" ? topicHeading(page.topic, route) : nothing}
-      ${staleNote(stale, route, now)}
+      ${staleNote(stale, route, supersededShown, now)}
       ${staleOutsideList(page, route, stale?.data ?? null)}
       ${limitNotes(page, matching.length)}
       ${
 				page.mode === "topic" && page.topic === null
 					? nothing
-					: memoryTable(page, shown, route, now, flagged, stale?.data != null)
+					: memoryTable(page, shown, route, now, flagged, {
+							checked: stale?.data != null,
+							supersededShown,
+						})
 			}
     </div>
   `;
@@ -640,7 +654,10 @@ export function recallResults(
 	return html`
     <div class="memory-view">
       ${recallPairs(page.pairs, page.memories, route)}
-      ${memoryTable(page, page.memories, route, now, new Map(), false)}
+      ${memoryTable(page, page.memories, route, now, new Map(), {
+				checked: false,
+				supersededShown: false,
+			})}
     </div>
   `;
 }
@@ -670,10 +687,10 @@ function memoryTable(
 	route: Route,
 	now: number,
 	flagged: Map<string, StaleMemory>,
-	checked: boolean,
+	check: StaleCheck,
 ): TemplateResult {
 	if (shown.length === 0) {
-		return html`<p class="empty">${emptyMessage(page, route, checked)}</p>`;
+		return html`<p class="empty">${emptyMessage(page, route, check)}</p>`;
 	}
 	const contradicted = new Set(
 		page.mode === "recall"
@@ -754,16 +771,26 @@ function tableHeading(page: MemoryPage): string {
 	}
 }
 
+/** What the stale check covers on this page, for the empty state. */
+interface StaleCheck {
+	/** A report has landed. */
+	checked: boolean;
+	/** The list can hold superseded memories, which the check skips. */
+	supersededShown: boolean;
+}
+
 function emptyMessage(
 	page: MemoryPage,
 	route: Route,
-	checked: boolean,
+	{ checked, supersededShown }: StaleCheck,
 ): string {
 	if (route.stale && !checked) {
 		return "Nothing to show: symbol refs have not been checked.";
 	}
 	if (route.stale && page.memories.length > 0) {
-		return "No memories here cite a symbol the code graph no longer has.";
+		return supersededShown
+			? "No current memories here cite a symbol the code graph no longer has. Superseded memories are not checked."
+			: "No memories here cite a symbol the code graph no longer has.";
 	}
 	if (page.memories.length > 0) {
 		return "No memories match these filters.";
@@ -861,6 +888,16 @@ export function memoryDetail(
 				memory.symbol_refs?.length
 					? html`<section class="edges">
               <h3>Symbols</h3>
+              ${
+								// `memory_stale_refs` reads current memories only.
+								replacedBy.length
+									? html`<p class="muted">
+                      <span class="badge unchecked">unchecked</span>
+                      Superseded memories are not checked against the code
+                      graph.
+                    </p>`
+									: nothing
+							}
               <ul class="symbols">
                 ${memory.symbol_refs.map((ref) => symbolRef(ref, checked.get(ref)))}
               </ul>

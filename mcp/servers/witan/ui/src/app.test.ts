@@ -1201,6 +1201,20 @@ describe("App", () => {
 		expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull();
 	});
 
+	it("says superseded memories go unchecked when the list shows them", async () => {
+		await open("#memory?superseded=1");
+		await vi.waitFor(() =>
+			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
+		);
+
+		expect(mcp.memoryList).toHaveBeenCalledWith(
+			expect.objectContaining({ include_superseded: true }),
+		);
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+	});
+
 	it("re-checks symbol refs on the memory view's Refresh", async () => {
 		await open("#memory");
 		await vi.waitFor(() =>

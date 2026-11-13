@@ -601,6 +601,61 @@ describe("stale symbol refs", () => {
 		expect(root.querySelector(".stale-refresh-failed")).not.toBeNull();
 	});
 
+	it("says superseded memories are unchecked when the list shows them", () => {
+		draw(browse, { ...route, superseded: true }, vi.fn(), landed(report));
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+
+		draw(
+			browse,
+			{ ...route, superseded: true },
+			vi.fn(),
+			landed({ ...report, memories: [] }),
+		);
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+
+		draw(browse, route, vi.fn(), landed(report));
+		expect(text()).not.toContain("Superseded memories are not checked");
+	});
+
+	it("qualifies an empty stale filter where superseded memories are shown", () => {
+		const clean = landed({ ...report, memories: [] });
+		// The inbox has its own `.empty`; this is the list's.
+		const emptyText = () =>
+			[...root.querySelectorAll("p.empty")].at(-1)?.textContent?.trim();
+		draw(browse, { ...route, stale: true, superseded: true }, vi.fn(), clean);
+		expect(emptyText()).toBe(
+			"No current memories here cite a symbol the code graph no longer has. Superseded memories are not checked.",
+		);
+
+		// A topic always includes superseded memories.
+		draw(
+			{
+				mode: "topic",
+				topic: {
+					slug: "tp-topic-mcp",
+					name: "mcp",
+					kind: "topic",
+					created_at: memory.created_at,
+				},
+				memories: [memory],
+				readAtLimit: false,
+			},
+			{ ...route, topic: "tp-topic-mcp", stale: true },
+			vi.fn(),
+			clean,
+		);
+		expect(emptyText()).toContain("Superseded memories are not checked");
+
+		draw(browse, { ...route, stale: true }, vi.fn(), clean);
+		expect(emptyText()).toBe(
+			"No memories here cite a symbol the code graph no longer has.",
+		);
+	});
+
 	it("draws no note when every checked ref resolves", () => {
 		draw(
 			browse,
@@ -737,6 +792,26 @@ describe("memoryDetail", () => {
 		expect(root.querySelectorAll("section.edges").length).toBe(0);
 		expect(root.querySelectorAll("h3").length).toBe(0);
 		expect(text()).toContain("x-fastmcp-wrap-result");
+	});
+
+	it("marks a superseded memory's refs as unchecked", () => {
+		const refs = ["https://github.com/example/lib#lib/service.py::Service.run"];
+		panel(superseded, {
+			...memory,
+			slug: superseded.slug,
+			topics: [],
+			symbol_refs: refs,
+		});
+		const symbols = [...root.querySelectorAll("section.edges")].find(
+			(section) => section.querySelector("h3")?.textContent === "Symbols",
+		);
+		expect(symbols?.querySelector(".badge.unchecked")).not.toBeNull();
+		expect(symbols?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+
+		panel(neighbors, { ...memory, symbol_refs: refs });
+		expect(text()).not.toContain("Superseded memories are not checked");
 	});
 
 	it("says what replaced a superseded memory", () => {
