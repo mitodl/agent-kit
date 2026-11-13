@@ -265,7 +265,7 @@ def test_all_repos_checks_every_repo(server, code):
     here = _lesson(server, "here", [DELETED])
     there = _lesson(server, "there", [f"{UNINDEXED}#a.py::f"], repo=UNINDEXED)
 
-    flagged = _by_slug(server.memory_stale_refs(repo=""))
+    flagged = _by_slug(server.memory_stale_refs(all_repos=True))
 
     assert {here, there} <= set(flagged)
 
