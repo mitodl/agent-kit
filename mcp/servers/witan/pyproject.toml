@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.48.0"
+version = "0.49.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -291,7 +291,13 @@ dependencies = [
   # session_summary.py, cli/session.py and remote/proxy.py import
   # `witan_core.timeutil.parse_timestamp` at module scope, added in witan-core
   # 0.55.0 in the same change (#629), so 0.54 cannot import the server.
-  "witan-core[cli,remote,observability,sentry]>=0.55.0,<1",
+  #
+  # >=0.56 is NOT an import floor: 0.55 imports fine and then breaks every
+  # remote `--all-repos` call. Since #640 the server refuses `repo` beside
+  # `all_repos`, and 0.55's RemoteMCPProxy fills the detected repo into a
+  # call that omits `repo`, `all_repos` or not; 0.56.0 skips it under
+  # `all_repos` (#640).
+  "witan-core[cli,remote,observability,sentry]>=0.56.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -358,7 +364,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.48.0"
+current_version = "0.49.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

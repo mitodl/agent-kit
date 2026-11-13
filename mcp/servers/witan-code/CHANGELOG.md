@@ -8,6 +8,63 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.31.0] - 2026-11-13
+
+### Added
+
+- `witan code why <path>` says whether a file is in the code graph, in the view the `code_*` tools read from its checkout, and if not, which indexer rule left it out (unsupported language, skipped directory, nested checkout, symlinked directory, gitignored) with the fix. An empty `code_*` result reads the same for an unused symbol and for a file the indexer never wrote; this tells the two apart. The rules are the indexer's own filter, now one function both the git-listing and disk-walk paths call, so the explanation cannot drift from what gets indexed. It reads the `--target`'s stores, and refuses (naming `code_transport`) when a remote URL sends the `code_*` reads to a deployment while the code-graph stores are local, since its answer would describe a graph those reads never use.
+
+- `code_search_symbol` matches symbol docstrings as well as qualified names, so a query like "rate limiting" finds a symbol whose docstring describes it even when its name does not. A second BM25 run over `Symbol.docstring` is appended after the name run, keeping only the symbols the name run did not return, so a docstring-only match never outranks a name match, across a cross-repo fan-out too. Each run returns up to 50 symbols per store.
+
+- `code_callers` takes `direction="callees"` to list the symbols a function calls, following the same `Calls` edges outward. The default, `direction="callers"`, is unchanged. Like the callers query it reads the checkout's branch view for the current repo.
+
+- `witan code diff-impact --base origin/main` maps a branch's diff to the symbols it changes, by parsing both sides of each changed file with the indexer's parser (a decorator-only edit maps to the decorated symbol), then lists each symbol's callers, the bindings in other repos that share its env vars, endpoints and packages, the test files that name it (a stand-in for "tests to run", since the graph has no test-to-code edges), and the witan tasks and memories that cite it, plus the tasks claimed on the head branch. Every list carries its total next to what is shown (`--limit`, `--max-items`), changed test files are listed by file rather than looked up, renamed files are listed with a note that every symbol id in them moved, and the notes say what the answer cannot see: an unindexed repo, symbols missing from the index, callers in other files, and callers only this branch adds. Tasks and memories are skipped, with a note, when witan (council) is not installed. Honors `--output-format`. Its in-process lookups are pinned to the base branch's view, so a symbol the branch removed resolves against main even after the branch is indexed.
+- `code_impact`, `code_cross_repo_impact` and `code_symbols_in_file` accept an optional `branch`, with the semantics `code_find_definition` already has: omitted, they follow the checkout's branch view for the current repo as before; `branch="main"` reads the default view from a checkout whose own branch is indexed. On `code_impact` it applies to the root symbol's repo, and on `code_cross_repo_impact` it selects that repo's bridge overlay. The server instructions now say which id-routed tools take `branch`.
+
+### Changed
+
+- `code_find_definition` and `code_search_symbol` docs no longer contrast their `repo=""` with the witan memory/task tools, which now refuse an empty `repo` and take `all_repos=True` instead. Behaviour is unchanged.
+
+- The `witan-code` skill points at `recall(symbol_id=…)` for the memories and
+  tasks attached to a symbol, since witan folded `symbol_context` into
+  `recall`.
+- `witan code diff-impact` reads each changed symbol's tasks and memories
+  through `recall(symbol_id=…, hops=0, include_superseded=True)`. It still
+  called the removed `symbol_context`, so it failed on every changed non-test
+  symbol when witan was installed.
+
+### Fixed
+
+- The optimize and cleanup throttle stamps
+  (`witan-code-{optimize,cleanup}-<digest>.json`) and the context hook's
+  cached bridge verdict (`codegraph-bridge-<digest>.probe`) moved from the bare
+  temp dir into witan-code's private per-user state dir, where the reindex
+  queue already lives (0700 under `$TMPDIR` on POSIX,
+  `%LOCALAPPDATA%\witan-code\state` on Windows). Another user could create a
+  predictable name in a shared `TMPDIR` first, as a file pinning a wrong
+  bridge verdict or as a symlink the write would follow. If the state dir is
+  refused, the hook probes the bridge uncached instead of dropping its block.
+  The first Stop hook after upgrading finds neither stamp, so it runs one
+  optimize and one `--cleanup-older-than 2d` cleanup that the old stamps might
+  have deferred (the cleanup by up to its 7-day window).
+
+- `witan --target <name> code doctor` reads that target's code graphs. `doctor` used the config loaded when the server module was imported, which never sees a forwarded `--target`.
+
+- `witan-code setup --agent codex` writes Codex's `witan-code` MCP entry as the installed `witan-code serve`, the same CLI its hooks call, instead of a `uvx --from git+…` entry. Which platforms get the CLI entry now follows agent-config-kit's registry: every platform it writes hooks for. Requires agent-config-kit 0.13, the first release with Codex hooks.
+- `witan-code setup` warns when `witan-code` is not on PATH, since the hooks and the `witan-code serve` MCP entry it registers both need it.
+
+- `code_repo_dependencies` and the bridge explorer draw the "ol-infrastructure
+  deploys repo X" edge again. The extractor has written a repo service anchor
+  as the bare repo URI with `sub_kind="repo"` since #7, but the graph builder
+  still looked for a `repo:` key prefix and the `all_bindings` read did not
+  return `sub_kind`, so no deployed graph ever had a service edge. Image and
+  app-name anchors still draw no edge: nothing in the indexed repos yet says
+  which repo builds an image.
+
+### Notes
+
+- `Symbol.docstring` gains `@index` in `code-schema.pg`. On omnigraph 0.15 both `schema plan` (a local store) and `cluster plan` (a cluster) report it as one supported `add_constraint` step, and the apply indexes the docstrings already stored, so no code graph needs a rebuild. A local store gains the index on its next index, through the schema apply that already runs when the schema file changes. A cluster's `code-<repo>` graphs gain it when an omnigraph-server image built with this schema boots and runs `cluster apply`. Until a store has the index, omnigraph 0.15 refuses the docstring run (`T27`). A client reading through a deployed MCP tier (`code_transport = "mcp"`) older than this release is refused too, because the tier looks the query up in its own bundled `code_read.gq`. In both cases `code_search_symbol` returns name matches only and logs `witan.code.search.docstring_search_unavailable`.
+
 ## [0.30.0] - 2026-11-12
 
 ### Added
