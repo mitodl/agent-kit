@@ -479,6 +479,8 @@ def test_the_stdio_server_opts_in(monkeypatch):
 
 
 class _NoRun:
+    instructions = ""
+
     def mount(self, _other):
         pass
 

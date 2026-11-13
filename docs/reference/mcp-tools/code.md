@@ -16,10 +16,12 @@ Follows Calls edges into ``symbol_id`` by default, or out of it with
 ``direction="callees"``. Heuristic name-resolution based; not a precise
 call graph. For calls plus other references use code_find_references.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``. |
-| `direction` | `callers` \| `callees` | `'callers'` | ``callers`` (default) returns the symbols that call ``symbol_id``;<br>``callees`` returns the symbols ``symbol_id`` calls. The indexer<br>resolves a call only to a symbol defined in the same file, so a call<br>into another module (in this repo or a library) is not listed. |
+| `symbol_id` | str | **required** | The symbol to start from (a ``symbol_id`` from a name-based tool). |
+| `direction` | `callers` \| `callees` | `'callers'` | ``callers`` (default) or ``callees``. Calls resolve only to symbols in<br>the same file, so a call into another module is not listed. |
 
 ## `code_cross_repo_impact`
 
@@ -34,11 +36,13 @@ no cross-repo surface or the bridge store does not exist yet.
 Generic env vars (DEBUG, PORT, …) are flagged ``generic`` and excluded from
 the cross-repo fan-out so a trivial edit doesn't appear to touch every repo.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `symbol_id` | str | **required** | The symbol whose cross-repo surface to trace, as returned in the<br>``symbol_id`` field of code_find_definition or code_search_symbol. Its<br>repo prefix also scopes the bridge read, so asking about another repo's<br>symbol does not pick up an unrelated overlay from your own checkout. |
-| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | ``heuristic`` (default) \| ``precise`` — see server instructions. |
-| `branch` | str? | `null` | Git branch whose bridge overlay for ``symbol_id``'s repo to read. The<br>repo's default branch, or a branch with no overlay, reads bridge main,<br>so pass e.g. ``main`` to see a symbol your checkout's branch removed.<br>Omitted, reads the checkout's overlay when the id's repo is the<br>current detected repo and bridge main otherwise. |
+| `symbol_id` | str | **required** | The symbol whose cross-repo surface to trace. |
+| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
+| `branch` | str? | `null` | Branch whose bridge overlay for ``symbol_id``'s repo to read; see<br>instructions. A branch with no overlay reads bridge main. |
 
 ## `code_find_definition`
 
@@ -49,11 +53,13 @@ Returns matching symbols (function, method, class, module, …) with their
 origin. Feed a returned ``symbol_id`` to code_find_references / code_callers
 / code_impact.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | str | **required** | Bare name (``run``) or qualified name (``Service.run``). |
-| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all. ``repo=""`` does **not** force a fan-out — it is<br>falsy, so it behaves exactly like omitting the argument. |
-| `branch` | str? | `null` | Git branch whose indexed view to query (e.g. another agent's in-flight<br>branch). Defaults to the checkout's branch when querying the current<br>repo; when ``repo`` names a different repo and ``branch`` is omitted,<br>reads that store's default (main) view. |
+| `repo` | str? | `null` | Repo to search; see instructions. |
+| `branch` | str? | `null` | Branch or view to read; see instructions. |
 
 ## `code_find_references`
 
@@ -62,9 +68,11 @@ Find symbols that reference or call ``symbol_id`` (incoming edges).
 Supersets code_callers (references includes calls); use code_callers when
 you want calls only. Heuristic — may miss or over-report.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``. |
+| `symbol_id` | str | **required** | The symbol to start from (a ``symbol_id`` from a name-based tool). |
 
 ## `code_impact`
 
@@ -74,27 +82,23 @@ Performs a breadth-first traversal over Calls edges, capping at ``max_depth``
 levels and ``max_nodes`` total. Returns the reached symbols and whether the
 traversal was truncated. Heuristic — see code_callers.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``.<br>This is the symbol you are about to change; the result is its blast<br>radius. |
+| `symbol_id` | str | **required** | The symbol to start from (a ``symbol_id`` from a name-based tool). |
 | `max_depth` | int | `5` | Maximum BFS depth (default 5). |
 | `max_nodes` | int | `200` | Cap on total symbols returned (default 200). |
-| `branch` | str? | `null` | Git branch (or a view name from code_indexed_branches) whose view of<br>``symbol_id``'s repo to walk, as for code_find_definition. Pass the<br>default branch (e.g. ``main``) to read the default view from a<br>checkout whose own branch is indexed, where a symbol the branch<br>removed no longer exists. Omitted, follows the checkout's branch when<br>the id's repo is the current detected repo and reads main otherwise.<br>Callers in other repos are always read from their default view. |
+| `branch` | str? | `null` | Branch or view of ``symbol_id``'s repo to walk; see instructions.<br>Callers in other repos are read from their default view. |
 
 ## `code_indexed_branches`
 
 The in-flight branch views each indexed repo's store carries, and who owns each.
 
-A non-default git branch is indexed onto its own store view, named for the
-writer as well as the branch (docs/BRANCH_INDEXING.md), so several people
-— or an agent and its human, or one developer in two worktrees — can each
-have a view of the same branch without overwriting one another.
-
-Pass ``branch`` (a raw git branch name) to see every writer's view of that
-one branch: this is how you find a teammate's in-flight work. Feed a
-returned ``view`` straight back as the ``branch`` argument of
-code_find_definition / code_search_symbol / code_symbols_in_file to read
-it. Omit ``branch`` to list everything.
+A non-default branch is indexed onto a view per writer
+(docs/BRANCH_INDEXING.md). Pass ``branch`` to see every writer's view of
+it, which is how you find a teammate's in-flight work, and pass a returned
+``view`` back as the ``branch`` argument of the name-routed tools.
 
 Each row is ``{repo, views}``, where a view is
 ``{view, branch, actor}`` — ``view`` the name to pass back, ``branch`` the
@@ -102,9 +106,11 @@ sanitized git branch it is a view of, ``actor`` its owner (null on a
 single-writer local store). ``views`` is null for a store that could not be
 listed.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `branch` | str? | `null` | A raw git branch name (not a view name) to filter by, showing every<br>writer's view of that one branch — this is how you find a teammate's<br>in-flight work. Omit to list every view of every indexed repo. |
+| `branch` | str? | `null` | A git branch name (not a view name). Omit to list every view. |
 
 ## `code_indexed_repos`
 
@@ -114,16 +120,12 @@ Use it to check coverage before trusting a negative result — a symbol
 search returning nothing means something different when the repo in
 question was never indexed. ``last_indexed`` is a Unix timestamp.
 
-``files`` is None for a store that could not be read, and ``unreadable``
-then carries why. Read the pair together: a repo listed with ``files: null``
-is NOT a repo with little indexed, it is one whose code graph no ``code_*``
-tool can query at all, and treating its empty results as "nothing found"
-is a confident wrong answer. ``unreadable`` is null on a healthy store.
+``files: null`` means the store could not be read (``unreadable`` says
+why), so no ``code_*`` tool can query that repo: its empty results are not
+"nothing found". ``bytes`` and ``last_indexed`` are null for a graph on the
+shared omnigraph-server.
 
-``bytes`` and ``last_indexed`` are both null for a graph on the shared
-omnigraph-server: they describe a directory on this machine, and a client
-of a shared graph has neither the directory nor any business reporting the
-server's disk. ``files`` stays real — it is a query, not a walk.
+*Read-only.*
 
 *Takes no parameters.*
 
@@ -134,11 +136,13 @@ Find repos that CONSUME a cross-repo contract ``key`` of ``kind``.
 The mirror of ``code_interface_providers`` — e.g. which repos read an env var
 or call an API endpoint. Spans every indexed repo.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | `env_var` \| `package` \| `service` \| `endpoint` | **required** | ``env_var``, ``package``, ``service``, or ``endpoint``. |
 | `key` | str | **required** | The contract value (``endpoint`` paths are normalized). |
-| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | ``heuristic`` (default) \| ``precise`` — see server instructions. |
+| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 | `in_repo` | str? | `null` | Keep only the bindings in this exact repo URI. Omitted, every repo. |
 
 ## `code_interface_providers`
@@ -150,11 +154,13 @@ Spans every indexed repo via the shared bridge store. Examples:
 ol-infrastructure binding that sets it; ``("endpoint", "/api/v1/courses/")``
 returns the Django/OpenAPI route that serves it.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | `env_var` \| `package` \| `service` \| `endpoint` | **required** | ``env_var``, ``package``, ``service``, or ``endpoint``. |
 | `key` | str | **required** | The contract value. For ``endpoint`` a raw path is accepted and<br>normalized (path params collapse to ``{}``). |
-| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | ``heuristic`` (default) \| ``precise`` — see server instructions. |
+| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 | `in_repo` | str? | `null` | Keep only the bindings in this exact repo URI. Omitted, every repo. |
 
 ## `code_interface_search`
@@ -164,11 +170,13 @@ BM25 search over cross-repo interface bindings (by normalized key).
 Use to discover contract keys when you only remember part of a name —
 e.g. ``code_interface_search("BASE_URL")`` or ``("courses", kind="endpoint")``.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Search terms matched against the normalized key. |
 | `kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | Optional filter to one kind. |
-| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | ``heuristic`` (default) \| ``precise`` — see server instructions. |
+| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 
 ## `code_precise_edges`
 
@@ -183,6 +191,8 @@ disambiguation); filter to ``preferred`` edges to narrow a fan-out to its
 best candidate(s). A reference with no precise match shows up in
 ``code_unresolved_symbols`` instead.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Keep only edges whose consumer OR provider is this repo. Omit to see<br>every precise edge in the bridge store. |
@@ -195,15 +205,14 @@ Incremental by default — unchanged files (matching content hash) are
 skipped. Lazily creates the per-repo store on first run. Returns a summary of
 files scanned/indexed/skipped and symbols/edges written.
 
-A full rebuild runs for minutes on a large repo, so this tool accepts
-task-augmented execution (`io.modelcontextprotocol/tasks`): a client that
-asks for it gets a task handle back immediately and polls `tasks/get`,
-instead of holding one tool call open for the whole index. Asking is the
-client's choice — omit it and the call runs to completion as it always has.
+Supports task-augmented execution (`io.modelcontextprotocol/tasks`) for a
+client that would rather poll than hold the call open.
+
+*Writes (destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `path` | str? | `null` | Optional file or directory under the repo. Defaults to the repo root<br>(or cwd if not in a git repo). |
+| `path` | str? | `null` | File or directory under the repo. Defaults to the repo root. |
 | `force` | bool | `False` | Re-index every file regardless of content hash. |
 
 ## `code_repo_dependencies`
@@ -217,11 +226,13 @@ the deploying repo depends on what it deploys). Returns
 contracts}]}`` — the coarse, whole-SOA view, where
 ``code_interface_providers``/``_consumers`` answer about one contract key.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | Filter to one contract kind (``env_var``/``package``/``service``/``endpoint``). |
 | `repo` | str? | `null` | Keep only links touching a repo whose URI contains this substring. |
-| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | ``heuristic`` (default) \| ``precise`` — see server instructions. |
+| `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 
 ## `code_repo_symbols`
 
@@ -233,6 +244,8 @@ rows are the unresolved references Stage 2 joins against other repos'
 exports. Use it to see what a repo publishes and what it expects from the
 rest of the SOA; ``code_precise_edges`` is the resolved join over the same
 table.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -249,19 +262,16 @@ its docstring says it does (e.g. "rate limiting"). Each result carries its
 ``symbol_id`` and ``repo`` of origin.
 
 Name matches come first, then symbols whose docstring matches and whose
-name does not. A docstring-only match never outranks a name match: BM25
-scores the two fields on scales that cannot be compared (a short name
-inflates under length normalisation), so the order between them is a
-policy, and this is the policy. Within each group, BM25 ranking is
-per-store, and a cross-repo fan-out concatenates each store's ranked
-results. Each group holds up to 50 results per store.
+name does not. Each group holds up to 50 results per store.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Search terms matched against ``qualified_name`` and ``docstring``. |
-| `kind` | `function` \| `method` \| `class` \| `module` \| `variable` \| `interface` \| `type` \| `enum` \| `key` \| `table` \| `cte` \| `block`? | `null` | Optional filter to a single symbol kind: ``function``, ``method``,<br>``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,<br>``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``<br>to exclude the many YAML ``key`` symbols when searching for code. |
-| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all — ``repo=""`` does **not** force that; it is falsy and<br>behaves like omitting the argument.<br>BM25 ranking is per-store, so a fan-out concatenates each store's<br>ranked results rather than producing one global ordering. |
-| `branch` | str? | `null` | Git branch whose indexed view to query. Defaults to the checkout's<br>branch when querying the current repo; when ``repo`` names a different<br>repo and ``branch`` is omitted, reads that store's default (main) view. |
+| `kind` | `function` \| `method` \| `class` \| `module` \| `variable` \| `interface` \| `type` \| `enum` \| `key` \| `table` \| `cte` \| `block`? | `null` | Filter to one symbol kind. ``kind="function"`` leaves out the many<br>YAML ``key`` symbols when searching for code. |
+| `repo` | str? | `null` | Repo to search; see instructions. |
+| `branch` | str? | `null` | Branch or view to read; see instructions. |
 
 ## `code_store_health`
 
@@ -271,23 +281,16 @@ The readiness check for witan-code. Call it when ``code_*`` tools return
 errors, or return nothing where you expected something, before concluding
 that a symbol or a consumer does not exist.
 
-The bridge graph is why this is its own tool rather than a column on
-code_indexed_repos. It belongs to no repo, so it appears in no repo
-listing, yet ``code_interface_search`` / ``code_interface_providers`` /
-``code_interface_consumers`` / ``code_cross_repo_impact`` all read it and
-nothing else does. A bridge that cannot be opened makes every one of those
-fail while every per-repo listing still looks healthy — which is how it
-stayed broken for six weeks.
+Covers the cross-repo bridge graph too, which the interface and
+cross-repo tools read and no repo listing shows.
 
 Returns ``{"stores": [{store, label, kind, ok, files, error,
-stale_schema}], "ok": bool, "stale_schema": [store, ...]}``. ``store`` is
-the full address; ``label`` is the short form that identifies WHICH graph a
-row is, which for a cluster graph the address does not (it ends in the
-endpoint, identical on every row). ``stale_schema`` names the
-stores written by an omnigraph whose on-disk format the installed binary
-no longer reads — the one failure with a known remedy, since a code graph
-is derived from its checkout and is rebuilt by reindexing
-(``witan-code reindex --rebuild``) rather than migrated.
+stale_schema}], "ok": bool, "stale_schema": [store, ...]}``. ``label``
+names which graph a row is. ``stale_schema`` lists stores the installed
+omnigraph can no longer read; rebuild them with
+``witan-code reindex --rebuild``.
+
+*Read-only.*
 
 *Takes no parameters.*
 
@@ -298,11 +301,13 @@ List symbols defined in ``path`` (repo-relative or absolute).
 A file is inherently repo-local, so this resolves a single repo (no fan-out):
 the given ``repo`` or, if omitted, the current repo.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `path` | str | **required** | Source file path. |
-| `repo` | str? | `null` | Canonical repo URI the file belongs to. Defaults to the current repo. |
-| `branch` | str? | `null` | Git branch whose indexed view to read (e.g. another agent's in-flight<br>branch), or a view name from code_indexed_branches. Defaults to the<br>checkout's branch when querying the current repo; when ``repo`` names<br>a different repo and ``branch`` is omitted, reads that store's default<br>(main) view. |
+| `repo` | str? | `null` | Repo the file belongs to. Defaults to the current repo. |
+| `branch` | str? | `null` | Branch or view to read; see instructions. |
 
 ## `code_unresolved_symbols`
 
@@ -314,6 +319,8 @@ either the provider repo isn't indexed yet, or the reference genuinely has
 no provider in this SOA. These still get a heuristic-tier chance via
 ``code_interface_consumers``/``_providers``; this tool finds what's NOT
 precisely resolved.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

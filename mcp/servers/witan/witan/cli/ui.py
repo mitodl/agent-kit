@@ -11,7 +11,7 @@ import cyclopts
 
 from .. import config as cfg_module
 from .. import ui_routes
-from ._common import app, console, print_error
+from ._common import app, console, mount_witan_code, print_error
 from .selected_target import selected_target
 
 
@@ -126,12 +126,7 @@ def _serve_local(port: int, *, browser: bool) -> None:
     # strictly smaller tool surface than the deployment, so the page would see
     # the code graph on one and not the other for no reason a reader could
     # find.
-    try:
-        from witan_code.server import mcp as code_mcp
-
-        witan_mcp.mount(code_mcp)
-    except ImportError:
-        pass
+    mount_witan_code(witan_mcp)
 
     # `witan ui` always serves the protocol at the default path, but say so
     # explicitly rather than relying on the module default: a process that

@@ -47,3 +47,42 @@ def test_the_tool_surface_is_actually_being_inspected():
         f"only {len(properties)} tool parameters found; the code_* surface is "
         "larger than that, so the schema inspection is probably broken"
     )
+
+
+def test_every_tool_carries_annotations():
+    """Every ``code_*`` tool, the indexer's store tools included, says whether
+    it reads, and if it writes, whether it can destroy."""
+    from witan_code import server as code_server
+    from witan_code.remote.store import _READ_ONLY_STORE_TOOLS
+
+    # The store tools are read off the registration table rather than
+    # registered here: registering mutates the module's server for every later
+    # test in the process.
+    annotations = {
+        t.name: t.annotations for t in asyncio.run(code_server.mcp._list_tools())
+    }
+    annotations |= {tool.__name__: hints for tool, hints in code_server._STORE_TOOLS}
+    assert len(annotations) > 20
+    unannotated = sorted(
+        name
+        for name, hints in annotations.items()
+        if hints is None
+        or hints.read_only_hint is None
+        or (not hints.read_only_hint and hints.destructive_hint is None)
+    )
+    assert not unannotated, f"tools missing MCP annotations: {unannotated}"
+    assert all(annotations[n].read_only_hint for n in _READ_ONLY_STORE_TOOLS)
+
+
+def test_reindex_is_destructive_and_store_open_is_not():
+    """``code_reindex`` deletes a changed file's rows before loading their
+    replacements, so a load that fails part-way leaves them missing; opening a
+    branch view deletes nothing."""
+    from witan_code import server as code_server
+
+    annotations = {
+        t.name: t.annotations for t in asyncio.run(code_server.mcp._list_tools())
+    }
+    annotations |= {tool.__name__: hints for tool, hints in code_server._STORE_TOOLS}
+    assert annotations["code_reindex"].destructive_hint is True
+    assert annotations["code_store_open"].destructive_hint is False

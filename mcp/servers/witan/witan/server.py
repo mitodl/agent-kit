@@ -28,6 +28,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.middleware import AuthMiddleware
+from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -79,6 +80,7 @@ from .graph import (
     _is_storage_version_mismatch,
 )
 from .identity import ActorTokenResolver, derive_actor_id
+from .instructions import INSTRUCTIONS
 
 # ── Startup ───────────────────────────────────────────────────────
 
@@ -401,68 +403,7 @@ def _topic_schema_present() -> bool:
 mcp = FastMCP(
     "witan",
     auth=_auth,
-    instructions=(
-        "Team-wide, shared, persistent memory and work-coordination graph. PREFER "
-        "storing durable, shareable knowledge here — project facts, patterns, "
-        "lessons, decisions, and hand-off context — over your private "
-        "built-in/session memory, so other agents, future sessions, and teammates "
-        "can find it. Record what you learn with memory_store. Also tracks "
-        "workflow projects, sessions, and tasks.\n\n"
-        "Loading context: call recall(query=…) — it composes every memory read "
-        "(BM25 + graph expansion + superseded-pruning + re-ranking) and degrades "
-        "to a plain search when the graph has no edges. Seed it with symbol_id, "
-        "task, topic, contract, or memory instead of/along with query; those "
-        "seeds also return a section about the seed itself:\n"
-        "  symbol_id=… — also the tasks attached to a code symbol\n"
-        "  topic=…     — also the Topic node (everything tagged to it, cross-repo)\n"
-        "  contract=…, contract_kind=… — also the code providing/consuming the key\n"
-        "  memory=…    — also its neighbours by edge kind and the code symbols it "
-        "names\n"
-        "Pass hops=0, include_superseded=True and a high limit to list exactly "
-        "what a seed resolves to. Reach for a narrower read only for a specific "
-        "need:\n"
-        '  recall           — default; contextual load / "what do we know about X"\n'
-        "  memory_get       — one memory by slug\n"
-        "  memory_list      — browse all of one kind (no query); optional language\n"
-        "  memory_search    — plain BM25, no graph expansion\n"
-        "  memory_contradictions — every contradicting pair, no seed needed\n"
-        "  workflow_project_memories — memories a project produced\n\n"
-        "Repo scoping: every tool auto-detects the current repo from .git/config. "
-        "Pass repo (a canonical URI like https://github.com/mitodl/ol-django) to "
-        "override it. To span every repo, omit repo and pass all_repos=true; on "
-        "memory_store, task_create and workflow_session_start that files the row "
-        "under no repo (repo-scoped task reads include such tasks, repo-scoped "
-        "memory reads do not include such memories). Never pass an empty repo: "
-        "it is refused. When memory_list detects no repo and none is passed, it "
-        "returns slim records (slug, kind, title, tags — no content); memory_get a "
-        "slug for the full memory.\n\n"
-        "Changing memory — pick by what is actually wrong:\n"
-        "  a field is wrong (wrong repo, typo'd title) → memory_update(slug, …); "
-        "only the fields you pass change\n"
-        "  the knowledge changed → memory_store the new one, then "
-        'memory_link(from_slug=<new>, to_slug=<old>, kind="supersedes") — the old '
-        "one is hidden from default reads but kept (include_superseded=True to "
-        "see it)\n"
-        "  it should never have existed (accidental duplicate, test write) → "
-        "memory_delete(slug, confirm=True); author-only, hard delete\n"
-        "  it contains a secret → rotate the credential. memory_delete removes it "
-        "from the current graph but not from history, and no tool can erase "
-        "that.\n\n"
-        "Found a problem with someone else's task? task_comment(slug, body) "
-        "leaves an attributed, append-only note ON it. Do NOT reach for "
-        "task_update (it overwrites their description) or task_create (it puts "
-        "an item that is not work into everyone's ready-work list). Comments "
-        "come back in task_get, so read them before executing a task you "
-        "claimed — they are often a correction to its own description.\n\n"
-        "Naming: the task_* tools track work items (task_create, task_claim, "
-        "task_ready, …) and have nothing to do with MCP's own tasks/* extension "
-        "for long-running calls. A task_* slug is a unit of work someone is "
-        "assigned; an MCP task id is a handle on a call still executing.\n\n"
-        "Errors: a lookup that finds nothing returns null/empty, never raises; an "
-        "invalid-but-well-formed mutation (self-link, claim "
-        "contention) returns a status object with a reason; only malformed input "
-        "raises."
-    ),
+    instructions=INSTRUCTIONS,
     # Let clients cache this server's ~37-tool list instead of re-listing it
     # every session. Scope stays private: memory reads are per-actor.
     **caching.hint_kwargs(),
@@ -588,13 +529,35 @@ async def _offload(fn, /, *args, **kwargs):
         scan.notice.adopt(ctx)
 
 
-def _tool(fn=None, *, app=None):
+#: MCP tool annotations. ``_tool`` takes one positionally and has no default,
+#: so a tool cannot be registered without saying what it does to the graph.
+#: ``DESTRUCTIVE`` is for a call that can overwrite or remove what someone
+#: stored: field replacement (including a re-written memory link or session
+#: summary, and a phase advance, which can move backwards and replace the
+#: project's PR), deletes, closes, merges, link removal. ``WRITE`` covers
+#: creates, comments and new edges. ``task_claim`` is ``WRITE`` though
+#: ``force`` steals a live claim: it is the most frequent write, the result
+#: reports ``stole``, and the holder can reclaim. ``idempotentHint`` is
+#: set only where a repeat with the same arguments is documented to change
+#: nothing more.
+READ = ToolAnnotations(read_only_hint=True)
+WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False)
+WRITE_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=True
+)
+DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
+DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=True
+)
+
+
+def _tool(annotations: ToolAnnotations, *, app=None):
     """Register an MCP tool, reporting any content its writes rewrote.
 
-    ``@_tool(app=...)`` binds the tool to an MCP Apps widget
-    (``ui_widgets.app_for``); plain ``@_tool`` is every other tool. ``app=None``
-    registers exactly what ``@_tool`` does, which is how a bound tool stays
-    unbound on an install with no widget built.
+    ``annotations`` is one of :data:`READ`, :data:`WRITE`, :data:`DESTRUCTIVE`
+    and their idempotent variants. ``app`` binds the tool to an MCP Apps
+    widget (``ui_widgets.app_for``); ``app=None`` registers an unbound tool,
+    which is how a bound tool stays unbound on an install with no widget built.
 
     ★ EVERY TOOL, AND AT THE OUTERMOST BOUNDARY — both halves are load-bearing,
     and the first attempt at this got both wrong by calling ``scan.annotate``
@@ -634,23 +597,24 @@ def _tool(fn=None, *, app=None):
     ``functools.wraps`` copies ``__wrapped__``, so ``inspect.signature`` — and
     therefore FastMCP's schema generation — still sees the real parameters.
     """
-    if fn is None:
-        return functools.partial(_tool, app=app)
 
-    if inspect.iscoroutinefunction(fn):
+    def register(fn):
+        if inspect.iscoroutinefunction(fn):
 
-        @functools.wraps(fn)
-        async def wrapper(*args, **kwargs):
-            with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
-                return scan.annotate(await fn(*args, **kwargs))
-    else:
+            @functools.wraps(fn)
+            async def wrapper(*args, **kwargs):
+                with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
+                    return scan.annotate(await fn(*args, **kwargs))
+        else:
 
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
-                return scan.annotate(fn(*args, **kwargs))
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
+                    return scan.annotate(fn(*args, **kwargs))
 
-    return mcp.tool(wrapper, app=app)
+        return mcp.tool(wrapper, app=app, annotations=annotations)
+
+    return register
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -3397,7 +3361,7 @@ def _data_tier_outage_reads_as_retryable():
         ) from exc
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 def store_merge(
     rows: list[dict],
     dry_run: bool = False,
@@ -3627,7 +3591,7 @@ _AUTHORSHIP_SOURCES = (
 )
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 def claim_authorship(was: str, apply: bool = False) -> dict:
     """Take ownership of rows a migration left under a local identity.
 
@@ -4381,7 +4345,7 @@ def _rerank(
 # ── Tools ─────────────────────────────────────────────────────────
 
 
-@_tool
+@_tool(READ)
 def memory_search(
     query: str,
     repo: str | None = None,
@@ -4401,24 +4365,20 @@ def memory_search(
     Parameters
     ----------
     query:
-        Free-text search query. Searched against ``content`` and ``title``.
-        A title-only match never outranks a content match on relevance: BM25
-        scores the two fields on scales that cannot be compared, so which one
-        wins is a policy rather than a measurement, and this is the policy.
-        Final order is the composite score, which also weighs recency,
-        corroboration and confidence, so a well-corroborated title-only hit
-        can still finish above a marginal content hit.
+        Free-text query, matched against ``content`` and ``title``.
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     kind:
-        Optional filter: ``pattern``, ``project_fact``, ``lesson``,
-        or ``agent_context``.
+        Filter to one memory kind.
     include_superseded:
-        When ``True``, keep memories that a newer memory ``Supersedes``. Default
-        ``False`` drops them.
+        Also return superseded memories.
     all_repos:
-        Search every repo instead of the detected one — see instructions.
+        Search every repo; see instructions.
     """
+    # Relevance seeds content matches ahead of title-only ones: BM25 scores the
+    # two fields on scales that cannot be compared, so the order is a policy.
+    # The composite score (recency, corroboration, confidence) then decides the
+    # final order, so a well-corroborated title hit can still finish higher.
     rows = _search_rows(query, _scope(repo, all_repos), kind)
 
     if not rows:  # nothing to prune or re-rank — skip the edge-index scan
@@ -4444,7 +4404,7 @@ def memory_search(
 _MEMORY_LIST_CAP = 100
 
 
-@_tool
+@_tool(READ)
 def memory_list(
     kind: MemoryKind | None = None,
     repo: str | None = None,
@@ -4461,32 +4421,24 @@ def memory_list(
     ``memory_list(kind="project_fact")`` at session start, or
     ``memory_list(kind="pattern", language="python")`` before writing code).
 
-    Returns at most the 100 most recent matching memories. Every filter,
-    including dropping superseded memories, applies before that cap, so fewer
-    than 100 rows is the whole listing and exactly 100 means there may be
-    more. The slim unscoped listing has no 100-row cap. A ``language``-filtered
-    or slim listing reads the 10,000 most recent memories (current ones only,
-    unless ``include_superseded``) and filters those, so it is complete only
-    while the store holds fewer than 10,000 of them.
+    Returns at most the 100 most recent matches, after every filter, so fewer
+    than 100 rows is the whole listing. The slim unscoped listing has no cap.
+    A ``language``-filtered or slim listing filters the 10,000 most recent
+    memories.
 
     Parameters
     ----------
     kind:
-        Optional filter: ``pattern``, ``project_fact``, ``lesson``, or
-        ``agent_context``. Omit to list all kinds.
+        Filter to one memory kind. Omit for all kinds.
     repo:
-        Repo scoping — see instructions. With no repo detected and none passed,
-        returns slim records (slug, kind, title, tags — no content) for unscoped
-        memories; ``memory_get`` a slug for its full content.
+        Repo scoping; see instructions (including the slim unscoped listing).
     language:
-        Optional filter by ``language`` (e.g. ``python``), case-insensitive;
-        applies to the full-content results, not the slim unscoped listing.
+        Filter by language (e.g. ``python``), case-insensitive. Not applied to
+        the slim listing.
     include_superseded:
-        When ``True``, keep memories that a newer memory ``Supersedes``. Default
-        ``False`` drops them, as ``memory_search`` and ``recall`` do.
+        Also return superseded memories.
     all_repos:
-        List every repo's memories, with full content, instead of the detected
-        repo's — see instructions.
+        List every repo's memories, with full content.
     """
     detected = _scope(repo, all_repos)
     slim = not detected and not all_repos
@@ -4655,7 +4607,7 @@ def _store_memory(
     return result
 
 
-@_tool
+@_tool(WRITE)
 async def memory_store(
     kind: MemoryKind,
     title: str,
@@ -4682,44 +4634,35 @@ async def memory_store(
     Parameters
     ----------
     kind:
-        ``pattern``      — coding convention or reusable technique
-        ``project_fact`` — structural fact about a repo/service
-        ``lesson``       — a correction or cautionary finding
-        ``agent_context``— information a future agent on this task should know
+        ``pattern`` (a convention or reusable technique), ``project_fact`` (a
+        structural fact about a repo or service), ``lesson`` (a correction or
+        cautionary finding) or ``agent_context`` (what a future agent on this
+        task should know).
     title:
-        Short, human-readable label. Used in listings and search.
+        Short label, used in listings and search.
     content:
-        Full text of the memory. Be specific: include the what, why, and any
-        examples. This is the primary search target.
+        Full text: the what, the why, and examples. The primary search target.
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     language:
-        Programming language (for ``pattern`` kind). e.g. ``python``, ``typescript``.
+        For a ``pattern``, e.g. ``python``.
     category:
-        Thematic category (for ``project_fact`` kind).
-        e.g. ``architecture``, ``deployment``, ``testing``, ``dependencies``.
+        For a ``project_fact``, e.g. ``architecture``, ``deployment``.
     severity:
-        Importance level (for ``lesson`` kind).
-        ``info`` | ``warning`` | ``critical``.
+        For a ``lesson``.
     tags:
-        Optional list of free-form tags for grouping.
+        Free-form tags for grouping.
     symbol_refs:
-        Optional code-graph symbol ids (``<repo>#<path/to/file.py>::<Name>``,
-        from the witan-code tools' ``symbol_id`` field) this memory concerns,
-        e.g. the function a lesson is about. Stored as a soft reference.
+        Symbol ids this memory concerns, e.g. the function a lesson is about.
     confidence:
-        Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
-        re-rank; omitted memories use the configured default.
+        Your trust in it, 0.0 to 1.0. Feeds ranking.
     session_slug:
-        The ``ws-`` handle returned by ``workflow_session_start``, recording
-        which session produced this memory. Pass it whenever you have one: the
-        protocol carries no session state, so against a deployed service this is
-        the only way the ``SessionProduced`` provenance edge can be created.
-        Omit it under a local stdio server, which finds the handle itself.
+        See instructions. Pass it whenever you have one.
     all_repos:
-        Store the memory under no repo. Repo-scoped memory reads leave it
-        out; ``all_repos`` reads include it — see instructions.
+        Store under no repo; see instructions.
     """
+    # session_slug is the only way a deployed server can draw the
+    # SessionProduced provenance edge: the protocol carries no session state.
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
     # None (today's behavior) under automation / an unsupported client.
@@ -4742,7 +4685,7 @@ async def memory_store(
     )
 
 
-@_tool
+@_tool(READ)
 def memory_get(
     slug: str, include_topics: bool = False, session_id: str | None = None
 ) -> dict | None:
@@ -4754,18 +4697,14 @@ def memory_get(
     Parameters
     ----------
     slug:
-        The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug to retrieve.
+        The memory slug.
     include_topics:
-        When ``True``, attach a ``topics`` list of the Topic nodes this memory is
-        tagged with (slug/name/kind), each with an ``edge`` dict describing the
-        link. ``edge.confidence`` is what separates a topic someone named from
-        one promoted out of the memory's free-string ``tags``.
+        Attach the Topics this memory is tagged with, each with its ``edge``
+        (``edge.confidence`` is ``inferred`` for a topic promoted from a tag).
     session_id:
-        The calling agent session's id. Only logged, never changes the result:
-        it is what ties this read to the ``task_claim`` that surfaced the
-        memory. The CLI's remote proxy fills it in; under local stdio the
-        server falls back to ``$CLAUDE_SESSION_ID`` (see ``task_claim``).
+        Your agent session id; only logged. See instructions.
     """
+    # session_id ties this read to the task_claim that surfaced the memory.
     rows = client.read("read.gq", "get_memory", {"slug": slug})
     if not rows:
         _log_memory_read("memory_get", [], session_id)
@@ -4785,7 +4724,7 @@ def memory_get(
     return node
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 def memory_update(
     slug: str,
     title: str | None = None,
@@ -4801,59 +4740,35 @@ def memory_update(
     """
     Correct a memory's fields in place. Only non-null arguments are applied.
 
-    This is the repair tool for a memory whose *content was always meant to be
-    what you are about to write* — a wrong ``repo`` (so it never showed up in
-    repo-scoped reads), a typo'd title, a missing tag. Returns the updated node,
-    or ``null`` if no memory has that slug.
-
-    Which tool to reach for:
-
-    - a field is wrong → ``memory_update`` (this one)
-    - the knowledge itself changed → ``memory_store`` the new one, then
-      ``memory_link(kind="supersedes")``; the old one stays readable as history
-    - it should never have existed (accidental duplicate, test write) →
-      ``memory_delete``
-    - it contains secret material → **rotate the credential.** Neither this tool
-      nor ``memory_delete`` erases the old value from the graph's history.
-
-    ``kind`` is deliberately not updatable: a memory that turns out to be a
-    different kind is a different memory — store it and supersede this one.
+    For a field that was always wrong: a mis-scoped ``repo``, a typo'd title,
+    a missing tag. If the knowledge itself changed, store a new memory and
+    supersede this one (see instructions). ``kind`` is not updatable; a
+    different kind is a different memory. Returns the updated node, or
+    ``null`` if no memory has that slug.
 
     Parameters
     ----------
     slug:
-        The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug of the memory to
-        correct.
+        The memory slug.
     title:
-        New short, human-readable label.
+        New short label.
     content:
-        New full text. Replaces the existing content rather than appending —
-        and note that rewriting content here leaves no record that it changed.
-        If the *knowledge* changed, store a new memory and supersede this one
-        instead.
+        Replacement text. Leaves no record that it changed.
     repo:
-        Canonical repo URI to (re)scope the memory to. Case-folded on write, as
-        every other repo-key path does: correcting a mis-scoped memory is this
-        tool's headline use, and a key that does not match what repo detection
-        returns would just mis-scope it again, differently.
+        Repo URI to rescope the memory to.
     language:
-        Programming language (``pattern`` kind). e.g. ``python``, ``typescript``.
+        For a ``pattern``, e.g. ``python``.
     category:
-        Thematic category (``project_fact`` kind). e.g. ``architecture``,
-        ``deployment``, ``testing``, ``dependencies``.
+        For a ``project_fact``, e.g. ``architecture``.
     severity:
-        Importance (``lesson`` kind): ``info`` | ``warning`` | ``critical``.
+        For a ``lesson``.
     tags:
-        Free-form tags. Replaces the existing list. Each tag is also promoted to
-        a ``Topic`` and linked. **Tags removed here keep their ``Tagged``
-        edge** — edges cannot be individually retracted, and deleting the Topic
-        to drop one would take out every other memory's edge to it. The string
-        list stays authoritative for what the memory claims to be tagged with.
+        Replaces the list. Each tag becomes a Topic; a removed tag keeps its
+        ``Tagged`` edge.
     symbol_refs:
-        Code-graph symbol ids (``repo#path::Name``) this memory concerns.
-        Replaces the existing list.
+        Symbol ids this memory concerns. Replaces the list.
     confidence:
-        Author/agent trust in this memory, 0.0–1.0. Feeds the recall re-rank.
+        Your trust in it, 0.0 to 1.0. Feeds ranking.
     """
     if isinstance(tags, str):
         tags = [tags]
@@ -4908,43 +4823,30 @@ def memory_update(
     return updated
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 def memory_delete(slug: str, confirm: bool = False) -> dict:
     """
-    Hard-delete a memory. Graph hygiene only — NOT a way to erase secrets.
+    Hard-delete a memory that should never have existed: an accidental
+    duplicate, a test write, a node in the wrong graph. Otherwise update or
+    supersede it (see instructions). Author-only.
 
-    Use when a memory should never have existed: an accidental duplicate, a test
-    write, a node created against the wrong graph. For anything else prefer
-    ``memory_update`` (a field is wrong) or ``memory_store`` +
-    ``memory_link(kind="supersedes")`` (the knowledge changed) — superseding is
-    the soft delete, and it keeps the history legible.
-
-    **This does not erase content.** The row remains fully readable, content
-    included, from any prior commit of the graph. If a memory captured a
-    credential, the fix is to **rotate the credential**; scrubbing history is an
-    admin ``omnigraph cleanup``, which no MCP tool performs.
-
-    Deleting a node also removes its incident edges in both directions, so a
-    deleted memory leaves no dangling ``Supersedes``/``RelatedTo``/``Tagged``
-    behind. Topic nodes on the far end of a ``Tagged`` edge survive and may be
-    left with no memories.
-
-    That is not the only way to remove an edge — edges are deletable on their
-    own (``task_link(remove=True)``, ``_unlink_edge``). Deleting the node is still the
-    only route for a *memory* edge, since no unlink tool covers those yet.
+    Not a way to erase secrets: prior commits keep the content, so rotate the
+    credential. The memory's edges go with it, both directions; Topics on the
+    far end survive.
 
     Parameters
     ----------
     slug:
         The memory to delete permanently.
     confirm:
-        Must be ``True``. Without it this is a no-op returning
-        ``{"deleted": False, "reason": ...}``.
+        Must be ``True``; otherwise a no-op returning ``{"deleted": False}``.
 
-    Returns the deleted node's full fields under ``memory`` so an accidental
-    delete can be re-stored straight from this result. Refuses (again as a
-    no-op) when the caller is not the memory's author.
+    Returns the deleted node's fields under ``memory``, so a mistake can be
+    re-stored from the result.
     """
+    # Scrubbing history is an admin `omnigraph cleanup`, which no MCP tool
+    # performs. Deleting the node is the only way to drop a memory-to-memory
+    # edge: no unlink tool covers those yet.
     rows = client.read("read.gq", "get_memory", {"slug": slug})
     if not rows:
         return {"slug": slug, "deleted": False, "reason": "no such memory"}
@@ -4972,7 +4874,7 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
     return {"slug": slug, "deleted": True, "memory": node}
 
 
-@_tool
+@_tool(DESTRUCTIVE)
 async def memory_link(
     from_slug: str,
     to_slug: str,
@@ -5004,36 +4906,22 @@ async def memory_link(
     Parameters
     ----------
     from_slug:
-        The memory the edge points **from**. Direction is load-bearing for the
-        asymmetric kinds — for ``supersedes`` this is the *newer* memory.
+        The edge's source; for ``supersedes``, the newer memory.
     to_slug:
-        The memory the edge points **to** — for ``supersedes``, the older memory
-        being replaced. For ``kind="tagged"`` this is a Topic instead: either an
-        existing ``tp-`` slug or a ``name:kind`` spec, which auto-creates it.
+        The edge's target; for ``supersedes``, the older memory. For
+        ``tagged``, a ``tp-`` slug or a ``name:kind`` spec.
     kind:
-        Which edge to write: ``supersedes`` | ``refines`` | ``applies_to`` |
-        ``contradicts`` | ``related_to`` | ``tagged``. See the descriptions
-        above — ``supersedes`` is the one that changes what default reads
-        return.
+        The edge kind; see above.
     role:
-        Free text saying WHY these two are linked, stored on the edge and
-        returned by ``recall(memory=...)``. The edge kind says what KIND of
-        relation it is; this says what the relation is ABOUT ("both configure
-        the Vault sidecar", "same incident"). Worth a sentence on a
-        ``related_to``, where the kind alone tells a later reader nothing.
-
-        Scanned on the way in like any other free text, so it can be redacted
-        before it lands. The returned ``edge`` therefore reports the three
-        machine-set properties and NOT ``role`` — read it back with
-        ``recall(memory=...)`` to see what was actually stored.
+        Why these two are linked (e.g. "same incident"), stored on the edge.
+        Worth a sentence on ``related_to``. Read it back with
+        ``recall(memory=...)``; the returned ``edge`` omits it.
     confidence:
-        ``asserted`` (default) when you are naming both endpoints because you
-        know they belong together; ``inferred`` when the link is a guess worth
-        recording but not worth ranking on. ``recall`` expands along asserted
-        edges in preference to inferred ones, so this is the knob that decides
-        whether a speculative link pulls its neighbour into other people's
-        results.
+        ``asserted`` when you know they belong together, ``inferred`` for a
+        guess. ``recall`` ranks neighbours over inferred edges lower.
     """
+    # `role` is scanned like any free text and may be redacted before it lands,
+    # which is why the result does not echo it.
     if from_slug == to_slug:
         return {
             "from": from_slug,
@@ -5212,50 +5100,36 @@ def _contradiction_in_scope(
     return lambda a, b: scope in (a["repo"], b["repo"])
 
 
-@_tool
+@_tool(READ)
 def memory_contradictions(
     repo: str | None = None, include_superseded: bool = False, all_repos: bool = False
 ) -> list[dict]:
     """
     List every pair of memories that contradict each other, newest link first.
 
-    An unranked enumeration of the ``contradicts`` edges, for reviewing
-    conflicts rather than loading context. ``recall`` reports a contradiction
-    only when both memories land in its result, and ``recall(memory=...)`` needs
-    a slug to start from; this needs neither. Both apply the same ``repo`` rule
-    (below), so every pair ``recall`` reports is one this lists for the same
-    ``repo`` and ``include_superseded``. The exception is no repo detected and
-    none passed: ``recall``'s ``query`` seed then spans every repo, so it
-    reports every pair among its result, while this keeps only pairs touching
-    an unscoped memory.
+    For reviewing conflicts: needs no seed, where ``recall`` reports a pair
+    only when both memories land in its result.
 
     Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
     carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
-    ``a`` is the side the link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
-    all ``null`` on links written before edge properties existed.
-
-    One row per unordered pair. ``contradicts`` is symmetric but can be stored
-    in both directions; when it is, the newer link is the one reported, the same
-    newest-wins rule as ``recall(memory=...)``.
-
-    Superseding either side is how a contradiction gets resolved, so a pair
-    with a superseded memory in it is dropped by default. That is also what
-    keeps this in agreement with ``recall``, which prunes superseded memories
-    before it looks for pairs.
+    ``a`` is the side the link was made from. ``edge`` is ``{confidence, role,
+    author, created_at}``. One row per unordered pair. Superseding either side
+    resolves a contradiction, so those pairs are dropped by default.
 
     Parameters
     ----------
     repo:
-        Repo scoping — see instructions. A pair is included when EITHER memory
-        is in scope, since a contradiction across two repos concerns both. With
-        no repo detected and none passed, only pairs touching an unscoped memory
-        (``repo`` null) are returned.
+        Repo scoping; see instructions. A pair is in scope when either memory
+        is. With no repo, only pairs touching an unscoped memory.
     include_superseded:
-        When ``True``, keep pairs where either memory has been superseded, i.e.
-        the resolved ones.
+        Also return resolved pairs (either side superseded).
     all_repos:
-        Report every pair, in any repo — see instructions.
+        Every pair, in any repo.
     """
+    # Same repo rule as recall, so every pair recall reports is listed here
+    # for the same repo and include_superseded. They differ only with no repo
+    # detected: recall's query seed then spans every repo. A pair stored in
+    # both directions reports the newer link, as recall(memory=...) does.
     in_scope = _contradiction_in_scope(_scope(repo, all_repos), every=all_repos)
     query = "contradicts_pairs" if include_superseded else "contradicts_current_pairs"
 
@@ -5525,7 +5399,7 @@ def _active_session_slug() -> str | None:
     return (handle or {}).get("session_slug") or None
 
 
-@_tool
+@_tool(WRITE)
 def workflow_project_create(
     title: str,
     description: str,
@@ -5542,54 +5416,33 @@ def workflow_project_create(
     Call this at the start of a multi-session project before calling
     ``workflow_session_start``. The returned slug is used to link sessions.
 
-    A project may span several repos (a service that touches a Django app, its
-    frontend, and the infra repo that deploys it) or none (a cross-cutting
-    objective not yet tied to any repo). The repo set also grows automatically
-    as sessions run in new repos — see ``workflow_session_start``.
-
-    Returns ``{"slug", "repos", "phase", "similar"}`` — ``similar`` is up to 3
-    BM25 matches on ``title`` against other *active* projects (searched across
-    all repos, not just this one — the same objective tracked from a
-    different repo is still a duplicate), a soft duplicate check. It never
-    blocks creation.
-
-    Against a deployment that serves the web UI, it also carries ``ui_url``:
-    the link that opens the project there. Hand a person that link rather than
-    building one.
+    A project may span several repos or none. Returns ``{"slug", "repos",
+    "phase", "similar"}``; ``similar`` is up to 3 active projects in any repo
+    whose title matches, a soft duplicate check that never blocks creation.
 
     Parameters
     ----------
     title:
-        Short name for the project. Used in listings and injected context.
+        Short name, used in listings and injected context.
     description:
-        Full description of the objective — what will be built or changed and why.
+        The objective: what will be built or changed, and why.
     phase:
-        Starting phase. One of ``discovery``, ``spec``, ``implementation``,
-        ``delivery``. Defaults to ``discovery``.
+        Starting phase.
     repos:
-        Canonical repo URIs this project spans. The current repo (detected from
-        ``.git/config``) is added automatically. Omit entirely when creating a
-        repo-less "floating" project from outside any git repo. Guessing here is
-        fine — a project's real blast radius is rarely known at creation. The
-        set can be corrected at any time with ``workflow_project_update``
-        (``repos`` to replace it, ``add_repos``/``remove_repos`` to nudge it),
-        and it also grows on its own as sessions run in new repos.
+        Repo URIs this project spans; the current repo is added. Guess freely:
+        correct it later with ``workflow_project_update``, and it grows as
+        sessions run in new repos.
     github_issue:
-        URL of the GitHub issue tracking this work.
-        e.g. ``github.com/mitodl/ol-django/issues/847``.
+        URL of the tracking GitHub issue.
     tags:
-        Optional list of tags for grouping and searching.
+        Tags for grouping and search.
     preauthorized:
-        The autonomy envelope's first half: actions an agent working this
-        project may take without asking, e.g. ``"deploy to the QA stack"`` or
-        ``"use the existing ~/.ssh/deploy key"``. Standing approval from the
-        project owner, scoped to this project. Each list records the caller
-        as the one who set it (``preauthorized_set_by``), resolved the same way
-        ``author`` is; it can't be passed in.
+        Actions an agent on this project may take without asking, e.g.
+        ``"deploy to the QA stack"``. The caller is recorded as
+        ``preauthorized_set_by``.
     reserved_decisions:
-        The other half: decisions kept for a human, e.g. ``"merging to
-        main"``. An agent collects these into one list for the user rather
-        than acting on them or asking about each one separately.
+        Decisions kept for a human, e.g. ``"merging to main"``. Collect these
+        into one list for the user rather than acting or asking one by one.
     """
     now = now_iso()
     author = _current_author()
@@ -5631,7 +5484,7 @@ def workflow_project_create(
     )
 
 
-@_tool
+@_tool(READ)
 def workflow_project_get(slug: str) -> dict | None:
     """
     Retrieve a single workflow project by slug.
@@ -5649,24 +5502,10 @@ def workflow_project_get(slug: str) -> dict | None:
     one list for the user. Neither overrides a permission prompt, the user's
     in-session instructions, or a repo's AGENTS.md.
 
-    ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
-    before this one is ready, and ``blockers`` resolves each of them to
-    ``{slug, title, status, phase}`` in the same order, so a blocker that has
-    already completed is visible without a second read. A slug in
-    ``blocked_by`` whose project no longer exists has no ``blockers`` row.
-    ``blocks`` lists projects this project is currently blocking (derived by
-    scanning all active projects).
-
-    When ``github_pr`` is set and witan runs on your machine, the project also
-    carries ``live_pr``: that PR's state fetched from GitHub just now
-    (``state``, ``draft``, ``review_decision``, ``checks``, ``fetched_at``), or
-    ``{"error": ...}`` when it could not be fetched. The description is a
-    snapshot from when it was written; where ``live_pr`` disagrees with it,
-    ``live_pr`` is current.
-
-    Against a deployment that serves the web UI, the project also carries
-    ``ui_url``: the link that opens it there. Hand a person that link rather
-    than building one.
+    ``blocked_by`` lists projects that must complete first, and ``blockers``
+    resolves each to ``{slug, title, status, phase}``. ``blocks`` lists the
+    active projects this one is blocking. May carry ``live_pr`` and ``ui_url``
+    (see instructions).
 
     Parameters
     ----------
@@ -5753,7 +5592,7 @@ def _project_ready_row(task: dict) -> dict:
     return row
 
 
-@_tool(app=ui_widgets.app_for("workflow_project_status"))
+@_tool(READ, app=ui_widgets.app_for("workflow_project_status"))
 def workflow_project_status(slug: str) -> dict | None:
     """One-call "what should I do next" resume view for a workflow project.
 
@@ -5763,10 +5602,8 @@ def workflow_project_status(slug: str) -> dict | None:
     handoff summary** (and whether it's still open), and any project-level
     **blockers**. Returns ``None`` if the project doesn't exist.
 
-    ``ready_tasks`` is capped at 100 while ``counts.ready`` counts every ready
-    task, so the two disagree on a busy project; ``ready_truncated`` is true
-    exactly when they do. The count has no ceiling of its own: it is bounded
-    by the project's task count, which ready work is a subset of.
+    ``ready_tasks`` is capped at 100; ``ready_truncated`` says when
+    ``counts.ready`` is higher.
 
     Parameters
     ----------
@@ -5827,7 +5664,7 @@ def workflow_project_status(slug: str) -> dict | None:
     }
 
 
-@_tool
+@_tool(READ)
 def workflow_project_list(
     repo: str | None = None,
     status: WorkflowStatus | None = "active",
@@ -5840,37 +5677,25 @@ def workflow_project_list(
     List workflow projects, optionally filtered by repo, status, and phase, or
     search them with ``query``.
 
-    Defaults to listing only ``active`` projects. Pass ``status=None`` to see
-    all statuses. The ``UserPromptSubmit`` hook calls this to inject project
-    context into new sessions.
-
-    With ``query``, this is a plain BM25 search (no graph expansion) matched
-    against ``description`` and ``title``: up to 20 projects, ranked by
-    relevance, after the other filters. Run it before
-    ``workflow_project_create`` to check whether the objective is already
-    tracked; ``workflow_project_create`` also runs the search itself and
-    returns the top matches as ``similar``.
+    With ``query``, a BM25 search over title and description: up to 20
+    matches, ranked, after the other filters. Run it before
+    ``workflow_project_create`` to check the objective is not already tracked.
 
     Parameters
     ----------
     repo:
-        Canonical repo URI to filter to (membership test against each
-        project's repo set). Auto-detected from ``.git/config`` if omitted.
+        Repo scoping; see instructions. Matches projects whose repo set
+        contains it.
     status:
-        ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
-        Defaults to ``active``.
+        Defaults to ``active``; ``None`` for every status.
     phase:
-        Optional phase filter applied after fetching.
+        Filter to one phase.
     ready:
-        When ``True``, only return active projects whose blockers are all
-        completed (i.e. projects that are unblocked and actionable).
+        Only active projects whose blockers have all completed.
     query:
-        Free-text search query. The repo, phase and ready filters apply to
-        every match the BM25 fetch returns (it is unbounded), and the 20-row
-        cap after them, so a filter never hides a match that scored below a
-        query-level cap.
+        Free-text search query.
     all_repos:
-        List projects across all repos instead of filtering to one.
+        List every repo's projects.
     """
     detected_repo = _scope(repo, all_repos)
 
@@ -5921,7 +5746,7 @@ def _search_project_rows(query: str, status: str | None) -> list[dict]:
     return rows
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 def workflow_project_update(
     slug: str,
     title: str | None = None,
@@ -5940,43 +5765,14 @@ def workflow_project_update(
     """
     Correct a project's metadata after creation, or change what blocks it.
 
-    The escape hatch for everything ``workflow_project_advance`` (phase,
-    ``github_pr``) and ``workflow_project_complete`` (completion) don't
-    cover. Every parameter is optional and only what you pass is touched;
-    omitting a field leaves it exactly as it was, so this can never blank
-    something by accident. Returns the updated project, or ``None`` if the
-    slug doesn't exist.
+    Only what you pass is touched. Returns the updated project, or ``None``
+    if the slug doesn't exist. The phase is set by ``workflow_project_advance``
+    and completion by ``workflow_project_complete``, not here.
 
-    Project dependencies are coarse ordering between whole projects; for
-    ordering between individual tasks use ``task_link(kind="blocks")``.
-    ``add_blocked_by`` declares projects that must complete before this one
-    can begin: each gets a ``ProjectBlocks`` edge (blocker -> this project)
-    and is appended to this project's ``blocked_by``, which is what the
-    ready-work check in ``workflow_project_list(ready=True)`` reads.
-    ``remove_blocked_by`` deletes the edge and the ``blocked_by`` entry.
-    A slug in both lists ends up removed. A project cannot block itself, so
-    naming ``slug`` in ``add_blocked_by`` raises ``ValueError``. A blocker
-    slug that does not exist is refused by the store, and none of the call's
-    other writes land with it except the edge deletes, which the store makes
-    commit on their own, ahead of the rest.
-
-    The common case is repos. A project's real blast radius is rarely known
-    during discovery, and until the set is right, repo-scoped recall from the
-    repos where the work actually lands won't surface the project at all. Pass
-    ``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
-    nudge it (both may be passed together; removals are applied after
-    additions).
-
-    Two things this deliberately can't do:
-
-    - **Set the phase.** ``workflow_project_advance`` stays the only route, so
-      a transition is always seen by its ordering check. It does allow going
-      backwards (with a confirmation), which is how a phase set in error gets
-      corrected — this tool would just bypass the prompt.
-    - **Complete a project.** ``status`` accepts ``abandoned`` (for work that
-      stopped without an outcome) and ``active`` (to revive it), but not
-      ``completed``: that belongs to ``workflow_project_complete``, which seals
-      a corpus trace. Nothing should mint a trace without a narrative.
+    Most often this fixes the repo set, which repo-scoped reads depend on:
+    ``repos`` replaces it, ``add_repos``/``remove_repos`` nudge it (removals
+    after additions). ``add_blocked_by``/``remove_blocked_by`` order whole
+    projects; for tasks use ``task_link(kind="blocks")``.
 
     Parameters
     ----------
@@ -5997,26 +5793,25 @@ def workflow_project_update(
     github_issue:
         URL of the GitHub issue tracking this work.
     status:
-        ``active`` | ``abandoned``.
+        ``abandoned`` for work that stopped without an outcome, ``active`` to
+        revive it.
     preauthorized:
-        Replacement list of actions an agent may take on this project without
-        asking. Pass ``[]`` to clear. When the user grants something "for this
-        project", record it here rather than only acting on it, so the next
-        session does not have to ask again. Replaces the whole list: read it
-        with ``workflow_project_get`` first to add one item. The caller is
-        recorded as ``preauthorized_set_by`` for every item in the new list,
-        so a list rewritten by anyone but the project author reads as
-        suggestions, not approval, until the author sets it again.
+        Replaces the list; ``[]`` clears. Record a grant the user makes "for
+        this project" here. Read it with ``workflow_project_get`` first to add
+        one item. Set by anyone but the author, it reads as suggestions.
     reserved_decisions:
-        Replacement list of decisions kept for a human. Pass ``[]`` to clear.
-        Replaces the whole list, as ``preauthorized`` does.
+        Replaces the list; ``[]`` clears.
     add_blocked_by:
-        ``wp-`` slugs of projects that must complete before this one can
-        begin. One already in ``blocked_by`` is left as it is.
+        ``wp-`` slugs that must complete before this project can begin.
     remove_blocked_by:
-        ``wp-`` slugs to drop from ``blocked_by``, deleting their
-        ``ProjectBlocks`` edges. One that is not a blocker is a no-op.
+        ``wp-`` slugs to drop from ``blocked_by``.
     """
+    # Phase stays with workflow_project_advance so every transition passes its
+    # ordering check (going backwards asks first); `completed` stays with
+    # workflow_project_complete, which seals a corpus trace with a narrative.
+    # A project naming itself in add_blocked_by raises ValueError. A missing
+    # blocker slug is refused by the store and none of the other writes land,
+    # except the edge deletes, which the store commits on their own first.
     if slug in (add_blocked_by or []):
         raise ValueError(f"a project cannot block itself: {slug}")
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
@@ -6111,7 +5906,7 @@ def workflow_project_update(
     return updated[0] if updated else payload
 
 
-@_tool
+@_tool(DESTRUCTIVE)
 async def workflow_project_advance(
     slug: str,
     phase: WorkflowPhase,
@@ -6181,7 +5976,7 @@ async def workflow_project_advance(
     return result
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 async def workflow_project_complete(
     slug: str,
     outcome: str,
@@ -6293,7 +6088,7 @@ async def workflow_project_complete(
     return {"project_slug": slug, "trace_slug": trace_slug, "existed": False}
 
 
-@_tool
+@_tool(WRITE)
 def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
     """
     Link a memory to a workflow project (the ``Informed`` edge).
@@ -6318,7 +6113,7 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
     return {"project_slug": project_slug, "memory_slug": memory_slug}
 
 
-@_tool
+@_tool(READ)
 def workflow_project_memories(
     project_slug: str, group_by_session: bool = False, session: str | None = None
 ) -> dict:
@@ -6331,30 +6126,24 @@ def workflow_project_memories(
     - **project-grain** (``Informed``): memories explicitly linked via
       ``workflow_project_link_memory``.
 
-    De-duplicated by slug. The flat ``memories`` list is assembled with two
-    queries regardless of session count. Pass ``group_by_session=True`` to also
-    get a ``by_session`` breakdown — that costs one extra query per session, so
-    it is opt-in.
+    De-duplicated by slug.
 
     Parameters
     ----------
     project_slug:
         The ``wp-`` slug whose memories to assemble.
     group_by_session:
-        Also return a ``by_session`` breakdown of which session produced what.
-        Costs one extra query per session, so leave it off unless you need the
-        attribution.
+        Also return ``by_session``. Costs one query per session.
     session:
-        A ``ws-`` slug. Return only the memories that one session produced,
-        in one query, instead of the project's. ``group_by_session`` is
-        ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it
-        auto-closes; named ``session`` rather than ``session_slug`` because
-        the remote proxy fills an omitted ``session_slug`` with the caller's
-        active session, which would silently narrow every project-wide call.
+        A ``ws-`` slug: only the memories that session produced.
+        ``group_by_session`` is then ignored.
 
     Returns ``{"project_slug": ..., "memories": [...], "by_session": {...}}``
     (``by_session`` is empty unless ``group_by_session`` is set).
     """
+    # `session`, not `session_slug`: the remote proxy fills an omitted
+    # session_slug with the caller's active session, which would narrow every
+    # project-wide call. The Stop hook passes it to summarize a session.
     if session:
         return {
             "project_slug": project_slug,
@@ -6392,7 +6181,7 @@ def workflow_project_memories(
 # ── Workflow Traces (corpus) ───────────────────────────────────────
 
 
-@_tool
+@_tool(READ)
 def workflow_trace_list(
     repo: str | None = None,
     tags: list[str] | None = None,
@@ -6437,7 +6226,7 @@ def workflow_trace_list(
     return rows[:limit]
 
 
-@_tool
+@_tool(READ)
 def workflow_trace_get(slug: str) -> dict | None:
     """
     Retrieve a single corpus WorkflowTrace by slug.
@@ -6526,7 +6315,7 @@ def _annotate_trace(
     return result
 
 
-@_tool
+@_tool(WRITE_IDEMPOTENT)
 def workflow_trace_annotate(
     trace_slug: str,
     lessons_slug: list[str] | None = None,
@@ -6555,7 +6344,7 @@ def workflow_trace_annotate(
     )
 
 
-@_tool
+@_tool(WRITE)
 def workflow_trace_mine(
     trace_slug: str,
     patterns: list[dict] | None = None,
@@ -6847,7 +6636,7 @@ def _dedupe_open_sessions(
     return canonical["slug"], canonical.get("started_at") or started_at
 
 
-@_tool
+@_tool(WRITE_IDEMPOTENT)
 def workflow_session_start(
     project_slug: str,
     session_id: str,
@@ -6860,69 +6649,42 @@ def workflow_session_start(
     """
     Link the current agent session to a workflow project.
 
-    Call this at the start of any session that is contributing to a tracked
-    project. The context injected by the context-injection hook (Claude Code) or
-    extension (Pi) provides the ``project_slug``; ``session_id`` should be the
-    session id — ``$CLAUDE_SESSION_ID`` on Claude Code, ``$PI_SESSION_ID`` on
-    Pi (read it with ``echo $PI_SESSION_ID`` in the bash tool; it is what the Pi
-    workflow extension's shutdown auto-close looks the handle up by),
-    ``$CODEX_SESSION_ID`` on Codex (read it the same way; Codex hands the Stop
-    hook that id), or any stable unique string for the session otherwise.
+    Call at the start of a session contributing to a tracked project; the
+    injected context names the ``project_slug``. Returns a handle
+    (``session_slug``, ``project_slug``, ``phase``, ``session_id``,
+    ``started_at``): pass ``session_slug`` to ``workflow_session_end``.
 
-    Returns an explicit session handle (``session_slug``, ``project_slug``,
-    ``phase``, ``session_id``, ``started_at``). Hold on to it and pass
-    ``session_slug`` back to ``workflow_session_end`` — the handle is the only
-    thing that ties the two calls together, since the protocol carries no session
-    state of its own and consecutive calls may land on different replicas.
-
-    **Re-entrant.** Calling again for a (``project_slug``, ``session_id``) whose
-    session is still open returns that same handle with ``existed: true``
-    instead of minting a second node — so a hook retry, a transport reconnect,
-    or the replica failover the paragraph above warns about can't silently
-    duplicate a session. Any newly-supplied ``repo`` and ``tags`` are merged
-    into the existing session; ``phase`` is left at what the first call set (use
-    ``workflow_project_advance`` to move a project's phase). Once a session has
-    been ended, the same ``session_id`` starts a fresh session — one
-    ``$CLAUDE_SESSION_ID`` legitimately spans several working stints.
-
-    Two *simultaneous* starts (a client retrying while the first request is
-    still in flight) can still both insert, since the check and the insert are
-    not one atomic operation. That is resolved immediately after the fact rather
-    than left for the migration to find — see ``_dedupe_open_sessions``. Both
-    racers return the same handle.
-
-    Because the repo accretion below runs on the re-entrant path too, calling
-    this once per repo remains a valid way to widen a project's repo set — but
-    ``workflow_project_update(add_repos=[...])`` does it directly, without
-    needing a session at all.
-
-    When a repo is detected and the caller is on a git branch, also upserts a
-    ``CodeBranch`` (repo, branch) and links it ``ForProject`` to this project —
-    schema.pg § Code Branches. Best-effort: silently skipped with no
-    repo/branch context, never fails the session start. Both values come from
-    the caller (see ``branch`` below); a deployed server has no checkout to
-    read them from.
+    Re-entrant: while the session for this (``project_slug``, ``session_id``)
+    is open, a repeat returns the same handle with ``existed: true``, merging
+    any new ``repo`` and ``tags``; ``phase`` stays as first set. After it
+    ends, the same ``session_id`` starts a fresh session. Also links your
+    branch to the project when a repo and branch are known.
 
     Parameters
     ----------
     project_slug:
         The ``wp-`` slug of the project this session belongs to.
     session_id:
-        Unique identifier for this agent session.
+        Your agent session id; see instructions.
     phase:
         The phase this session is working in.
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     branch:
-        The git branch the caller is on, for the ``CodeBranch`` above. Filled
-        in client-side by the remote proxy; omitted, the server falls back to
-        its own working directory, which is right under local stdio and empty
-        under a deployment.
+        Your git branch. witan's CLI proxy fills it in; under local stdio it
+        defaults to the server's checkout.
     tags:
         Optional tags.
     all_repos:
-        Record the session under no repo — see instructions.
+        Record the session under no repo; see instructions.
     """
+    # The handle is the only thing tying start to end: the protocol carries no
+    # session state and consecutive calls may land on different replicas, which
+    # is also why the call is re-entrant (a hook retry or failover must not mint
+    # a second session). Two simultaneous starts can both insert, since check
+    # and insert are not atomic; `_dedupe_open_sessions` resolves that right
+    # after, and both racers return the same handle. The CodeBranch upsert
+    # (schema.pg § Code Branches) is best-effort and never fails the start.
     now = now_iso()
     detected_repo = _scope(repo, all_repos)
     existing = _open_session_for_key(project_slug, session_id)
@@ -7038,7 +6800,7 @@ def workflow_session_start(
     return handle
 
 
-@_tool
+@_tool(DESTRUCTIVE)
 def workflow_session_end(
     session_slug: str,
     summary: str,
@@ -7134,7 +6896,7 @@ def _parse_since(since: str) -> datetime:
         raise ValueError(msg) from None
 
 
-@_tool
+@_tool(READ)
 def workflow_session_list(
     project_slug: str | None = None,
     open_only: bool = False,
@@ -7144,43 +6906,29 @@ def workflow_session_list(
     """
     List workflow sessions, newest last.
 
-    Mainly for finding sessions that leaked open — one whose agent died, or
-    whose Stop hook could not reach the graph. An open session is not cosmetic:
-    ``workflow_project_complete`` folds every linked session into the corpus
-    trace, so one with no ``ended_at`` inflates ``session_count``, contributes
-    its phase while having recorded nothing, carries no handoff summary, and
-    cannot extend ``duration`` (computed from ``max(ended_at)``). It is also
-    what drives the context hook's "N sessions in <phase>" staleness nag.
-
-    Use ``witan session sweep`` to close them in bulk.
+    Mainly for finding sessions that leaked open (the agent died, or its Stop
+    hook could not reach the graph). An open session skews its project's
+    corpus trace and drives the context hook's staleness nag. ``witan session
+    sweep`` closes them in bulk.
 
     Parameters
     ----------
     project_slug:
         Restrict to one project's sessions. Omit for every project.
     open_only:
-        Only sessions with no ``ended_at``. Superseded sessions (deduped by
-        ``witan migrate dedupe-sessions``) are always excluded — they are
-        already skipped by every aggregate read and are not leaks.
+        Only sessions with no ``ended_at``. Superseded sessions are excluded.
     include_superseded:
-        Keep superseded rows instead of dropping them. For ``witan session
-        list``, the one caller that wants to see what
-        ``migrate dedupe-sessions`` did rather than the leaked-session view.
+        Keep rows superseded by ``witan migrate dedupe-sessions``.
     since:
-        ISO timestamp. Keep only sessions that ended at or after it, plus
-        every still-open one — an open session has no ``ended_at`` to compare
-        and is current by definition, so a window must not drop it. Without
-        this an unscoped read returns every session ever recorded, and a view
-        showing the last two weeks pays for all of it on every poll.
-
-        Raises ``ValueError`` if it does not parse, the empty string
-        included. Tolerating either would mean ``since="last week"`` or
-        ``since=""`` silently returning every session, which is the same
-        unsignalled no-op this parameter exists to remove.
-
-        The filter runs in Python: ``read.gq`` has no comparison on a
-        ``DateTime``, so this bounds the response, not the store read.
+        ISO timestamp: sessions that ended at or after it, plus every open
+        one. An unparseable value, ``""`` included, raises ``ValueError``.
     """
+    # An open session inflates the trace's session_count, adds its phase with
+    # nothing recorded, and cannot extend `duration` (max(ended_at)). `since`
+    # refuses what it cannot parse because `since="last week"` silently
+    # returning every session is the unbounded read it exists to stop. The
+    # filter runs in Python (read.gq cannot compare a DateTime), so it bounds
+    # the response, not the store read.
     # `is not None`, not truthiness: an explicit `since=""` would otherwise
     # skip the filter silently, which is the behaviour this parameter's
     # "unparseable values raise" promise exists to rule out. Omitted stays
@@ -7537,7 +7285,7 @@ def _update_task_once(
     return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
-@_tool
+@_tool(WRITE)
 async def task_create(
     title: str,
     description: str,
@@ -7562,27 +7310,20 @@ async def task_create(
     dependencies so ``task_ready`` can withhold the task until its blockers
     close.
 
-    Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
-    BM25 matches for the title and the start of the description against
-    existing tasks in every repo (any status), each with its ``slug``,
-    ``title``, ``status`` and ``repo``: a soft duplicate check. It never
-    blocks creation; review it and close this task as a duplicate
-    (``task_close``) if one of them is really the same work.
-
-    Against a deployment that serves the web UI, it also carries ``ui_url``:
-    the link that opens the task there. Hand a person that link rather than
-    building one.
+    Returns ``{"slug", "status", "repo", "similar"}``; ``similar`` is up to 3
+    existing tasks in any repo and status that match, a soft duplicate check.
+    If one is the same work, close this task as a duplicate.
 
     Parameters
     ----------
     title, description:
         Short label and full text of the work.
     type:
-        ``bug`` | ``feature`` | ``task`` | ``chore`` | ``epic``.
+        The kind of work; ``epic`` for a parent of sub-issues.
     priority:
-        ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering.
+        ``p0`` is highest. Drives ``task_ready`` ordering.
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     project_slug:
         ``wp-`` slug of the WorkflowProject this task rolls up to.
     parent:
@@ -7594,12 +7335,11 @@ async def task_create(
     external_uri:
         A reference URI — e.g. a GitHub issue or PR.
     symbol_refs:
-        Code-graph symbol ids (``repo#path::Name``) this task concerns.
+        Symbol ids this task concerns.
     tags:
         Optional free-form tags.
     all_repos:
-        Create the task under no repo. Repo-scoped task reads include
-        unscoped tasks, so every repo sees it — see instructions.
+        Create the task under no repo, so every repo's task reads include it.
     """
     now = now_iso()
     slug = _make_slug("task", title)
@@ -7695,7 +7435,7 @@ async def task_create(
     )
 
 
-@_tool
+@_tool(READ)
 def task_get(slug: str) -> dict | None:
     """Retrieve a single task by slug. Returns the full node or ``null``.
 
@@ -7705,31 +7445,17 @@ def task_get(slug: str) -> dict | None:
     your description, so it is often a correction to the very plan the
     description sets out.
 
-    It also carries its edges, which the node fields alone do not give:
-    ``blocks`` (slugs of the tasks THIS one holds back — the inverse of the
-    ``blocked_by`` field), ``children`` and ``branches`` (the ``CodeBranch``es
-    working it). An ``in_progress`` task also carries ``lease_expired`` (see
-    ``task_ready``).
-
-    ``DiscoveredFrom`` is not included: it has no read query, and nothing has
-    needed it.
-
-    When ``external_uri`` is a GitHub PR or issue and witan runs on your
-    machine, the node also carries ``live_pr``: that PR's or issue's state
-    fetched from GitHub just now (``state``, ``draft``, ``review_decision``,
-    ``checks``, ``fetched_at``), or ``{"error": ...}`` when it could not be
-    fetched. The description and comments are snapshots from when they were
-    written; where ``live_pr`` disagrees with them, ``live_pr`` is current.
-
-    Against a deployment that serves the web UI, the node also carries
-    ``ui_url``: the link that opens the task there. Hand a person that link
-    rather than building one.
+    It also carries ``blocks`` (the tasks this one holds back), ``children``
+    and ``branches`` (the ``CodeBranch``es working it), and may carry
+    ``lease_expired``, ``live_pr`` and ``ui_url`` (see instructions).
 
     Parameters
     ----------
     slug:
         The ``tk-`` slug to retrieve.
     """
+    # DiscoveredFrom is not included: it has no read query, and nothing has
+    # needed it.
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -7830,7 +7556,7 @@ def _task_comments(slug: str) -> list[dict]:
         return []
 
 
-@_tool
+@_tool(WRITE)
 def task_comment(slug: str, body: str) -> dict:
     """
     Leave an attributed, append-only comment ON a task without changing it.
@@ -7914,7 +7640,7 @@ def task_comment(slug: str, body: str) -> dict:
     }
 
 
-@_tool(app=ui_widgets.app_for("task_list"))
+@_tool(READ, app=ui_widgets.app_for("task_list"))
 def task_list(
     repo: str | None = None,
     status: TaskStatus | None = None,
@@ -7927,58 +7653,35 @@ def task_list(
     """
     List tasks, filtered by repo, status, project, parent, and/or assignee.
 
-    ``project_slug`` and ``parent`` take precedence as the primary scope; other
-    filters are applied on top in Python. With no filters, lists recent tasks
-    across all repos — 50 of them unless ``limit`` says otherwise.
-
-    An ``in_progress`` row carries ``lease_expired`` (see ``task_ready``); rows
-    in any other status do not.
-
-    ``closed_at`` is an invariant of ``status``: it is set on every row whose
-    status is ``closed`` and null on every row whose status is not, whichever
-    surface made the transition. Rows written before this held — a release to
-    ``closed``, or a reopen through ``task_update`` — are corrected the next
-    time anything writes them, so a row untouched since then can still carry
-    the old spelling.
-
-    ``first_claimed_at`` is when the task was FIRST claimed, and is never
-    cleared. Unlike ``claimed_at``, which is the current lease and moves on
-    every renewal, it survives a release, a close and a reopen. It is null on
-    a task that has never been claimed, and on any task last claimed before
-    the field existed — there is no backfill.
+    ``project_slug`` and ``parent`` are the primary scope; other filters
+    apply on top. ``closed_at`` is set exactly when status is ``closed``.
+    ``first_claimed_at`` is the first claim ever and survives release, close
+    and reopen; ``claimed_at`` is the current lease.
 
     Parameters
     ----------
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     status:
-        ``open`` | ``in_progress`` | ``blocked`` | ``closed``.
+        Filter to one status.
     project_slug:
         List the tasks of a WorkflowProject.
     parent:
         List the direct children of a parent task/epic.
     assignee:
-        Filter to a single owner. ``"@me"`` resolves to the calling identity
-        (every session of it) — the only spelling that works from a client
-        that cannot know the identity a deployment resolves from its token.
+        Filter to one holder; ``"@me"`` is you (every session).
     limit:
-        Maximum rows to return, 1 to 10,000. Omitted, every scope behaves as
-        it always has: 50 rows unscoped, uncapped when scoped by repo, project
-        or parent. That asymmetry is why this is nullable rather than
-        ``limit: int = 50`` — a plain default would either cap the scoped
-        reads that are uncapped today, or, applied only to the unscoped ones,
-        make an explicit ``limit=50`` indistinguishable from not asking.
-
-        On the repo-detected branch (the default, since ``repo`` is inferred)
-        the rows are this repo's followed by the unscoped ones, two
-        ``updated_at`` runs concatenated rather than merged. So a limit there
-        keeps this repo's tasks and may return no unscoped ones at all, even
-        if an unscoped task was touched more recently. Pass ``all_repos=True``
-        for a single ``updated_at`` ordering across everything.
+        Max rows, 1 to 10,000. Omitted: 50 unscoped, all when scoped by repo,
+        project or parent. On the default repo scope, rows are this repo's
+        then the unscoped ones, so a limit may drop the unscoped ones.
     all_repos:
-        List every repo's tasks instead of the detected repo's — see
-        instructions.
+        List every repo's tasks, in one ``updated_at`` order.
     """
+    # `limit` is nullable rather than `int = 50` because a plain default would
+    # either cap the scoped reads (uncapped today) or make an explicit
+    # limit=50 indistinguishable from not asking. `closed_at` rows written
+    # before the invariant held are corrected the next time anything writes
+    # them; `first_claimed_at` has no backfill.
     if limit is not None and not 1 <= limit <= _MAX_TASK_LIMIT:
         msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
         raise ValueError(msg)
@@ -8134,7 +7837,7 @@ def _filtered_task_search_rows(
     return rows
 
 
-@_tool
+@_tool(READ)
 def task_search(
     query: str,
     repo: str | None = None,
@@ -8147,47 +7850,34 @@ def task_search(
     """
     Plain BM25 text search over tasks (no graph expansion).
 
-    Returns up to ``limit`` tasks ranked by BM25 relevance, matched against
-    ``description`` and ``title`` (description matches are seeded ahead of
-    title-only matches — see ``memory_search``'s doc for why). Run this
-    before ``task_create`` to check whether the work is already tracked;
-    ``task_create`` also runs a search across every repo, with the title and
-    the start of the description, and returns the top matches as ``similar``
-    in its response.
-
-    To find "the next task" in a project there is no query to rank by: use
-    ``task_ready(project_slug=...)``, or ``task_list(project_slug=...)`` for
-    every task in it.
-
-    The ``limit`` applies after every filter, so a match that ranks below it
-    on the unfiltered query is still returned. The one exception is the
-    unscoped half of a repo-scoped search: those tasks are picked out of the
-    all-repos read, so other repos' matches can still crowd them out.
+    Returns up to ``limit`` tasks ranked by relevance over description and
+    title. Run it before ``task_create`` to check the work is not already
+    tracked. For "the next task" in a project use
+    ``task_ready(project_slug=...)``.
 
     Parameters
     ----------
     query:
         Free-text search query.
     repo:
-        Repo scoping — see instructions. Matches against the detected repo
-        plus unscoped tasks (``repo=None``), same as ``task_list``. Ignored
-        when ``project_slug`` is given.
+        Repo scoping; see instructions. Includes unscoped tasks. Ignored with
+        ``project_slug``.
     status:
-        Optional filter: ``open``, ``in_progress``, ``blocked``, or
-        ``closed``. Omit to search all statuses — a closed task is still
-        useful to surface (the work may already be done).
+        Filter to one status. Omit to include closed tasks, which can show the
+        work is already done.
     project_slug:
-        Search only the tasks of this WorkflowProject (``wp-`` slug), in
-        every repo.
+        Search only this project's tasks, in every repo.
     assignee:
-        Search only tasks held by this owner, matched as ``task_list``
-        matches it; ``"@me"`` is the calling identity.
+        Filter to one holder; ``"@me"`` is you.
     limit:
-        Maximum hits to return, 1 to 10,000.
+        Max hits, 1 to 10,000, applied after every filter.
     all_repos:
-        Search every repo's tasks instead of the detected repo's — see
-        instructions.
+        Search every repo's tasks.
     """
+    # The limit applies after the filters, except to the unscoped half of a
+    # repo-scoped search, which is picked out of the all-repos read and can be
+    # crowded out by other repos' matches. Description matches are seeded ahead
+    # of title-only ones, as in memory_search.
     if not 1 <= limit <= _MAX_TASK_LIMIT:
         msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
         raise ValueError(msg)
@@ -8204,7 +7894,7 @@ def task_search(
     return rows[:limit]
 
 
-@_tool
+@_tool(DESTRUCTIVE)
 def task_update(
     slug: str,
     title: str | None = None,
@@ -8225,27 +7915,9 @@ def task_update(
     """
     Update a task's mutable fields. Only non-null arguments are applied.
 
-    Use this to re-prioritise, re-parent (``parent``), reassign (``assignee``),
-    correct the repo association (``repo``), or attach an ``external_uri``. To
-    *claim* a task for work prefer ``task_claim`` (it sets ``in_progress`` + a
-    lease and refuses if someone else holds it); to close a task prefer
-    ``task_close``; to add dependencies use ``task_link``.
-
-    The write is fenced on the read it merged from: it applies only while the
-    graph is unchanged since this call read the task, and a refusal re-reads
-    and merges again, up to five attempts. That is what stops an edit from
-    reverting a claim that landed after its read. The cost is availability.
-    The fence is the whole branch head, so writes anywhere on the graph refuse
-    it. Over the 7 days to 2026-10-16 the production graph peaked at about 9
-    write-tool calls a minute (5-minute rate) and averaged 0.15, with p95 tool
-    durations near 5s for ``task_update`` and 10s or more for ``task_close`` and
-    ``task_claim``. At that peak one attempt has roughly an even chance of
-    being refused and all five a few percent; off-peak it is negligible.
-    Running out raises ``WriteContention`` with nothing written, and retrying
-    is safe. (A row-scoped guard, a mutation matching on ``slug`` and
-    ``updated_at``, would avoid refusals from unrelated writes; it is
-    unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
-    ``task_close``.
+    Re-prioritise, re-parent, reassign, fix the repo, or attach an
+    ``external_uri``. To take a task use ``task_claim``, to finish one
+    ``task_close``, to add a dependency ``task_link``.
 
     Parameters
     ----------
@@ -8254,72 +7926,53 @@ def task_update(
     title:
         New short label for the work.
     description:
-        New full description. Replaces the existing text; it is not appended to.
+        Replacement description (not appended).
     type:
-        ``bug`` | ``feature`` | ``task`` | ``chore`` | ``epic``.
+        The kind of work.
     status:
-        ``open`` | ``in_progress`` | ``blocked`` | ``closed``. Two values have
-        side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,
-        on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this
-        task's dependents**, exactly as ``task_close`` does. Prefer
-        ``task_claim`` / ``task_close`` for those two transitions. ``closed``
-        is refused here as ``task_close`` refuses it, with the same answer,
-        while another person holds a live claim (see ``force``); nothing else
-        is written either. ``in_progress`` carries none of ``task_claim``'s
-        checks.
-
-        ``closed_at`` follows the status whatever value you pass: set on
-        arrival at ``closed``, cleared on any move away from it, so reopening
-        a task here does not leave it carrying its old close time.
-
-        Setting ``in_progress`` with no ``assignee`` on a task that has none
-        recorded defaults it via ``_claim_holder`` — the same identity
-        ``task_claim`` would use — rather than leaving
-        ``(in_progress, claimed_at set, assignee null)`` reachable: that
-        combination is a live lease with nobody named on it, which
-        ``task_claim`` correctly refuses and correctly cannot say who holds.
-        A task that already has an assignee keeps it; this only fills a gap,
-        never reassigns.
+        ``in_progress`` stamps a fresh lease, filling a missing assignee with
+        you, without ``task_claim``'s checks. ``closed`` unblocks dependents
+        and is refused while another person holds a live claim (see
+        ``force``). Prefer ``task_claim``/``task_close`` for those two.
     priority:
-        ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering.
+        ``p0`` is highest. Drives ``task_ready`` ordering.
     repo:
-        Canonical repo URI to (re)assign this task to. Pass an explicit value to
-        correct tasks that were created without proper repo context.
+        Repo URI to reassign the task to.
     assignee:
-        Holder identity to reassign the task to. Prefer ``task_claim`` to take a
-        task for yourself — it checks nobody else holds it, which this does not.
+        Reassign to this holder. Unlike ``task_claim``, does not check who
+        holds the task.
     project_slug:
         ``wp-`` slug of the WorkflowProject this task rolls up to.
     parent:
-        ``tk-`` slug of the parent task/epic. Written as both the
-        ``parent_slug`` field and the ``ParentOf`` edge in one commit, so a
-        concurrent reader never sees the task parented one way and not the
-        other. **Re-parenting does not retract the previous edge**: the field
-        moves to the new parent while the old ``ParentOf`` remains, so a task
-        re-parented this way is reachable from both. Call
-        ``task_link(kind="parent", remove=True)`` on the old pair first if the edge
-        matters to you.
+        ``tk-`` slug of the parent task. Re-parenting leaves the old
+        ``ParentOf`` edge; remove it with ``task_link(kind="parent",
+        remove=True)``.
     external_uri:
-        Reference URI — e.g. the GitHub issue or PR this task tracks.
+        Reference URI, e.g. the GitHub issue or PR this task tracks.
     symbol_refs:
-        Code-graph symbol ids (``repo#path::Name``) this task concerns.
-        Replaces the existing list.
+        Symbol ids this task concerns. Replaces the list.
     tags:
-        Free-form tags. Replaces the existing list rather than merging into it.
+        Free-form tags. Replaces the list.
     session_id:
-        The calling agent session's id, used only to qualify the ``assignee``
-        this defaults when ``status="in_progress"`` leaves one to fill in —
-        see ``task_claim``'s ``session_id`` for why a deployed caller needs to
-        pass this explicitly (no shared environment to infer it from). Has no
-        effect when an explicit ``assignee`` is given, or when one already
-        exists on the task. Appended after every other parameter, not placed
-        near ``assignee``, so inserting it cannot shift what an existing
-        positional caller's later arguments bind to.
+        Your agent session id, for the assignee ``in_progress`` fills in; see
+        instructions.
     force:
-        With ``status="closed"``, close even while another person's claim is
-        live. The holder compared is the caller, never ``assignee``: here
-        that names who the task goes to, not who is closing it.
+        With ``status="closed"``, close despite another person's live claim.
     """
+    # The write is fenced on the read it merged from (the whole branch head)
+    # and re-merged up to five times, so an edit cannot revert a claim that
+    # landed after its read. The cost is availability: writes anywhere refuse
+    # it. In the 7 days to 2026-10-16 production peaked near 9 write calls a
+    # minute (p95 ~5s here, 10s+ for task_close/task_claim); at that peak one
+    # attempt is refused about half the time and all five a few percent. A
+    # row-scoped guard (match on slug and updated_at) is unexplored.
+    #
+    # `closed_at` follows the status: set on arrival at closed, cleared on any
+    # move away. Defaulting the assignee on `in_progress` (via _claim_holder)
+    # keeps (in_progress, claimed_at set, assignee null) unreachable: a live
+    # lease nobody is named on, which task_claim refuses and cannot attribute.
+    # `force` compares the caller, never `assignee`, which names who the task
+    # goes to. `session_id` is last so it cannot shift a positional caller.
     # A blank ``assignee`` is "not provided", not "provided as nothing".
     # ``_claim_holder`` already reads it that way (``if assignee:``), and
     # without this the two disagree: the ``is not None`` test below would write
@@ -8429,7 +8082,7 @@ def task_update(
     return updated
 
 
-@_tool
+@_tool(DESTRUCTIVE_IDEMPOTENT)
 def task_close(
     slug: str,
     resolution: str | None = None,
@@ -8439,45 +8092,32 @@ def task_close(
     """
     Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 
-    Closing a blocker is what unblocks its dependents — they become visible to
-    ``task_ready`` once every blocker is closed.
-
-    Refuses, writing nothing, while another person holds a live claim on the
-    task: ``{"closed": false, "reason": "held", "held_by", "claimed_at",
-    "remedy"}``. That stops a worker whose lease lapsed, and whose task was
-    taken over, from closing the new holder's work when it finishes late. A
-    claim held by any session of your own identity, an expired lease, and a
-    task nobody is named as holding all close as before. The check is made on
-    the row the close is fenced on, so a claim that lands first is seen.
-
-    The close is fenced like ``task_update`` and has the same trade: under
-    write load elsewhere on the graph it can run out of attempts and raise
-    ``WriteContention`` with nothing written (see ``task_update`` for the
-    production rates as of 2026-10-16). Retrying is safe, and a retry of a
-    close that did land keeps its original ``closed_at``. Reopening each
-    dependent is a separate fenced write after the close has committed, so one
-    that runs out of attempts does not fail the call: the closed task comes
-    back with a ``warning`` naming the dependents still marked ``blocked``.
-    ``task_ready`` lists them anyway, since every blocker is closed, and the
-    next close anywhere or a claim of one of them reopens it.
+    Closing a blocker unblocks its dependents. Refuses, writing nothing, while
+    another person holds a live claim: ``{"closed": false, "reason": "held",
+    "held_by", "claimed_at", "remedy"}``. Claims held by any of your own
+    sessions, expired leases and unheld tasks close. A retry of a close that
+    landed keeps its ``closed_at``. A ``warning`` names dependents that could
+    not be reopened; ``task_ready`` lists them anyway.
 
     Parameters
     ----------
     slug:
         The ``tk-`` slug to close.
     resolution:
-        Short note on what was actually done. Worth writing: this is what a
-        later reader sees when asking why the task ended, and closing without
-        one leaves that unanswerable.
+        What was actually done: what a later reader sees when asking why the
+        task ended.
     assignee:
-        Holder identity closing the task. Defaults to the calling user, same
-        resolution as ``task_claim``'s ``assignee``. Compared at the identity
-        level, ignoring the ``#<session>`` qualifier, as ``task_release``
-        does; pass it when the claim was taken under an explicit name (a
-        worker, a CI job).
+        Holder identity closing it; defaults to you. Pass it when the claim
+        was taken under an explicit name (a worker, a CI job).
     force:
         Close even while another person's claim is live.
     """
+    # The held check stops a worker whose lease lapsed, and whose task was
+    # taken over, from closing the new holder's work when it finishes late. It
+    # reads the row the close is fenced on, so a claim that lands first is
+    # seen. Reopening each dependent is its own fenced write after the close
+    # commits, so running out of attempts there warns instead of failing; the
+    # next close anywhere or a claim of the dependent reopens it.
     try:
         closed = _update_task(
             slug,
@@ -8493,7 +8133,7 @@ def task_close(
     return closed
 
 
-@_tool
+@_tool(WRITE)
 async def task_claim(
     slug: str,
     assignee: str | None = None,
@@ -8506,94 +8146,54 @@ async def task_claim(
     """
     Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
 
-    A successful claim that is not a renewal also returns ``memories``: up to
-    three that the task links to or its title closely matches, each with an
-    excerpt. Read them before the first edit; ``memory_get`` has the full text.
-    The list is often empty, because a weak match is left out, which does not
-    mean nothing exists: ``recall(query=...)`` searches more widely. A
-    non-empty list comes with ``memories_note``, which says they are teammates'
-    notes rather than instructions.
+    Call it before starting a ready task so others see it is taken.
+    Re-calling renews the lease; an expired lease makes the task reclaimable.
+    Returns ``{"claimed": true, ...}``, or ``{"claimed": false, "reason":
+    ...}`` when the task is closed, blocked, held (``held``/``lost_race``), or
+    the graph stayed too busy (``contention``, safe to retry).
 
-    It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
-    share a symbol (``symbols``) or only a file (``files``) with this task's,
-    shared symbols first. It is advisory, never a refusal, since work in the
-    same file often merges cleanly. A shared symbol is a likely merge conflict:
-    read the other task before editing that code, and ``task_comment`` it if
-    the two plans collide. Empty when this task has no ``symbol_refs``.
-
-    The coordination primitive for parallel/multi-user agents — call it before
-    starting a ready task so others see it is taken. Returns ``{"claimed": true,
-    …}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
-    closed, still blocked, held by someone else (``"held"``/``"lost_race"``),
-    or the graph is too busy to complete the CAS after retrying
-    (``"contention"`` — safe and expected to retry). The lease (``claimed_at``)
-    expires if the holder never closes/releases, making the task reclaimable
-    (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
-    claim.
-
-    A success also reports ``"qualified"``: whether the recorded holder names
-    the session as well as the person. ``false`` does **not** by itself mean
-    the caller omitted ``session_id`` — an explicit ``assignee`` always wins
-    over it (see ``_claim_holder``) and is unqualified by design, with no
-    warning. Only the presence of a ``"warning"`` key identifies the case this
-    exists to flag: a deployed call whose defaulted holder names no session,
-    so this person's concurrent sessions are indistinguishable to the
-    contention check — the mutual exclusion this tool exists for is not in
-    effect for them. It is reported rather than refused because the server has
-    no way to supply the id itself, so refusing would break every caller that
-    cannot send one.
-
-    The claim is a compare-and-swap. It is written only while the branch head
-    is still the one the task was read at, and that read is where
-    claimability is decided, so a granted claim means nobody else claimed,
-    closed or blocked the task first. A lost race reports ``{"claimed": false,
-    "reason": "lost_race", "held_by": …}``. Every other task write is fenced
-    the same way and merged from the row it read, so an edit that read the
-    task before the claim is refused and re-merged rather than reverting it.
-    The holder can still change afterwards by a write meant to change it:
-    ``force``, a ``task_update`` that sets ``assignee`` or ``status``, a
-    ``task_release --force``, or a claim taken once the lease lapses. An error
-    whose outcome is unknown (a lost response, a client timeout) may still have
-    claimed the task, because the server finishes an admitted write after its
-    caller disconnects, so re-read with ``task_get`` before retrying. See
-    docs/adr/0003.
+    A first claim also returns ``memories``, up to three teammates' notes the
+    task links to or matches (read them before the first edit; empty does not
+    mean nothing exists, ``recall`` searches wider), and ``overlaps``, other
+    in-flight tasks sharing a symbol or file in ``symbol_refs``. A shared
+    symbol is a likely merge conflict: read that task first and
+    ``task_comment`` it if the plans collide. A ``warning`` key means a
+    deployed call named no session, so your parallel sessions share one
+    holder.
 
     Parameters
     ----------
     slug:
         The ``tk-`` slug to claim.
     assignee:
-        Holder identity. Defaults to the calling user (the JWT's
-        ``preferred_username`` when deployed, the configured author locally)
-        qualified by ``session_id`` — see ``_claim_holder``. Two of one
-        person's parallel sessions must not share a holder string, or the
-        contention check passes and the second silently renews the first's
-        lease. Pass an explicit id to override (a worker name, a CI job).
+        Holder identity; defaults to you, qualified by ``session_id``.
+        Override for a worker or CI job.
     session_id:
-        The calling agent session's id, which qualifies the default holder.
-        **Pass this when calling a deployed witan** — the server cannot infer
-        it (no shared environment, and MCP 2026-07-28 carries no session
-        state), and without it every one of your concurrent sessions claims
-        under the same name. The CLI's remote proxy fills it in automatically;
-        under local stdio the server falls back to its own
-        ``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``, else
-        ``$CODEX_SESSION_ID``), inherited from the agent. Pi and Codex do not
-        export their ids to the MCP servers they launch, so under Pi pass the
-        value from ``echo $PI_SESSION_ID``, and under Codex from
-        ``echo $CODEX_SESSION_ID``.
+        Your agent session id; see instructions. Without it, a deployed witan
+        records your parallel sessions under one holder.
     force:
         Steal the task even if another holder's lease is still valid.
     repo:
-        Repo scoping — see instructions. Used only for the branch tracking
-        below, not to scope the claim itself.
+        Repo scoping; used only to link your branch, not to scope the claim.
     branch:
-        The git branch the caller is on. Together with ``repo`` this is what
-        the ``WorksOn`` link is keyed on, and both have to come from the caller
-        because a deployed server has no checkout to read them from — see
-        ``_code_branch_steps``. The CLI's remote proxy fills both in
-        automatically; under local stdio they default to the server's own
-        working directory, which is the agent's.
+        Your git branch, linked to the task. witan's CLI proxy fills it in;
+        under local stdio it defaults to the server's checkout.
     """
+    # The claim is a compare-and-swap on the branch head the task was read at,
+    # and that read decides claimability, so a granted claim means nobody else
+    # claimed, closed or blocked the task first (docs/adr/0003). The holder can
+    # still change later through a write meant to change it: `force`, a
+    # task_update of assignee or status, task_release --force, or a claim after
+    # the lease lapses. An unknown outcome may have claimed: the server
+    # finishes an admitted write after its caller disconnects.
+    #
+    # `qualified` says whether the holder names the session. An explicit
+    # assignee wins over session_id and is unqualified by design, so only the
+    # `warning` key flags the real problem: a deployed call whose defaulted
+    # holder names no session, leaving that person's sessions
+    # indistinguishable to the contention check. It warns rather than refuses
+    # because the server cannot supply the id itself. `overlaps` is advisory:
+    # work in one file often merges cleanly.
     # Before the steal prompt below, so nobody confirms a steal that then fails.
     _refuse_empty_repo(repo)
     # This first read only decides whether to refuse or offer a steal; the
@@ -8765,7 +8365,7 @@ async def task_claim(
     return result
 
 
-@_tool
+@_tool(DESTRUCTIVE)
 def task_release(
     slug: str,
     assignee: str | None = None,
@@ -8785,26 +8385,14 @@ def task_release(
     slug:
         The ``tk-`` slug to release.
     assignee:
-        Holder identity releasing the task. Defaults to the calling user, same
-        resolution as ``task_claim``'s ``assignee``. The held-by check compares
-        *identities*, ignoring the ``#<session>`` qualifier, so you can release a
-        claim one of your own other sessions took; another person's still needs
-        ``force``.
+        Holder identity releasing it; defaults to you. Any of your sessions'
+        claims count as yours; another person's needs ``force``.
     session_id:
-        The calling agent session's id, same resolution and same reason as
-        ``task_claim``'s. Only affects the holder string this call is compared
-        *as*; since the comparison is identity-level, omitting it against a
-        deployed server is harmless here in a way it is not for ``task_claim``.
+        Your agent session id; see instructions.
     status:
-        Status to return the task to (default ``open``). Passing ``closed``
-        stamps ``closed_at`` like any other transition to closed, which it did
-        not before: this surface used to write only status, assignee and
-        ``claimed_at``, leaving a closed task with no close time.
+        Status to return the task to.
     force:
         Release even if held by a different assignee.
-
-    Releasing clears ``claimed_at`` (the lease) but never ``first_claimed_at``
-    — the point of that field is to survive exactly this.
     """
     holder = _claim_holder(assignee, session_id)
 
@@ -8845,7 +8433,7 @@ def task_release(
     return result
 
 
-@_tool(app=ui_widgets.app_for("task_ready"))
+@_tool(READ, app=ui_widgets.app_for("task_ready"))
 def task_ready(
     repo: str | None = None,
     project_slug: str | None = None,
@@ -8856,32 +8444,27 @@ def task_ready(
     """
     Return ready-to-work tasks: pickable tasks whose blockers are all closed.
 
-    A task is ready when its status is ``open``/``blocked`` (nobody is on it yet
-    and it is not closed), OR ``in_progress`` with an expired lease (the holder
-    likely abandoned it — see ``readiness.status_pickable``), AND every task in
-    its ``blocked_by`` list is closed. A returned ``in_progress`` task is
-    therefore a reclaim, not fresh work — check ``assignee``/``claimed_at``
-    (falling back to ``updated_at`` when ``claimed_at`` is null, e.g. a legacy
-    row) before starting it, and it carries ``lease_expired: true`` saying so
-    without your having to apply the lease rule yourself. This is the core
-    coordination primitive — call it
-    to pick the next actionable item without manual triage. Results are
-    ordered by priority (``p0`` first).
+    Call it to pick the next item. A task is ready when it is ``open`` or
+    ``blocked``, or ``in_progress`` with an expired lease, and every task in
+    its ``blocked_by`` is closed. An ``in_progress`` result is a reclaim
+    (``lease_expired: true``): check ``assignee`` and ``claimed_at`` (or
+    ``updated_at`` when that is null) first.
+    Ordered by priority, ``p0`` first.
 
     Parameters
     ----------
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     project_slug:
         Restrict to a single WorkflowProject.
     assignee:
-        Restrict to a single owner (or pass to find your own ready work).
+        Filter to one holder.
     limit:
-        Maximum tasks to return. Defaults to 20.
+        Maximum tasks to return.
     all_repos:
-        Return every repo's ready tasks instead of the detected repo's — see
-        instructions.
+        Return every repo's ready tasks.
     """
+    # Pickability is readiness.status_pickable.
     # The candidate set and the blocker-status lookup are built from different
     # row sets on purpose. A task in ANOTHER repo is never a candidate here,
     # but it is routinely a blocker of one — and ``list_tasks_uncapped`` is an
@@ -8931,34 +8514,26 @@ def task_ready(
     return [_with_lease_flag(r) for r in ready[:limit]]
 
 
-@_tool
+@_tool(READ)
 def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
     """
     Return the tasks linked to a git branch — "what is this branch already for".
 
-    A ``WorksOn`` link is written by a SUCCESSFUL ``task_claim`` and by nothing
-    else — losing a claim race does not link, and ``workflow_session_start``
-    touches the same ``CodeBranch`` but links it ``ForProject``. So a non-empty
-    result means somebody actually holds a task on this branch. Call it before
-    starting fresh work on a branch you did not just create: on a shared graph
-    the holder may be a different actor, in which case the answer is to
-    continue or coordinate, not to open a second task.
-
-    An empty result is therefore weaker than it looks: a branch someone is
-    working on without having claimed a task returns nothing.
-
-    Closed tasks are included — filter on ``status`` if you only want live
-    work. Returns ``[]`` for an unknown branch, an unlinked one, or when no
-    repo can be resolved; none of those are errors.
+    Only a successful ``task_claim`` writes the link, so a non-empty result
+    means somebody holds a task on this branch. Call it before starting fresh
+    work on a branch you did not create, and continue or coordinate rather
+    than open a second task. An empty result does not mean nobody is working
+    the branch. Closed tasks are included.
 
     Parameters
     ----------
     branch:
-        Git branch name. Required: the server has no checkout to infer it from,
-        unlike ``repo``.
+        Git branch name. Required: a deployed server cannot infer it.
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     """
+    # A lost claim race does not link, and workflow_session_start links the
+    # same CodeBranch ForProject rather than WorksOn.
     detected = _scope(repo)
     if not detected or not branch:
         return []
@@ -8969,7 +8544,7 @@ def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
     )
 
 
-@_tool
+@_tool(DESTRUCTIVE)
 def task_link(
     from_slug: str, to_slug: str, kind: TaskLinkKind, remove: bool = False
 ) -> dict:
@@ -8988,30 +8563,20 @@ def task_link(
     For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
     fields on the affected task are kept in sync so ``task_ready`` stays correct.
 
-    Reversible: ``remove=True`` removes any of these, including one recorded in
-    the wrong direction. Pass the endpoints as the link was written, not
-    reversed. Removing a ``blocks`` link is how a task wrongly marked blocked
-    becomes ready again, and for ``blocks`` and ``parent`` the denormalized
-    fields are updated to match: unblocking a task whose remaining blockers
-    are all closed returns it from ``blocked`` to ``open``. A removal returns
-    ``{"from", "to", "kind", "removed"}``, where ``removed`` is ``False`` when
-    the edge was not there. That is not an error, so removing twice, or
-    removing a link that never existed, is a safe no-op.
+    ``remove=True`` removes a link, passing the endpoints as it was written.
+    Removing a ``blocks`` link returns the task from ``blocked`` to ``open``
+    once its remaining blockers are closed. Removing an absent link returns
+    ``removed: False``, not an error.
 
     Parameters
     ----------
     from_slug:
-        The ``tk-`` slug the edge points **from**. Its meaning depends on
-        ``kind`` — see above; for ``blocks`` this is the blocker, for ``parent``
-        the epic, for ``discovered_from`` the newly-found task.
+        The ``tk-`` slug the edge points from; see ``kind`` above.
     to_slug:
-        The slug the edge points **to** — the blocked task, the child, the task
-        the work was discovered during, or (for ``addresses``) a ``Memory``
-        slug.
+        The slug the edge points to; a Memory slug for ``addresses``.
     kind:
-        ``blocks`` | ``parent`` | ``discovered_from`` | ``addresses``. Getting
-        the direction wrong is the common mistake here, and it matters: for
-        ``blocks`` it decides which task ``task_ready`` withholds.
+        The edge kind. Direction matters: for ``blocks`` it decides which task
+        ``task_ready`` withholds.
     remove:
         Remove the ``from -> to`` edge of ``kind`` instead of adding it.
     """
@@ -9370,7 +8935,7 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
     return out
 
 
-@_tool
+@_tool(READ)
 def memory_stale_refs(repo: str | None = None, all_repos: bool = False) -> dict:
     """
     Memories whose ``symbol_refs`` no longer resolve in the code graph.
@@ -9387,10 +8952,9 @@ def memory_stale_refs(repo: str | None = None, all_repos: bool = False) -> dict:
     Parameters
     ----------
     repo:
-        Repo scoping — see instructions.
+        Repo scoping; see instructions.
     all_repos:
-        Check every repo's memories instead of the detected repo's — see
-        instructions.
+        Check every repo's memories.
 
     Returns ``{"repo", "checked", "counts", "memories"}``. ``checked`` is how
     many memories carry refs; ``counts`` tallies refs by status. ``memories``
@@ -9529,7 +9093,7 @@ def _expand_from_seeds(candidates: dict[str, float], hops: int) -> None:
             break
 
 
-@_tool(app=ui_widgets.app_for("recall"))
+@_tool(READ, app=ui_widgets.app_for("recall"))
 def recall(
     query: str | None = None,
     symbol_id: str | None = None,
@@ -9559,32 +9123,10 @@ def recall(
     ``include_superseded``); flags Contradicts pairs; and re-ranks with the
     composite score minus a distance penalty so seeds outrank neighbours.
 
-    A Contradicts pair is reported when both memories are in the returned
-    result AND at least one of them is in ``repo``, the rule
-    ``memory_contradictions`` scopes by. Expansion can return memories from
-    other repos, but a pair with neither side in ``repo`` is left out, so every
-    pair here is also in ``memory_contradictions`` for the same ``repo`` and
-    ``include_superseded``. Pass ``all_repos=True`` to report every pair among
-    the returned memories. The one mode where the two disagree: with no repo
-    detected and none passed, the ``query`` seed searches every repo, so
-    recall reports every pair among the returned memories, as with
-    ``all_repos=True``, while ``memory_contradictions`` keeps only pairs
-    touching an unscoped memory.
-
-    Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
-    edge — today that means a Tagged edge promoted from a free-string tag,
-    rather than a link someone named — costs ``w_inferred_edge`` extra
-    distance, so a shared tag no longer pulls as hard as an asserted
-    ``related_to``. The surcharge accumulates along the path, so extending an
-    inferred edge with an asserted one does not wash the penalty out. A
-    neighbour reachable both ways is scored at its best route. Edges written
-    before edge properties existed are unstamped and score as asserted, so this
-    reweights the graph as it is rewritten rather than all at once;
-    ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
-
-    With no edges in the graph the result equals ``memory_search`` — expansion is
-    additive, never lossy. Embeddings are not implemented: ``recall`` seeds from
-    BM25 only and needs no embedding provider.
+    A Contradicts pair is reported when both memories are returned and at
+    least one is in ``repo`` (with ``all_repos=True``, any pair). A neighbour
+    reached over an ``inferred`` edge ranks below one over an asserted edge.
+    With no edges in the graph the result equals ``memory_search``.
 
     Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
     Past a total content budget a memory's ``content`` is cut, marked by
@@ -9611,74 +9153,62 @@ def recall(
       store when ``contract_kind`` is given and witan-code is reachable, and
       empty lists otherwise.
 
-    To list exactly what a seed resolves to, with nothing ranked out or pruned,
-    pass ``hops=0``, ``include_superseded=True`` and a ``limit`` above the
-    expected count: e.g. every memory tagged to a topic, or every memory citing
-    a symbol.
+    To list exactly what a seed resolves to, pass ``hops=0``,
+    ``include_superseded=True`` and a ``limit`` above the expected count.
 
     Parameters
     ----------
     query:
-        Free-text BM25 query, matched against ``content`` and ``title``.
+        Free-text query, matched against ``content`` and ``title``.
     symbol_id:
-        A code-graph symbol id (``repo#path::Name``) to seed from — the memories
-        and tasks whose ``symbol_refs`` include it. Use this before editing a
-        symbol: "what do we already know about this function?"
+        Seed from memories and tasks whose ``symbol_refs`` include this symbol.
+        Use it before editing a symbol.
     task:
-        A ``tk-`` slug to seed from — the memories it ``Addresses``, those
-        sharing its ``symbol_refs``, and those its title closely matches. A first
-        ``task_claim`` already returns the best of these, so this is the one-call
-        way to load context for a task you are resuming or looking at without
-        claiming.
+        Seed from a ``tk-`` task: memories it addresses, shares symbols with,
+        or matches by title. Loads context for a task without claiming it.
     topic:
-        A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,
-        ``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join
-        surface, so this seed in particular can pull in other repositories. A
-        spec resolves through the same slugify used on write, so a tag stored
-        as ``UV`` is found by ``uv:topic``.
+        Seed from a ``tp-`` slug or ``name:kind`` spec (e.g. ``uv:topic``).
+        Crosses repos.
     repo:
-        Repo scoping — see instructions. Applies to the ``query`` seed and to
-        which contradiction pairs are reported (see above); symbol, task, and
-        topic seeds resolve wherever they live, and expansion crosses repos.
+        Repo scoping; see instructions. Scopes the ``query`` seed and which
+        contradiction pairs are reported; other seeds and expansion cross
+        repos.
     kind:
-        Restrict the ``query`` seed to one memory kind: ``pattern``,
-        ``project_fact``, ``lesson``, or ``agent_context``.
+        Restrict the ``query`` seed to one memory kind.
     hops:
-        How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``
-        edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``
-        disables expansion and returns the seeds alone; ``1`` (the default) is
-        almost always right, since each extra hop widens results faster than it
-        deepens them. Counts HOPS, not the fractional distance the inferred-edge
-        surcharge produces — the surcharge only reranks, it never truncates the
-        walk.
+        Expansion depth, 0 to 2. ``0`` returns the seeds alone; ``1`` is
+        almost always right.
     limit:
         Maximum memories to return after re-ranking.
     include_superseded:
-        When ``True``, keep memories that a newer memory ``Supersedes``. Default
-        ``False`` hides them, which is what makes recall return current
-        knowledge rather than its history.
+        Also return superseded memories (history, not current knowledge).
     session_id:
-        The calling agent session's id. Only logged, never changes the result;
-        see ``memory_get``.
+        Your agent session id; only logged.
     memory:
-        A memory slug to seed from, which adds the ``memory`` section: its
-        links by kind and the code symbols it names. Use after ``memory_get``
-        to see what a memory connects to.
+        Seed from a memory slug; adds the ``memory`` section (its links and
+        the code symbols it names).
     contract:
-        A normalised contract key (e.g. ``DATABASE_URL`` or
-        ``GET /api/v1/courses/``) to seed from: the memories tagged to its
-        ``<key>:contract`` Topic, cross-repo by nature. Adds the ``contract``
-        section. Tag a memory to a contract with
-        ``memory_link(<memory slug>, "<key_norm>:contract", "tagged")``.
+        Seed from a normalised contract key (e.g. ``DATABASE_URL``) through its
+        ``<key>:contract`` Topic. Adds the ``contract`` section. Tag a memory
+        to one with ``memory_link(<slug>, "<key_norm>:contract", "tagged")``.
     contract_kind:
-        ``env_var`` | ``endpoint`` | ``package`` | ``service``. With
-        ``contract``, also asks witan-code for the code that provides or
-        consumes the key, so you can pivot from what we know to where it lives.
-        Omit to skip that lookup.
+        With ``contract``, also look up the code that provides or consumes the
+        key in witan-code.
     all_repos:
-        Seed the ``query`` from every repo and report every contradiction pair,
-        instead of scoping both to the detected repo — see instructions.
+        Seed ``query`` from every repo and report every contradiction pair.
     """
+    # Contradiction scoping matches memory_contradictions, so every pair here
+    # is listed there for the same repo and include_superseded; they differ
+    # only with no repo detected, where the query seed spans every repo.
+    #
+    # Expansion is confidence-weighted: an inferred edge (today, a Tagged edge
+    # promoted from a tag) costs `w_inferred_edge` extra distance, accumulated
+    # along the path, and a neighbour reachable two ways scores at its best
+    # route. Unstamped (pre-property) edges score as asserted, so the graph is
+    # reweighted as it is rewritten; WITAN_RANK_W_INFERRED_EDGE=0 turns it
+    # off. `hops` counts hops, not that fractional distance: the surcharge
+    # reranks and never truncates the walk. Seeds are BM25 only; there are no
+    # embeddings. A topic spec resolves through the slugify used on write.
     scope = _scope(repo, all_repos)
     hops = max(0, min(hops, 2))
     now = datetime.now(UTC)
