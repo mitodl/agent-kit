@@ -582,9 +582,11 @@ def why(path: Path, *, repo: str | None = None) -> None:
             detail = explained
         else:
             state = f"in the graph, but excluded: {rule}"
+            # Not "indexing the file": below a real nested repository that
+            # indexes into the nested repository's graph, not this one.
             detail = (
                 f"{explained} Its rows were written before the rule applied to "
-                "it; indexing the file or the repo drops them."
+                f"it; a full index of the repo drops them: `{index_command(root)}`."
             )
     elif found["store"] is None:
         state = f"not indexed: {slug} has no code graph"

@@ -295,22 +295,37 @@ def test_a_file_indexed_by_name_is_held_to_the_path_rules(
     assert row["state"] == "not indexed: excluded path"
 
 
+@pytest.mark.parametrize("real_repo", [False, True])
 @requires_stack
-def test_rows_a_rule_now_excludes_are_called_out(checkout, monkeypatch, capsys):
-    """Rows written before a rule applied stay until the file or the repo is
-    indexed again, so the graph can hold a file the rules exclude."""
+def test_rows_a_rule_now_excludes_are_called_out(
+    checkout, monkeypatch, capsys, real_repo
+):
+    """Rows written before a rule applied stay until a full index of the repo
+    purges them, so the graph can hold a file the rules exclude. Indexing the
+    file does not reach them once `lib/` is a real repository: the file then
+    indexes into that repository's graph."""
     _fresh_server(monkeypatch)
     (checkout / "lib").mkdir()
     (checkout / "lib" / "dep.py").write_text("x = 1\n")
     indexer.index_path(checkout)
-    (checkout / "lib" / ".git").mkdir()
+    if real_repo:
+        _git(checkout / "lib", "init", "-q", "-b", "main")
+        indexer.index_path(checkout / "lib" / "dep.py")
+    else:
+        (checkout / "lib" / ".git").mkdir()
 
     row = _why("lib/dep.py", capsys)
 
     assert row["indexed"] is True
     assert row["rule"] == "nested checkout"
     assert row["state"] == "in the graph, but excluded: nested checkout"
-    assert row["detail"].endswith("indexing the file or the repo drops them.")
+    assert row["detail"].endswith(
+        "a full index of the repo drops them: `witan code index .`."
+    )
+
+    indexer.index_path(checkout)
+
+    assert _why("lib/dep.py", capsys)["indexed"] is False
 
 
 @requires_stack
