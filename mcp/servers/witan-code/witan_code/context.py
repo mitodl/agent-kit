@@ -341,15 +341,18 @@ _BRIDGE_PROBE_TTL = 300.0
 
 
 def _bridge_probe_path(cfg: cfg_module.Config) -> Path:
-    """Where the cached bridge verdict lives, in TMPDIR.
+    """Where the cached bridge verdict lives, in :func:`state_dir`.
+
+    Not the bare TMPDIR: another user could create a predictable name there
+    first, either as a file pinning a wrong verdict or as a symlink the write
+    below would follow.
 
     Keyed by a hash of the code dir rather than the path itself: two code dirs
     must not collide on one cache entry, and a long path must not blow past a
     filename limit. The same reasoning as :func:`_state_digest`.
     """
-    tmp = Path(os.environ.get("TMPDIR", "/tmp"))
     digest = hashlib.sha256(str(cfg.code_dir).encode()).hexdigest()[:16]
-    return tmp / f"codegraph-bridge-{digest}.probe"
+    return state_dir() / f"codegraph-bridge-{digest}.probe"
 
 
 def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
@@ -369,7 +372,12 @@ def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
     ref = store_module.bridge_store(cfg)
     if not ref.is_remote and not ref.exists(cfg):
         return None
-    cache = _bridge_probe_path(cfg)
+    try:
+        cache = _bridge_probe_path(cfg)
+    except (OSError, KeyError):
+        # state_dir() refused its directory, or (Windows) LOCALAPPDATA is
+        # unset. Probe uncached: a raise here would blank the whole block.
+        return store_module.store_health(ref, cfg, bridge=True).ok
     try:
         if time.time() - cache.stat().st_mtime < _BRIDGE_PROBE_TTL:
             return cache.read_text().strip() == "ok"
