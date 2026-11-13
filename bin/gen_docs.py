@@ -677,8 +677,8 @@ def _py_env_names(source: str) -> set[str]:
 
       ``WITAN_BRANCH``          appears only in a comment saying there is *no*
                                 such override
-      ``WITAN_EMBED_ENABLED``   named in two docstrings; embeddings are deferred
-                                and nothing reads it
+      ``WITAN_EMBED_ENABLED``   was named in two docstrings; embeddings are not
+                                implemented and nothing read it
       ``WITAN_REQUEST_TIMEOUT`` a comment's cross-reference to a budget the
                                 deployment enforces at APISIX, not here
 
