@@ -564,7 +564,12 @@ _DELETE_STATEMENT_RE = re.compile(r"^\s*delete\b", re.MULTILINE)
 # roots are opened directly. Only http(s) needs the server/graph addressing
 # split. s3:// is a direct store, which only a pre-0.14 CLI can open.
 _SERVER_SCHEMES = ("http://", "https://")
-_CLOUD_SCHEMES = ("s3://", "az://")
+Backend = Literal["local", "s3", "az", "server", "mcp"]
+# The one list of direct object-store schemes: `SubstrateProfile.for_uri`
+# classifies by it and the 0.14 CLI path refuses by it, so a scheme added here
+# is never taken for a local path.
+_CLOUD_BACKENDS: dict[str, Backend] = {"s3://": "s3", "az://": "az"}
+_CLOUD_SCHEMES = tuple(_CLOUD_BACKENDS)
 # omnigraph graph ids: letters, digits, hyphens; 1-64 chars. NO underscores
 # (the engine reserves them) and no path separators — see the naming decision
 # in memory pf-decision-cluster-graph-names-track-package.
@@ -2172,7 +2177,6 @@ def _cli_payload(
         yield str(params_file), None if source_file is None else str(source_file)
 
 
-Backend = Literal["local", "s3", "az", "server", "mcp"]
 #: The capabilities :meth:`OmnigraphClient.require` can be asked for. Each is a
 #: predicate on :class:`SubstrateProfile`; ``client_maintenance`` is
 #: ``maintenance == "client"``.
@@ -2252,10 +2256,9 @@ class SubstrateProfile:
         """The profile of the store ``graph_uri`` names, by its scheme."""
         if graph_uri.startswith(_SERVER_SCHEMES):
             return cls.for_backend("server")
-        if graph_uri.startswith("s3://"):
-            return cls.for_backend("s3")
-        if graph_uri.startswith("az://"):
-            return cls.for_backend("az")
+        for scheme, backend in _CLOUD_BACKENDS.items():
+            if graph_uri.startswith(scheme):
+                return cls.for_backend(backend)
         return cls.for_backend("local")
 
     def supports(self, capability: Capability) -> bool:

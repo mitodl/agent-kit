@@ -113,6 +113,17 @@ def test_profile_backend_follows_the_uri_scheme(monkeypatch, uri, backend):
     assert client.is_remote is (backend == "server")
 
 
+@pytest.mark.parametrize("scheme", og._CLOUD_SCHEMES)
+def test_every_cloud_scheme_is_classified_as_its_cloud_backend(scheme):
+    backend = og.SubstrateProfile.for_uri(f"{scheme}bucket/graph").backend
+    assert backend == og._CLOUD_BACKENDS[scheme]
+
+
+def test_a_cloud_scheme_added_later_is_not_classified_local(monkeypatch):
+    monkeypatch.setitem(og._CLOUD_BACKENDS, "gs://", "s3")
+    assert og.SubstrateProfile.for_uri("gs://bucket/graph").backend == "s3"
+
+
 def test_a_direct_store_declares_no_server_capabilities(monkeypatch):
     profile = _built_client(monkeypatch, "s3://bucket/graph").profile
     assert profile == og.SubstrateProfile(
