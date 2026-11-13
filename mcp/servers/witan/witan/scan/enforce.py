@@ -243,7 +243,9 @@ class WriteGuard:
         A span the write would block is replaced too, though that write will
         fail anyway. Only ``warn`` (including an allowlisted finding) keeps it,
         matching what the write stores. Emits no audit event and records no
-        notice: the write that follows does both, for the field itself.
+        notice: the write that follows does both, for the field itself. A
+        scanner failing open under ``on_scanner_error="warn"`` still logs
+        ``scanner_failed`` here, so that field's failure is logged twice.
         """
         node_type, _ = FIELD_MAP[query_name]
         config, allowlist = self._policy(repo)
