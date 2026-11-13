@@ -226,7 +226,12 @@ dependencies = [
     # ★ >=0.52 IS AN IMPORT FLOOR: hooks.py imports `witan_core._filelock`
     # (added in witan-core 0.52.0 by #601) at module scope, so 0.51.1 cannot
     # import the hook commands at all.
-    "witan-core[cli,remote,observability,sentry]>=0.52.0,<1",
+    #
+    # ★ >=0.57 IS AN IMPORT FLOOR: store.py, indexer.py and ingest.py import
+    # `witan_core.graph_ids` at module scope. It moved there from config.py so
+    # ol-infrastructure's cluster provisioning can import the same function
+    # instead of mirroring it.
+    "witan-core[cli,remote,observability,sentry]>=0.57.0,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled

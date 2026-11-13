@@ -343,14 +343,13 @@ bindings.
 
 Set `code_server` (env `WITAN_CODE_SERVER`) and each repo's code graph is
 instead a graph on the deployed omnigraph-server, addressed as `--server <url>
---graph <id>` with the id from `witan_code.config.graph_id()` — e.g.
+--graph <id>` with the id from `witan_core.graph_ids.code_graph_id()` — e.g.
 `https://github.com/mitodl/ol-django` → `code-github-com-mitodl-ol-django`.
-The bridge graph is the fixed `code-bridge`. That id function is a contract
-shared byte-for-byte with ol-infrastructure's provisioning
-(`applications/omnigraph/data_tier.py`), which is what *declares* the graphs
-and applies their schema; this client never creates one, and indexing a repo
-the cluster has no graph for fails immediately with the id it expected and the
-ids the server actually serves.
+The bridge graph is the fixed `code-bridge`. ol-infrastructure's provisioning
+(`applications/omnigraph/cluster_config.py`) imports the same function from
+witan-core to *declare* the graphs and apply their schema; this client never
+creates one, and indexing a repo the cluster has no graph for fails immediately
+with the id it expected and the ids the server actually serves.
 
 This is the **data tier** and is independent of `remote_url`
 ([Remote mode](#remote-mode)), which routes read *tools* through a deployed

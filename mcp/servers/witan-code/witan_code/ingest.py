@@ -67,6 +67,7 @@ import os
 import re
 from dataclasses import replace
 
+from witan_core.graph_ids import BRIDGE_GRAPH_ID
 from witan_core.identity import ActorTokenResolver, derive_actor_id
 from witan_core.refusal import Refusal
 
@@ -89,7 +90,7 @@ __all__ = [
     "views",
 ]
 
-BRIDGE = cfg_module.BRIDGE_GRAPH_ID
+BRIDGE = BRIDGE_GRAPH_ID
 """``graph`` value selecting the shared cross-repo bridge graph.
 
 Every other graph is named by the repo it holds; the bridge holds every repo's
@@ -408,8 +409,9 @@ def graphs() -> list[str]:
 
     What a client asks instead of listing graph ids and inverting them: the
     server's own resolution is the authority for which repo a graph holds, and
-    :func:`config.graph_id` does not invert. The bridge graph is not in the
-    list — it is one fixed graph, addressed as :data:`BRIDGE`.
+    :func:`witan_core.graph_ids.code_graph_id` does not invert. The bridge
+    graph is not in the list — it is one fixed graph, addressed as
+    :data:`BRIDGE`.
     """
     cfg = _config()
     return store_module.map_refs(
