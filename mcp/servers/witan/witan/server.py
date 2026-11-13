@@ -53,6 +53,7 @@ from witan_core.omnigraph import (
     store_cli_args,
 )
 from witan_core.refusal import Refusal
+from witan_core.timeutil import parse_timestamp
 
 from . import config as cfg_module
 from . import (
@@ -60,9 +61,11 @@ from . import (
     live_pr,
     merge_bounds,
     merge_report,
+    provenance,
     readiness,
     scan,
     session_state,
+    session_summary,
     ui_access,
     ui_routes,
     ui_widgets,
@@ -425,9 +428,13 @@ mcp = FastMCP(
         "  workflow_project_memories — memories a project produced\n\n"
         "Repo scoping: every tool auto-detects the current repo from .git/config. "
         "Pass repo (a canonical URI like https://github.com/mitodl/ol-django) to "
-        'override it, or repo="" to operate across all repos. When a list tool '
-        "detects no repo and none is passed, it returns slim records (slug, kind, "
-        "title, tags — no content); memory_get a slug for the full memory.\n\n"
+        "override it. To span every repo, omit repo and pass all_repos=true; on "
+        "memory_store, task_create and workflow_session_start that files the row "
+        "under no repo (repo-scoped task reads include such tasks, repo-scoped "
+        "memory reads do not include such memories). Never pass an empty repo: "
+        "it is refused. When memory_list detects no repo and none is passed, it "
+        "returns slim records (slug, kind, title, tags — no content); memory_get a "
+        "slug for the full memory.\n\n"
         "Changing memory — pick by what is actually wrong:\n"
         "  a field is wrong (wrong repo, typo'd title) → memory_update(slug, …); "
         "only the fields you pass change\n"
@@ -1032,11 +1039,9 @@ def _lease_expiry(lease_started_at: str | None) -> str | None:
     if not lease_started_at:
         return None
     try:
-        started = datetime.fromisoformat(lease_started_at)
+        started = parse_timestamp(lease_started_at)
     except (ValueError, TypeError):
         return None
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
     return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
 
 
@@ -1583,15 +1588,16 @@ def migrate_topics() -> dict:
     }
 
 
-_AUTOCLOSE_PREFIX = "Session ended (auto-closed by Stop hook"
+_AUTOCLOSE_PREFIX = session_summary.AUTOCLOSE_PREFIX
 
 
 def _has_own_summary(session: dict) -> bool:
     """True when a session carries a summary someone actually wrote.
 
-    The Stop hook's auto-close placeholder is treated as no summary: it says
-    only that the session ended, so a session carrying it holds nothing the
-    corpus would lose.
+    The Stop hook's auto-close summary is treated as no summary, whether it is
+    the placeholder or one derived from recorded activity: nobody wrote it, and
+    what it lists is already recorded (tasks and memories in the graph, commits
+    in git), so a session carrying it holds nothing the corpus would lose.
     """
     summary = (session.get("summary") or "").strip()
     return bool(summary) and not summary.startswith(_AUTOCLOSE_PREFIX)
@@ -3879,8 +3885,65 @@ def _fit_contents(rows: list[dict]) -> list[dict]:
     return fitted
 
 
+_EMPTY_REPO_REFUSAL = (
+    'repo="" names no repo. Omit repo to use the current repo (or, on an '
+    "update, to leave it unchanged), or pass a canonical repo URI (e.g. "
+    "https://github.com/mitodl/ol-django). To span every repo, omit repo and "
+    "pass all_repos=true instead."
+)
+
+
+def _refuse_empty_repo(repo: str | None) -> None:
+    """Refuse a ``repo`` that names no repo.
+
+    :param repo: A caller's ``repo`` argument.
+    :raises ValueError: When ``repo`` is empty or whitespace.
+    """
+    if repo is not None and not repo.strip():
+        raise ValueError(_EMPTY_REPO_REFUSAL)
+
+
+def _check_scope(repo: str | None, all_repos: bool = False) -> None:
+    """Refuse a ``repo``/``all_repos`` pair that names no scope or two.
+
+    Split from :func:`_scope` so a tool with branches that ignore the repo
+    can refuse a bad pair up front without paying for repo detection.
+
+    :param repo: The caller's ``repo`` argument.
+    :param all_repos: The caller's ``all_repos`` argument.
+    :raises ValueError: On an empty ``repo``, or ``repo`` with ``all_repos``.
+    """
+    _refuse_empty_repo(repo)
+    if all_repos and repo is not None:
+        msg = f"Pass repo or all_repos=true, not both (got repo={repo!r})."
+        raise ValueError(msg)
+
+
+def _scope(repo: str | None, all_repos: bool = False) -> str | None:
+    """Resolve a repo-taking tool's ``repo`` and ``all_repos`` to one repo.
+
+    An empty ``repo`` used to mean "every repo". The most common malformed
+    witan call in agent transcripts was no value at all for it
+    (``"repo": }``), which the client rejects before sending, so "every repo"
+    is now the ``all_repos`` flag and an empty ``repo`` is refused rather than
+    read as either meaning.
+
+    :param repo: The caller's ``repo`` argument.
+    :param all_repos: The caller's ``all_repos`` argument.
+    :returns: The canonical repo the call is scoped to, or ``None`` when it
+        spans every repo or no repo is detected.
+    :rtype: str | None
+    :raises ValueError: On an empty ``repo``, or ``repo`` with ``all_repos``.
+    """
+    _check_scope(repo, all_repos)
+    return None if all_repos else repo_module.detect(override=repo)
+
+
 def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     """BM25 candidate rows in score-desc order (the seed step for §3.5 / §8).
+
+    ``repo`` is already resolved (see :func:`_scope`); ``None`` searches every
+    repo.
 
     Two BM25 runs — one over ``content``, one over ``title`` — unioned here
     rather than in the query, because the engine won't ``or`` two ``search``
@@ -3907,7 +3970,7 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     """
     params = {
         "query": query,
-        "repo": repo_module.detect(override=repo) or None,
+        "repo": repo,
         "kind": kind or None,
     }
     rows = _with_relevance(
@@ -4097,6 +4160,75 @@ def _surfaced_for_claim(task: dict, session_id: str | None) -> list[dict]:
     return memories
 
 
+def _ref_file(symbol_id: str) -> str:
+    """The code-graph file id (``repo#path``) a ``repo#path::Name`` id sits in."""
+    return symbol_id.partition("::")[0]
+
+
+def _task_overlaps(task: dict) -> list[dict]:
+    """In-flight tasks whose ``symbol_refs`` share a symbol or a file with ``task``.
+
+    In flight means ``in_progress`` with a live lease, by the same test
+    ``task_ready`` uses, so a claim abandoned past its lease is not reported.
+    Tasks sharing a symbol come first, then those sharing only a file, each
+    group most recently claimed first.
+
+    :param task: The task being claimed, as ``get_task`` returns it.
+    :returns: One row per overlapping task, with ``slug``, ``title``,
+        ``assignee``, ``claimed_at`` and the shared ``symbols`` and ``files``.
+    :rtype: list[dict]
+    """
+    refs = set(task.get("symbol_refs") or [])
+    if not refs:
+        return []
+    files = {_ref_file(ref) for ref in refs}
+    overlaps = []
+    for row in client.read("read.gq", "in_progress_tasks_with_refs", {}):
+        if row["slug"] == task["slug"] or readiness.status_pickable(row):
+            continue
+        theirs = set(row.get("symbol_refs") or [])
+        shared_files = files & {_ref_file(ref) for ref in theirs}
+        if not shared_files:
+            continue
+        overlaps.append(
+            {
+                "slug": row["slug"],
+                "title": row["title"],
+                "assignee": row.get("assignee"),
+                "claimed_at": row.get("claimed_at"),
+                "symbols": sorted(refs & theirs),
+                "files": sorted(shared_files),
+            }
+        )
+    overlaps.sort(key=lambda o: o["claimed_at"] or "", reverse=True)
+    overlaps.sort(key=lambda o: not o["symbols"])
+    return overlaps
+
+
+def _overlaps_for_claim(task: dict, session_id: str | None) -> list[dict]:
+    """``_task_overlaps`` for a claim, which has already committed by now.
+
+    Advisory only. Two tasks in the same file often merge cleanly, so this
+    never refuses, and a failed lookup returns nothing rather than raising, for
+    the reason ``_surfaced_for_claim`` gives. Logs every first claim, empty
+    ones included, so the share of claims that found an overlap is countable.
+    """
+    try:
+        overlaps = _task_overlaps(task)
+    except Exception:
+        logger.warning("witan.claim.overlap_failed", task=task["slug"], exc_info=True)
+        overlaps = []
+    logger.info(
+        "witan.claim.overlaps",
+        task=task["slug"],
+        session=_log_session(session_id),
+        count=len(overlaps),
+        slugs=[o["slug"] for o in overlaps],
+        shared_symbols=sum(bool(o["symbols"]) for o in overlaps),
+    )
+    return overlaps
+
+
 # The edge index is a handful of global queries; cache it briefly so a burst of
 # searches doesn't re-scan the graph each time. Keyed by store URI (test stores
 # differ) and dropped on any local edge write, so it's never stale within a
@@ -4166,11 +4298,9 @@ def _age_days(ts: str | None, now: datetime) -> float:
     if not ts:
         return 0.0
     try:
-        dt = datetime.fromisoformat(ts)
+        dt = parse_timestamp(ts)
     except (ValueError, TypeError):
         return 0.0
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 
@@ -4252,6 +4382,7 @@ def memory_search(
     repo: str | None = None,
     kind: MemoryKind | None = None,
     include_superseded: bool = False,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     Plain BM25 text search over memories (no graph expansion — for that use
@@ -4280,8 +4411,10 @@ def memory_search(
     include_superseded:
         When ``True``, keep memories that a newer memory ``Supersedes``. Default
         ``False`` drops them.
+    all_repos:
+        Search every repo instead of the detected one — see instructions.
     """
-    rows = _search_rows(query, repo, kind)
+    rows = _search_rows(query, _scope(repo, all_repos), kind)
 
     if not rows:  # nothing to prune or re-rank — skip the edge-index scan
         return rows
@@ -4312,6 +4445,7 @@ def memory_list(
     repo: str | None = None,
     language: str | None = None,
     include_superseded: bool = False,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     List memories (no search), optionally filtered by kind, repo, and/or language.
@@ -4345,9 +4479,12 @@ def memory_list(
     include_superseded:
         When ``True``, keep memories that a newer memory ``Supersedes``. Default
         ``False`` drops them, as ``memory_search`` and ``recall`` do.
+    all_repos:
+        List every repo's memories, with full content, instead of the detected
+        repo's — see instructions.
     """
-    detected = repo_module.detect(override=repo)
-    slim = not detected and repo != ""
+    detected = _scope(repo, all_repos)
+    slim = not detected and not all_repos
     # Every read below prunes superseded rows in the query, before its cap, so
     # a full page means the cap was hit rather than that pruning ate into it.
     name = "list_memories" if include_superseded else "list_current_memories"
@@ -4366,8 +4503,8 @@ def memory_list(
             and (r.get("language") or "").lower() == language.lower()
         ][:_MEMORY_LIST_CAP]
 
-    # No repo detected here means the explicit all-repos opt-in (repo=""),
-    # which returns full content.
+    # No repo detected here means the explicit `all_repos` opt-in, which
+    # returns full content.
     return client.read(
         "read.gq", name, {"repo": detected or None, "kind": kind or None}
     )
@@ -4416,6 +4553,7 @@ def _store_memory(
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
     session_slug: str | None = None,
+    all_repos: bool = False,
 ) -> dict:
     """Create a Memory node — shared by memory_store and workflow_trace_mine."""
     if isinstance(tags, str):
@@ -4424,7 +4562,7 @@ def _store_memory(
         symbol_refs = [symbol_refs]
     now = now_iso()
     slug = _make_slug(kind, title)
-    detected_repo = repo_module.detect(override=repo)
+    detected_repo = _scope(repo, all_repos)
 
     # The whole memory — node, its topics, its edges — is ONE commit. Every
     # separate `mutate` is a separate Lance version, and a store accumulating a
@@ -4525,6 +4663,7 @@ async def memory_store(
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
     session_slug: str | None = None,
+    all_repos: bool = False,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -4572,11 +4711,15 @@ async def memory_store(
         protocol carries no session state, so against a deployed service this is
         the only way the ``SessionProduced`` provenance edge can be created.
         Omit it under a local stdio server, which finds the handle itself.
+    all_repos:
+        Store the memory under no repo. Repo-scoped memory reads leave it
+        out; ``all_repos`` reads include it — see instructions.
     """
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
     # None (today's behavior) under automation / an unsupported client.
-    repo = await elicit.repo_or_detect(ctx, repo)
+    if not all_repos:
+        repo = await elicit.repo_or_detect(ctx, repo)
     return await _offload(
         _store_memory,
         kind,
@@ -4590,6 +4733,7 @@ async def memory_store(
         symbol_refs=symbol_refs,
         confidence=confidence,
         session_slug=session_slug,
+        all_repos=all_repos,
     )
 
 
@@ -4710,6 +4854,7 @@ def memory_update(
         tags = [tags]
     if isinstance(symbol_refs, str):
         symbol_refs = [symbol_refs]
+    _refuse_empty_repo(repo)
     changes = {
         key: value
         for key, value in (
@@ -5040,30 +5185,31 @@ _CONTRADICTION_ENDPOINT_FIELDS = (
 )
 
 
-def _contradiction_in_scope(repo: str | None) -> Callable[[dict, dict], bool]:
+def _contradiction_in_scope(
+    scope: str | None, *, every: bool
+) -> Callable[[dict, dict], bool]:
     """
     The repo rule both ``memory_contradictions`` and ``recall`` report pairs by.
 
     Shared so the two cannot drift: for an explicit or detected repo, a pair
     ``recall`` flags is always one the inbox lists for the same ``repo``.
-    ``recall`` passes ``""`` when no repo is detected, because its ``query``
+    ``recall`` passes ``every`` when no repo is detected, because its ``query``
     seed then spans every repo.
 
-    :param repo: The caller's ``repo`` argument, resolved as every repo-scoped
-        tool resolves it. ``""`` keeps every pair.
+    :param scope: The repo resolved by :func:`_scope`.
+    :param every: Keep every pair, whatever ``scope`` is.
     :returns: A predicate over the pair's two sides that is true when either
-        side's ``repo`` is the resolved one.
+        side's ``repo`` is ``scope``.
     :rtype: Callable[[dict, dict], bool]
     """
-    if repo == "":
+    if every:
         return lambda a, b: True
-    detected = repo_module.detect(override=repo)
-    return lambda a, b: detected in (a["repo"], b["repo"])
+    return lambda a, b: scope in (a["repo"], b["repo"])
 
 
 @_tool
 def memory_contradictions(
-    repo: str | None = None, include_superseded: bool = False
+    repo: str | None = None, include_superseded: bool = False, all_repos: bool = False
 ) -> list[dict]:
     """
     List every pair of memories that contradict each other, newest link first.
@@ -5102,8 +5248,10 @@ def memory_contradictions(
     include_superseded:
         When ``True``, keep pairs where either memory has been superseded, i.e.
         the resolved ones.
+    all_repos:
+        Report every pair, in any repo — see instructions.
     """
-    in_scope = _contradiction_in_scope(repo)
+    in_scope = _contradiction_in_scope(_scope(repo, all_repos), every=all_repos)
     query = "contradicts_pairs" if include_superseded else "contradicts_current_pairs"
 
     pairs: dict[frozenset[str], dict] = {}
@@ -5235,7 +5383,7 @@ def _code_branch_steps(
     proxy fills it in client-side (``_BRANCH_IS_CHECKOUT``). Three values, three
     meanings: a branch name uses it, ``None`` means "work it out yourself" and
     takes the fallback, and ``""`` means "no branch, do not track" and returns
-    ``[]`` — matching what ``repo=""`` means on every tool that takes it.
+    ``[]``.
 
     ★ "ALREADY RECORDED" IS NOT ONE OF THEM. With a repo and a branch the list
     is never empty: `_upsert_code_branch_step` yields an insert for a new
@@ -5264,7 +5412,7 @@ def _code_branch_steps(
     if not repo:
         return []
     # `is None`, not truthiness: an explicitly-passed `""` means "no branch —
-    # do not track", the same sentinel `repo=""` carries, and `_map_args` sends
+    # do not track", and `_map_args` sends
     # it through untouched (only an OMITTED branch is filled in client-side).
     # Falling back on it would build a CodeBranch out of the server's own
     # checkout for a caller who asked for none — which under local stdio is the
@@ -5681,6 +5829,7 @@ def workflow_project_list(
     phase: WorkflowPhase | None = None,
     ready: bool = False,
     query: str | None = None,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     List workflow projects, optionally filtered by repo, status, and phase, or
@@ -5702,7 +5851,6 @@ def workflow_project_list(
     repo:
         Canonical repo URI to filter to (membership test against each
         project's repo set). Auto-detected from ``.git/config`` if omitted.
-        Pass an empty string to list projects across all repos.
     status:
         ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
         Defaults to ``active``.
@@ -5716,8 +5864,10 @@ def workflow_project_list(
         every match the BM25 fetch returns (it is unbounded), and the 20-row
         cap after them, so a filter never hides a match that scored below a
         query-level cap.
+    all_repos:
+        List projects across all repos instead of filtering to one.
     """
-    detected_repo = repo_module.detect(override=repo)
+    detected_repo = _scope(repo, all_repos)
 
     # `repos` is a list, so membership can't be a graph match-filter — fetch by
     # status (or all) and filter on set membership in Python.
@@ -6165,7 +6315,7 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
 
 @_tool
 def workflow_project_memories(
-    project_slug: str, group_by_session: bool = False
+    project_slug: str, group_by_session: bool = False, session: str | None = None
 ) -> dict:
     """
     "What did we learn during project X" — the provenance walk.
@@ -6189,10 +6339,27 @@ def workflow_project_memories(
         Also return a ``by_session`` breakdown of which session produced what.
         Costs one extra query per session, so leave it off unless you need the
         attribution.
+    session:
+        A ``ws-`` slug. Return only the memories that one session produced,
+        in one query, instead of the project's. ``group_by_session`` is
+        ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it
+        auto-closes; named ``session`` rather than ``session_slug`` because
+        the remote proxy fills an omitted ``session_slug`` with the caller's
+        active session, which would silently narrow every project-wide call.
 
     Returns ``{"project_slug": ..., "memories": [...], "by_session": {...}}``
     (``by_session`` is empty unless ``group_by_session`` is set).
     """
+    if session:
+        return {
+            "project_slug": project_slug,
+            "memories": client.read(
+                "read.gq",
+                "session_produced_memories",
+                {"project_slug": project_slug, "session_slug": session},
+            ),
+            "by_session": {},
+        }
     merged: dict[str, dict] = {}
     for query in ("project_produced_memories", "informed_memories"):
         for row in client.read("read.gq", query, {"project_slug": project_slug}):
@@ -6201,14 +6368,14 @@ def workflow_project_memories(
     by_session: dict[str, list[dict]] = {}
     if group_by_session:
         sessions = _project_sessions(project_slug)
-        for session in sessions:
+        for sess in sessions:
             produced = client.read(
                 "read.gq",
                 "session_produced_memories",
-                {"session_slug": session["slug"]},
+                {"project_slug": project_slug, "session_slug": sess["slug"]},
             )
             if produced:
-                by_session[session["slug"]] = produced
+                by_session[sess["slug"]] = produced
 
     return {
         "project_slug": project_slug,
@@ -6226,6 +6393,7 @@ def workflow_trace_list(
     tags: list[str] | None = None,
     author: str | None = None,
     limit: int = 50,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     List corpus WorkflowTrace records, optionally filtered by repo, tags, or author.
@@ -6239,18 +6407,19 @@ def workflow_trace_list(
     ----------
     repo:
         Canonical repo URI to filter to (membership test against each trace's
-        repo set). Auto-detected from ``.git/config`` if omitted. Pass an
-        empty string to list traces across all repos.
+        repo set). Auto-detected from ``.git/config`` if omitted.
     tags:
         Only return traces that carry ALL of these tags.
     author:
         Only return traces created by this author.
     limit:
         Max rows to return (applied after filtering).
+    all_repos:
+        List traces across all repos instead of filtering to one.
     """
     if isinstance(tags, str):
         tags = [tags]
-    detected_repo = repo_module.detect(override=repo)
+    detected_repo = _scope(repo, all_repos)
     rows = client.read("read.gq", "list_all_traces", {})
 
     if detected_repo:
@@ -6411,11 +6580,12 @@ def workflow_trace_mine(
     patterns:
         Proposed pattern memories to create on this call. Each dict needs
         ``title`` and ``content``; may also include ``repo``, ``language``,
-        and ``tags``.
+        ``tags``, and ``all_repos`` (``true`` stores it under no repo, as on
+        ``memory_store``; not with ``repo``).
     lessons:
         Proposed lesson memories to create on this call. Each dict needs
         ``title`` and ``content``; may also include ``repo``, ``severity``,
-        and ``tags``.
+        ``tags``, and ``all_repos`` (as for ``patterns``).
     session_slug:
         The ``ws-`` handle from ``workflow_session_start``, recorded as the
         provenance of every memory mined on this call — see ``memory_store``.
@@ -6450,6 +6620,11 @@ def workflow_trace_mine(
                 raise ValueError(
                     f"Each proposed {label} must be a dict containing 'title' and 'content', got {spec!r}"
                 )
+            if not isinstance(spec.get("all_repos", False), bool):
+                raise TypeError(
+                    f"A proposed {label}'s all_repos must be true or false, got {spec['all_repos']!r}"
+                )
+            _check_scope(spec.get("repo"), spec.get("all_repos", False))
 
     created_patterns = [
         _store_memory(
@@ -6460,6 +6635,7 @@ def workflow_trace_mine(
             language=spec.get("language"),
             tags=spec.get("tags"),
             session_slug=session_slug,
+            all_repos=spec.get("all_repos", False),
         )["slug"]
         for spec in patterns or []
     ]
@@ -6472,6 +6648,7 @@ def workflow_trace_mine(
             severity=spec.get("severity"),
             tags=spec.get("tags"),
             session_slug=session_slug,
+            all_repos=spec.get("all_repos", False),
         )["slug"]
         for spec in lessons or []
     ]
@@ -6673,6 +6850,7 @@ def workflow_session_start(
     repo: str | None = None,
     branch: str | None = None,
     tags: list[str] | None = None,
+    all_repos: bool = False,
 ) -> dict:
     """
     Link the current agent session to a workflow project.
@@ -6737,9 +6915,11 @@ def workflow_session_start(
         under a deployment.
     tags:
         Optional tags.
+    all_repos:
+        Record the session under no repo — see instructions.
     """
     now = now_iso()
-    detected_repo = repo_module.detect(override=repo)
+    detected_repo = _scope(repo, all_repos)
     existing = _open_session_for_key(project_slug, session_id)
 
     # ONE commit for everything this call writes. Each of the four writes below
@@ -6865,7 +7045,8 @@ def workflow_session_end(
 
     Call this before ending a session to produce a high-quality corpus record.
     The ``Stop`` hook will auto-close sessions that did not call this, but
-    with a placeholder summary.
+    with a summary it can only derive from what was recorded (tasks claimed
+    and closed, memories stored, commits, uncommitted files), not why.
 
     For best corpus quality, write a summary that includes:
     - What was done this session
@@ -6926,14 +7107,9 @@ def _ended_at_or_after(ended_at: str | None, since: datetime) -> bool:
     if not ended_at:
         return True
     try:
-        return _as_utc(datetime.fromisoformat(ended_at)) >= since
+        return parse_timestamp(ended_at) >= since
     except (ValueError, TypeError):
         return True
-
-
-def _as_utc(moment: datetime) -> datetime:
-    """Read a naive timestamp as UTC, so two of them are always comparable."""
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _parse_since(since: str) -> datetime:
@@ -6944,7 +7120,7 @@ def _parse_since(since: str) -> datetime:
     ``since`` there would make every row compare true.
     """
     try:
-        return _as_utc(datetime.fromisoformat(since))
+        return parse_timestamp(since)
     except (ValueError, TypeError):
         msg = f"since must be an ISO timestamp, got {since!r}"
         raise ValueError(msg) from None
@@ -7367,6 +7543,7 @@ async def task_create(
     external_uri: str | None = None,
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
+    all_repos: bool = False,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -7412,13 +7589,17 @@ async def task_create(
         Code-graph symbol ids (``repo#path::Name``) this task concerns.
     tags:
         Optional free-form tags.
+    all_repos:
+        Create the task under no repo. Repo-scoped task reads include
+        unscoped tasks, so every repo sees it — see instructions.
     """
     now = now_iso()
     slug = _make_slug("task", title)
     # Offer to scope the task when nothing is detected; falls back to an
     # unscoped task (today's behavior) under automation / an unsupported client.
-    repo = await elicit.repo_or_detect(ctx, repo)
-    detected_repo = repo_module.detect(override=repo)
+    if not all_repos:
+        repo = await elicit.repo_or_detect(ctx, repo)
+    detected_repo = _scope(repo, all_repos)
     # Soft duplicate check (tk-phase-0-bm25-task-search-project-search).
     # Warn-only — never blocks the create — since a lexical hit is a decent
     # duplicate signal but nowhere near certain; the caller decides whether a
@@ -7733,6 +7914,7 @@ def task_list(
     parent: str | None = None,
     assignee: str | None = None,
     limit: int | None = None,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     List tasks, filtered by repo, status, project, parent, and/or assignee.
@@ -7783,12 +7965,16 @@ def task_list(
         the rows are this repo's followed by the unscoped ones, two
         ``updated_at`` runs concatenated rather than merged. So a limit there
         keeps this repo's tasks and may return no unscoped ones at all, even
-        if an unscoped task was touched more recently. Pass ``repo=""`` for a
-        single ``updated_at`` ordering across everything.
+        if an unscoped task was touched more recently. Pass ``all_repos=True``
+        for a single ``updated_at`` ordering across everything.
+    all_repos:
+        List every repo's tasks instead of the detected repo's — see
+        instructions.
     """
     if limit is not None and not 1 <= limit <= _MAX_TASK_LIMIT:
         msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
         raise ValueError(msg)
+    _check_scope(repo, all_repos)
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
     if project_slug:
@@ -7797,33 +7983,29 @@ def task_list(
         )
     elif parent:
         rows = client.read("read.gq", "list_tasks_by_parent", {"parent_slug": parent})
+    elif detected := _scope(repo, all_repos):
+        # Include repo-scoped tasks and unscoped (repo=null) tasks. Unscoped
+        # tasks were created without git context (e.g. via MCP from a global
+        # server) and should be visible regardless of which repo you're in.
+        repo_rows = client.read(
+            "read.gq",
+            "list_tasks_by_repo",
+            {"repo": detected, "status": status or None},
+        )
+        all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
+        seen = {r["slug"] for r in repo_rows}
+        unscoped = [r for r in all_rows if not r.get("repo") and r["slug"] not in seen]
+        rows = repo_rows + unscoped
     else:
-        detected = repo_module.detect(override=repo)
-        if detected:
-            # Include repo-scoped tasks and unscoped (repo=null) tasks. Unscoped
-            # tasks were created without git context (e.g. via MCP from a global
-            # server) and should be visible regardless of which repo you're in.
-            repo_rows = client.read(
-                "read.gq",
-                "list_tasks_by_repo",
-                {"repo": detected, "status": status or None},
-            )
-            all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
-            seen = {r["slug"] for r in repo_rows}
-            unscoped = [
-                r for r in all_rows if not r.get("repo") and r["slug"] not in seen
-            ]
-            rows = repo_rows + unscoped
-        else:
-            # The all-repos read is the only one capped in the query, at 50
-            # rows — which is why "all repos" silently truncated. An explicit
-            # limit swaps in the uncapped twin (same projection and order,
-            # `limit 10000`) and slices below.
-            rows = client.read(
-                "read.gq",
-                "list_tasks_uncapped" if limit else "list_tasks",
-                {"status": status or None},
-            )
+        # The all-repos read is the only one capped in the query, at 50
+        # rows — which is why "all repos" silently truncated. An explicit
+        # limit swaps in the uncapped twin (same projection and order,
+        # `limit 10000`) and slices below.
+        rows = client.read(
+            "read.gq",
+            "list_tasks_uncapped" if limit else "list_tasks",
+            {"status": status or None},
+        )
 
     if status:
         rows = [r for r in rows if r.get("status") == status]
@@ -7884,12 +8066,13 @@ def _similar_task_query(title: str, description: str) -> str:
     return re.sub(r"[^\w\s]", " ", text).strip()
 
 
-def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
+def _search_task_rows(
+    query: str, detected: str | None, status: str | None
+) -> list[dict]:
     """BM25 candidate rows in score-desc order — the Task twin of
     ``_search_rows``; `description` stands in for Memory's `content` as the
-    primary matched field.
+    primary matched field. ``detected`` is resolved by :func:`_scope`.
     """
-    detected = repo_module.detect(override=repo)
     global_params = {"query": query, "repo": None, "status": status or None}
     if not detected:
         return _search_task_bm25(global_params)
@@ -7910,7 +8093,7 @@ def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[
 
 def _filtered_task_search_rows(
     query: str,
-    repo: str | None,
+    detected: str | None,
     status: str | None,
     project_slug: str | None,
     assignee: str | None,
@@ -7920,7 +8103,8 @@ def _filtered_task_search_rows(
     Reads through the uncapped query pairs, because the capped ones return the
     top 20 of the UNFILTERED query and filtering those afterwards loses every
     match ranked below them. A project scope replaces the repo scope, as in
-    ``task_list``: a project spans repos.
+    ``task_list``: a project spans repos. ``detected`` is resolved by
+    :func:`_scope`.
     """
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
@@ -7930,7 +8114,6 @@ def _filtered_task_search_rows(
         )
     else:
         rows = _search_task_bm25({"query": query}, "search_tasks_all_uncapped")
-        detected = repo_module.detect(override=repo)
         if detected:
             # This repo's matches, then unscoped ones, as in _search_task_rows.
             rows = [r for r in rows if r.get("repo") == detected] + [
@@ -7950,6 +8133,7 @@ def task_search(
     status: TaskStatus | None = None,
     project_slug: str | None = None,
     assignee: str | None = None,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     Plain BM25 text search over tasks (no graph expansion).
@@ -7988,11 +8172,17 @@ def task_search(
     assignee:
         Search only tasks held by this owner, matched as ``task_list``
         matches it; ``"@me"`` is the calling identity.
+    all_repos:
+        Search every repo's tasks instead of the detected repo's — see
+        instructions.
     """
+    detected = _scope(repo, all_repos)
     if project_slug or assignee:
-        rows = _filtered_task_search_rows(query, repo, status, project_slug, assignee)
+        rows = _filtered_task_search_rows(
+            query, detected, status, project_slug, assignee
+        )
     else:
-        rows = _search_task_rows(query, repo, status)
+        rows = _search_task_rows(query, detected, status)
     return rows[:_SEARCH_LIMIT]
 
 
@@ -8142,6 +8332,7 @@ def task_update(
     if priority is not None:
         changes["priority"] = priority
     if repo is not None:
+        _refuse_empty_repo(repo)
         changes["repo"] = repo
     if assignee is not None:
         changes["assignee"] = assignee
@@ -8301,7 +8492,16 @@ async def task_claim(
     three that the task links to or its title closely matches, each with an
     excerpt. Read them before the first edit; ``memory_get`` has the full text.
     The list is often empty, because a weak match is left out, which does not
-    mean nothing exists: ``recall(query=...)`` searches more widely.
+    mean nothing exists: ``recall(query=...)`` searches more widely. A
+    non-empty list comes with ``memories_note``, which says they are teammates'
+    notes rather than instructions.
+
+    It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
+    share a symbol (``symbols``) or only a file (``files``) with this task's,
+    shared symbols first. It is advisory, never a refusal, since work in the
+    same file often merges cleanly. A shared symbol is a likely merge conflict:
+    read the other task before editing that code, and ``task_comment`` it if
+    the two plans collide. Empty when this task has no ``symbol_refs``.
 
     The coordination primitive for parallel/multi-user agents — call it before
     starting a ready task so others see it is taken. Returns ``{"claimed": true,
@@ -8376,6 +8576,8 @@ async def task_claim(
         automatically; under local stdio they default to the server's own
         working directory, which is the agent's.
     """
+    # Before the steal prompt below, so nobody confirms a steal that then fails.
+    _refuse_empty_repo(repo)
     # This first read only decides whether to refuse or offer a steal; the
     # claim loop below re-decides on the row its conditional write is fenced
     # on (see docs/adr/0003). The claim also upserts a CodeBranch for the
@@ -8474,7 +8676,7 @@ async def task_claim(
     # returns `[]` on a failed read); a failed commit is the claim failing.
     branch_steps = functools.partial(
         _code_branch_steps,
-        repo_module.detect(override=repo),
+        _scope(repo),
         branch=branch,
         task_slug=slug,
     )
@@ -8523,6 +8725,9 @@ async def task_claim(
     # is the same holder carrying on, which already had them.
     if not (held and own):
         result["memories"] = await _offload(_surfaced_for_claim, claimed, session_id)
+        if result["memories"]:
+            result["memories_note"] = provenance.TEAMMATE_NOTES
+        result["overlaps"] = await _offload(_overlaps_for_claim, claimed, session_id)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the
@@ -8628,6 +8833,7 @@ def task_ready(
     project_slug: str | None = None,
     assignee: str | None = None,
     limit: int = 20,
+    all_repos: bool = False,
 ) -> list[dict]:
     """
     Return ready-to-work tasks: pickable tasks whose blockers are all closed.
@@ -8654,6 +8860,9 @@ def task_ready(
         Restrict to a single owner (or pass to find your own ready work).
     limit:
         Maximum tasks to return. Defaults to 20.
+    all_repos:
+        Return every repo's ready tasks instead of the detected repo's — see
+        instructions.
     """
     # The candidate set and the blocker-status lookup are built from different
     # row sets on purpose. A task in ANOTHER repo is never a candidate here,
@@ -8663,25 +8872,22 @@ def task_ready(
     # a time: ~3.0s of a 4.2s ``task_ready`` against the deployed service,
     # which is most of what blows the context hook's timeout (agent-kit#349).
     known: list[dict] = []
+    _check_scope(repo, all_repos)
     if project_slug:
         rows = client.read(
             "read.gq", "list_tasks_by_project", {"project_slug": project_slug}
         )
+    elif detected := _scope(repo, all_repos):
+        repo_rows = client.read(
+            "read.gq", "list_tasks_by_repo", {"repo": detected, "status": None}
+        )
+        all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
+        seen = {r["slug"] for r in repo_rows}
+        unscoped = [r for r in all_rows if not r.get("repo") and r["slug"] not in seen]
+        rows = repo_rows + unscoped
+        known = all_rows
     else:
-        detected = repo_module.detect(override=repo)
-        if detected:
-            repo_rows = client.read(
-                "read.gq", "list_tasks_by_repo", {"repo": detected, "status": None}
-            )
-            all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
-            seen = {r["slug"] for r in repo_rows}
-            unscoped = [
-                r for r in all_rows if not r.get("repo") and r["slug"] not in seen
-            ]
-            rows = repo_rows + unscoped
-            known = all_rows
-        else:
-            rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
+        rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
 
     # ``rows`` last: where a slug appears in both, the candidate row is the one
     # the readiness decision is about, so its status wins.
@@ -8735,7 +8941,7 @@ def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
     repo:
         Repo scoping — see instructions.
     """
-    detected = repo_module.detect(override=repo)
+    detected = _scope(repo)
     if not detected or not branch:
         return []
     return client.read(
@@ -9067,6 +9273,143 @@ def _memory_symbols(node: dict | None) -> list[dict]:
     return symbols
 
 
+def _unknown(refs: Iterable[str], reason: str) -> dict[str, dict]:
+    return {ref: {"status": "unknown", "reason": reason} for ref in refs}
+
+
+def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
+    """Classify each ref against the code graph as live, missing or unknown.
+
+    A ref is ``missing`` only when its repo has a readable index and the id is
+    not in it. Everything that stops us asking (witan-code absent, the graph
+    unreachable, the repo never indexed) is ``unknown``, because reporting those
+    as stale would flag every memory in a repo nobody indexed.
+
+    :param refs: Distinct ``symbol_refs`` values.
+    :returns: Each ref mapped to ``{"status", "reason"?, "candidates"?}``.
+    :rtype: dict[str, dict]
+    """
+    refs = list(refs)
+    code = _code_server()
+    if code is None:
+        return _unknown(refs, "witan-code is not installed")
+    try:
+        indexed = {row["repo"]: row for row in code.code_indexed_repos()}
+    except Exception:  # cross-store lookup is best-effort
+        logger.info("witan.stale_refs.code_graph_unreachable", exc_info=True)
+        return _unknown(refs, "code graph unreachable")
+
+    out: dict[str, dict] = {}
+    file_symbols: dict[tuple[str, str], set[str]] = {}
+    for ref in refs:
+        # The repo has to be in the ref. Borrowing the cwd's, as symbol_context
+        # does for a bare id, would judge the ref against whichever repo the
+        # caller happens to run from.
+        repo, _, rest = ref.partition("#")
+        path, _, name = rest.rpartition("::")
+        if not (repo and path and name):
+            out[ref] = {"status": "unknown", "reason": "not a repo#path::Name id"}
+            continue
+        repo = repo_module.normalise(repo)
+        row = indexed.get(repo)
+        if row is None:
+            out[ref] = {"status": "unknown", "reason": f"{repo} is not indexed"}
+            continue
+        if row.get("files") is None:
+            out[ref] = {
+                "status": "unknown",
+                "reason": f"{repo}'s code graph is unreadable: {row.get('unreadable')}",
+            }
+            continue
+        symbol_id = f"{repo}#{path}::{name}"
+        try:
+            # Liveness is an exact-id check against the file's symbols. A name
+            # lookup is capped at 50 rows in no stable order, so a qualified
+            # name that repeats across files (every `<module>`, Django's
+            # `Command.handle`) would report a live symbol as missing.
+            if (repo, path) not in file_symbols:
+                file_symbols[repo, path] = {
+                    s["symbol_id"]
+                    for s in _code_result(code.code_symbols_in_file(path, repo))
+                }
+            if symbol_id in file_symbols[repo, path]:
+                out[ref] = {"status": "live"}
+                continue
+            defs = _code_result(code.code_find_definition(name, repo))
+        except Exception:  # cross-store lookup is best-effort
+            logger.info("witan.stale_refs.lookup_failed", ref=ref, exc_info=True)
+            out[ref] = {"status": "unknown", "reason": "definition lookup failed"}
+            continue
+        ids = {d["symbol_id"] for d in defs}
+        # The file read can miss: witan-code resolves a relative path against
+        # the cwd when it exists there, which names a different file.
+        if symbol_id in ids:
+            out[ref] = {"status": "live"}
+            continue
+        # Same-named symbols elsewhere in the repo: the likely rename/move
+        # targets a reviewer checks before deciding the memory is stale.
+        out[ref] = {"status": "missing", "candidates": sorted(ids)}
+    return out
+
+
+@_tool
+def memory_stale_refs(repo: str | None = None) -> dict:
+    """
+    Memories whose ``symbol_refs`` no longer resolve in the code graph.
+
+    A review list, never an edit. Resolves every current memory's
+    ``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+    symbol is still defined), ``missing`` (its repo is indexed and the symbol is
+    not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
+    index, or witan-code is unreachable). A missing symbol may have been renamed
+    or moved, so the memory can still be true: ``candidates`` lists the indexed
+    symbols with the same name to check first, then ``memory_update`` the refs
+    or supersede the memory.
+
+    Parameters
+    ----------
+    repo:
+        Repo scoping — see instructions. ``""`` checks every repo's memories.
+
+    Returns ``{"repo", "checked", "counts", "memories"}``. ``checked`` is how
+    many memories carry refs; ``counts`` tallies refs by status. ``memories``
+    holds only those with a ref that is not live, each with ``status``
+    (``stale`` when any ref is missing, else ``unknown``) and its ``refs``.
+    """
+    detected = repo_module.detect(override=repo)
+    rows = [
+        r
+        for r in client.read("read.gq", "current_memory_refs", {"repo": detected})
+        if r.get("symbol_refs")
+    ]
+    resolved = _resolve_symbol_refs({ref for r in rows for ref in r["symbol_refs"]})
+
+    counts: Counter[str] = Counter({"live": 0, "missing": 0, "unknown": 0})
+    flagged = []
+    for row in rows:
+        refs = [{"symbol_ref": ref, **resolved[ref]} for ref in row["symbol_refs"]]
+        statuses = {r["status"] for r in refs}
+        counts.update(r["status"] for r in refs)
+        if statuses == {"live"}:
+            continue
+        flagged.append(
+            {
+                "slug": row["slug"],
+                "kind": row.get("kind"),
+                "title": row.get("title"),
+                "repo": row.get("repo"),
+                "status": "stale" if "missing" in statuses else "unknown",
+                "refs": refs,
+            }
+        )
+    return {
+        "repo": detected,
+        "checked": len(rows),
+        "counts": dict(counts),
+        "memories": flagged,
+    }
+
+
 # ── Graph-aware recall (spec §8) ──────────────────────────────────
 
 
@@ -9180,6 +9523,7 @@ def recall(
     memory: str | None = None,
     contract: str | None = None,
     contract_kind: ContractKind | None = None,
+    all_repos: bool = False,
 ) -> dict:
     """
     Graph-aware contextual recall — the composition of every other memory tool.
@@ -9199,12 +9543,12 @@ def recall(
     ``memory_contradictions`` scopes by. Expansion can return memories from
     other repos, but a pair with neither side in ``repo`` is left out, so every
     pair here is also in ``memory_contradictions`` for the same ``repo`` and
-    ``include_superseded``. Pass ``repo=""`` to report every pair among the
-    returned memories. The one mode where the two disagree: with no repo
+    ``include_superseded``. Pass ``all_repos=True`` to report every pair among
+    the returned memories. The one mode where the two disagree: with no repo
     detected and none passed, the ``query`` seed searches every repo, so
     recall reports every pair among the returned memories, as with
-    ``repo=""``, while ``memory_contradictions`` keeps only pairs touching an
-    unscoped memory.
+    ``all_repos=True``, while ``memory_contradictions`` keeps only pairs
+    touching an unscoped memory.
 
     Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
     edge — today that means a Tagged edge promoted from a free-string tag,
@@ -9218,8 +9562,8 @@ def recall(
     ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
     With no edges in the graph the result equals ``memory_search`` — expansion is
-    additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
-    (default off); ``recall`` works with BM25 only and needs no embedding provider.
+    additive, never lossy. Embeddings are not implemented: ``recall`` seeds from
+    BM25 only and needs no embedding provider.
 
     Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
     Past a total content budget a memory's ``content`` is cut, marked by
@@ -9310,7 +9654,11 @@ def recall(
         ``contract``, also asks witan-code for the code that provides or
         consumes the key, so you can pivot from what we know to where it lives.
         Omit to skip that lookup.
+    all_repos:
+        Seed the ``query`` from every repo and report every contradiction pair,
+        instead of scoping both to the detected repo — see instructions.
     """
+    scope = _scope(repo, all_repos)
     hops = max(0, min(hops, 2))
     now = datetime.now(UTC)
 
@@ -9345,7 +9693,7 @@ def recall(
         candidates.setdefault(slug, 0)
 
     if query:
-        for r in _search_rows(query, repo, kind):
+        for r in _search_rows(query, scope, kind):
             seed_relevance[r["slug"]] = r[_RELEVANCE_KEY]
             add_seed(r["slug"], "query")
     if symbol_id:
@@ -9464,7 +9812,7 @@ def recall(
     # Only over the limited result set, so every pair references a memory the
     # caller actually receives.
     returned_by_slug = {n["slug"]: n for n in returned}
-    in_scope = _contradiction_in_scope(repo_module.detect(override=repo) or "")
+    in_scope = _contradiction_in_scope(scope, every=scope is None)
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
     position = {slug: i for i, slug in enumerate(returned_by_slug)}

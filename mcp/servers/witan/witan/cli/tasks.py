@@ -32,6 +32,7 @@ from .output import dump_record, get_output_format
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
+    _overlap_lines,
     _pick_items,
     _prompt_memories,
     _run_prompt,
@@ -52,7 +53,7 @@ def _search_tasks(
     s,
     query: str,
     *,
-    repo_arg: str | None,
+    repo_arg: dict,
     status: str | None,
     project: str | None,
     assignee: str | None,
@@ -65,10 +66,10 @@ def _search_tasks(
     """
     hits = _fn(s.task_search)(
         query=query,
-        repo=repo_arg,
         status=status,
         project_slug=project,
         assignee=assignee,
+        **repo_arg,
     )
     if status is None:
         hits = [h for h in hits if h.get("status") != "closed"]
@@ -77,7 +78,7 @@ def _search_tasks(
     allowed_slugs = {
         r["slug"]
         for r in _fn(s.task_ready)(
-            repo=repo_arg, project_slug=project, assignee=assignee, limit=_ALL_READY
+            project_slug=project, assignee=assignee, limit=_ALL_READY, **repo_arg
         )
     }
     return [h for h in hits if h["slug"] in allowed_slugs]
@@ -142,10 +143,10 @@ def tasks(
         )
     elif ready:
         rows = _fn(s.task_ready)(
-            repo=repo_arg,
             project_slug=project,
             assignee=assignee,
             limit=limit if status is None else _ALL_READY,
+            **repo_arg,
         )
         # task_ready takes no status, and "ready" spans open, blocked (all
         # blockers closed) and lapsed in_progress tasks.
@@ -158,11 +159,11 @@ def tasks(
         # server's ceiling, take the ceiling: the slice below still applies,
         # and `--limit 99999` should bound a listing rather than raise.
         rows = _fn(s.task_list)(
-            repo=repo_arg,
             status=status,
             project_slug=project,
             assignee=assignee,
             limit=min(limit, _MAX_TASK_LIMIT),
+            **repo_arg,
         )
         # A bare `witan tasks` is a live-work view: drop closed tasks unless the
         # user explicitly asks for a status (including `--status closed`).
@@ -523,6 +524,8 @@ def task_claim_cmd(
             f"[green]Claimed[/green] [bold]{slug}[/bold] "
             f"(assignee={result.get('assignee')})"
         )
+        for line in _overlap_lines(result.get("overlaps") or []):
+            console.print(line, markup=False, emoji=False, highlight=False)
         return
     reason = result.get("held_by") or result.get("reason") or "unavailable"
     console.print(f"[yellow]Not claimed[/yellow] ({esc(reason)}).")
@@ -777,7 +780,7 @@ def task_run(
 
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
-    ready = _fn(s.task_ready)(repo=repo_arg, project_slug=project, limit=50)
+    ready = _fn(s.task_ready)(project_slug=project, limit=50, **repo_arg)
     if not ready:
         console.print("[dim]No ready tasks.[/dim]")
         return
@@ -849,6 +852,7 @@ def task_run(
                     t,
                     claimed=claim,
                     memories=_prompt_memories(s, t["slug"], claims.get(t["slug"])),
+                    overlaps=claims.get(t["slug"], {}).get("overlaps"),
                 )
                 for t in claimable
             ],

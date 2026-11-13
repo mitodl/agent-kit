@@ -53,12 +53,12 @@ def graph(
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
 
-    projects = _fn(s.workflow_project_list)(repo=repo_arg, status=status or None)
+    projects = _fn(s.workflow_project_list)(status=status or None, **repo_arg)
 
     # An explicit limit, because an unscoped `task_list` is capped at 50 in
     # the query: `witan graph --all-repos` drew the 50 most recently updated
     # tasks and silently omitted the rest of the graph it claims to show.
-    tasks_raw = _fn(s.task_list)(repo=repo_arg, status=None, limit=_GRAPH_TASK_LIMIT)
+    tasks_raw = _fn(s.task_list)(status=None, limit=_GRAPH_TASK_LIMIT, **repo_arg)
     tasks = visualize.scope_tasks(projects, tasks_raw, include_closed=all_tasks)
 
     g = visualize.build_graph(projects, tasks, show_belongs_to=not no_belongs_to)

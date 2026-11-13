@@ -50,7 +50,7 @@ for why that's structural rather than a coincidence of the current code.
 ## Agent: tool calls without a human step in between
 
 Once witan's MCP server is registered with your agent platform, the agent can
-call any of its ~60 tools directly, in the middle of ordinary work, with no
+call any of its tools directly, in the middle of ordinary work, with no
 slash command and no CLI involved. This is the mode that makes witan a
 *shared* graph rather than a personal notebook: `AGENTS.md`/`CLAUDE.md`
 instructions (or the agent's own judgment) tell it to check `recall` before

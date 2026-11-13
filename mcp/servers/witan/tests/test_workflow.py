@@ -208,7 +208,7 @@ def test_list_across_all_repos_with_empty_repo(server):
     p2 = server.workflow_project_create(
         title="B", description="d", repos=["https://github.com/x/two"]
     )
-    all_active = {p["slug"] for p in server.workflow_project_list(repo="")}
+    all_active = {p["slug"] for p in server.workflow_project_list(all_repos=True)}
     assert {p1["slug"], p2["slug"]} <= all_active
 
 
@@ -503,14 +503,18 @@ def test_blocked_project_not_ready(server):
         downstream["slug"], add_blocked_by=[upstream["slug"]]
     )
 
-    ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    ready = {
+        p["slug"] for p in server.workflow_project_list(ready=True, all_repos=True)
+    }
     # upstream is ready (no blockers), downstream is not
     assert upstream["slug"] in ready
     assert downstream["slug"] not in ready
 
     # complete the upstream; now downstream becomes ready
     server.workflow_project_complete(upstream["slug"], outcome="shipped")
-    ready_after = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    ready_after = {
+        p["slug"] for p in server.workflow_project_list(ready=True, all_repos=True)
+    }
     assert downstream["slug"] in ready_after
 
 
@@ -523,7 +527,7 @@ def test_project_search_applies_the_ready_filter(server):
         downstream["slug"], add_blocked_by=[upstream["slug"]]
     )
 
-    ready = server.workflow_project_list(query="zorblat", ready=True, repo="")
+    ready = server.workflow_project_list(query="zorblat", ready=True, all_repos=True)
     assert {p["slug"] for p in ready} == {upstream["slug"]}
 
 
@@ -538,7 +542,9 @@ def test_blocking_completed_project_does_not_block(server):
         downstream["slug"], add_blocked_by=[upstream["slug"]]
     )
 
-    ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    ready = {
+        p["slug"] for p in server.workflow_project_list(ready=True, all_repos=True)
+    }
     assert downstream["slug"] in ready
 
 
@@ -550,7 +556,7 @@ def test_list_blocked_projects_includes_blocked_by(server):
 
     server.workflow_project_update(blocked["slug"], add_blocked_by=[blocker["slug"]])
 
-    rows = server.workflow_project_list(status="active", repo="")
+    rows = server.workflow_project_list(status="active", all_repos=True)
     blocked_row = next((r for r in rows if r["slug"] == blocked["slug"]), None)
     assert blocked_row is not None
     assert blocker["slug"] in (blocked_row.get("blocked_by") or [])
@@ -574,10 +580,10 @@ def test_trace_list_filters_by_repo_tags_author(server):
     by_repo = server.workflow_trace_list(repo="https://github.com/x/one")
     assert {t["slug"] for t in by_repo} == {f"wt-{proj['slug']}"}
 
-    by_tag = server.workflow_trace_list(repo="", tags=["alpha"])
+    by_tag = server.workflow_trace_list(all_repos=True, tags=["alpha"])
     assert {t["slug"] for t in by_tag} == {f"wt-{proj['slug']}"}
 
-    by_author = server.workflow_trace_list(repo="", author="nobody")
+    by_author = server.workflow_trace_list(all_repos=True, author="nobody")
     assert by_author == []
 
 
@@ -589,7 +595,7 @@ def test_trace_list_tags_as_bare_string_is_coerced(server):
     )
     server.workflow_project_complete(proj["slug"], outcome="done")
 
-    rows = server.workflow_trace_list(repo="", tags="alpha")
+    rows = server.workflow_trace_list(all_repos=True, tags="alpha")
     assert {t["slug"] for t in rows} == {f"wt-{proj['slug']}"}
 
 
@@ -650,7 +656,7 @@ def test_mine_trace_with_proposals_creates_memories_and_links_project(server):
     assert len(created["created_patterns"]) == 1
     assert len(created["created_lessons"]) == 1
 
-    trace = server.workflow_trace_list(repo="")
+    trace = server.workflow_trace_list(all_repos=True)
     tr = next(t for t in trace if t["slug"] == trace_slug)
     assert tr["patterns_slug"] == created["created_patterns"]
     assert tr["lessons_slug"] == created["created_lessons"]
@@ -684,6 +690,58 @@ def test_mine_trace_rejects_proposal_missing_required_keys(server):
         server.workflow_trace_mine(
             done["trace_slug"], patterns=[{"title": "no content"}]
         )
+
+
+@requires_omnigraph
+def test_mine_trace_all_repos_stores_unscoped_memories(server):
+    """With a repo detected (the fixture sets WITAN_REPO), a proposal's
+    `all_repos` is the only way to mine a memory under no repo."""
+    proj = server.workflow_project_create(title="mine unscoped", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+
+    created = server.workflow_trace_mine(
+        done["trace_slug"],
+        patterns=[{"title": "p", "content": "c", "all_repos": True}],
+        lessons=[
+            {"title": "l", "content": "c", "all_repos": True},
+            {"title": "scoped", "content": "c"},
+        ],
+    )
+
+    unscoped, scoped = created["created_lessons"]
+    for slug in (*created["created_patterns"], unscoped):
+        assert server.memory_get(slug)["repo"] is None
+    assert server.memory_get(scoped)["repo"] == "https://github.com/test/repo"
+
+
+@requires_omnigraph
+@pytest.mark.parametrize(
+    ("bad", "error", "match"),
+    [
+        ({"repo": ""}, ValueError, "names no repo"),
+        (
+            {"repo": "https://github.com/test/other", "all_repos": True},
+            ValueError,
+            "not both",
+        ),
+        ({"all_repos": "yes"}, TypeError, "true or false"),
+    ],
+)
+def test_mine_trace_refuses_a_bad_scope_before_creating_anything(
+    server, bad, error, match
+):
+    proj = server.workflow_project_create(title="mine bad scope", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+    before = {m["slug"] for m in server.memory_list(all_repos=True)}
+
+    with pytest.raises(error, match=match):
+        server.workflow_trace_mine(
+            done["trace_slug"],
+            patterns=[{"title": "fine", "content": "c"}],
+            lessons=[{"title": "bad", "content": "c", **bad}],
+        )
+
+    assert {m["slug"] for m in server.memory_list(all_repos=True)} == before
 
 
 @requires_omnigraph

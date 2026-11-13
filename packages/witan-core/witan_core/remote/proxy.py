@@ -1213,7 +1213,9 @@ class RemoteMCPProxy:
         return {
             "repo": (
                 self._resolve_repo()
-                if kwargs.get("repo") is None and self._repo_means_detect(name)
+                if kwargs.get("repo") is None
+                and not kwargs.get("all_repos")
+                and self._repo_means_detect(name)
                 else None
             ),
             "branch": (
@@ -1482,12 +1484,15 @@ class RemoteMCPProxy:
         arguments = dict(kwargs)
         # The deployed server has no git checkout, so it cannot resolve
         # repo=None ("detect current repo") — do that on the client and send an
-        # explicit value. repo="" (all repos) is a meaningful sentinel, kept.
-        # Skipped where an omitted `repo` means "leave the stored value alone"
-        # rather than "detect": see `_repo_means_detect`.
+        # explicit value. Skipped under `all_repos`, which asks for no repo and
+        # which the server refuses alongside one, and where an omitted `repo`
+        # means "leave the stored value alone" rather than "detect": see
+        # `_repo_means_detect`. An explicit value, `""` included, goes through
+        # as given; the server refuses `""`.
         if (
             "repo" in names
             and arguments.get("repo") is None
+            and not arguments.get("all_repos")
             and self._repo_means_detect(name)
         ):
             detected = self._client_value("repo", resolved)

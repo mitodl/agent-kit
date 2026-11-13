@@ -267,10 +267,23 @@ function describe(content: unknown): string {
 
 // ── The bound set (ADR 0011 §3) ────────────────────────────────────
 //
-// `repo` is explicit on every call that takes it, including `""` for all
-// repos, because the tools fall back to detecting a repo from the server's
-// working directory. A deployed witan has no checkout, so an omitted `repo`
-// means one thing locally and another on the deployment.
+// The repo scope is explicit on every call that takes one, because the tools
+// fall back to detecting a repo from the server's working directory. A
+// deployed witan has no checkout, so an omitted `repo` means one thing locally
+// and another on the deployment.
+
+/**
+ * A witan tool's scope keywords for the page's `repo`.
+ *
+ * The page carries "every repo" as `repo: ""` (the route's empty repo filter).
+ * The tools spell that `all_repos: true` and refuse an empty `repo`.
+ */
+export function scoped<T extends { repo: string }>(
+	args: T,
+): Omit<T, "repo"> & { repo?: string; all_repos?: true } {
+	const { repo, ...rest } = args;
+	return repo ? { ...rest, repo } : { ...rest, all_repos: true };
+}
 
 export function taskReady(args: {
 	repo: string;
@@ -278,7 +291,7 @@ export function taskReady(args: {
 	assignee?: string;
 	limit?: number;
 }): Promise<TaskRow[]> {
-	return read("task_ready", args);
+	return read("task_ready", scoped(args));
 }
 
 /** `null` for a slug that does not exist. Not an error: a stale link is normal. */
@@ -294,7 +307,7 @@ export function taskList(args: {
 	assignee?: string;
 	limit?: number;
 }): Promise<TaskRow[]> {
-	return read("task_list", args);
+	return read("task_list", scoped(args));
 }
 
 /** Narrower rows than the list tools: no timestamps, plus `description`. */
@@ -303,7 +316,7 @@ export function taskSearch(args: {
 	repo: string;
 	status?: string;
 }): Promise<TaskSearchRow[]> {
-	return read("task_search", args);
+	return read("task_search", scoped(args));
 }
 
 /** The DETAIL shape: nine fields more than the rollup's `project`. */
@@ -327,7 +340,7 @@ export function workflowProjectList(args: {
 	phase?: string;
 	ready?: boolean;
 }): Promise<WorkflowProjectSummary[]> {
-	return read("workflow_project_list", args);
+	return read("workflow_project_list", scoped(args));
 }
 
 export function workflowSessionList(args: {
@@ -350,7 +363,7 @@ export function recall(args: {
 	hops?: number;
 	include_superseded?: boolean;
 }): Promise<RecallResult> {
-	return read("recall", args);
+	return read("recall", scoped(args));
 }
 
 /** `topics` attaches each Tagged edge, which costs a second graph read. */
@@ -367,7 +380,7 @@ export function memoryList(args: {
 	language?: string;
 	include_superseded?: boolean;
 }): Promise<Memory[]> {
-	return read("memory_list", args);
+	return read("memory_list", scoped(args));
 }
 
 export function memorySearch(args: {
@@ -376,7 +389,7 @@ export function memorySearch(args: {
 	kind?: MemoryKind;
 	include_superseded?: boolean;
 }): Promise<Memory[]> {
-	return read("memory_search", args);
+	return read("memory_search", scoped(args));
 }
 
 /**
@@ -413,7 +426,7 @@ export function memoryContradictions(args: {
 	repo: string;
 	include_superseded?: boolean;
 }): Promise<MemoryContradiction[]> {
-	return read("memory_contradictions", args);
+	return read("memory_contradictions", scoped(args));
 }
 
 /**

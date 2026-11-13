@@ -70,7 +70,7 @@ def projects(
     # The server reads status=None as every status; "all" is the CLI's
     # spelling of it, since an empty --status reaches the server as "".
     status_arg = None if status == "all" else status
-    rows = _fn(s.workflow_project_list)(repo=repo_arg, status=status_arg, query=query)
+    rows = _fn(s.workflow_project_list)(status=status_arg, query=query, **repo_arg)
     rows = rows[:limit]
     matching = "" if query is None else f" matching '{query}'"
     detected_repo = (
@@ -687,7 +687,7 @@ def project_run(
         return
 
     repo_arg = _repo_arg(repo, all_repos)
-    active = _fn(s.workflow_project_list)(repo=repo_arg, status="active")[:50]
+    active = _fn(s.workflow_project_list)(status="active", **repo_arg)[:50]
     if not active:
         console.print("[dim]No active projects.[/dim]")
         return

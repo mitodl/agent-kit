@@ -87,6 +87,7 @@ Reach for a narrower read only for a specific need:
 | Everything tagged to a topic (cross-repo) | `recall(topic="uv:topic")`, whose `topic` section is the Topic |
 | Memories + code for a contract key | `recall(contract="DATABASE_URL", contract_kind="env_var")`, whose `contract` section holds the code bindings |
 | Memories/tasks for a code symbol | `recall(symbol_id=…)`, whose `symbol` section lists the tasks |
+| Memories whose symbol refs no longer resolve | `memory_stale_refs` |
 | Memories a project produced | `workflow_project_memories` |
 
 Pass `hops=0, include_superseded=True` and a high `limit` to any of those
@@ -100,7 +101,8 @@ memory_list(kind="project_fact")  # structural facts, this repo
 memory_list(kind="pattern", language="python")  # conventions before coding
 ```
 
-Scoping: auto-detects the current repo; pass `repo=""` for all repos. With no
+Scoping: auto-detects the current repo; pass `all_repos=True` for all repos
+(never an empty `repo`, which is refused). With no
 repo detected and none passed it returns slim records (slug, kind, title, tags —
 no content); `memory_get` a slug for its full content.
 
@@ -184,6 +186,9 @@ do. The forward direction ("what code does this memory concern?") is the
 `symbols` list in `recall(memory=slug)`'s `memory` section. (Symbol ids come
 from the witan-code server, and are soft references, so a stale one simply
 resolves to nothing.)
+`memory_stale_refs()` lists the memories whose refs no longer resolve, with
+same-named symbols as rename candidates. It only reports: fix the refs with
+`memory_update`, or supersede the memory if the code it described is gone.
 
 ## Quality Guidelines
 

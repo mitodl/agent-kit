@@ -259,6 +259,7 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "memory_search",
             "memory_link",
             "memory_contradictions",
+            "memory_stale_refs",
             "store_merge",
             # The repair half of `store_merge`: it restamps rows a migration
             # already landed under a local identity, which `store_merge`'s own

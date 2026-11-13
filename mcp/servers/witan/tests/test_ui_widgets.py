@@ -119,9 +119,9 @@ def test_binding_leaves_every_bound_tools_result_byte_identical(server, widgets)
     server.memory_store(kind="pattern", title="widgets", content="render a result")
 
     calls = {
-        "task_ready": {"repo": ""},
-        "task_list": {"repo": ""},
-        "recall": {"query": "widgets", "repo": ""},
+        "task_ready": {"all_repos": True},
+        "task_list": {"all_repos": True},
+        "recall": {"query": "widgets", "all_repos": True},
         "workflow_project_status": {"slug": project["slug"]},
     }
     assert set(calls) == set(ui_widgets.BOUND_TOOLS)

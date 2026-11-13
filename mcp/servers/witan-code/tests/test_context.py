@@ -293,7 +293,12 @@ def test_the_bridge_verdict_is_cached_across_processes(tmp_path, monkeypatch):
     (code_dir / "_bridge.omni").mkdir(parents=True)
     monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     cfg = cfg_mod.load()
+
+    # In the private state dir, not the bare temp dir another user can write.
+    assert context._bridge_probe_path(cfg).parent == context.state_dir()
 
     probes = []
 
@@ -315,6 +320,33 @@ def test_the_bridge_verdict_is_cached_across_processes(tmp_path, monkeypatch):
         (0, time.time() - context._BRIDGE_PROBE_TTL - 1),
     )
     context._bridge_ok(cfg)
+    assert len(probes) == 2
+
+
+def test_a_refused_state_dir_probes_uncached(tmp_path, monkeypatch):
+    """state_dir() raises when its directory is not ours. The verdict must
+    still come back, uncached, rather than the raise blanking the block."""
+    from witan_code import config as cfg_mod
+
+    code_dir = tmp_path / "code"
+    (code_dir / "_bridge.omni").mkdir(parents=True)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    cfg = cfg_mod.load()
+
+    def _refused():
+        raise PermissionError("not a directory owned by this user")
+
+    monkeypatch.setattr(context, "state_dir", _refused)
+    probes = []
+
+    def _probe(ref, config=None, *, bridge=False):
+        probes.append(ref)
+        return context.store_module.StoreHealth(ref, None, error="stale")
+
+    monkeypatch.setattr(context.store_module, "store_health", _probe)
+
+    assert context._bridge_ok(cfg) is False
+    assert context._bridge_ok(cfg) is False
     assert len(probes) == 2
 
 

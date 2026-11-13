@@ -6,7 +6,7 @@ import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 import recallTopicFixture from "../fixtures/recall.topic.json" with {
 	type: "json",
 };
-import { memorySectionOf, topicResultOf, withInRepo } from "./mcp.js";
+import { memorySectionOf, scoped, topicResultOf, withInRepo } from "./mcp.js";
 import type { RecallResult } from "./types.js";
 import { unwrap } from "./unwrap.js";
 
@@ -56,5 +56,19 @@ describe("withInRepo", () => {
 
 	it("leaves it off before the tool list has been read", () => {
 		expect(withInRepo(args, undefined)).not.toHaveProperty("in_repo");
+	});
+});
+
+describe("scoped", () => {
+	it("sends every repo as all_repos, never an empty repo the tools refuse", () => {
+		expect(scoped({ repo: "", limit: 5 })).toEqual({
+			all_repos: true,
+			limit: 5,
+		});
+	});
+
+	it("sends a chosen repo as repo", () => {
+		const repo = "https://github.com/example/web";
+		expect(scoped({ repo, limit: 5 })).toEqual({ repo, limit: 5 });
 	});
 });

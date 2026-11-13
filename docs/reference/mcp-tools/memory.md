@@ -27,12 +27,12 @@ result AND at least one of them is in ``repo``, the rule
 ``memory_contradictions`` scopes by. Expansion can return memories from
 other repos, but a pair with neither side in ``repo`` is left out, so every
 pair here is also in ``memory_contradictions`` for the same ``repo`` and
-``include_superseded``. Pass ``repo=""`` to report every pair among the
-returned memories. The one mode where the two disagree: with no repo
+``include_superseded``. Pass ``all_repos=True`` to report every pair among
+the returned memories. The one mode where the two disagree: with no repo
 detected and none passed, the ``query`` seed searches every repo, so
 recall reports every pair among the returned memories, as with
-``repo=""``, while ``memory_contradictions`` keeps only pairs touching an
-unscoped memory.
+``all_repos=True``, while ``memory_contradictions`` keeps only pairs
+touching an unscoped memory.
 
 Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
 edge — today that means a Tagged edge promoted from a free-string tag,
@@ -46,8 +46,8 @@ reweights the graph as it is rewritten rather than all at once;
 ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
 With no edges in the graph the result equals ``memory_search`` — expansion is
-additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
-(default off); ``recall`` works with BM25 only and needs no embedding provider.
+additive, never lossy. Embeddings are not implemented: ``recall`` seeds from
+BM25 only and needs no embedding provider.
 
 Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
 Past a total content budget a memory's ``content`` is cut, marked by
@@ -94,6 +94,7 @@ a symbol.
 | `memory` | str? | `null` | A memory slug to seed from, which adds the ``memory`` section: its<br>links by kind and the code symbols it names. Use after ``memory_get``<br>to see what a memory connects to. |
 | `contract` | str? | `null` | A normalised contract key (e.g. ``DATABASE_URL`` or<br>``GET /api/v1/courses/``) to seed from: the memories tagged to its<br>``<key>:contract`` Topic, cross-repo by nature. Adds the ``contract``<br>section. Tag a memory to a contract with<br>``memory_link(<memory slug>, "<key_norm>:contract", "tagged")``. |
 | `contract_kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | ``env_var`` \| ``endpoint`` \| ``package`` \| ``service``. With<br>``contract``, also asks witan-code for the code that provides or<br>consumes the key, so you can pivot from what we know to where it lives.<br>Omit to skip that lookup. |
+| `all_repos` | bool | `False` | Seed the ``query`` from every repo and report every contradiction pair,<br>instead of scoping both to the detected repo — see instructions. |
 
 ## `memory_store`
 
@@ -117,6 +118,7 @@ so callers can link to it.
 | `symbol_refs` | list[str]? | `null` | Optional code-graph symbol ids (``<repo>#<path/to/file.py>::<Name>``,<br>from the witan-code tools' ``symbol_id`` field) this memory concerns,<br>e.g. the function a lesson is about. Stored as a soft reference. |
 | `confidence` | float? | `null` | Optional author/agent trust in this memory, 0.0–1.0. Feeds the search<br>re-rank; omitted memories use the configured default. |
 | `session_slug` | str? | `null` | The ``ws-`` handle returned by ``workflow_session_start``, recording<br>which session produced this memory. Pass it whenever you have one: the<br>protocol carries no session state, so against a deployed service this is<br>the only way the ``SessionProduced`` provenance edge can be created.<br>Omit it under a local stdio server, which finds the handle itself. |
+| `all_repos` | bool | `False` | Store the memory under no repo. Repo-scoped memory reads leave it<br>out; ``all_repos`` reads include it — see instructions. |
 
 ## `memory_get`
 
@@ -218,6 +220,7 @@ while the store holds fewer than 10,000 of them.
 | `repo` | str? | `null` | Repo scoping — see instructions. With no repo detected and none passed,<br>returns slim records (slug, kind, title, tags — no content) for unscoped<br>memories; ``memory_get`` a slug for its full content. |
 | `language` | str? | `null` | Optional filter by ``language`` (e.g. ``python``), case-insensitive;<br>applies to the full-content results, not the slim unscoped listing. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them, as ``memory_search`` and ``recall`` do. |
+| `all_repos` | bool | `False` | List every repo's memories, with full content, instead of the detected<br>repo's — see instructions. |
 
 ## `memory_search`
 
@@ -235,6 +238,7 @@ memory's ``content`` is cut, marked by ``content_truncated`` and
 | `repo` | str? | `null` | Repo scoping — see instructions. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``,<br>or ``agent_context``. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them. |
+| `all_repos` | bool | `False` | Search every repo instead of the detected one — see instructions. |
 
 ## `memory_link`
 
@@ -297,6 +301,24 @@ before it looks for pairs.
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Repo scoping — see instructions. A pair is included when EITHER memory<br>is in scope, since a contradiction across two repos concerns both. With<br>no repo detected and none passed, only pairs touching an unscoped memory<br>(``repo`` null) are returned. |
 | `include_superseded` | bool | `False` | When ``True``, keep pairs where either memory has been superseded, i.e.<br>the resolved ones. |
+| `all_repos` | bool | `False` | Report every pair, in any repo — see instructions. |
+
+## `memory_stale_refs`
+
+Memories whose ``symbol_refs`` no longer resolve in the code graph.
+
+A review list, never an edit. Resolves every current memory's
+``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+symbol is still defined), ``missing`` (its repo is indexed and the symbol is
+not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
+index, or witan-code is unreachable). A missing symbol may have been renamed
+or moved, so the memory can still be true: ``candidates`` lists the indexed
+symbols with the same name to check first, then ``memory_update`` the refs
+or supersede the memory.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `repo` | str? | `null` | Repo scoping — see instructions. ``""`` checks every repo's memories. |
 
 ## `store_merge`
 

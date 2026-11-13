@@ -42,7 +42,7 @@ def test_create_get_and_status_round_trip(server):
     assert status["preauthorized"] == ALLOW
     assert status["reserved_decisions"] == RESERVE
 
-    listed = {p["slug"]: p for p in server.workflow_project_list(repo="")}
+    listed = {p["slug"]: p for p in server.workflow_project_list(all_repos=True)}
     assert listed[proj["slug"]]["preauthorized"] == ALLOW
 
 
@@ -199,7 +199,7 @@ def test_create_with_a_secret_in_the_envelope_is_refused(server, monkeypatch):
         server.workflow_project_create(
             title="envelope", description="d", preauthorized=["use AKIASECRET"]
         )
-    assert server.workflow_project_list(repo="") == []
+    assert server.workflow_project_list(all_repos=True) == []
 
 
 @requires_omnigraph
@@ -273,7 +273,7 @@ def test_create_records_the_creator_as_setter(server):
     assert status["author"] == "alice"
     assert status["preauthorized_set_by"] == "alice"
 
-    listed = {p["slug"]: p for p in server.workflow_project_list(repo="")}
+    listed = {p["slug"]: p for p in server.workflow_project_list(all_repos=True)}
     assert listed[proj["slug"]]["author"] == "alice"
     assert listed[proj["slug"]]["preauthorized_set_by"] == "alice"
 
@@ -465,7 +465,7 @@ def test_cli_allow_and_reserve_are_repeatable_and_not_comma_split(server, monkey
             "merging to main",
         ]
     )
-    slug = _fn(server.workflow_project_list)(repo="")[0]["slug"]
+    slug = _fn(server.workflow_project_list)(all_repos=True)[0]["slug"]
     got = _fn(server.workflow_project_get)(slug=slug)
     assert got["preauthorized"] == [
         "deploy to QA, then smoke-test it",

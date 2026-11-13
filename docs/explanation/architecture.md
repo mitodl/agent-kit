@@ -9,7 +9,7 @@ flowchart TB
     subgraph agent["Your coding agent"]
         A["Claude Code · Pi · Copilot · OpenCode"]
     end
-    subgraph mcp["witan MCP server — one endpoint, 60 tools"]
+    subgraph mcp["witan MCP server — one endpoint"]
         M["Memory & recall<br/><small>memory_* · recall · topic_*</small>"]
         T["Work coordination<br/><small>task_* · workflow_*</small>"]
         C["Code graph<br/><small>code_*</small>"]

@@ -52,7 +52,7 @@ def test_project_create_with_phase_and_repo(server, monkeypatch):
     assert "wp-" in combined
     assert "spec" in combined
 
-    rows = _fn(srv.workflow_project_list)(repo="", status=None)
+    rows = _fn(srv.workflow_project_list)(all_repos=True, status=None)
     assert any("spec" == r.get("phase") for r in rows)
 
 
@@ -682,7 +682,7 @@ def test_tasks_ready_honours_status_with_and_without_query(server, monkeypatch):
     # `blocked` with no open blockers is still ready (status_pickable).
     blocked_task = _fn(server.task_create)(title="grafana alert", description="d")
     _fn(server.task_update)(slug=blocked_task["slug"], status="blocked")
-    ready_slugs = {r["slug"] for r in _fn(server.task_ready)(repo="", limit=100)}
+    ready_slugs = {r["slug"] for r in _fn(server.task_ready)(all_repos=True, limit=100)}
     assert blocked_task["slug"] in ready_slugs
 
     for query in (None, "grafana"):
@@ -923,7 +923,7 @@ def test_project_update_only_touches_what_is_passed(server, monkeypatch):
     )
     from witan.cli._common import _fn
 
-    slug = _fn(server.workflow_project_list)(repo="")[0]["slug"]
+    slug = _fn(server.workflow_project_list)(all_repos=True)[0]["slug"]
 
     project_update(slug, title="Corrected")
 
