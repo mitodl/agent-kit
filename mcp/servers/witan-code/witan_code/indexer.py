@@ -712,7 +712,7 @@ def index_paths(
         slug=slug,
         existing=existing,
         dropped=dropped,
-        relink=not (force and full_repo),
+        relink=None if force and full_repo else repo_root,
         stats=stats,
     )
 
@@ -1274,39 +1274,41 @@ def _cross_file_records(
     slug: str,
     existing: dict[str, str],
     dropped: set[str],
-    relink: bool,
+    relink: Path | None,
     stats: IndexStats,
 ) -> list[dict]:
-    """Calls/References and Imports edges from these files into other files.
+    """Calls/References edges from these files into other files of the repo.
 
     Resolved through each file's imports (:mod:`witan_code.xref`) against
     every file the store holds once this run lands: the ones parsed here, plus
-    the stored ones it does not drop. Each target is checked against the
-    symbols the load can see, because one edge to a missing node fails the
-    whole load (see ``chunking.chunk_records``).
+    the stored ones it does not drop. Both ends of each edge are checked
+    against the symbols the load can see, because one edge to a missing node
+    fails the whole load (see ``chunking.chunk_records``).
 
     WHY THE RELINK. Re-indexing a file deletes its symbols, and with them every
     edge into them from files this run does not touch, so editing a module
-    would silently drop all of its cross-file callers. With ``relink`` set, the
-    stored files that import a re-indexed one (found through the Imports edges
-    an earlier run wrote) are parsed again and their cross-file edges written
-    back. Their own rows are left as stored. An importer that changed on disk
-    since it was indexed is skipped instead: its stored symbols no longer match
-    a fresh parse, and its own reindex links it. A forced full-repo run turns
-    ``relink`` off, since it parses every importer anyway.
+    would silently drop all of its cross-file callers. A caller written before
+    the module it calls has no edge to keep in the first place. With
+    ``relink`` set to the git root, the stored files that mention a parsed
+    file's module name as a word are parsed again and their cross-file edges
+    written back, which covers both. Their own rows are left as stored. One
+    that changed on disk since it was indexed is skipped: its stored symbols no
+    longer match a fresh parse, and its own reindex links it. A forced
+    full-repo run passes ``None``, since it parses every caller anyway.
     """
     prefix = f"{slug}#"
     batch = {p.path: p for p in parsed_files}
     linking = list(parsed_files)
-    if relink:
-        reindexed = [p.file_id for p in parsed_files if p.file_id in existing]
-        for file_id in sorted(_importer_files(client, reindexed)):
-            rel = file_id.removeprefix(prefix)
-            path = base / rel
-            if rel in batch or file_id in dropped or not path.is_file():
+    if relink is not None:
+        words = {
+            _module_word(p.path) for p in parsed_files if p.language in xref.LANGUAGES
+        }
+        for rel in repo_module.files_mentioning(relink, sorted(words), _XREF_GLOBS):
+            file_id = prefix + rel
+            if rel in batch or file_id not in existing or file_id in dropped:
                 continue
-            result = _parse_for_index(path, base, slug, existing, force=True)
-            if result is not None and result[0].content_hash == existing.get(file_id):
+            result = _parse_for_index(base / rel, base, slug, existing, force=True)
+            if result is not None and result[0].content_hash == existing[file_id]:
                 linking.append(result[0])
 
     modules = xref.ModuleIndex(
@@ -1330,22 +1332,18 @@ def _cross_file_records(
     for parsed in linking:
         if not parsed.import_bindings:
             continue
-        for binding in parsed.import_bindings.values():
-            target = xref.resolve_module(binding, modules, parsed.language, parsed.path)
-            module_id = f"{prefix}{target}::<module>"
-            if (
-                target is not None
-                and target != parsed.path
-                and defined(target, module_id)
-            ):
-                records.append(_edge("Imports", parsed.file_id, module_id))
-
         by_qualified = {s.qualified_name: s for s in parsed.symbols}
-        local_names = {s.name for s in parsed.symbols if s.kind != "module"}
+        # Only a module-level def can shadow an import for a bare-name call; a
+        # method of the same name is never reached that way.
+        top_level = {
+            s.name
+            for s in parsed.symbols
+            if s.kind != "module" and "." not in s.qualified_name
+        }
         fallback = _reference_origin(parsed)
         for origin_qn, chain in parsed.call_chains:
             # A bare name defined in the file is the same-file pass's to link.
-            if len(chain) == 1 and chain[0] in local_names:
+            if len(chain) == 1 and chain[0] in top_level:
                 continue
             resolved = xref.resolve_call(
                 chain, parsed.import_bindings, modules, parsed.language, parsed.path
@@ -1354,7 +1352,9 @@ def _cross_file_records(
             if resolved is None or resolved[0] == parsed.path or origin is None:
                 continue
             target_id = f"{prefix}{resolved[0]}::{resolved[1]}"
-            if defined(resolved[0], target_id):
+            # A re-linked file's symbols are the stored ones, which an indexer
+            # of another version may have extracted differently.
+            if defined(resolved[0], target_id) and defined(parsed.path, origin.id):
                 records.append(_edge("Calls", origin.id, target_id))
                 records.append(_edge("References", origin.id, target_id))
     records = _dedupe(records)
@@ -1362,22 +1362,24 @@ def _cross_file_records(
     return records
 
 
-def _importer_files(client: OmnigraphClient, file_ids: list[str]) -> set[str]:
-    """Stored files with an Imports edge into any of ``file_ids``, those excluded."""
-    from .remote.store import RemoteToolFailed
+# The file types xref resolves imports in, for the relink's word search.
+_XREF_GLOBS = tuple(
+    f"*{ext}"
+    for spec in _LANGUAGES
+    if spec.name in xref.LANGUAGES
+    for ext in spec.extensions
+)
 
-    out: set[str] = set()
-    for file_id in file_ids:
-        try:
-            rows = client.read("code_read.gq", "importer_files", {"file_id": file_id})
-        except RemoteToolFailed as exc:
-            # A deployment older than this client has no `importer_files` query.
-            # Its callers lose their edges into the re-indexed files until they
-            # are indexed themselves, which is what every edit did before.
-            logger.warning("witan.code.index.relink_skipped", error=str(exc))
-            return set()
-        out.update(row["slug"] for row in rows)
-    return out - set(file_ids)
+
+def _module_word(rel: str) -> str:
+    """The word an import of ``rel`` has to contain: its module's own name.
+
+    A package's ``__init__.py`` or an ``index.ts`` is imported by its directory.
+    """
+    path = Path(rel)
+    if path.stem in ("__init__", "index") and path.parent.name:
+        return path.parent.name
+    return path.stem
 
 
 # ── Parsing ───────────────────────────────────────────────────────
