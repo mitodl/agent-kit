@@ -78,12 +78,26 @@ export interface TaskSearchRow extends TaskCore {
 	description: string | null;
 }
 
+/**
+ * A record's prompt-injection screening label (`witan/screen/label.py`). Only
+ * single-record reads carry one: `task_get` and its comments, and `memory_get`.
+ * `notice` is absent on a `clean` verdict, and `reason` appears only on a
+ * `flagged` one.
+ */
+export interface Screening {
+	verdict: "clean" | "flagged" | "unscreened";
+	notice?: string;
+	classifier?: string | null;
+	reason?: string | null;
+}
+
 export interface TaskComment {
 	slug: string;
 	task_slug: string;
 	body: string;
 	author: string;
 	created_at: string;
+	screening: Screening;
 }
 
 export interface TaskChild {
@@ -111,6 +125,7 @@ export interface TaskDetail extends TaskRow {
 	blocks: string[];
 	children: TaskChild[];
 	branches: CodeBranchRef[];
+	screening: Screening;
 }
 
 /**
@@ -257,6 +272,8 @@ export interface Memory {
 	updated_at?: string;
 	/** Present only on `memory_get(include_topics=True)`. */
 	topics?: MemoryTopic[];
+	/** Present only on `memory_get`. */
+	screening?: Screening;
 }
 
 /** A Topic a memory is tagged with, and the link that tags it. */
@@ -563,6 +580,14 @@ export function isTaskCore(value: unknown): value is TaskCore {
 	return matches(value, TASK_CORE, TASK_CORE_OPTIONAL);
 }
 
+export function isScreening(value: unknown): value is Screening {
+	return matches(
+		value,
+		{ verdict: oneOf("clean", "flagged", "unscreened") },
+		{ notice: str, classifier: nullable(str), reason: nullable(str) },
+	);
+}
+
 export function isTaskComment(value: unknown): value is TaskComment {
 	return matches(value, {
 		slug: str,
@@ -570,6 +595,7 @@ export function isTaskComment(value: unknown): value is TaskComment {
 		body: str,
 		author: str,
 		created_at: str,
+		screening: isScreening,
 	});
 }
 
@@ -608,6 +634,7 @@ export function isTaskDetail(value: unknown): value is TaskDetail {
 			blocks: arrayOf(str),
 			children: arrayOf(isTaskChild),
 			branches: arrayOf(isCodeBranchRef),
+			screening: isScreening,
 		},
 		TASK_CORE_OPTIONAL,
 	);
@@ -741,6 +768,7 @@ export function isMemory(value: unknown): value is Memory {
 			symbol_refs: strList,
 			updated_at: str,
 			topics: arrayOf(isMemoryTopic),
+			screening: isScreening,
 		},
 	);
 }
