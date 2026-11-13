@@ -244,7 +244,7 @@ def projects(tmp_path):
 
 
 def _titles(server) -> list[str]:
-    return sorted(m["title"] for m in server.memory_list(repo=""))
+    return sorted(m["title"] for m in server.memory_list(all_repos=True))
 
 
 @requires_omnigraph
