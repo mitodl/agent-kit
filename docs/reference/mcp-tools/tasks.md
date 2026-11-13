@@ -108,7 +108,8 @@ Return ready-to-work tasks: pickable tasks whose blockers are all closed.
 Call it to pick the next item. A task is ready when it is ``open`` or
 ``blocked``, or ``in_progress`` with an expired lease, and every task in
 its ``blocked_by`` is closed. An ``in_progress`` result is a reclaim
-(``lease_expired: true``): check ``assignee`` and ``claimed_at`` first.
+(``lease_expired: true``): check ``assignee`` and ``claimed_at`` (or
+``updated_at`` when that is null) first.
 Ordered by priority, ``p0`` first.
 
 *Read-only.*
@@ -187,7 +188,7 @@ Call when stepping away from an unfinished task so others can pick it up
 (closing a finished task — use ``task_close`` — also ends the claim). Refuses
 if the task is held by a different ``assignee`` unless ``force`` is set.
 
-*Writes (non-destructive).*
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

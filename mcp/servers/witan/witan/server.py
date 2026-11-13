@@ -532,10 +532,13 @@ async def _offload(fn, /, *args, **kwargs):
 #: MCP tool annotations. ``_tool`` takes one positionally and has no default,
 #: so a tool cannot be registered without saying what it does to the graph.
 #: ``DESTRUCTIVE`` is for a call that can overwrite or remove what someone
-#: stored: field replacement, deletes, closes, merges, link removal. ``WRITE``
-#: covers creates, links, comments, and state transitions a later call undoes
-#: (claim, release, phase advance, session end). ``idempotentHint`` is set only
-#: where a repeat with the same arguments is documented to change nothing more.
+#: stored: field replacement (including a re-written memory link or session
+#: summary), deletes, closes, merges, link removal. ``WRITE`` covers creates,
+#: comments, new edges and phase advances. ``task_claim`` is ``WRITE`` though
+#: ``force`` steals a live claim: it is the most frequent write, the result
+#: reports ``stole``, and the holder can reclaim. ``idempotentHint`` is
+#: set only where a repeat with the same arguments is documented to change
+#: nothing more.
 READ = ToolAnnotations(read_only_hint=True)
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False)
 WRITE_IDEMPOTENT = ToolAnnotations(
@@ -4766,12 +4769,6 @@ def memory_update(
     confidence:
         Your trust in it, 0.0 to 1.0. Feeds ranking.
     """
-    # `repo` is case-folded on write like every repo key: correcting a
-    # mis-scoped memory is this tool's main use, and a key that differs from
-    # what repo detection returns would mis-scope it again. A removed tag keeps
-    # its Tagged edge because edges cannot be retracted one at a time and
-    # deleting the Topic would drop every other memory's edge to it; the
-    # `tags` list stays authoritative.
     if isinstance(tags, str):
         tags = [tags]
     if isinstance(symbol_refs, str):
@@ -4876,7 +4873,7 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
     return {"slug": slug, "deleted": True, "memory": node}
 
 
-@_tool(WRITE)
+@_tool(DESTRUCTIVE)
 async def memory_link(
     from_slug: str,
     to_slug: str,
@@ -6802,7 +6799,7 @@ def workflow_session_start(
     return handle
 
 
-@_tool(WRITE)
+@_tool(DESTRUCTIVE)
 def workflow_session_end(
     session_slug: str,
     summary: str,
@@ -8367,7 +8364,7 @@ async def task_claim(
     return result
 
 
-@_tool(WRITE)
+@_tool(DESTRUCTIVE)
 def task_release(
     slug: str,
     assignee: str | None = None,
@@ -8449,7 +8446,8 @@ def task_ready(
     Call it to pick the next item. A task is ready when it is ``open`` or
     ``blocked``, or ``in_progress`` with an expired lease, and every task in
     its ``blocked_by`` is closed. An ``in_progress`` result is a reclaim
-    (``lease_expired: true``): check ``assignee`` and ``claimed_at`` first.
+    (``lease_expired: true``): check ``assignee`` and ``claimed_at`` (or
+    ``updated_at`` when that is null) first.
     Ordered by priority, ``p0`` first.
 
     Parameters
@@ -8465,8 +8463,7 @@ def task_ready(
     all_repos:
         Return every repo's ready tasks.
     """
-    # Pickability is readiness.status_pickable; a legacy row with no
-    # claimed_at falls back to updated_at.
+    # Pickability is readiness.status_pickable.
     # The candidate set and the blocker-status lookup are built from different
     # row sets on purpose. A task in ANOTHER repo is never a candidate here,
     # but it is routinely a blocker of one — and ``list_tasks_uncapped`` is an
@@ -9191,7 +9188,8 @@ def recall(
         the code symbols it names).
     contract:
         Seed from a normalised contract key (e.g. ``DATABASE_URL``) through its
-        ``<key>:contract`` Topic. Adds the ``contract`` section.
+        ``<key>:contract`` Topic. Adds the ``contract`` section. Tag a memory
+        to one with ``memory_link(<slug>, "<key_norm>:contract", "tagged")``.
     contract_kind:
         With ``contract``, also look up the code that provides or consumes the
         key in witan-code.

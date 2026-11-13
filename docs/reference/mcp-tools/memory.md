@@ -70,7 +70,7 @@ To list exactly what a seed resolves to, pass ``hops=0``,
 | `include_superseded` | bool | `False` | Also return superseded memories (history, not current knowledge). |
 | `session_id` | str? | `null` | Your agent session id; only logged. |
 | `memory` | str? | `null` | Seed from a memory slug; adds the ``memory`` section (its links and<br>the code symbols it names). |
-| `contract` | str? | `null` | Seed from a normalised contract key (e.g. ``DATABASE_URL``) through its<br>``<key>:contract`` Topic. Adds the ``contract`` section. |
+| `contract` | str? | `null` | Seed from a normalised contract key (e.g. ``DATABASE_URL``) through its<br>``<key>:contract`` Topic. Adds the ``contract`` section. Tag a memory<br>to one with ``memory_link(<slug>, "<key_norm>:contract", "tagged")``. |
 | `contract_kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | With ``contract``, also look up the code that provides or consumes the<br>key in witan-code. |
 | `all_repos` | bool | `False` | Seed ``query`` from every repo and report every contradiction pair. |
 
@@ -222,7 +222,7 @@ For memory↔memory kinds both endpoints must already exist as ``Memory`` nodes;
 the edge is not written otherwise (avoids dead off-type edges). A memory cannot
 link to itself. Returns ``linked: False`` in those cases rather than raising.
 
-*Writes (non-destructive).*
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

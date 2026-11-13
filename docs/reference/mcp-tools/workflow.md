@@ -237,7 +237,7 @@ For best corpus quality, write a summary that includes:
 - What remains for the next session
 - Any blockers or decisions made
 
-*Writes (non-destructive).*
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

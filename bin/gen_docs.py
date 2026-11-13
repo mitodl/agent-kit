@@ -462,9 +462,9 @@ def _emit_tool_index(groups: list, tools: dict) -> None:
 def _served_instructions() -> str:
     """The instructions `witan serve` sends: witan's, then the mounted witan-code's."""
     import witan_code.server as code_server
-    from witan.instructions import INSTRUCTIONS
+    from witan.instructions import INSTRUCTIONS, with_code_instructions
 
-    return f"{INSTRUCTIONS}\n\n{code_server.mcp.instructions}"
+    return with_code_instructions(INSTRUCTIONS, code_server.mcp.instructions)
 
 
 def annotations_str(tool: Any) -> str:

@@ -1,8 +1,9 @@
 ### Added
 
 - Every tool carries MCP annotations: `readOnlyHint` on reads, and on writes
-  `destructiveHint` (true for deletes, closes, merges, field overwrites and
-  link removal) plus `idempotentHint` where a repeat changes nothing more.
+  `destructiveHint` (true for deletes, closes, merges, field overwrites,
+  rewritten memory links and session summaries, and link removal) plus
+  `idempotentHint` where a repeat changes nothing more.
   Clients can auto-approve the reads. `witan serve` against a deployed target
   republishes the deployment's annotations.
 
@@ -12,7 +13,7 @@
   value. Text several tools repeated (the agent session id, `session_slug`,
   `assignee`, slug prefixes, `ui_url`, `live_pr`, `lease_expired`, write
   contention) now lives once in the server instructions. The agent-facing
-  manifest drops from 94,561 to 62,231 characters.
+  manifest drops from 94,561 to 62,355 characters.
 
 ### Fixed
 
