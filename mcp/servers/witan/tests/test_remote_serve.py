@@ -103,6 +103,30 @@ def test_the_schema_comes_from_the_deployment_not_local_code(proxy):
     assert sorted(tool.parameters["properties"]) == ["repo"]
 
 
+def test_cli_only_tools_are_not_republished():
+    # The deployment lists these to the proxy so the CLI can call them;
+    # `witan serve` hands its list to an agent, which must not see them.
+    backing = _backing()
+
+    async def _echo(**kwargs):
+        return {"saw": kwargs}
+
+    backing.add_tool(
+        FunctionTool(
+            name="workflow_trace_list",
+            description="listed to the CLI's proxy, never to an agent",
+            parameters={"type": "object", "properties": {}},
+            fn=_echo,
+        )
+    )
+    p = RemoteServerProxy(REMOTE, lambda: "tok")
+    p._new_client = lambda _token: Client(backing)  # type: ignore[method-assign]
+
+    served = _tools(asyncio.run(build_remote_server(REMOTE, proxy=p)))
+    assert "task_ready" in served
+    assert "workflow_trace_list" not in served
+
+
 def test_code_tools_are_not_republished(proxy):
     # witan-code has to run where the checkout is — indexing reads source
     # files. Its graph still belongs in the cluster, but via

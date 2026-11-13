@@ -183,7 +183,11 @@ See [`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](./witan/sk
 | `workflow_project_get_blockers` | Return all projects currently blocking the given project |
 | `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook. Re-entrant — a retry returns the open session rather than minting a second one |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
-| `workflow_trace_get` | Fetch a completed project's corpus `WorkflowTrace` by its `wt-`/`wp-` slug |
+
+Corpus traces are read and mined with `witan traces` and `witan trace`, not over
+MCP. The `workflow_trace_*` tools, `store_merge` and `claim_authorship` stay
+callable, but the server lists them only to the `witan` CLI so they cost agents
+no discovery (`witan/cli_only.py`).
 
 ### Task Tracking Tools
 
@@ -350,6 +354,8 @@ and `project tasks` exit 1 on a missing slug.
 | `project create <title>` | Create a workflow project from the CLI |
 | `project advance\|complete\|block\|unblock <wp-slug> …` | Drive project phase/dependency transitions from the CLI |
 | `session start\|end\|list …` | Start/close a workflow session, or list a project's sessions |
+| `traces [--all-repos]` / `trace <slug>` | Completed projects' corpus traces, one trace in full |
+| `trace mine\|annotate <slug> …` | Turn a trace into pattern/lesson memories, or record ones already written |
 | `memory [QUERY] [--kind …]` | BM25 memory search, or (with no query) list memories |
 | `code repos` | Repositories with a code graph indexed (requires witan-code) |
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |

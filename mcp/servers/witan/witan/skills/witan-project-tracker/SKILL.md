@@ -58,7 +58,7 @@ this particular session will focus on, not necessarily the project's current
 overall phase.
 
 Hold on to the `session_slug` in the returned handle. Pass it to `memory_store`
-and `workflow_trace_mine` so what you record this session is attributed to it, and
+(and to `witan trace mine --session-slug`) so what you record this session is attributed to it, and
 to `workflow_session_end` when you close. The protocol carries no session state,
 so the handle is the only link between these calls.
 
@@ -382,16 +382,22 @@ Completed projects accumulate as `WorkflowTrace` nodes:
 workflow_project_list(status="completed")   # list finished projects
 ```
 
-Fetch a specific trace:
+Reading and mining traces is a CLI job, not an MCP one: the `workflow_trace_*`
+tools are listed only to the `witan` CLI. Run these through your shell:
 
-```text
-workflow_trace_get(slug="wp-add-vault-k8s-auth-a3f912")   # accepts the wp- or wt- slug
+```bash
+witan traces --all-repos                                  # discover traces
+witan trace wp-add-vault-k8s-auth-a3f912                  # one trace; wp- or wt- slug
+witan trace mine wp-add-vault-k8s-auth-a3f912             # print the material to mine
+witan trace mine wp-add-vault-k8s-auth-a3f912 \
+  --proposals proposals.json --session-slug ws-...       # create the memories
+witan trace annotate wp-add-vault-k8s-auth-a3f912 --lesson les-...   # record existing ones
 ```
 
-`workflow_trace_get` accepts either the project slug (`wp-…`) or the trace slug
-(`wt-…`) — no need to hand-construct `wt-{project_slug}` — and returns `None`
-until the project has been completed. `workflow_trace_list` is the discovery
-path across many traces.
+`witan trace` accepts either the project slug (`wp-…`) or the trace slug
+(`wt-…`), and reports no trace until the project has been completed.
+`proposals.json` is `{"patterns": [...], "lessons": [...]}`, each entry with a
+`title` and `content`.
 
 Traces record: phases traversed, session count, total duration, and the outcome
 narrative (tools-used/files-changed are per-session, not on the trace). These

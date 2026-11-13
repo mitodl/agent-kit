@@ -71,6 +71,7 @@ from . import (
     ui_widgets,
 )
 from . import repo as repo_module
+from .cli_only import CliOnlyToolsMiddleware
 from .graph import (
     OmnigraphClient,
     OmnigraphConflict,
@@ -479,6 +480,10 @@ mcp.add_middleware(
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.
 mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
+# Admin and corpus-mining tools stay callable but are listed only to witan's
+# own CLI, which reaches a deployment through them (`witan.cli_only`).
+mcp.add_middleware(CliOnlyToolsMiddleware())
 
 
 @mcp.custom_route("/health", methods=["GET"])

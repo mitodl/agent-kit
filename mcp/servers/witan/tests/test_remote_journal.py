@@ -17,6 +17,7 @@ from fastmcp import Client
 
 from witan.config import RemoteConfig
 from witan.remote.proxy import RemoteServerProxy
+from witan_core.remote.proxy import proxy_client_info
 
 from .conftest import requires_omnigraph
 
@@ -42,7 +43,11 @@ def proxy(server, monkeypatch):
         srv, "cfg", srv.cfg.model_copy(update={"author": "ada@example.org"})
     )
     p = RemoteServerProxy(REMOTE_CFG, lambda: "tok")
-    monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
+    monkeypatch.setattr(
+        p,
+        "_new_client",
+        lambda _token: Client(srv.mcp, client_info=proxy_client_info()),
+    )
     return p
 
 
