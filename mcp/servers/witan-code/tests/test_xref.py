@@ -1,14 +1,12 @@
 """Calls resolved across files through imports (witan_code.xref + the indexer)."""
 
-import asyncio
-import inspect
 import subprocess
 
 import pytest
 
 from witan_code import xref
 
-from .conftest import requires_stack
+from .conftest import requires_stack, tool_fn
 
 REPO = "https://github.com/test/xref"
 
@@ -138,13 +136,6 @@ def _git(base, *args):
     )
 
 
-def _fn(tool):
-    fn = getattr(tool, "fn", tool)
-    if inspect.iscoroutinefunction(fn):
-        return lambda *a, **kw: asyncio.run(fn(*a, **kw))
-    return fn
-
-
 @pytest.fixture
 def two_modules(tmp_path, monkeypatch):
     """A git repo whose `pkg/a.py` calls into `pkg/b.py`, indexed on main."""
@@ -183,7 +174,7 @@ def _callers(symbol, direction="callers"):
     srv._clients.clear()
     srv._store_branches.clear()
     srv._git_context.clear()
-    rows = _fn(srv.code_callers)(f"{REPO}#{symbol}", direction=direction)
+    rows = tool_fn(srv.code_callers)(f"{REPO}#{symbol}", direction=direction)
     return {f"{r['symbol_id'].split('#', 1)[1]}" for r in rows}
 
 
@@ -202,7 +193,7 @@ def test_a_call_into_another_module_is_a_caller(two_modules):
 def test_impact_walks_across_files(two_modules):
     from witan_code import server as srv
 
-    impact = _fn(srv.code_impact)(f"{REPO}#pkg/b.py::target", max_depth=2)
+    impact = tool_fn(srv.code_impact)(f"{REPO}#pkg/b.py::target", max_depth=2)
     reached = {c["symbol_id"].split("#", 1)[1] for c in impact["impacted"]}
     assert "pkg/a.py::through_class" in reached  # via Thing.build
 
