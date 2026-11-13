@@ -27,6 +27,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`cleanup`](#witan-cleanup)
 - [`memory`](#witan-memory)
     - [`import`](#witan-memory-import)
+    - [`stale-refs`](#witan-memory-stale-refs)
 - [`projects`](#witan-projects)
 - [`project`](#witan-project)
     - [`status`](#witan-project-status)
@@ -81,8 +82,10 @@ witan — agent memory, planning, and collaboration graph.
     - [`index`](#witan-code-index)
     - [`reindex`](#witan-code-reindex)
     - [`doctor`](#witan-code-doctor)
+    - [`why`](#witan-code-why)
     - [`deps`](#witan-code-deps)
     - [`symbols`](#witan-code-symbols)
+    - [`diff-impact`](#witan-code-diff-impact)
     - [`stitch`](#witan-code-stitch)
     - [`inject-context`](#witan-code-inject-context)
     - [`serve`](#witan-code-serve)
@@ -301,6 +304,12 @@ sessions open forever.
 Under Codex, whose hooks get no session variable, the session id comes
 from the hook's stdin payload instead.
 
+The summary is derived from what the session left behind (see
+``witan.session_summary``), because the next session's handoff shows it
+and agents rarely write one. A session already ended, by an explicit
+``workflow_session_end`` or an earlier Stop, is not closed again: its
+summary stands and only the stale handle is dropped.
+
 **Parameters**:
 
 * `--output-format CHOICE`: txt | json | toml | yaml.
@@ -435,6 +444,7 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 **Commands**:
 
 * [`import`](#witan-memory-import): Import Claude Code's local memory files into the shared graph.
+* [`stale-refs`](#witan-memory-stale-refs): List memories whose symbol_refs no longer resolve in the code graph.
 
 **Parameters**:
 
@@ -482,6 +492,24 @@ include it.
     a glob over either. Repeatable or comma-separated.
 * `--all, --no-all`: Select every memory that is not already in the graph, except user ones. *[default: False]*
 * `--confirm, --no-confirm`: Write the selected memories. Without it the command only reports. *[default: False]*
+
+### witan memory stale-refs
+
+```console
+witan memory stale-refs [OPTIONS]
+```
+
+List memories whose symbol_refs no longer resolve in the code graph.
+
+A review list, never an edit. ``missing`` means the repo is indexed and the
+symbol is not, which may be a rename: the detail column lists indexed
+symbols with the same name. ``unknown`` means the ref could not be checked
+(the repo is not indexed, or witan-code is unreachable).
+
+**Parameters**:
+
+* `--repo STR`:
+* `--all-repos, --no-all-repos`: *[default: False]*
 
 ## witan projects
 
@@ -1189,12 +1217,17 @@ witan task close [OPTIONS] SLUG
 
 Close a task, recording an optional resolution.
 
-Closing a blocker unblocks its dependents.
+Closing a blocker unblocks its dependents. A live claim held by someone
+else is refused unless ``--force`` is passed.
 
 **Parameters**:
 
 * `SLUG, --slug`: The ``tk-`` slug to close. **[required]**
 * `--resolution STR`: Short note on what was done.
+* `--assignee STR`: Holder identity closing the task (default: the author). A claim taken
+    by another of your own sessions still matches, since the check is on
+    identity, not session.
+* `--force, --no-force`: Close even while another person's claim is live. *[default: False]*
 
 ### witan task claim
 
@@ -1256,6 +1289,8 @@ to add dependencies use ``task link``.
 * `--assignee STR`: Owner identity.
 * `--external-uri STR`: Reference URI (e.g. a GitHub issue or PR).
 * `--tags STR..., --empty-tags`: Replacement free-form tags.
+* `--force, --no-force`: With ``--status closed``, close even while another person's claim
+    is live. *[default: False]*
 
 ### witan task link
 
@@ -1712,6 +1747,26 @@ Check that every code graph — per-repo and the shared bridge — can be read.
 
 Exits non-zero when any store is unreadable, so it is usable as a check.
 
+### witan code why
+
+```console
+witan code why [OPTIONS] PATH
+```
+
+Say whether a file is in the code graph and, if not, which rule left it out.
+
+An empty `code_*` result reads the same for an unused symbol and for a file
+the indexer never wrote. This replays the indexer's own file filter on
+PATH (unsupported language, skipped directory, nested checkout, symlinked
+directory, gitignored) and looks the file up in the view the `code_*` tools read from its
+checkout.
+
+**Parameters**:
+
+* `PATH, --path`: The file to explain, as part of the checkout this runs from when it is
+    inside it, else as part of its own. **[required]**
+* `--repo STR`: Canonical repo URI, when the checkout has no remote to detect it from.
+
 ### witan code deps
 
 ```console
@@ -1751,6 +1806,34 @@ other repos' exports.
 * `REPO, --repo`: Canonical repo URI. Defaults to the repo detected from the CWD.
 * `ROLE, --role`: Filter to exported or external rows. *[choices: exported, external]*
 * `SCHEME, --scheme`: Filter to one symbol scheme (http/env/pkg/svc).
+
+### witan code diff-impact
+
+```console
+witan code diff-impact [OPTIONS] [ARGS]
+```
+
+What a branch's diff touches: changed symbols, callers, consumers, work.
+
+Maps the diff between ``head`` and its merge base with ``base`` to the
+symbols it changes, by parsing both sides of each changed file with the
+indexer's parser. For each changed symbol it lists callers (two levels,
+from the default branch's index), the test files that call or name it
+as a stand-in for tests to run, bindings in other repos that share its
+env vars, endpoints and packages, and the witan tasks and memories that
+cite it, plus the tasks claimed on the head branch. Changed test files
+are listed by file, not looked up. Every list carries its total, and
+the notes say what the answer cannot see (an unindexed repo, symbols
+missing from the index, callers in other files or only on this branch).
+Tasks and memories need witan (council) installed alongside.
+
+**Parameters**:
+
+* `BASE, --base`: The ref the branch merges into. *[default: origin/main]*
+* `HEAD, --head`: The ref under review. *[default: HEAD]*
+* `--repo STR`: Canonical repo URI. Defaults to the repo detected from the CWD.
+* `--limit INT`: Most changed symbols to look up; the rest are counted, not listed. *[default: 25]*
+* `--max-items INT`: Most callers, tests, consumers, tasks or memories listed per symbol. *[default: 10]*
 
 ### witan code stitch
 

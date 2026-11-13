@@ -34,7 +34,10 @@ node Symbol {
     start_line: I32
     end_line: I32
     signature: String?
-    docstring: String?
+    // @index enables BM25 search over docstrings (code_search_symbol). Adding it
+    // to an existing store is one additive `add_constraint` step under
+    // `schema plan`, and the apply indexes the docstrings already stored.
+    docstring: String? @index
     decorators: [String]?      // @decorators on the def (framework semantics: routes, tasks, fixtures, …)
     indexed_at: DateTime
 }

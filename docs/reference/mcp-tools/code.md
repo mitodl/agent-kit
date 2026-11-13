@@ -10,14 +10,16 @@ Exact symbol lookups, caller graphs, change-impact analysis, and cross-repo cont
 
 ## `code_callers`
 
-Find symbols that call ``symbol_id`` (incoming Calls edges).
+Find symbols that call ``symbol_id``, or that ``symbol_id`` calls.
 
-Heuristic name-resolution based; not a precise call graph. For calls plus
-other references use code_find_references.
+Follows Calls edges into ``symbol_id`` by default, or out of it with
+``direction="callees"``. Heuristic name-resolution based; not a precise
+call graph. For calls plus other references use code_find_references.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``. |
+| `direction` | `callers` \| `callees` | `'callers'` | ``callers`` (default) returns the symbols that call ``symbol_id``;<br>``callees`` returns the symbols ``symbol_id`` calls. The indexer<br>resolves a call only to a symbol defined in the same file, so a call<br>into another module (in this repo or a library) is not listed. |
 
 ## `code_cross_repo_impact`
 
@@ -36,6 +38,7 @@ the cross-repo fan-out so a trivial edit doesn't appear to touch every repo.
 | --- | --- | --- | --- |
 | `symbol_id` | str | **required** | The symbol whose cross-repo surface to trace, as returned in the<br>``symbol_id`` field of code_find_definition or code_search_symbol. Its<br>repo prefix also scopes the bridge read, so asking about another repo's<br>symbol does not pick up an unrelated overlay from your own checkout. |
 | `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | ``heuristic`` (default) \| ``precise`` — see server instructions. |
+| `branch` | str? | `null` | Git branch whose bridge overlay for ``symbol_id``'s repo to read. The<br>repo's default branch, or a branch with no overlay, reads bridge main,<br>so pass e.g. ``main`` to see a symbol your checkout's branch removed.<br>Omitted, reads the checkout's overlay when the id's repo is the<br>current detected repo and bridge main otherwise. |
 
 ## `code_find_definition`
 
@@ -49,7 +52,7 @@ origin. Feed a returned ``symbol_id`` to code_find_references / code_callers
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | str | **required** | Bare name (``run``) or qualified name (``Service.run``). |
-| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all. Note this differs from the witan memory/task tools:<br>``repo=""`` does **not** force a fan-out here — it is falsy, so it<br>behaves exactly like omitting the argument. |
+| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all. ``repo=""`` does **not** force a fan-out — it is<br>falsy, so it behaves exactly like omitting the argument. |
 | `branch` | str? | `null` | Git branch whose indexed view to query (e.g. another agent's in-flight<br>branch). Defaults to the checkout's branch when querying the current<br>repo; when ``repo`` names a different repo and ``branch`` is omitted,<br>reads that store's default (main) view. |
 
 ## `code_find_references`
@@ -76,6 +79,7 @@ traversal was truncated. Heuristic — see code_callers.
 | `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``.<br>This is the symbol you are about to change; the result is its blast<br>radius. |
 | `max_depth` | int | `5` | Maximum BFS depth (default 5). |
 | `max_nodes` | int | `200` | Cap on total symbols returned (default 200). |
+| `branch` | str? | `null` | Git branch (or a view name from code_indexed_branches) whose view of<br>``symbol_id``'s repo to walk, as for code_find_definition. Pass the<br>default branch (e.g. ``main``) to read the default view from a<br>checkout whose own branch is indexed, where a symbol the branch<br>removed no longer exists. Omitted, follows the checkout's branch when<br>the id's repo is the current detected repo and reads main otherwise.<br>Callers in other repos are always read from their default view. |
 
 ## `code_indexed_branches`
 
@@ -238,17 +242,25 @@ table.
 
 ## `code_search_symbol`
 
-Full-text/substring search over symbol qualified names (BM25-ranked).
+Full-text search over symbol qualified names and docstrings (BM25-ranked).
 
-Use to locate a symbol when you only remember part of its name. Each result
-carries its ``symbol_id`` and ``repo`` of origin. BM25 ranking is per-store;
-cross-repo fan-out concatenates each store's ranked results.
+Use to locate a symbol when you only remember part of its name, or by what
+its docstring says it does (e.g. "rate limiting"). Each result carries its
+``symbol_id`` and ``repo`` of origin.
+
+Name matches come first, then symbols whose docstring matches and whose
+name does not. A docstring-only match never outranks a name match: BM25
+scores the two fields on scales that cannot be compared (a short name
+inflates under length normalisation), so the order between them is a
+policy, and this is the policy. Within each group, BM25 ranking is
+per-store, and a cross-repo fan-out concatenates each store's ranked
+results. Each group holds up to 50 results per store.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | **required** | Search terms matched against ``qualified_name``. |
+| `query` | str | **required** | Search terms matched against ``qualified_name`` and ``docstring``. |
 | `kind` | `function` \| `method` \| `class` \| `module` \| `variable` \| `interface` \| `type` \| `enum` \| `key` \| `table` \| `cte` \| `block`? | `null` | Optional filter to a single symbol kind: ``function``, ``method``,<br>``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,<br>``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``<br>to exclude the many YAML ``key`` symbols when searching for code. |
-| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all — ``repo=""`` does **not** force that, unlike the witan<br>memory/task tools; it is falsy and behaves like omitting the argument.<br>BM25 ranking is per-store, so a fan-out concatenates each store's<br>ranked results rather than producing one global ordering. |
+| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all — ``repo=""`` does **not** force that; it is falsy and<br>behaves like omitting the argument.<br>BM25 ranking is per-store, so a fan-out concatenates each store's<br>ranked results rather than producing one global ordering. |
 | `branch` | str? | `null` | Git branch whose indexed view to query. Defaults to the checkout's<br>branch when querying the current repo; when ``repo`` names a different<br>repo and ``branch`` is omitted, reads that store's default (main) view. |
 
 ## `code_store_health`
@@ -290,6 +302,7 @@ the given ``repo`` or, if omitted, the current repo.
 | --- | --- | --- | --- |
 | `path` | str | **required** | Source file path. |
 | `repo` | str? | `null` | Canonical repo URI the file belongs to. Defaults to the current repo. |
+| `branch` | str? | `null` | Git branch whose indexed view to read (e.g. another agent's in-flight<br>branch), or a view name from code_indexed_branches. Defaults to the<br>checkout's branch when querying the current repo; when ``repo`` names<br>a different repo and ``branch`` is omitted, reads that store's default<br>(main) view. |
 
 ## `code_unresolved_symbols`
 

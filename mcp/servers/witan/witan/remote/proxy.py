@@ -18,7 +18,6 @@ import logging
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +34,7 @@ from witan_core.remote.proxy import (
     RemoteUnreachable,
     RemoteWriteIndeterminate,
 )
+from witan_core.timeutil import parse_timestamp
 
 from .. import merge_bounds, merge_report, readiness, session_state
 from .. import repo as repo_module
@@ -247,6 +247,7 @@ _READ_ONLY = frozenset(
         "memory_list",
         "memory_neighbors",
         "memory_search",
+        "memory_stale_refs",
         "memory_symbols",
         "recall",
         "symbol_context",
@@ -286,6 +287,7 @@ _REPO_IS_SCOPE_OR_STAMP = frozenset(
         "memory_contradictions",
         "memory_list",
         "memory_search",
+        "memory_stale_refs",
         "memory_store",
         "recall",
         "task_claim",
@@ -351,18 +353,12 @@ _IDEMPOTENT_WRITES = frozenset({"task_update", "task_close", "task_release"})
 _HOLDER_CHECKED = _IDEMPOTENT_WRITES
 
 
-def _parse_ts(value: str) -> datetime:
-    """A graph or journal timestamp, as an aware UTC datetime.
-
-    The graph hands back naive ISO strings (omnigraph drops the offset) while
-    the journal stamps `now_iso()`'s `+00:00`; both are UTC. Both are also only
-    millisecond-precise, so a write and a queued entry can carry the same
-    stamp. Replay counts a tie as "since": it cannot be ordered, and treating it
-    as later turns the queued write into a comment instead of applying it over
-    a change it never saw.
-    """
-    parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+# Graph and journal timestamps go through `parse_timestamp`: the graph hands
+# back naive ISO strings while the journal stamps `now_iso()`'s `+00:00`, and
+# both are UTC. Both are also only millisecond-precise, so a write and a queued
+# entry can carry the same stamp. Replay counts a tie as "since": it cannot be
+# ordered, and treating it as later turns the queued write into a comment
+# instead of applying it over a change it never saw.
 
 
 def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
@@ -372,23 +368,44 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     same rule ``task_release`` applies: a close queued from a plain shell on a
     task one of your agent sessions claimed is still yours to close.
 
-    A ``task_release`` that named its ``assignee`` is compared as that holder,
-    because the tool releases as it (``server._claim_holder`` lets an explicit
-    assignee override the caller's identity): a worker that claimed as
-    ``ci-worker`` releases as ``ci-worker``, not as its token's user.
+    A ``task_release`` or ``task_close`` that named its ``assignee`` is
+    compared as that holder, because the tool acts as it
+    (``server._claim_holder`` lets an explicit assignee override the caller's
+    identity): a worker that claimed as ``ci-worker`` releases and closes as
+    ``ci-worker``, not as its token's user. ``task_update``'s ``assignee`` is
+    the task's new holder, not the caller, so it is not read this way.
+
+    A write queued with ``force`` skips the holder comparison: the caller
+    already said to override another person's claim, and the tool will.
     """
     holder = entry.holder
-    if entry.tool == "task_release" and "assignee" in entry.args:
+    if entry.tool in ("task_release", "task_close") and "assignee" in entry.args:
         holder = entry.args["assignee"]
     assignee = task.get("assignee")
-    if assignee and readiness.holder_identity(assignee) != readiness.holder_identity(
-        holder
+    if (
+        assignee
+        and not entry.args.get("force")
+        and readiness.holder_identity(assignee) != readiness.holder_identity(holder)
     ):
         return f"the task is now held by {assignee}"
     closed_at = task.get("closed_at")
-    if closed_at and _parse_ts(closed_at) >= _parse_ts(entry.ts):
+    if closed_at and parse_timestamp(closed_at) >= parse_timestamp(entry.ts):
         return f"the task was closed at {closed_at}"
     return None
+
+
+def _conflict_comment(entry: JournalEntry, reason: str) -> JournalEntry:
+    """The comment a queued task write that no longer applies is replayed as."""
+    text = (
+        f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
+        f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
+    )
+    return dataclasses.replace(
+        entry,
+        tool="task_comment",
+        args={"slug": entry.args["slug"], "text": text},
+        context=None,
+    )
 
 
 # Rows per page of the exact-title scan, growing to the tool's own maximum.
@@ -403,17 +420,19 @@ async def _created_since(
     Not ``task_search``: it is relevance-ranked and capped at 20 rows with
     description matches ahead of title-only ones, so a duplicate can rank
     outside it. This walks every task by ``updated_at`` desc instead
-    (``task_list(repo="")``) and stops once a page reaches rows updated before
+    (``task_list(all_repos=True)``) and stops once a page reaches rows updated before
     ``ts``. A task created since ``ts`` has ``updated_at >= created_at >= ts``,
     so nothing past that point can be one.
     """
-    since = _parse_ts(ts)
+    since = parse_timestamp(ts)
     for limit in _TITLE_SCAN_LIMITS:
-        rows = await call("task_list", {"repo": "", "limit": limit})
+        rows = await call("task_list", {"all_repos": True, "limit": limit})
         for row in rows:
-            if row["title"] == title and _parse_ts(row["created_at"]) >= since:
+            if row["title"] == title and parse_timestamp(row["created_at"]) >= since:
                 return row["slug"]
-        if len(rows) < limit or (rows and _parse_ts(rows[-1]["updated_at"]) < since):
+        if len(rows) < limit or (
+            rows and parse_timestamp(rows[-1]["updated_at"]) < since
+        ):
             return None
     return None
 
@@ -465,16 +484,7 @@ class RemoteServerProxy(RemoteMCPProxy):
             task = await call("task_get", {"slug": entry.args["slug"]})
             reason = _replay_conflict(task, entry) if task else None
             if reason is not None:
-                text = (
-                    f"buffered {entry.tool} from {entry.ts} by {entry.holder} "
-                    f"not applied: {reason}. Intended: {json.dumps(entry.args)}"
-                )
-                return dataclasses.replace(
-                    entry,
-                    tool="task_comment",
-                    args={"slug": entry.args["slug"], "text": text},
-                    context=None,
-                )
+                return _conflict_comment(entry, reason)
         elif entry.tool == "task_create":
             title = entry.args["title"]
             duplicate = await _created_since(call, title, entry.ts)
@@ -489,6 +499,24 @@ class RemoteServerProxy(RemoteMCPProxy):
                 )
                 return None
         return entry
+
+    def _replay_result(
+        self, entry: JournalEntry, plan: JournalEntry, result: Any
+    ) -> JournalEntry | None:
+        # `_replay_plan` checked the holder on its own read, so a claim that
+        # lands between that read and the write is refused by the tool itself,
+        # as `{"closed": false}` rather than an error. Without this the replay
+        # reports it applied and the queued close is gone.
+        if (
+            plan is entry
+            and entry.tool in _HOLDER_CHECKED
+            and isinstance(result, dict)
+            and result.get("closed") is False
+        ):
+            return _conflict_comment(
+                entry, f"the task is now held by {result['held_by']}"
+            )
+        return None
 
     @property
     def remote_url(self) -> str:

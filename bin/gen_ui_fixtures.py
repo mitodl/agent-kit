@@ -398,31 +398,32 @@ def _normalize(value, seen: dict[str, str]):
 def _calls(slugs: dict[str, str]) -> dict[str, dict]:
     """The one call per bound tool whose result gets recorded.
 
-    Chosen to be the shape a view actually issues: `repo=""` everywhere,
-    because §6.1 has every call pass repo explicitly so a result never depends
-    on the server's working directory.
+    Chosen to be the shape a view actually issues: `all_repos=True` on every
+    witan tool, because §6.1 has every call state its repo scope explicitly so a
+    result never depends on the server's working directory.
     """
     return {
-        "task_ready": {"repo": "", "limit": 20},
+        "task_ready": {"all_repos": True, "limit": 20},
         "task_get": {"slug": slugs["blocker"]},
-        "task_list": {"repo": "", "limit": 50},
-        "task_search": {"query": "read gaps", "repo": ""},
+        "task_list": {"all_repos": True, "limit": 50},
+        "task_search": {"query": "read gaps", "all_repos": True},
         "workflow_project_get": {"slug": slugs["project"]},
         "workflow_project_status": {"slug": slugs["project"]},
-        "workflow_project_list": {"repo": ""},
+        "workflow_project_list": {"all_repos": True},
         "workflow_session_list": {"project_slug": slugs["project"]},
-        "recall": {"query": "unwrap mcp results", "repo": ""},
+        "recall": {"query": "unwrap mcp results", "all_repos": True},
         # With topics: the memory view shows them, and their edges are the
         # only `inferred` ones the seed produces (promoted from `tags`).
         "memory_get": {"slug": slugs["memory"], "include_topics": True},
-        "memory_list": {"kind": "pattern", "repo": ""},
-        "memory_search": {"query": "wrap flag", "repo": ""},
+        "memory_list": {"kind": "pattern", "all_repos": True},
+        "memory_search": {"query": "wrap flag", "all_repos": True},
         "memory_neighbors": {"slug": slugs["memory"]},
-        "memory_contradictions": {"repo": ""},
+        "memory_contradictions": {"all_repos": True},
         # `name:kind`, not a bare tag: a plain name resolves nothing and the
         # fixture would record the null case twice over.
         "topic_get": {"topic": "witan-ui:topic"},
-        # `repo` explicit, as for every other tool: "" is every repo.
+        # `repo` explicit: a substring filter in this witan-code tool, where
+        # "" matches every repo.
         "code_repo_dependencies": {"repo": ""},
         # `kind` and `key` explicit: the ADR 0011 amendment's rule, and what
         # an edge's contract hands the drill-down.

@@ -90,7 +90,9 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     # credential-refresh note in `witan_core.remote.proxy._invoke`. Killing it
     # is not a dropped block but a session left open with no handoff summary,
     # which is invisible until someone resumes and finds nothing recorded. 60s
-    # covers that recorded worst case.
+    # covers that recorded worst case. The reads that build the summary run
+    # before the write and are capped at `SUMMARY_READ_BUDGET_SECONDS` (8s, in
+    # `witan.cli.hooks`) so the two together still fit.
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,

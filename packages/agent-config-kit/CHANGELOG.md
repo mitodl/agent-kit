@@ -8,6 +8,18 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.14.1] - 2026-11-12
+
+### Fixed
+
+- Error messages keep a long path on one line (e.g. `config init`
+  refusing to overwrite an existing file).
+  Rich hard-wrapped them at 80 columns when no standard stream is a
+  terminal (an agent's shell, a CI job), which put a newline inside any
+  longer path. Tables still wrap to the width.
+  They are also escaped now, so a `[section]` quoted in an exception
+  message is no longer dropped by Rich's markup parser.
+
 ## [0.14.0] - 2026-10-27
 
 ### Changed

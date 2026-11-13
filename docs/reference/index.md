@@ -12,7 +12,7 @@ That is a deliberate trade: these pages will never be as readable as the
 
 -   **[MCP tools](mcp-tools/index.md)**
 
-    All 60 tools your agent can call, with full parameter schemas. Grouped into
+    Every tool your agent can call, with full parameter schemas. Grouped into
     [memory](mcp-tools/memory.md), [tasks](mcp-tools/tasks.md),
     [workflow](mcp-tools/workflow.md), and [code](mcp-tools/code.md).
 
@@ -23,7 +23,7 @@ That is a deliberate trade: these pages will never be as readable as the
 
 -   **[Environment variables](environment.md)**
 
-    All 67 settings, what they do, and their defaults.
+    Every setting, what it does, and its default.
 
 -   **[Graph schema](graph-schema.md)**
 

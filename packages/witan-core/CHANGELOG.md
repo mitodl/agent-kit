@@ -8,6 +8,34 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.55.0] - 2026-11-12
+
+### Added
+
+- `witan_core.timeutil.parse_timestamp` parses an ISO-8601 timestamp into an
+  aware datetime, reading a naive one (what omnigraph returns for a
+  `DateTime`) as UTC and keeping an offset that is present. It raises on a
+  value that won't parse, so each caller decides what that means. witan
+  had eight copies of this parse; they now all call this one.
+
+## [0.54.0] - 2026-11-12
+
+### Added
+
+- `RemoteMCPProxy._replay_result(entry, plan, result)`, called with a replayed
+  write's result before the replay reports it applied. A binding whose tool
+  refuses by returning an answer rather than raising returns a substitute
+  entry, which is sent in the write's place and reported `substituted`. A
+  retryable write whose substitute cannot be sent stays queued. The default
+  returns `None`, so replay behaves as before.
+
+## [0.53.0] - 2026-11-12
+
+### Added
+
+- The `mcp.tool_call` log line carries `client_name` and `client_version`, the calling client's self-reported MCP `clientInfo`. A post-release check can now tell an un-upgraded client from a fix that didn't work. Both strings are capped at 128 characters. A client that never set its own reports the SDK default, `mcp 0.1.0`.
+- The remote proxy (the witan and witan-code CLIs' remote mode) names itself `witan-remote-proxy <witan-core version>` instead of `mcp 0.1.0`, so its calls aren't mistaken for an un-upgraded witan-code's.
+
 ## [0.52.0] - 2026-11-12
 
 ### Changed

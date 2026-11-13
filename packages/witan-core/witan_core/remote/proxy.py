@@ -424,6 +424,20 @@ _REPLAY_UNSENT = (
 )
 
 
+def _log_lost_substitute(
+    entry: JournalEntry, substitute: JournalEntry, exc: Exception
+) -> None:
+    logger.warning(
+        "lost journal entry %s (%s from %s): refused on replay, and its %s "
+        "could not be sent: %s",
+        entry.id,
+        entry.tool,
+        entry.ts,
+        substitute.tool,
+        exc,
+    )
+
+
 def _outcome(entry: JournalEntry, outcome: str, detail: str) -> dict:
     """One line of a journal replay's report."""
     return {
@@ -730,6 +744,21 @@ class RemoteMCPProxy:
         Default: replay every entry as recorded.
         """
         return entry
+
+    def _replay_result(
+        self, entry: JournalEntry, plan: JournalEntry, result: Any
+    ) -> JournalEntry | None:
+        """A substitute to send when ``plan``'s replay answered with a refusal.
+
+        Called with the tool's result after ``plan`` (what ``_replay_plan``
+        chose for ``entry``) was sent and did not raise. A tool that refuses by
+        returning an answer rather than raising, e.g. a write whose
+        precondition stopped holding between ``_replay_plan``'s read and the
+        write, would otherwise be reported as applied and dropped. Returning an
+        entry sends it in the write's place, over the same connection, and the
+        replay reports ``substituted``. Default: ``None``, the result stands.
+        """
+        return None
 
     @property
     def journal(self) -> WriteJournal:
@@ -1184,7 +1213,9 @@ class RemoteMCPProxy:
         return {
             "repo": (
                 self._resolve_repo()
-                if kwargs.get("repo") is None and self._repo_means_detect(name)
+                if kwargs.get("repo") is None
+                and not kwargs.get("all_repos")
+                and self._repo_means_detect(name)
                 else None
             ),
             "branch": (
@@ -1305,6 +1336,13 @@ class RemoteMCPProxy:
         and a failed send is logged as lost. A refused write (a tool error, an
         unknown tool, a 413) is dropped either way: a refusal is an answer, and
         leaving it at the head would wedge every entry behind it.
+
+        A write that returned rather than raised goes to :meth:`_replay_result`
+        last, because a tool can refuse with an answer (a precondition that
+        stopped holding after ``_replay_plan`` read it). A substitute it returns
+        is sent before the entry is removed, so a retryable write whose
+        substitute could not be sent stays queued and is planned again next
+        time, from a fresh read.
         """
         journal = self.journal
         if not journal.has_pending():
@@ -1341,7 +1379,7 @@ class RemoteMCPProxy:
                 if not retryable:
                     journal.remove(entry.id)
                 try:
-                    await call(plan.tool, plan.args, plan.context)
+                    result = await call(plan.tool, plan.args, plan.context)
                 except _REPLAY_REFUSED as exc:
                     logger.warning(
                         "dropped journal entry %s (%s from %s): refused: %s",
@@ -1369,6 +1407,27 @@ class RemoteMCPProxy:
                         )
                         report.append(_outcome(entry, "lost", str(exc)))
                     break
+                substitute = self._replay_result(entry, plan, result)
+                if substitute is not None:
+                    try:
+                        await call(substitute.tool, substitute.args, substitute.context)
+                    except _REPLAY_UNSENT as exc:
+                        if retryable:
+                            report.append(_outcome(entry, "kept", str(exc)))
+                        else:
+                            _log_lost_substitute(entry, substitute, exc)
+                            report.append(_outcome(entry, "lost", str(exc)))
+                        break
+                    except _REPLAY_REFUSED as exc:
+                        _log_lost_substitute(entry, substitute, exc)
+                        if retryable:
+                            journal.remove(entry.id)
+                        report.append(_outcome(entry, "lost", str(exc)))
+                        continue
+                    if retryable:
+                        journal.remove(entry.id)
+                    report.append(_outcome(entry, "substituted", substitute.tool))
+                    continue
                 if retryable:
                     journal.remove(entry.id)
                 outcome = "applied" if plan is entry else "substituted"
@@ -1425,12 +1484,15 @@ class RemoteMCPProxy:
         arguments = dict(kwargs)
         # The deployed server has no git checkout, so it cannot resolve
         # repo=None ("detect current repo") — do that on the client and send an
-        # explicit value. repo="" (all repos) is a meaningful sentinel, kept.
-        # Skipped where an omitted `repo` means "leave the stored value alone"
-        # rather than "detect": see `_repo_means_detect`.
+        # explicit value. Skipped under `all_repos`, which asks for no repo and
+        # which the server refuses alongside one, and where an omitted `repo`
+        # means "leave the stored value alone" rather than "detect": see
+        # `_repo_means_detect`. An explicit value, `""` included, goes through
+        # as given; the server refuses `""`.
         if (
             "repo" in names
             and arguments.get("repo") is None
+            and not arguments.get("all_repos")
             and self._repo_means_detect(name)
         ):
             detected = self._client_value("repo", resolved)

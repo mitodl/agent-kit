@@ -15,6 +15,8 @@ unconditionally.
 
 import asyncio
 import inspect
+import os
+import shlex
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -32,7 +34,13 @@ from witan_core.cli import (
 from witan_core.elicit import with_console_ctx
 
 from . import indexer
-from .output import OutputFormat, dump_structured, get_output_format, set_output_format
+from .output import (
+    OutputFormat,
+    dump_payload,
+    dump_structured,
+    get_output_format,
+    set_output_format,
+)
 
 app = make_app(
     name="witan-code",
@@ -116,6 +124,24 @@ def _is_remote() -> bool:
     from . import server as server_module
 
     return _srv() is not server_module
+
+
+def _local_server():
+    """The in-process server module, reading the selected ``--target``'s stores.
+
+    For commands that ask about this machine's code-graph config rather than
+    dispatching through :func:`_srv` (``doctor``, ``why``).
+    """
+    from . import config as cfg_module
+    from . import server as server_module
+    from .selected_target import selected_target
+
+    try:
+        server_module.use_config(cfg_module.load(selected_target()))
+    except ValueError as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from None
+    return server_module
 
 
 def print_error(message: object, *, stderr: bool = False) -> None:
@@ -345,7 +371,7 @@ def doctor() -> None:
     # maintenance action on local files — the same side of the split as
     # `index`/`optimize`/`cleanup`. Dispatching to a deployment would report a
     # cluster's health and then advise a rebuild of stores that are fine.
-    from . import server as server_module
+    server_module = _local_server()
 
     # stderr under a structured format: stdout holds the table's document.
     console = Console(stderr=get_output_format() != "txt")
@@ -403,6 +429,204 @@ def doctor() -> None:
             "first one and refills as the rest are reindexed."
         )
     raise SystemExit(1)
+
+
+def _exclusion_detail(rule: indexer.Exclusion, matched: str) -> str:
+    """What ``rule`` means for the file, and how to get it indexed if it can be."""
+    if rule is indexer.Exclusion.UNSUPPORTED_LANGUAGE:
+        suffix = Path(matched).suffix or "a file with no extension"
+        return (
+            f"The indexer has no grammar for {suffix}. It parses "
+            f"{', '.join(sorted(indexer._EXT_TO_SPEC))}."
+        )
+    if rule is indexer.Exclusion.EXCLUDED_PATH:
+        return (
+            f"{matched}/ is a directory name the indexer always skips "
+            f"({', '.join(sorted(indexer._SKIP_DIRS))})."
+        )
+    if rule is indexer.Exclusion.NESTED_CHECKOUT:
+        return (
+            f"{matched}/ has its own .git, so its files belong to that "
+            "checkout's graph. Index it from there: "
+            f"`witan code index {shlex.quote(matched)}`."
+        )
+    if rule is indexer.Exclusion.SYMLINKED_DIRECTORY:
+        return (
+            f"{matched}/ is a symlink, and the indexer does not follow a "
+            "symlinked directory, so files outside the repository are not "
+            "indexed as its own. Index the directory it points to from its own "
+            "checkout."
+        )
+    return (
+        f"git ignores it (`git check-ignore -v {shlex.quote(matched)}` names the "
+        "pattern). A tracked file is indexed whatever the patterns say, so "
+        "`git add -f` it or drop the pattern."
+    )
+
+
+@app.command
+def why(path: Path, *, repo: str | None = None) -> None:
+    """Say whether a file is in the code graph and, if not, which rule left it out.
+
+    An empty `code_*` result reads the same for an unused symbol and for a file
+    the indexer never wrote. This replays the indexer's own file filter on
+    PATH (unsupported language, skipped directory, nested checkout, symlinked
+    directory, gitignored) and looks the file up in the view the `code_*` tools read from its
+    checkout.
+
+    Parameters
+    ----------
+    path:
+        The file to explain, as part of the checkout this runs from when it is
+        inside it, else as part of its own.
+    repo:
+        Canonical repo URI, when the checkout has no remote to detect it from.
+    """
+    from rich.console import Console
+    from rich.markup import escape
+
+    from . import config as cfg_module
+    from . import repo as repo_module
+    from . import store as store_module
+    from .selected_target import selected_target
+
+    server_module = _local_server()
+    # The `code_*` read commands dispatch to a deployment whenever a remote
+    # URL is configured, but the code-graph stores come from `code_transport`
+    # and `code_server`. With only the first set, this would explain a local
+    # graph the reads never look at.
+    try:
+        remote = cfg_module.load_remote_config(selected_target())
+    except ValueError as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from None
+    if remote is not None and not server_module.cfg.is_cluster:
+        print_error(
+            f"The code_* reads go to the deployment at {remote.url} (remote_url "
+            "or WITAN_REMOTE_URL), but the code-graph config points at the local "
+            f"stores in {server_module.cfg.code_dir}, so `witan code why` would "
+            "explain a graph those reads do not use. Set code_transport = "
+            '"mcp" on the target (or WITAN_CODE_TRANSPORT=mcp) to read the '
+            "deployment's code graphs, or unset remote_url to read local ones.",
+            stderr=True,
+        )
+        raise SystemExit(1)
+
+    # Not resolved: the walk names a file by its path in the checkout, so a
+    # symlinked directory on the way is a rule to report, and a symlink to a
+    # file is collected under its own name.
+    target = Path(os.path.abspath(path))
+    if not target.is_file():
+        print_error(
+            f"{path} is not a file. `witan code why` explains one file.", stderr=True
+        )
+        raise SystemExit(1)
+    # The checkout run from, when PATH is under it: a file in a nested
+    # checkout is the case the nested-checkout rule exists for, and asked from
+    # its own root it is simply that checkout's file.
+    root = repo_module.root(Path.cwd())
+    if root is None or not target.is_relative_to(root.resolve()):
+        # Outside that checkout, or named through a symlink to it: git
+        # answers with the physical path, so compare against that.
+        target = target.parent.resolve() / target.name
+        root = repo_module.root(target.parent)
+    if root is None:
+        print_error(
+            f"{path} is not inside a git checkout, so there is no full index of "
+            "it to explain.",
+            stderr=True,
+        )
+        raise SystemExit(1)
+    root = root.resolve()
+    try:
+        slug = indexer.resolve_repo_key(root, repo)
+    except repo_module.RepoNotDetected as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from exc
+
+    rel = target.relative_to(root).as_posix()
+    excluded = indexer.why_excluded(target, root)
+    try:
+        # Looked up under the id the indexer writes, which resolves symlinks.
+        found = server_module.indexed_file(
+            slug, indexer._relative_path(target, root), root
+        )
+    except store_module.ClusterUnreachable as exc:
+        print_error(exc, stderr=True)
+        raise SystemExit(1) from exc
+    row = found["file"]
+    rule, matched = (
+        (excluded[0], excluded[1].relative_to(root).as_posix())
+        if excluded
+        else (None, None)
+    )
+
+    # The commands in the advice run from the cwd, which may be below `root`.
+    # relpath raises on Windows across drives; the absolute path still works.
+    def here(p: Path) -> str:
+        try:
+            return Path(os.path.relpath(p)).as_posix()
+        except ValueError:
+            return str(p)
+
+    # A checkout with no remote indexes only with the same `--repo`.
+    def index_command(p: Path) -> str:
+        command = f"witan code index {shlex.quote(here(p))}"
+        return f"{command} --repo {shlex.quote(repo)}" if repo else command
+
+    if rule is not None:
+        explained = _exclusion_detail(rule, here(excluded[1]))
+        if row is None:
+            state = f"not indexed: {rule}"
+            detail = explained
+        else:
+            # `index_paths` checks a file named directly against git's ignore
+            # rules, but not against the path rules.
+            cause = (
+                "before the rule applied to it"
+                if rule is indexer.Exclusion.GITIGNORED
+                else "by indexing the file by name, or before the rule applied to it"
+            )
+            state = f"in the graph, but excluded: {rule}"
+            detail = (
+                f"{explained} Its rows were written {cause}; a full index of "
+                "the repo drops them."
+            )
+    elif found["store"] is None:
+        state = f"not indexed: {slug} has no code graph"
+        detail = f"Index the repo with `{index_command(root)}`."
+    elif row is not None:
+        state = f"indexed ({row.get('language')}, at {row.get('indexed_at')})"
+        detail = ""
+    else:
+        state = "not indexed yet"
+        detail = (
+            "No indexer rule excludes it, so the next index writes it: "
+            f"`{index_command(target)}`."
+        )
+
+    record = {
+        "path": rel,
+        "repo": slug,
+        "store": found["store"] or "",
+        "view": found["view"] or ("main" if found["store"] else ""),
+        "indexed": row is not None,
+        "rule": str(rule or ""),
+        "matched": matched or "",
+        "state": state,
+        "detail": detail,
+    }
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_structured([record], f"why {rel}", fmt)
+        return
+    console = Console(soft_wrap=True)
+    where = (
+        f" (store {record['store']}, view {record['view']})" if found["store"] else ""
+    )
+    console.print(f"{escape(rel)}: {escape(state)}{escape(where)}")
+    if detail:
+        console.print(escape(detail))
 
 
 def _index(path: Path, *, force: bool, repo: str | None = None) -> indexer.IndexStats:
@@ -498,22 +722,7 @@ def symbols(
     """
     from rich.markup import escape
 
-    from . import repo as repo_module
-    from . import store as store_module
-
-    # Resolved here, not server-side: a deployment has no checkout to detect
-    # from, and the table title names the repo either way. A remote dispatch
-    # reads deployed graphs, none keyed by a directory name, even when this
-    # machine's own code store is local (a target with only `remote_url`).
-    repo = repo or (
-        repo_module.detect(dirname_fallback=False)
-        if _is_remote()
-        else store_module.detect_repo()
-    )
-    if not repo:
-        print("No repo detected — pass --repo <canonical URI>.", file=sys.stderr)
-        raise SystemExit(1)
-
+    repo = _current_repo(repo)
     rows = _fn(_srv().code_repo_symbols)(repo=repo, role=role, scheme=scheme)
     table_rows: list[dict[str, object]] = []
     for r in rows:
@@ -539,6 +748,133 @@ def symbols(
         rows=table_rows,
         empty=f"[dim]No symbol table rows for {escape(repo)}.[/dim]",
     )
+
+
+def _current_repo(repo: str | None) -> str:
+    """``repo`` if given, else the checkout's canonical URI; exit if neither."""
+    from . import repo as repo_module
+    from . import store as store_module
+
+    # Resolved here, not server-side: a deployment has no checkout to detect
+    # from. A remote dispatch reads deployed graphs, none keyed by a directory
+    # name, even when this machine's own code store is local (a target with
+    # only `remote_url`).
+    repo = repo or (
+        repo_module.detect(dirname_fallback=False)
+        if _is_remote()
+        else store_module.detect_repo()
+    )
+    if not repo:
+        print("No repo detected — pass --repo <canonical URI>.", file=sys.stderr)
+        raise SystemExit(1)
+    return repo
+
+
+def _work_tool():
+    """witan (council)'s tool lookup, or ``None`` when witan is not installed.
+
+    witan-code does not depend on witan; under ``witan code …`` both are
+    installed and witan's launcher has already bound its target, so this
+    dispatches to the same deployment as ``witan tasks``.
+    """
+    try:
+        from witan.cli._common import _fn as work_fn
+        from witan.cli._common import _srv as work_srv
+    except ImportError:
+        return None
+    srv = work_srv()
+    if hasattr(srv, "prime_tool_schema"):  # a deployment, not the local module
+        srv.prime_tool_schema()
+    return lambda name: work_fn(getattr(srv, name))
+
+
+@app.command(name="diff-impact")
+def diff_impact(
+    base: str = "origin/main",
+    head: str = "HEAD",
+    *,
+    repo: str | None = None,
+    limit: int = 25,
+    max_items: int = 10,
+) -> None:
+    """What a branch's diff touches: changed symbols, callers, consumers, work.
+
+    Maps the diff between ``head`` and its merge base with ``base`` to the
+    symbols it changes, by parsing both sides of each changed file with the
+    indexer's parser. For each changed symbol it lists callers (two levels,
+    from the default branch's index), the test files that call or name it
+    as a stand-in for tests to run, bindings in other repos that share its
+    env vars, endpoints and packages, and the witan tasks and memories that
+    cite it, plus the tasks claimed on the head branch. Changed test files
+    are listed by file, not looked up. Every list carries its total, and
+    the notes say what the answer cannot see (an unindexed repo, symbols
+    missing from the index, callers in other files or only on this branch).
+    Tasks and memories need witan (council) installed alongside.
+
+    Parameters
+    ----------
+    base:
+        The ref the branch merges into.
+    head:
+        The ref under review.
+    repo:
+        Canonical repo URI. Defaults to the repo detected from the CWD.
+    limit:
+        Most changed symbols to look up; the rest are counted, not listed.
+    max_items:
+        Most callers, tests, consumers, tasks or memories listed per symbol.
+    """
+    import subprocess
+
+    from . import diff_impact as diff_module
+
+    repo = _current_repo(repo)
+    cwd = Path.cwd()
+    try:
+        merge_base, files = diff_module.git_diff_files(base, head, cwd)
+        symbols, unparsed = diff_module.changed_symbols(
+            files,
+            repo=repo,
+            read_blob=diff_module.git_blob_reader(cwd, merge_base, head),
+        )
+    except subprocess.CalledProcessError as exc:
+        # `git show` runs in bytes mode (blobs are not text); the rest in text.
+        err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
+        print_error(f"git {' '.join(exc.cmd[1:])} failed: {err.strip()}", stderr=True)
+        raise SystemExit(1) from None
+    remote = _is_remote()
+    if remote:
+        # Lookups fan out across threads; list the deployment's tools once
+        # first rather than once per thread.
+        _srv().prime_tool_schema()
+    report = diff_module.build_report(
+        symbols,
+        unparsed,
+        renamed=[f"{f.old_path} -> {f.new_path}" for f in files if f.renamed],
+        repo=repo,
+        branch=diff_module.branch_name(head, cwd),
+        code=lambda name: _fn(getattr(_srv(), name)),
+        work=_work_tool(),
+        test_mentions=diff_module.git_test_mentions(cwd, head),
+        # In-process reads follow the checkout's branch view once it is
+        # indexed, where a symbol this branch removed is gone, so they are
+        # pinned to the base's view. A deployment has no checkout to follow
+        # and already reads its default view; sending nothing there also keeps
+        # this working against one older than the `branch` parameters.
+        view=None if remote else diff_module.base_branch(base, cwd),
+        limit=limit,
+        max_items=max_items,
+    )
+    report["base"], report["head"], report["merge_base"] = base, head, merge_base
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_payload(report, fmt)
+        return
+    header = (
+        f"diff-impact {base}...{head} (merge base {merge_base[:12]}, "
+        f"{len(files)} files changed)"
+    )
+    print(diff_module.render_text(report, header=header), end="")
 
 
 @app.command

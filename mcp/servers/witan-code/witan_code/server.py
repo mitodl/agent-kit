@@ -2,11 +2,12 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastmcp import Context, FastMCP
 
 from witan_core import caching
+from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 
 from . import bridge_extractors, elicit, indexer, ingest, stitch, views
@@ -16,7 +17,12 @@ from . import repo as repo_module
 from . import store as store_module
 from .graph import OmnigraphClient
 
+if TYPE_CHECKING:
+    from .remote.store import RemoteStoreClient
+
 # ── Startup ───────────────────────────────────────────────────────
+
+logger = get_logger("witan.code.server")
 
 cfg = cfg_module.load()
 
@@ -24,8 +30,8 @@ mcp = FastMCP(
     "witan-code",
     instructions=(
         "Tree-sitter code graph across one or many repositories: resolve symbol "
-        "definitions, callers, references, and change-impact, and trace cross-repo "
-        "contracts (env vars, endpoints, packages, services).\n\n"
+        "definitions, callers, callees, references, and change-impact, and trace "
+        "cross-repo contracts (env vars, endpoints, packages, services).\n\n"
         "Symbol ids have the form `<repo>#<path/to/file.py>::<QualifiedName>` "
         "(a whole module is `<repo>#<path/to/file.py>::<module>`). Name-based "
         "tools return this id in the `symbol_id` field; pass it straight back to "
@@ -45,10 +51,14 @@ mcp = FastMCP(
         "current checkout's branch ONLY when querying the current detected repo; "
         "when you pass `repo` for a different repo and omit `branch`, you read "
         "that store's default (main) view — pass `branch` "
-        "explicitly to target another view. Id-routed tools (code_find_references "
-        "/ callers / impact / cross_repo_impact) take no `branch`: `symbol_id` "
-        "does not encode a branch, so they read the default view of the id's "
-        "repo store.\n\n"
+        "explicitly to target another view. `symbol_id` does not encode a "
+        "branch, so the id-routed tools follow the same default, reading the "
+        "checkout's branch view when the id's repo is the current detected repo "
+        "and that store's main view otherwise. code_impact and "
+        "code_cross_repo_impact also accept `branch` for the id's repo (pass "
+        "the default branch, e.g. `main`, to read main from a checkout whose "
+        "own branch is indexed — where a symbol the branch removed no longer "
+        "exists); code_find_references and code_callers take none.\n\n"
         "min_precision (`heuristic` default | `precise`) on the interface and "
         "cross-repo tools: `precise` keeps only edges also confirmed by a "
         "canonical-symbol join, suppressing false positives.\n\n"
@@ -224,9 +234,15 @@ def _client_for_repo(repo: str, branch: str | None = None) -> OmnigraphClient | 
     return _client_for_ref(store, _resolve_branch(store, repo, branch))
 
 
-def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
-    """Route a `repo#path::Name` id to the store of its repo prefix."""
-    return _client_for_repo(symbol_id.split("#", 1)[0])
+def _client_for_symbol(
+    symbol_id: str, branch: str | None = None
+) -> OmnigraphClient | None:
+    """Route a `repo#path::Name` id to the store of its repo prefix.
+
+    ``branch`` selects the view as it does for ``_client_for_repo``; omitted,
+    the read follows the checkout's branch only for the detected repo.
+    """
+    return _client_for_repo(symbol_id.split("#", 1)[0], branch)
 
 
 def _all_clients() -> list[OmnigraphClient]:
@@ -253,7 +269,9 @@ def _resolve_clients(
     return _all_clients()
 
 
-def _resolve_bridge_branch(store, repo: str | None) -> str | None:
+def _resolve_bridge_branch(
+    store, repo: str | None, requested: str | None = None
+) -> str | None:
     """Effective bridge branch for reads scoped to ``repo``: None = bridge main.
 
     Mirrors ``_resolve_branch``'s "current repo only" rule: the overlay is a
@@ -263,12 +281,22 @@ def _resolve_bridge_branch(store, repo: str | None) -> str | None:
     agent asking about some other repo's symbol while sitting elsewhere
     should not silently pick up an unrelated overlay branch.
 
+    ``requested`` is a git branch name, read through the same git→store
+    mapping as indexing, so the repo's default branch (or any branch with no
+    overlay for ``repo``) reads bridge main. That is how a caller pins a read
+    to main from a checkout whose own branch has an overlay.
+
     It mirrors the owner preference too: this actor's overlay first, then any
     writer's overlay of the same repo+branch.
     """
-    if repo is None or repo != _cached_detect():
+    if repo is None:
         return None
-    branch = _cached_store_branch()
+    if requested:
+        branch = repo_module.branch_store_name(requested)
+    elif repo != _cached_detect():
+        return None
+    else:
+        branch = _cached_store_branch()
     if not branch:
         return None
     mine = views.bridge_view(branch, repo, actor=identity_module.actor_id())
@@ -280,21 +308,24 @@ def _resolve_bridge_branch(store, repo: str | None) -> str | None:
     return candidates[0].name if candidates else None
 
 
-def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
+def _bridge_client(
+    repo: str | None = None, branch: str | None = None
+) -> OmnigraphClient | None:
     """Resolve the shared cross-repo bridge client, or None if not built yet.
 
     When ``repo`` is omitted, auto-detects the current checkout's repo. Reads
     are scoped to that repo's bridge branch overlay when it's on a
     non-default git branch that has already been written to the bridge;
     otherwise (no repo context, on the default branch, or nothing written to
-    that branch's overlay yet) reads see bridge main.
+    that branch's overlay yet) reads see bridge main. ``branch`` names the git
+    branch whose overlay to read instead of the checkout's.
     """
     store = store_module.bridge_store(cfg)
     if not store.exists():
         return None
     if repo is None:
         repo = _cached_detect()
-    return _client_for_ref(store, _resolve_bridge_branch(store, repo))
+    return _client_for_ref(store, _resolve_bridge_branch(store, repo, branch))
 
 
 def _remote_caller() -> bool:
@@ -443,9 +474,8 @@ async def code_find_definition(
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
-        detected at all. Note this differs from the witan memory/task tools:
-        ``repo=""`` does **not** force a fan-out here — it is falsy, so it
-        behaves exactly like omitting the argument.
+        detected at all. ``repo=""`` does **not** force a fan-out — it is
+        falsy, so it behaves exactly like omitting the argument.
     branch:
         Git branch whose indexed view to query (e.g. another agent's in-flight
         branch). Defaults to the checkout's branch when querying the current
@@ -505,13 +535,22 @@ async def code_find_references(
     return _as_symbol_id(refs + [c for c in callers if c["slug"] not in seen])
 
 
-@mcp.tool
-async def code_callers(symbol_id: str, ctx: Context | None = None) -> list[dict]:
-    """
-    Find symbols that call ``symbol_id`` (incoming Calls edges).
+# Each value is also the name of the code_read.gq query that answers it.
+CallDirection = Literal["callers", "callees"]
 
-    Heuristic name-resolution based; not a precise call graph. For calls plus
-    other references use code_find_references.
+
+@mcp.tool
+async def code_callers(
+    symbol_id: str,
+    direction: CallDirection = "callers",
+    ctx: Context | None = None,
+) -> list[dict]:
+    """
+    Find symbols that call ``symbol_id``, or that ``symbol_id`` calls.
+
+    Follows Calls edges into ``symbol_id`` by default, or out of it with
+    ``direction="callees"``. Heuristic name-resolution based; not a precise
+    call graph. For calls plus other references use code_find_references.
 
     Parameters
     ----------
@@ -519,13 +558,18 @@ async def code_callers(symbol_id: str, ctx: Context | None = None) -> list[dict]
         The symbol to start from, as returned in the ``symbol_id`` field of
         code_find_definition or code_search_symbol. Form:
         ``<repo>#<path/to/file.py>::<QualifiedName>``.
+    direction:
+        ``callers`` (default) returns the symbols that call ``symbol_id``;
+        ``callees`` returns the symbols ``symbol_id`` calls. The indexer
+        resolves a call only to a symbol defined in the same file, so a call
+        into another module (in this repo or a library) is not listed.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
         client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
         if client is None:
             return []
-    return _as_symbol_id(client.read("code_read.gq", "callers", {"id": symbol_id}))
+    return _as_symbol_id(client.read("code_read.gq", direction, {"id": symbol_id}))
 
 
 @mcp.tool
@@ -533,6 +577,7 @@ async def code_impact(
     symbol_id: str,
     max_depth: int = 5,
     max_nodes: int = 200,
+    branch: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -554,10 +599,26 @@ async def code_impact(
         Maximum BFS depth (default 5).
     max_nodes:
         Cap on total symbols returned (default 200).
+    branch:
+        Git branch (or a view name from code_indexed_branches) whose view of
+        ``symbol_id``'s repo to walk, as for code_find_definition. Pass the
+        default branch (e.g. ``main``) to read the default view from a
+        checkout whose own branch is indexed, where a symbol the branch
+        removed no longer exists. Omitted, follows the checkout's branch when
+        the id's repo is the current detected repo and reads main otherwise.
+        Callers in other repos are always read from their default view.
     """
+    root_repo = symbol_id.split("#", 1)[0]
+
+    def client_for(sid: str) -> OmnigraphClient | None:
+        # `branch` names a view of the root's repo; another repo has no view
+        # of that name to read, so it keeps its own default.
+        repo = sid.split("#", 1)[0]
+        return _client_for_repo(repo, branch if repo == root_repo else None)
+
     if (
-        _client_for_symbol(symbol_id) is None
-        and await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0]) is None
+        client_for(symbol_id) is None
+        and await _confirm_and_reindex(ctx, root_repo) is None
     ):
         return {"root": symbol_id, "impacted": [], "truncated": False}
 
@@ -570,7 +631,7 @@ async def code_impact(
         next_frontier: list[str] = []
         for sid in frontier:
             # Route each node to its repo's store, so impact can cross repos.
-            client = _client_for_symbol(sid)
+            client = client_for(sid)
             if client is None:
                 continue
             for caller in client.read("code_read.gq", "callers", {"id": sid}):
@@ -602,7 +663,10 @@ async def code_impact(
 
 @mcp.tool
 async def code_symbols_in_file(
-    path: str, repo: str | None = None, ctx: Context | None = None
+    path: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    ctx: Context | None = None,
 ) -> list[dict]:
     """
     List symbols defined in ``path`` (repo-relative or absolute).
@@ -616,6 +680,12 @@ async def code_symbols_in_file(
         Source file path.
     repo:
         Canonical repo URI the file belongs to. Defaults to the current repo.
+    branch:
+        Git branch whose indexed view to read (e.g. another agent's in-flight
+        branch), or a view name from code_indexed_branches. Defaults to the
+        checkout's branch when querying the current repo; when ``repo`` names
+        a different repo and ``branch`` is omitted, reads that store's default
+        (main) view.
     """
     slug = repo or _cached_detect()
     if slug is None:
@@ -628,7 +698,7 @@ async def code_symbols_in_file(
         )
         if not slug:
             return []
-    client = _client_for_repo(slug)
+    client = _client_for_repo(slug, branch)
     if client is None:
         client = await _confirm_and_reindex(ctx, slug)
         if client is None:
@@ -656,6 +726,49 @@ SymbolKind = Literal[
 ]
 
 
+#: omnigraph's typecheck code for a ``search`` over a field with no full-text
+#: index. A store still on the schema from before ``Symbol.docstring`` gained
+#: ``@index`` answers the docstring run with it on omnigraph 0.15 (0.13 scans
+#: the field instead and answers).
+_NO_FTS_INDEX = "T27:"
+
+#: Marks a docstring-run row inside one store's results until the union
+#: in ``code_search_symbol`` has placed it. Never reaches a caller.
+_DOCSTRING_ONLY = "_docstring_only"
+
+
+def _docstring_search(
+    client: "OmnigraphClient | RemoteStoreClient", name: str, params: dict
+) -> list[dict]:
+    """The docstring BM25 run, or no rows from a store or tier that cannot run it.
+
+    Two cases answer with no rows instead of failing the search. A store whose
+    schema lacks the index refuses the run with ``T27``: a local store gains the
+    index on its next index, which applies the schema (``store.ensure_store``),
+    and a cluster graph when the data tier's ``cluster apply`` runs with the new
+    schema. And a deployed MCP tier older than the query (``code_transport =
+    "mcp"``, ``RemoteStoreClient``) looks the name up in its own bundled
+    ``code_read.gq`` and refuses one it does not have. Either way the name run
+    still answers, so the mismatch costs docstring matches, not the search.
+    """
+    try:
+        return client.read("code_read.gq", name, params)
+    except RuntimeError as exc:
+        text = str(exc)
+        if _NO_FTS_INDEX not in text and f"{name!r} not found in source" not in text:
+            raise
+        logger.warning(
+            "witan.code.search.docstring_search_unavailable",
+            store=str(client),
+            error=text,
+            recovery=(
+                "reindex the repo (local store), or roll out the data tier and "
+                "witan-code tier (deployment)"
+            ),
+        )
+        return []
+
+
 @mcp.tool
 def code_search_symbol(
     query: str,
@@ -664,16 +777,24 @@ def code_search_symbol(
     branch: str | None = None,
 ) -> list[dict]:
     """
-    Full-text/substring search over symbol qualified names (BM25-ranked).
+    Full-text search over symbol qualified names and docstrings (BM25-ranked).
 
-    Use to locate a symbol when you only remember part of its name. Each result
-    carries its ``symbol_id`` and ``repo`` of origin. BM25 ranking is per-store;
-    cross-repo fan-out concatenates each store's ranked results.
+    Use to locate a symbol when you only remember part of its name, or by what
+    its docstring says it does (e.g. "rate limiting"). Each result carries its
+    ``symbol_id`` and ``repo`` of origin.
+
+    Name matches come first, then symbols whose docstring matches and whose
+    name does not. A docstring-only match never outranks a name match: BM25
+    scores the two fields on scales that cannot be compared (a short name
+    inflates under length normalisation), so the order between them is a
+    policy, and this is the policy. Within each group, BM25 ranking is
+    per-store, and a cross-repo fan-out concatenates each store's ranked
+    results. Each group holds up to 50 results per store.
 
     Parameters
     ----------
     query:
-        Search terms matched against ``qualified_name``.
+        Search terms matched against ``qualified_name`` and ``docstring``.
     kind:
         Optional filter to a single symbol kind: ``function``, ``method``,
         ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
@@ -682,8 +803,8 @@ def code_search_symbol(
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
-        detected at all — ``repo=""`` does **not** force that, unlike the witan
-        memory/task tools; it is falsy and behaves like omitting the argument.
+        detected at all — ``repo=""`` does **not** force that; it is falsy and
+        behaves like omitting the argument.
         BM25 ranking is per-store, so a fan-out concatenates each store's
         ranked results rather than producing one global ordering.
     branch:
@@ -692,23 +813,39 @@ def code_search_symbol(
         repo and ``branch`` is omitted, reads that store's default (main) view.
     """
 
-    def _query(client: OmnigraphClient) -> list[dict]:
-        if kind:
-            return client.read(
-                "code_read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
-            )
-        return client.read("code_read.gq", "search_symbols", {"query": query})
+    # Two runs unioned here, because the engine will not `or` two `search`
+    # predicates in one match. Both run inside one fan-out, so a store that
+    # fails fails both and the healthy stores' rows survive, as `_fan_out`
+    # promises. The rows are then split, so across repos too every name match
+    # precedes every docstring-only one.
+    suffix = "_by_kind" if kind else ""
+    params = {"query": query, "kind": kind} if kind else {"query": query}
 
-    return _as_symbol_id(_fan_out(_resolve_clients(repo, branch), _query))
+    def _query(client: "OmnigraphClient | RemoteStoreClient") -> list[dict]:
+        names = client.read("code_read.gq", f"search_symbols{suffix}", params)
+        docstrings = _docstring_search(
+            client, f"search_symbols_docstring{suffix}", params
+        )
+        return [*names, *({**r, _DOCSTRING_ONLY: True} for r in docstrings)]
+
+    rows = _fan_out(_resolve_clients(repo, branch), _query)
+    named = [r for r in rows if _DOCSTRING_ONLY not in r]
+    seen = {r["slug"] for r in named}
+    named.extend(
+        {k: v for k, v in r.items() if k != _DOCSTRING_ONLY}
+        for r in rows
+        if _DOCSTRING_ONLY in r and r["slug"] not in seen
+    )
+    return _as_symbol_id(named)
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
 PrecisionTier = Literal["precise", "heuristic", "fuzzy"]
 
 
-def _precise_pairs(repo: str | None = None) -> frozenset:
+def _precise_pairs(repo: str | None = None, branch: str | None = None) -> frozenset:
     """(consumer_repo, provider_repo, kind, key_norm) covered by a Stage-2 join."""
-    client = _bridge_client(repo=repo)
+    client = _bridge_client(repo=repo, branch=branch)
     if client is None:
         return frozenset()
     from . import edges as edges_module
@@ -823,6 +960,7 @@ async def _bindings_by_role(
 async def code_cross_repo_impact(
     symbol_id: str,
     min_precision: PrecisionTier = "heuristic",
+    branch: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -846,6 +984,12 @@ async def code_cross_repo_impact(
         symbol does not pick up an unrelated overlay from your own checkout.
     min_precision:
         ``heuristic`` (default) | ``precise`` — see server instructions.
+    branch:
+        Git branch whose bridge overlay for ``symbol_id``'s repo to read. The
+        repo's default branch, or a branch with no overlay, reads bridge main,
+        so pass e.g. ``main`` to see a symbol your checkout's branch removed.
+        Omitted, reads the checkout's overlay when the id's repo is the
+        current detected repo and bridge main otherwise.
     """
     empty = {"symbol_id": symbol_id, "bindings": [], "cross_repo": []}
     own_repo = symbol_id.split("#", 1)[0]
@@ -854,7 +998,7 @@ async def code_cross_repo_impact(
     # (it can't discover another repo's branch state from here regardless),
     # so this just avoids picking up an unrelated overlay from the caller's
     # own cwd when asking about a symbol in some other repo.
-    client = _bridge_client(repo=own_repo)
+    client = _bridge_client(repo=own_repo, branch=branch)
     if client is None:
         client = await _confirm_and_reindex_bridge(ctx)
         if client is None:
@@ -864,7 +1008,11 @@ async def code_cross_repo_impact(
     if not own:
         return empty
 
-    pairs = _precise_pairs(repo=own_repo) if min_precision == "precise" else None
+    pairs = (
+        _precise_pairs(repo=own_repo, branch=branch)
+        if min_precision == "precise"
+        else None
+    )
     seen: set[str] = set()
     cross: list[dict] = []
     for b in own:
@@ -1128,6 +1276,54 @@ def code_store_health() -> dict:
         "ok": all(h.ok for h in report),
         "stale_schema": [str(h.ref) for h in report if h.stale_schema],
     }
+
+
+def use_config(config: cfg_module.Config) -> None:
+    """Read ``config``'s stores from here on, instead of the import-time load.
+
+    For the CLI commands that call this module in-process (``doctor``,
+    ``why``): the import-time :func:`config.load` takes no target, so a
+    ``--target`` forwarded into :mod:`witan_code.selected_target` never
+    reaches it. Clients and branch listings cached under the old config are
+    dropped with it.
+    """
+    global cfg
+    cfg = config
+    _clients.clear()
+    _store_branches.clear()
+
+
+def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:
+    """``rel_path``'s row in the view the ``code_*`` tools read for ``checkout``.
+
+    The view is the one :func:`_resolve_branch` picks for a read from inside
+    ``checkout``: this actor's view of its branch, else anyone's, else main.
+    Resolved from ``checkout`` rather than the cwd, so a file in another
+    checkout is looked up where that checkout's reads go.
+
+    Returns ``{"store", "view", "file"}``: the store's label (``None`` with
+    ``view`` when the repo has no code graph at all), the view name (``None``
+    for main), and the ``CodeFile`` row, or ``None`` when the view has none.
+
+    :raises store.ClusterUnreachable: when a cluster graph cannot be asked
+        about at all (a rejected token, a closed port), which
+        :meth:`StoreRef.exists` would report as an absent graph.
+    """
+    absent = {"store": None, "view": None, "file": None}
+    store = store_module.store_for_repo(repo, cfg)
+    if store.is_remote:
+        try:
+            store_module.probe_cluster_graph(store, f"{repo}'s code graph", cfg)
+        except store_module.ClusterGraphMissing:
+            return absent
+    elif not store.exists(cfg):
+        return absent
+    branch = repo_module.store_branch(checkout)
+    view = _view_for_branch(store, branch) if branch else None
+    rows = _client_for_ref(store, view).read(
+        "code_read.gq", "get_file", {"id": f"{repo}#{rel_path}"}
+    )
+    return {"store": store.label, "view": view, "file": rows[0] if rows else None}
 
 
 @mcp.tool

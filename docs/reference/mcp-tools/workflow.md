@@ -106,10 +106,11 @@ context into new sessions.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted.<br>Pass an empty string to list projects across all repos. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted. |
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active``. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery`? | `null` | Optional phase filter applied after fetching. |
 | `ready` | bool | `False` | When ``True``, only return active projects whose blockers are all<br>completed (i.e. projects that are unblocked and actionable). |
+| `all_repos` | bool | `False` | List projects across all repos instead of filtering to one. |
 
 ## `workflow_project_search`
 
@@ -124,8 +125,9 @@ its response.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Free-text search query. |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted;<br>pass ``""`` to search across all repos. Applied in Python after the<br>BM25 fetch (``repos`` is a list, not match-filterable) — the<br>underlying query is unbounded so this filter sees every match, not<br>just a small top-N, then the real ``limit 20`` is applied after. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted.<br>Applied in Python after the BM25 fetch (``repos`` is a list, not<br>match-filterable) — the underlying query is unbounded so this filter<br>sees every match, not just a small top-N, then the real ``limit 20``<br>is applied after. |
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active`` — the useful default for a dedup check is<br>"is someone already working on this." |
+| `all_repos` | bool | `False` | Search projects across all repos instead of filtering to one. |
 
 ## `workflow_project_update`
 
@@ -275,6 +277,7 @@ it is opt-in.
 | --- | --- | --- | --- |
 | `project_slug` | str | **required** | The ``wp-`` slug whose memories to assemble. |
 | `group_by_session` | bool | `False` | Also return a ``by_session`` breakdown of which session produced what.<br>Costs one extra query per session, so leave it off unless you need the<br>attribution. |
+| `session` | str? | `null` | A ``ws-`` slug. Return only the memories that one session produced,<br>in one query, instead of the project's. ``group_by_session`` is<br>ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it<br>auto-closes; named ``session`` rather than ``session_slug`` because<br>the remote proxy fills an omitted ``session_slug`` with the caller's<br>active session, which would silently narrow every project-wide call. |
 
 ## `workflow_session_start`
 
@@ -331,6 +334,7 @@ read them from.
 | `repo` | str? | `null` | Repo scoping — see instructions. |
 | `branch` | str? | `null` | The git branch the caller is on, for the ``CodeBranch`` above. Filled<br>in client-side by the remote proxy; omitted, the server falls back to<br>its own working directory, which is right under local stdio and empty<br>under a deployment. |
 | `tags` | list[str]? | `null` | Optional tags. |
+| `all_repos` | bool | `False` | Record the session under no repo — see instructions. |
 
 ## `workflow_session_end`
 
@@ -338,7 +342,8 @@ Close the current session with a summary of work accomplished.
 
 Call this before ending a session to produce a high-quality corpus record.
 The ``Stop`` hook will auto-close sessions that did not call this, but
-with a placeholder summary.
+with a summary it can only derive from what was recorded (tasks claimed
+and closed, memories stored, commits, uncommitted files), not why.
 
 For best corpus quality, write a summary that includes:
 - What was done this session
@@ -384,10 +389,11 @@ went end to end).
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each trace's<br>repo set). Auto-detected from ``.git/config`` if omitted. Pass an<br>empty string to list traces across all repos. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each trace's<br>repo set). Auto-detected from ``.git/config`` if omitted. |
 | `tags` | list[str]? | `null` | Only return traces that carry ALL of these tags. |
 | `author` | str? | `null` | Only return traces created by this author. |
 | `limit` | int | `50` | Max rows to return (applied after filtering). |
+| `all_repos` | bool | `False` | List traces across all repos instead of filtering to one. |
 
 ## `workflow_trace_get`
 
@@ -444,6 +450,6 @@ project can follow the reasoning, not just a terse note for a future agent.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `trace_slug` | str | **required** | The ``wt-`` slug of the trace to mine. |
-| `patterns` | list[object]? | `null` | Proposed pattern memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``language``,<br>and ``tags``. |
-| `lessons` | list[object]? | `null` | Proposed lesson memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``severity``,<br>and ``tags``. |
+| `patterns` | list[object]? | `null` | Proposed pattern memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``language``,<br>``tags``, and ``all_repos`` (``true`` stores it under no repo, as on<br>``memory_store``; not with ``repo``). |
+| `lessons` | list[object]? | `null` | Proposed lesson memories to create on this call. Each dict needs<br>``title`` and ``content``; may also include ``repo``, ``severity``,<br>``tags``, and ``all_repos`` (as for ``patterns``). |
 | `session_slug` | str? | `null` | The ``ws-`` handle from ``workflow_session_start``, recorded as the<br>provenance of every memory mined on this call — see ``memory_store``. |

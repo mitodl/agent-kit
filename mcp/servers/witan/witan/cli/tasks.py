@@ -32,6 +32,7 @@ from .output import dump_record, get_output_format
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
+    _overlap_lines,
     _pick_items,
     _prompt_memories,
     _run_prompt,
@@ -52,7 +53,7 @@ def _search_tasks(
     s,
     query: str,
     *,
-    repo_arg: str | None,
+    repo_arg: dict,
     status: str | None,
     project: str | None,
     assignee: str | None,
@@ -65,10 +66,10 @@ def _search_tasks(
     """
     hits = _fn(s.task_search)(
         query=query,
-        repo=repo_arg,
         status=status,
         project_slug=project,
         assignee=assignee,
+        **repo_arg,
     )
     if status is None:
         hits = [h for h in hits if h.get("status") != "closed"]
@@ -77,7 +78,7 @@ def _search_tasks(
     allowed_slugs = {
         r["slug"]
         for r in _fn(s.task_ready)(
-            repo=repo_arg, project_slug=project, assignee=assignee, limit=_ALL_READY
+            project_slug=project, assignee=assignee, limit=_ALL_READY, **repo_arg
         )
     }
     return [h for h in hits if h["slug"] in allowed_slugs]
@@ -142,10 +143,10 @@ def tasks(
         )
     elif ready:
         rows = _fn(s.task_ready)(
-            repo=repo_arg,
             project_slug=project,
             assignee=assignee,
             limit=limit if status is None else _ALL_READY,
+            **repo_arg,
         )
         # task_ready takes no status, and "ready" spans open, blocked (all
         # blockers closed) and lapsed in_progress tasks.
@@ -158,11 +159,11 @@ def tasks(
         # server's ceiling, take the ceiling: the slice below still applies,
         # and `--limit 99999` should bound a listing rather than raise.
         rows = _fn(s.task_list)(
-            repo=repo_arg,
             status=status,
             project_slug=project,
             assignee=assignee,
             limit=min(limit, _MAX_TASK_LIMIT),
+            **repo_arg,
         )
         # A bare `witan tasks` is a live-work view: drop closed tasks unless the
         # user explicitly asks for a status (including `--status closed`).
@@ -428,11 +429,40 @@ def task_comment_cmd(slug: str, text: str) -> None:
     )
 
 
+def _close_override(force: bool) -> dict:
+    """``task_close``/``task_update``'s ``force``, sent only when set.
+
+    A deployment older than that parameter rejects it as an unexpected
+    argument, and the remote proxy keeps a ``False`` (it drops only ``None``),
+    so an unforced close or update would fail there.
+    """
+    return {"force": True} if force else {}
+
+
+def _exit_if_close_refused(slug: str, result: dict) -> None:
+    """Print ``task_close``'s holder refusal and exit 1, if that is the answer."""
+    if result.get("closed") is not False:
+        return
+    console.print(
+        f"[yellow]Not closed[/yellow] ({esc(slug)} is held by "
+        f"{esc(result['held_by'])})."
+    )
+    console.print(f"  {esc(result['remedy'])}")
+    raise SystemExit(1)
+
+
 @task_app.command(name="close")
-def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
+def task_close_cmd(
+    slug: str,
+    *,
+    resolution: str | None = None,
+    assignee: str | None = None,
+    force: bool = False,
+) -> None:
     """Close a task, recording an optional resolution.
 
-    Closing a blocker unblocks its dependents.
+    Closing a blocker unblocks its dependents. A live claim held by someone
+    else is refused unless ``--force`` is passed.
 
     Parameters
     ----------
@@ -440,14 +470,23 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
         The ``tk-`` slug to close.
     resolution:
         Short note on what was done.
+    assignee:
+        Holder identity closing the task (default: the author). A claim taken
+        by another of your own sessions still matches, since the check is on
+        identity, not session.
+    force:
+        Close even while another person's claim is live.
     """
     s = _srv()
-    result = _fn(s.task_close)(slug=slug, resolution=resolution)
+    result = _fn(s.task_close)(
+        slug=slug, resolution=resolution, assignee=assignee, **_close_override(force)
+    )
     if _queued(result):
         return
     if not result:
         print_error(f"No task {slug!r}.")
         raise SystemExit(1)
+    _exit_if_close_refused(slug, result)
     console.print(f"[green]Closed[/green] [bold]{slug}[/bold]")
     if resolution:
         console.print(f"  resolution: {esc(resolution)}")
@@ -485,6 +524,8 @@ def task_claim_cmd(
             f"[green]Claimed[/green] [bold]{slug}[/bold] "
             f"(assignee={result.get('assignee')})"
         )
+        for line in _overlap_lines(result.get("overlaps") or []):
+            console.print(line, markup=False, emoji=False, highlight=False)
         return
     reason = result.get("held_by") or result.get("reason") or "unavailable"
     console.print(f"[yellow]Not claimed[/yellow] ({esc(reason)}).")
@@ -555,6 +596,7 @@ def task_update_cmd(
     assignee: str | None = None,
     external_uri: str | None = None,
     tags: list[str] | None = None,
+    force: bool = False,
 ) -> None:
     """Update a task's mutable fields (only provided fields change).
 
@@ -587,6 +629,9 @@ def task_update_cmd(
         Reference URI (e.g. a GitHub issue or PR).
     tags:
         Replacement free-form tags.
+    force:
+        With ``--status closed``, close even while another person's claim
+        is live.
     """
     s = _srv()
     result = _fn(s.task_update)(
@@ -602,12 +647,14 @@ def task_update_cmd(
         assignee=assignee,
         external_uri=external_uri,
         tags=_split_csv(tags),
+        **_close_override(force),
     )
     if _queued(result):
         return
     if not result:
         print_error(f"No task {slug!r}.")
         raise SystemExit(1)
+    _exit_if_close_refused(slug, result)
     console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
     console.print(
         f"  status={_styled(result.get('status', ''), _STATUS_STYLE)}  "
@@ -731,7 +778,7 @@ def task_run(
 
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
-    ready = _fn(s.task_ready)(repo=repo_arg, project_slug=project, limit=50)
+    ready = _fn(s.task_ready)(project_slug=project, limit=50, **repo_arg)
     if not ready:
         console.print("[dim]No ready tasks.[/dim]")
         return
@@ -803,6 +850,7 @@ def task_run(
                     t,
                     claimed=claim,
                     memories=_prompt_memories(s, t["slug"], claims.get(t["slug"])),
+                    overlaps=claims.get(t["slug"], {}).get("overlaps"),
                 )
                 for t in claimable
             ],
