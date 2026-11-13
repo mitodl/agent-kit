@@ -1871,13 +1871,14 @@ What a branch's diff touches: changed symbols, callers, consumers, work.
 Maps the diff between ``head`` and its merge base with ``base`` to the
 symbols it changes, by parsing both sides of each changed file with the
 indexer's parser. For each changed symbol it lists callers (two levels,
-from the default branch's index), the test files that call or name it
-as a stand-in for tests to run, bindings in other repos that share its
-env vars, endpoints and packages, and the witan tasks and memories that
-cite it, plus the tasks claimed on the head branch. Changed test files
-are listed by file, not looked up. Every list carries its total, and
-the notes say what the answer cannot see (an unindexed repo, symbols
-missing from the index, callers in other files or only on this branch).
+from the default branch's index), the test files among those callers
+(plus, for a method, a TS/JS class or type, or a language without import
+resolution, test files naming it), bindings in other repos that share
+its env vars, endpoints and packages, and the witan tasks and memories
+that cite it, plus the tasks claimed on the head branch. Changed test
+files are listed by file, not looked up. Every list carries its total, and the notes say what the
+answer cannot see (an unindexed repo, symbols missing from the index,
+callers the indexer cannot resolve or that exist only on this branch).
 Tasks and memories need witan (council) installed alongside.
 
 **Parameters**:

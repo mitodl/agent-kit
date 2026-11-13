@@ -1,0 +1,8 @@
+### Added
+
+- The indexer resolves calls into other files of the repo through each file's imports, for Python (absolute and relative imports, `from pkg import mod`, `import pkg.mod as m`) and TS/JS (relative `import { f }` and `import * as ns`). A call whose callee is an imported name or an attribute chain rooted at one (`f()`, `mod.f()`, `Cls.method()`) gets a `Calls`/`References` edge to the symbol in the other file, so `code_callers`, `code_impact` and `witan code diff-impact` now list callers in other modules, on main and branch views alike. Calls through an instance (`obj.method()`), re-exports, star imports, `require()` and path aliases are not followed. Existing stores need one `witan-code reindex` (or a forced CI index) to get these edges for files that have not changed since.
+- Indexing a file re-links the stored files that mention its module name (and, for a package `__init__.py` or an `index.ts`, the names it defines, since `from . import f` or `from './index'` reaches it without its directory's name), found with one `git grep` over the work tree. Re-indexing a file deletes its symbols and every edge into them, so without this the edit hook's one-file run dropped a module's cross-file callers. It also links a caller written before the module or function it calls. The re-linked files' own rows are not rewritten.
+
+### Changed
+
+- `witan code diff-impact` takes "tests to run" from a symbol's callers when the graph can reach them (a module-level Python function or class, or a module-level TS/JS function). The `git grep` name search now runs only for methods and nested defs, TS/JS classes, interfaces and type aliases, languages without import resolution, and a repo with no code graph, and the label drops "(stand-in)".

@@ -560,9 +560,10 @@ async def code_callers(
         ``<repo>#<path/to/file.py>::<QualifiedName>``.
     direction:
         ``callers`` (default) returns the symbols that call ``symbol_id``;
-        ``callees`` returns the symbols ``symbol_id`` calls. The indexer
-        resolves a call only to a symbol defined in the same file, so a call
-        into another module (in this repo or a library) is not listed.
+        ``callees`` returns the symbols ``symbol_id`` calls. A call into
+        another file of the repo is listed when it goes through an import
+        (Python, TS/JS); a call through an instance or a re-export, or into
+        a library, is not.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:

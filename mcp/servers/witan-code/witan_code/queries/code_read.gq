@@ -219,8 +219,8 @@ query indexed_repo() {
     limit 1
 }
 
-// Symbol ids defined by a file — needed to delete their outgoing edges
-// before reindexing the file.
+// Symbol ids defined by a file. The indexer checks a cross-file edge's target
+// against them, since an edge to a missing node fails the whole load.
 
 query symbol_ids_in_file($file_id: String) {
     match {

@@ -7,15 +7,13 @@ parity, and the local-only refusals are exercised end to end without a network.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from fastmcp import Client
 
 from witan_code.remote.proxy import RemoteServerProxy, RemoteToolUnavailable
 from witan_core.remote.config import RemoteConfig
 
-from .conftest import requires_stack
+from .conftest import requires_stack, tool_fn
 
 REPO = "https://github.com/test/cg"
 
@@ -30,7 +28,7 @@ def proxy(sample_repo, monkeypatch):
     monkeypatch.setattr(srv, "cfg", cfg_mod.load())
     srv._clients.clear()
     srv._git_context.clear()
-    _fn(srv.code_reindex)(path=str(sample_repo))
+    tool_fn(srv.code_reindex)(path=str(sample_repo))
 
     cfg = RemoteConfig(url="http://unused/mcp", oidc_issuer="https://sso/realms/ol")
     tokens: list[str] = []
@@ -43,15 +41,6 @@ def proxy(sample_repo, monkeypatch):
     monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
     p._token_calls = tokens  # type: ignore[attr-defined]
     return p
-
-
-def _fn(tool):
-    import inspect
-
-    fn = getattr(tool, "fn", tool)
-    if inspect.iscoroutinefunction(fn):
-        return lambda *a, **kw: asyncio.run(fn(*a, **kw))
-    return fn
 
 
 @requires_stack
