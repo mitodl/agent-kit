@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from . import indexer, xref
+from . import indexer
 
 Status = Literal["removed", "modified", "added"]
 
@@ -407,16 +407,30 @@ def git_test_mentions(cwd: Path, head: str) -> Callable[[str], list[str]]:
     return mentions
 
 
+# Per language, the kinds an import-resolved call reaches. A TS/JS class is
+# used through `new` and an interface or type alias in type positions, none of
+# which the parser captures as a call.
+_LINKED_KINDS = {
+    "python": frozenset({"function", "class"}),
+    "typescript": frozenset({"function"}),
+    "javascript": frozenset({"function"}),
+}
+
+
 def graph_reaches_callers(sym: ChangedSymbol) -> bool:
     """Whether the indexed Calls edges find ``sym``'s callers in other files.
 
-    They do for a function or class in a language :mod:`witan_code.xref`
-    resolves imports for, so a test calling it is one of its callers. A method
-    is mostly called through an instance, which no import names, so a test of
-    one is still searched for by name.
+    They do for a module-level function, or a Python class, in a language
+    :mod:`witan_code.xref` resolves imports for, so a test calling it is one
+    of its callers. A qualified name is a method or a nested def (Python
+    records a method as a ``function``), mostly called through an instance
+    that no import names, so a test of one is still searched for by name.
     """
     language = indexer._EXT_TO_SPEC[Path(sym.path).suffix].name
-    return language in xref.LANGUAGES and sym.kind != "method"
+    return (
+        sym.kind in _LINKED_KINDS.get(language, frozenset())
+        and "." not in sym.qualified_name
+    )
 
 
 def build_report(
@@ -501,10 +515,10 @@ def build_report(
     notes.append(
         "Tests to run: test files among the callers, which needs a graph "
         "indexed with cross-file call resolution (run `witan-code reindex` "
-        "once if it predates that). For a method, a symbol in a language "
-        "without import resolution, or an unindexed repo, test files naming it "
-        "are added as a stand-in, so a test reaching it without naming it is "
-        "not listed."
+        "once if it predates that). For a method or nested def, a TS/JS "
+        "class, interface or type, a symbol in a language without import "
+        "resolution, or an unindexed repo, test files naming it are added as a "
+        "stand-in, so a test reaching it without naming it is not listed."
     )
 
     # Every symbol, removed ones included, is checked against the same view its

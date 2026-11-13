@@ -326,6 +326,65 @@ def test_a_functions_tests_come_from_its_callers_not_a_name_search():
     assert row["callers"]["shown"] == ["app.py::serve"]
 
 
+LINKED_PY = """\
+class Service:
+    def run(self):
+        return 1
+
+
+def helper():
+    return 1
+"""
+
+LINKED_TS = """\
+export class Store {
+  get() {
+    return 1;
+  }
+}
+
+export interface Shape {
+  size: number;
+}
+
+export type Id = string;
+
+export function load() {
+  return new Store();
+}
+
+export const make = () => 1;
+"""
+
+
+@pytest.mark.parametrize(
+    ("path", "line", "qualified_name", "expected"),
+    [
+        ("svc.py", 7, "helper", True),
+        ("svc.py", 1, "Service", True),
+        # Recorded as a function, but called through an instance.
+        ("svc.py", 3, "Service.run", False),
+        ("web/s.ts", 14, "load", True),
+        ("web/s.ts", 17, "make", True),
+        # `new Store()` and type positions are not calls the parser captures.
+        ("web/s.ts", 1, "Store", False),
+        ("web/s.ts", 3, "Store.get", False),
+        ("web/s.ts", 8, "Shape", False),
+        ("web/s.ts", 11, "Id", False),
+    ],
+)
+def test_graph_reaches_callers_only_for_what_the_resolver_links(
+    path, line, qualified_name, expected
+):
+    source = {"svc.py": LINKED_PY, "web/s.ts": LINKED_TS}[path]
+    files = [diff_impact.FileDiff(path, path, {line}, {line})]
+    (sym,), _ = diff_impact.changed_symbols(
+        files, repo=REPO, read_blob=lambda *_: source.encode()
+    )
+    assert sym.qualified_name == qualified_name
+    assert diff_impact.graph_reaches_callers(sym) is expected
+
+
 def test_test_mentions_match_across_one_language_family():
     tools = {
         "code_indexed_repos": list,

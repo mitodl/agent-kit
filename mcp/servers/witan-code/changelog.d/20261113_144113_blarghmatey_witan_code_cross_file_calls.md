@@ -5,4 +5,4 @@
 
 ### Changed
 
-- `witan code diff-impact` takes "tests to run" from a symbol's callers when the graph can reach them (a Python or TS/JS function or class). The `git grep` name search now runs only for methods, for languages without import resolution, and for a repo with no code graph, and the label drops "(stand-in)".
+- `witan code diff-impact` takes "tests to run" from a symbol's callers when the graph can reach them (a module-level Python function or class, or a module-level TS/JS function). The `git grep` name search now runs only for methods and nested defs, TS/JS classes, interfaces and type aliases, languages without import resolution, and a repo with no code graph, and the label drops "(stand-in)".
