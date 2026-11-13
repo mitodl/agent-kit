@@ -20,6 +20,10 @@ from pydantic import BaseModel, ConfigDict
 Decision = Literal["clean", "flagged"]
 
 MALFORMED_REASON = "invalid classifier verdict"
+#: The reasons witan writes itself. Only these reach an agent: a classifier's
+#: own reason is free-form model output that the record being screened can
+#: steer, so it stays on the row for operators (:mod:`.label`).
+HOST_REASONS = frozenset({MALFORMED_REASON})
 REASON_MAX_CHARS = 160
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 

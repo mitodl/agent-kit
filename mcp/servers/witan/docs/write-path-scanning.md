@@ -375,6 +375,11 @@ merge, a load) reads as:
 {"verdict": "unscreened", "notice": "[NOT security-screened: ...]"}
 ```
 
+A `flagged` record's notice names a reason only when witan wrote it (e.g. an
+unreadable classifier verdict). The classifier's own reason is model output,
+and the model read the text it flagged, so an injected record could steer it;
+it stays in `screen_reason` and the server log for operators.
+
 The notice sits beside the text rather than prefixed to it, because agents edit
 a record by reading it and writing it back. Not yet done: labelling the
 multi-record reads (`recall`, searches, listings) and the context hook,

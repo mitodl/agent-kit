@@ -10,6 +10,12 @@ The marker is a field beside the text, not a prefix on it as qm does, because
 an agent edits a memory or task by reading it and writing it back, and a prefix
 would be written into the record.
 
+A flagged label names its reason only when witan wrote it
+(:data:`~.verdict.HOST_REASONS`). The classifier's reason is model output, and
+the model read the very text it flagged, so an injected record could have it
+write new instructions into a notice the agent trusts as witan's own. That
+reason stays in ``screen_reason`` and the server log for operators.
+
 Only single-record reads are labelled for now (``memory_get``, ``task_get``
 and its comments, the memories a first ``task_claim`` surfaces). While no
 deployment has a classifier, every record is unscreened, and a marker repeated
@@ -21,6 +27,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from .guard import text_digest
+from .verdict import HOST_REASONS
 
 UNSCREENED_NOTICE = (
     "[NOT security-screened: witan has no screening verdict for this record's "
@@ -58,6 +65,7 @@ def screening(node_type: str, record: dict, stored: dict | None) -> dict:
     label = {"verdict": verdict, "classifier": stored.get("screen_version")}
     if verdict == "flagged":
         reason = stored.get("screen_reason")
+        reason = reason if reason in HOST_REASONS else None
         label["reason"] = reason
         label["notice"] = _FLAGGED_NOTICE.format(
             reason=f" ({reason})" if reason else ""
