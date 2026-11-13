@@ -303,6 +303,23 @@ strings otherwise.
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The memory whose ``symbol_refs`` to resolve. An unknown slug returns an<br>empty ``symbols`` list rather than raising. |
 
+## `memory_stale_refs`
+
+Memories whose ``symbol_refs`` no longer resolve in the code graph.
+
+A review list, never an edit. Resolves every current memory's
+``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+symbol is still defined), ``missing`` (its repo is indexed and the symbol is
+not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
+index, or witan-code is unreachable). A missing symbol may have been renamed
+or moved, so the memory can still be true: ``candidates`` lists the indexed
+symbols with the same name to check first, then ``memory_update`` the refs
+or supersede the memory.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `repo` | str? | `null` | Repo scoping — see instructions. ``""`` checks every repo's memories. |
+
 ## `memory_for_contract`
 
 What do we know about a contract (env_var / endpoint / package / service)?
