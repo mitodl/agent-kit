@@ -251,6 +251,52 @@ def test_a_dotted_import_keeps_its_caller_through_a_callee_reindex(two_modules):
 
 
 @requires_stack
+def test_a_package_entrypoint_keeps_its_callers_through_a_reindex(two_modules):
+    """`from . import target` reaches `pkg/__init__.py` without naming `pkg`."""
+    init = two_modules / "pkg" / "__init__.py"
+    init.write_text("def target():\n    return 1\n")
+    (two_modules / "pkg" / "g.py").write_text(
+        "from . import target\n\n\ndef via_init():\n    return target()\n"
+    )
+    _index(two_modules)
+    assert _callers("pkg/__init__.py::target") == {"pkg/g.py::via_init"}
+    init.write_text("def target():\n    return 2\n")
+    _index(init)
+    assert _callers("pkg/__init__.py::target") == {"pkg/g.py::via_init"}
+
+
+@requires_stack
+def test_a_ts_index_keeps_its_callers_through_a_reindex(tmp_path, monkeypatch):
+    """`'./index'` and `'.'` reach `lib/index.ts` without naming `lib`."""
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    base = tmp_path / "r"
+    (base / "lib").mkdir(parents=True)
+    _git(base, "init", "-q", "-b", "main")
+    index = base / "lib" / "index.ts"
+    index.write_text("export function target() {\n  return 1;\n}\n")
+    (base / "lib" / "a.ts").write_text(
+        "import { target } from './index';\n\n"
+        "export function viaIndex() {\n  return target();\n}\n"
+    )
+    (base / "lib" / "c.ts").write_text(
+        "import * as here from '.';\n\n"
+        "export function viaDot() {\n  return here.target();\n}\n"
+    )
+    monkeypatch.chdir(base)
+    _index(base)
+    expected = {"lib/a.ts::viaIndex", "lib/c.ts::viaDot"}
+    assert _callers("lib/index.ts::target") == expected
+    index.write_text("export function target() {\n  return 2;\n}\n")
+    _index(index)
+    assert _callers("lib/index.ts::target") == expected
+
+
+@requires_stack
 def test_a_caller_written_before_its_module_is_linked(two_modules):
     (two_modules / "e.py").write_text(
         "from pkg.new import made\n\n\ndef early():\n    return made()\n"
