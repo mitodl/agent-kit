@@ -1117,7 +1117,7 @@ def test_inject_context_remote_branch_read_failure_keeps_the_rest(
 
 def test_inject_context_remote_no_repo_skips_project_list(tmp_path, monkeypatch):
     """Mirrors the local path's own gating: outside a detected repo, no
-    project list is fetched at all (calling ``workflow_project_list(repo="")``
+    project list is fetched at all (calling ``workflow_project_list(all_repos=True)``
     would return every repo's active projects, not "none" — see its
     docstring), but ready tasks still resolve to the unscoped set."""
     from witan import context as ctx_module
@@ -1134,7 +1134,7 @@ def test_inject_context_remote_no_repo_skips_project_list(tmp_path, monkeypatch)
     ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
 
     assert not any(name == "workflow_project_list" for name, _ in server.calls)
-    assert ("task_ready", {"repo": "", "limit": 10000}) in server.calls
+    assert ("task_ready", {"limit": 10000, "all_repos": True}) in server.calls
 
 
 def test_inject_context_remote_cache_key_is_the_deployment_url(tmp_path, monkeypatch):
@@ -1583,7 +1583,7 @@ def test_inject_context_remote_asks_for_held_tasks_across_all_repos(
 
     assert (
         "task_list",
-        {"assignee": "@me", "status": "in_progress", "repo": "", "limit": 10000},
+        {"assignee": "@me", "status": "in_progress", "all_repos": True, "limit": 10000},
     ) in server.calls
 
 

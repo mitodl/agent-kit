@@ -111,7 +111,7 @@ def test_a_command_with_no_handler_of_its_own_is_caught_by_the_entrypoint(monkey
     from witan.cli._common import _fn
 
     with pytest.raises(RemoteToolFailed, match="cedar: read denied"):
-        _fn(proxy.task_ready)(repo="", limit=5)
+        _fn(proxy.task_ready)(all_repos=True, limit=5)
 
 
 def test_the_entrypoint_actually_lists_the_type_it_must_catch():

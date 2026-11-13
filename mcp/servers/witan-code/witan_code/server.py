@@ -474,9 +474,8 @@ async def code_find_definition(
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
-        detected at all. Note this differs from the witan memory/task tools:
-        ``repo=""`` does **not** force a fan-out here — it is falsy, so it
-        behaves exactly like omitting the argument.
+        detected at all. ``repo=""`` does **not** force a fan-out — it is
+        falsy, so it behaves exactly like omitting the argument.
     branch:
         Git branch whose indexed view to query (e.g. another agent's in-flight
         branch). Defaults to the checkout's branch when querying the current
@@ -804,8 +803,8 @@ def code_search_symbol(
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
-        detected at all — ``repo=""`` does **not** force that, unlike the witan
-        memory/task tools; it is falsy and behaves like omitting the argument.
+        detected at all — ``repo=""`` does **not** force that; it is falsy and
+        behaves like omitting the argument.
         BM25 ranking is per-store, so a fan-out concatenates each store's
         ranked results rather than producing one global ordering.
     branch:

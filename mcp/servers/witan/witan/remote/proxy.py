@@ -420,13 +420,13 @@ async def _created_since(
     Not ``task_search``: it is relevance-ranked and capped at 20 rows with
     description matches ahead of title-only ones, so a duplicate can rank
     outside it. This walks every task by ``updated_at`` desc instead
-    (``task_list(repo="")``) and stops once a page reaches rows updated before
+    (``task_list(all_repos=True)``) and stops once a page reaches rows updated before
     ``ts``. A task created since ``ts`` has ``updated_at >= created_at >= ts``,
     so nothing past that point can be one.
     """
     since = parse_timestamp(ts)
     for limit in _TITLE_SCAN_LIMITS:
-        rows = await call("task_list", {"repo": "", "limit": limit})
+        rows = await call("task_list", {"all_repos": True, "limit": limit})
         for row in rows:
             if row["title"] == title and parse_timestamp(row["created_at"]) >= since:
                 return row["slug"]

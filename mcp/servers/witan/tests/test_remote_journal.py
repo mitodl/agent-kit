@@ -199,7 +199,7 @@ def test_a_queued_create_is_skipped_when_that_title_was_created_since(proxy, ser
 
     proxy.task_get(slug="tk-missing")
 
-    hits = proxy.task_search(query="only once", repo="")
+    hits = proxy.task_search(query="only once", all_repos=True)
     assert [t["title"] for t in hits].count("only once") == 1
     assert not proxy.journal.has_pending()
 
@@ -214,11 +214,13 @@ def test_a_duplicate_outside_the_search_results_still_skips_the_create(proxy, se
         server.task_create(title=f"other {i}", description=f"{title} {title}")
     _queue(proxy, "task_create", {"title": title, "description": "d"})
     dup = server.task_create(title=title, description="unrelated")["slug"]
-    assert dup not in [t["slug"] for t in server.task_search(query=title, repo="")]
+    assert dup not in [
+        t["slug"] for t in server.task_search(query=title, all_repos=True)
+    ]
 
     proxy.task_get(slug="tk-missing")
 
-    titles = [t["title"] for t in proxy.task_list(repo="", limit=100)]
+    titles = [t["title"] for t in proxy.task_list(all_repos=True, limit=100)]
     assert titles.count(title) == 1
     assert not proxy.journal.has_pending()
 

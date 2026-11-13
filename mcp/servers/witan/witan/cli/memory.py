@@ -19,10 +19,10 @@ def memory(
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
     if query:
-        rows = _fn(s.memory_search)(query=query, repo=repo_arg, kind=kind)[:limit]
+        rows = _fn(s.memory_search)(query=query, kind=kind, **repo_arg)[:limit]
         title = f"Memory search: {query!r}"
     else:
-        rows = _fn(s.memory_list)(kind=kind, repo=repo_arg)[:limit]
+        rows = _fn(s.memory_list)(kind=kind, **repo_arg)[:limit]
         title = f"Memories ({kind})" if kind else "Memories"
     rows_data = [
         {

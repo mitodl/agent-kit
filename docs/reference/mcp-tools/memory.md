@@ -26,12 +26,12 @@ result AND at least one of them is in ``repo``, the rule
 ``memory_contradictions`` scopes by. Expansion can return memories from
 other repos, but a pair with neither side in ``repo`` is left out, so every
 pair here is also in ``memory_contradictions`` for the same ``repo`` and
-``include_superseded``. Pass ``repo=""`` to report every pair among the
-returned memories. The one mode where the two disagree: with no repo
+``include_superseded``. Pass ``all_repos=True`` to report every pair among
+the returned memories. The one mode where the two disagree: with no repo
 detected and none passed, the ``query`` seed searches every repo, so
 recall reports every pair among the returned memories, as with
-``repo=""``, while ``memory_contradictions`` keeps only pairs touching an
-unscoped memory.
+``all_repos=True``, while ``memory_contradictions`` keeps only pairs
+touching an unscoped memory.
 
 Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
 edge — today that means a Tagged edge promoted from a free-string tag,
@@ -65,6 +65,7 @@ text.
 | `limit` | int | `20` | Maximum memories to return after re-ranking. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` hides them, which is what makes recall return current<br>knowledge rather than its history. |
 | `session_id` | str? | `null` | The calling agent session's id. Only logged, never changes the result;<br>see ``memory_get``. |
+| `all_repos` | bool | `False` | Seed the ``query`` from every repo and report every contradiction pair,<br>instead of scoping both to the detected repo — see instructions. |
 
 ## `memory_store`
 
@@ -88,6 +89,7 @@ so callers can link to it.
 | `symbol_refs` | list[str]? | `null` | Optional code-graph symbol ids (``<repo>#<path/to/file.py>::<Name>``,<br>from the witan-code tools' ``symbol_id`` field) this memory concerns,<br>e.g. the function a lesson is about. Stored as a soft reference. |
 | `confidence` | float? | `null` | Optional author/agent trust in this memory, 0.0–1.0. Feeds the search<br>re-rank; omitted memories use the configured default. |
 | `session_slug` | str? | `null` | The ``ws-`` handle returned by ``workflow_session_start``, recording<br>which session produced this memory. Pass it whenever you have one: the<br>protocol carries no session state, so against a deployed service this is<br>the only way the ``SessionProduced`` provenance edge can be created.<br>Omit it under a local stdio server, which finds the handle itself. |
+| `all_repos` | bool | `False` | Store the memory under no repo. Repo-scoped memory reads leave it<br>out; ``all_repos`` reads include it — see instructions. |
 
 ## `memory_get`
 
@@ -189,6 +191,7 @@ while the store holds fewer than 10,000 of them.
 | `repo` | str? | `null` | Repo scoping — see instructions. With no repo detected and none passed,<br>returns slim records (slug, kind, title, tags — no content) for unscoped<br>memories; ``memory_get`` a slug for its full content. |
 | `language` | str? | `null` | Optional filter by ``language`` (e.g. ``python``), case-insensitive;<br>applies to the full-content results, not the slim unscoped listing. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them, as ``memory_search`` and ``recall`` do. |
+| `all_repos` | bool | `False` | List every repo's memories, with full content, instead of the detected<br>repo's — see instructions. |
 
 ## `memory_search`
 
@@ -206,6 +209,7 @@ memory's ``content`` is cut, marked by ``content_truncated`` and
 | `repo` | str? | `null` | Repo scoping — see instructions. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``,<br>or ``agent_context``. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them. |
+| `all_repos` | bool | `False` | Search every repo instead of the detected one — see instructions. |
 
 ## `memory_link`
 
@@ -290,6 +294,7 @@ before it looks for pairs.
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Repo scoping — see instructions. A pair is included when EITHER memory<br>is in scope, since a contradiction across two repos concerns both. With<br>no repo detected and none passed, only pairs touching an unscoped memory<br>(``repo`` null) are returned. |
 | `include_superseded` | bool | `False` | When ``True``, keep pairs where either memory has been superseded, i.e.<br>the resolved ones. |
+| `all_repos` | bool | `False` | Report every pair, in any repo — see instructions. |
 
 ## `memory_symbols`
 

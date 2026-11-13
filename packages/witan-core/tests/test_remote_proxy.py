@@ -63,7 +63,7 @@ class _Proxy(RemoteMCPProxy):
         # of 41 tools in production.
         self._param_names = {
             "task_get": ["slug"],
-            "task_ready": ["repo"],
+            "task_ready": ["all_repos", "repo"],
             "task_create": ["description", "repo", "title"],
             "task_claim": ["branch", "repo", "slug"],
             # Declares `branch` with the OTHER meaning: a branch the caller is
@@ -175,9 +175,17 @@ def test_repo_none_dropped_when_resolver_returns_none():
     assert "repo" not in p._map_args("task_ready", (), {})
 
 
-def test_repo_empty_string_sentinel_is_preserved():
+def test_repo_not_injected_under_all_repos():
+    # `all_repos` asks for no repo, and the server refuses a repo beside it.
     p = _Proxy(repo="https://other/repo")
-    # "" (all repos) must NOT be replaced by detection.
+    assert "repo" not in p._map_args("task_ready", (), {"all_repos": True})
+    assert p._client_context("task_ready", {"all_repos": True})["repo"] is None
+
+
+def test_explicit_empty_repo_is_sent_as_given():
+    # Not replaced by detection: the server refuses it, naming `all_repos`,
+    # which tells an un-upgraded caller what to send instead.
+    p = _Proxy(repo="https://other/repo")
     assert p._map_args("task_ready", (), {"repo": ""})["repo"] == ""
 
 
@@ -266,7 +274,7 @@ def test_session_slug_dropped_when_no_active_session():
 
 def test_session_slug_not_added_to_tools_without_the_param():
     p = _Proxy(session="ws-abc")
-    assert "session_slug" not in p._map_args("task_ready", (), {"repo": ""})
+    assert "session_slug" not in p._map_args("task_ready", (), {"all_repos": True})
 
 
 def test_none_optionals_are_dropped():
