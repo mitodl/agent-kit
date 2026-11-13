@@ -32,6 +32,7 @@ from .output import dump_record, get_output_format
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
+    _overlap_lines,
     _pick_items,
     _prompt_memories,
     _run_prompt,
@@ -523,6 +524,8 @@ def task_claim_cmd(
             f"[green]Claimed[/green] [bold]{slug}[/bold] "
             f"(assignee={result.get('assignee')})"
         )
+        for line in _overlap_lines(result.get("overlaps") or []):
+            console.print(line, markup=False, emoji=False, highlight=False)
         return
     reason = result.get("held_by") or result.get("reason") or "unavailable"
     console.print(f"[yellow]Not claimed[/yellow] ({esc(reason)}).")
@@ -847,6 +850,7 @@ def task_run(
                     t,
                     claimed=claim,
                     memories=_prompt_memories(s, t["slug"], claims.get(t["slug"])),
+                    overlaps=claims.get(t["slug"], {}).get("overlaps"),
                 )
                 for t in claimable
             ],

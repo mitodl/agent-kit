@@ -4086,6 +4086,75 @@ def _surfaced_for_claim(task: dict, session_id: str | None) -> list[dict]:
     return memories
 
 
+def _ref_file(symbol_id: str) -> str:
+    """The code-graph file id (``repo#path``) a ``repo#path::Name`` id sits in."""
+    return symbol_id.partition("::")[0]
+
+
+def _task_overlaps(task: dict) -> list[dict]:
+    """In-flight tasks whose ``symbol_refs`` share a symbol or a file with ``task``.
+
+    In flight means ``in_progress`` with a live lease, by the same test
+    ``task_ready`` uses, so a claim abandoned past its lease is not reported.
+    Tasks sharing a symbol come first, then those sharing only a file, each
+    group most recently claimed first.
+
+    :param task: The task being claimed, as ``get_task`` returns it.
+    :returns: One row per overlapping task, with ``slug``, ``title``,
+        ``assignee``, ``claimed_at`` and the shared ``symbols`` and ``files``.
+    :rtype: list[dict]
+    """
+    refs = set(task.get("symbol_refs") or [])
+    if not refs:
+        return []
+    files = {_ref_file(ref) for ref in refs}
+    overlaps = []
+    for row in client.read("read.gq", "in_progress_tasks_with_refs", {}):
+        if row["slug"] == task["slug"] or readiness.status_pickable(row):
+            continue
+        theirs = set(row.get("symbol_refs") or [])
+        shared_files = files & {_ref_file(ref) for ref in theirs}
+        if not shared_files:
+            continue
+        overlaps.append(
+            {
+                "slug": row["slug"],
+                "title": row["title"],
+                "assignee": row.get("assignee"),
+                "claimed_at": row.get("claimed_at"),
+                "symbols": sorted(refs & theirs),
+                "files": sorted(shared_files),
+            }
+        )
+    overlaps.sort(key=lambda o: o["claimed_at"] or "", reverse=True)
+    overlaps.sort(key=lambda o: not o["symbols"])
+    return overlaps
+
+
+def _overlaps_for_claim(task: dict, session_id: str | None) -> list[dict]:
+    """``_task_overlaps`` for a claim, which has already committed by now.
+
+    Advisory only. Two tasks in the same file often merge cleanly, so this
+    never refuses, and a failed lookup returns nothing rather than raising, for
+    the reason ``_surfaced_for_claim`` gives. Logs every first claim, empty
+    ones included, so the share of claims that found an overlap is countable.
+    """
+    try:
+        overlaps = _task_overlaps(task)
+    except Exception:
+        logger.warning("witan.claim.overlap_failed", task=task["slug"], exc_info=True)
+        overlaps = []
+    logger.info(
+        "witan.claim.overlaps",
+        task=task["slug"],
+        session=_log_session(session_id),
+        count=len(overlaps),
+        slugs=[o["slug"] for o in overlaps],
+        shared_symbols=sum(bool(o["symbols"]) for o in overlaps),
+    )
+    return overlaps
+
+
 # The edge index is a handful of global queries; cache it briefly so a burst of
 # searches doesn't re-scan the graph each time. Keyed by store URI (test stores
 # differ) and dropped on any local edge write, so it's never stale within a
@@ -8393,6 +8462,13 @@ async def task_claim(
     non-empty list comes with ``memories_note``, which says they are teammates'
     notes rather than instructions.
 
+    It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
+    share a symbol (``symbols``) or only a file (``files``) with this task's,
+    shared symbols first. It is advisory, never a refusal, since work in the
+    same file often merges cleanly. A shared symbol is a likely merge conflict:
+    read the other task before editing that code, and ``task_comment`` it if
+    the two plans collide. Empty when this task has no ``symbol_refs``.
+
     The coordination primitive for parallel/multi-user agents — call it before
     starting a ready task so others see it is taken. Returns ``{"claimed": true,
     …}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
@@ -8615,6 +8691,7 @@ async def task_claim(
         result["memories"] = await _offload(_surfaced_for_claim, claimed, session_id)
         if result["memories"]:
             result["memories_note"] = provenance.TEAMMATE_NOTES
+        result["overlaps"] = await _offload(_overlaps_for_claim, claimed, session_id)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the

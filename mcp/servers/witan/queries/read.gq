@@ -1258,6 +1258,19 @@ query tasks_with_refs() {
     limit 200
 }
 
+// Every `in_progress` Task, for the overlap advisory on a first claim. The
+// lease fields are here because a lapsed claim is not in flight. No `limit`:
+// a live task this read leaves out is an overlap the advisory cannot report.
+query in_progress_tasks_with_refs() {
+    match {
+        $t: Task { status: "in_progress" }
+    }
+    return {
+        $t.slug, $t.title, $t.status, $t.assignee, $t.symbol_refs,
+        $t.claimed_at, $t.updated_at
+    }
+}
+
 // ── Code Branches ───────────────────────────────────────────────────
 
 query get_code_branch($slug: String) {

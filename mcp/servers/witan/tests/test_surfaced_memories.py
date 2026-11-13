@@ -18,22 +18,6 @@ def no_floor(server, monkeypatch):
     )
 
 
-@pytest.fixture
-def logged(server, monkeypatch):
-    """The fields of each ``info`` line the server logs, by event name."""
-    events: dict[str, list[dict]] = {}
-
-    class Recorder:
-        def info(self, event, **fields):
-            events.setdefault(event, []).append(fields)
-
-        def __getattr__(self, _name):
-            return lambda *_args, **_fields: None
-
-    monkeypatch.setattr(server._module, "logger", Recorder())
-    return events
-
-
 def _task(server, title="frobnicate the widget cache"):
     return server.task_create(title=title, description="d")
 

@@ -137,7 +137,39 @@ def _memory_lines(memories: list[dict]) -> list[str]:
     return lines
 
 
-def _run_prompt(t: dict, *, claimed: bool, memories: list[dict] | None = None) -> str:
+def _overlap_lines(overlaps: list[dict]) -> list[str]:
+    """The in-flight tasks a claim found on the same code, or nothing.
+
+    Each title is collapsed to one line for the reason ``_memory_lines`` gives:
+    anyone can write one, and it reaches the claimer's terminal or prompt.
+    """
+    if not overlaps:
+        return []
+    lines = [
+        "",
+        (
+            "In-flight tasks on the same code. Read each before editing shared "
+            "code, and task_comment it if the plans collide:"
+        ),
+    ]
+    for o in overlaps:
+        title = " ".join(o["title"].split())
+        shared = (
+            f"shared symbols: {', '.join(o['symbols'])}"
+            if o["symbols"]
+            else f"shared files: {', '.join(o['files'])}"
+        )
+        lines += [f"  {o['slug']} ({o['assignee']}): {title}", f"    {shared}"]
+    return lines
+
+
+def _run_prompt(
+    t: dict,
+    *,
+    claimed: bool,
+    memories: list[dict] | None = None,
+    overlaps: list[dict] | None = None,
+) -> str:
     lines = [
         "Work on this task from the witan task graph and see it through to completion.",
         "",
@@ -183,6 +215,7 @@ def _run_prompt(t: dict, *, claimed: bool, memories: list[dict] | None = None) -
         "Description:",
         t.get("description") or "(none)",
         *_memory_lines(memories or []),
+        *_overlap_lines(overlaps or []),
         "",
         held,
         (
@@ -242,7 +275,12 @@ def _run_task_slug(
             raise SystemExit(1)
         console.print(f"[cyan]Claimed {slug} (assignee={res.get('assignee')}).[/cyan]")
 
-    prompt = _run_prompt(t, claimed=claim, memories=_prompt_memories(s, slug, res))
+    prompt = _run_prompt(
+        t,
+        claimed=claim,
+        memories=_prompt_memories(s, slug, res),
+        overlaps=(res or {}).get("overlaps"),
+    )
     _launch_agent(cfg, resolved_agent, resolved_model, prompt, dry_run)
 
 
