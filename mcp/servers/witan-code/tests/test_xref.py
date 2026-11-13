@@ -82,6 +82,23 @@ def test_two_equally_near_modules_of_one_name_resolve_to_neither():
     )
 
 
+@pytest.mark.parametrize("source", ["from pkg.b import f\n", "from .b import f\n"])
+def test_a_sibling_stub_does_not_hide_its_implementation(source):
+    """`b.pyi` next to `b.py` is the same module, not a second candidate."""
+    files = PY_FILES | {"src/pkg/b.pyi", "src/pkg/__init__.pyi"}
+    assert _resolve(files, "src/pkg/a.py", source, "f") == ("src/pkg/b.py", "f")
+    assert _resolve(files, "main.py", "from pkg import name\n", "name") == (
+        "src/pkg/__init__.py",
+        "name",
+    )
+
+
+def test_a_stub_alone_is_the_module():
+    files = {"src/pkg/__init__.py", "src/pkg/b.pyi"}
+    got = _resolve(files, "main.py", "from pkg.b import f\n", "f")
+    assert got == ("src/pkg/b.pyi", "f")
+
+
 @pytest.mark.parametrize(
     ("source", "call", "expected"),
     [

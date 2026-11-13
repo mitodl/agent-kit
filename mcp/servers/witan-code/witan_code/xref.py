@@ -153,12 +153,18 @@ class ModuleIndex:
         ``pkg/sub/mod`` and not as ``sub/mod``, which would let ``import sub``
         or a stdlib name like ``import logging`` match a module deep inside a
         package.
+
+        A ``.pyi`` stub next to its ``.py`` is the same module, so only the
+        implementation registers, as relative imports already prefer it.
+        Registering both would make every absolute import of it a tie.
         """
         if self._py_roots is None:
             roots: dict[str, list[str]] = {}
             for path in sorted(self._paths):
                 stem, suffix = posixpath.splitext(path)
                 if suffix not in _PY_SUFFIXES:
+                    continue
+                if suffix == ".pyi" and f"{stem}.py" in self._paths:
                     continue
                 parts = stem.split("/")
                 if parts[-1] == "__init__":
