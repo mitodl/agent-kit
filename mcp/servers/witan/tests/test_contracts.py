@@ -77,9 +77,9 @@ def code(monkeypatch):
 
     calls: list[tuple] = []
 
-    async def code_find_definition(name, repo=None):
-        calls.append(("definition", name, repo))
-        return [{"symbol_id": f"{repo}#a.py::{name}"}]
+    async def code_find_definition(symbol_id):
+        calls.append(("definition", symbol_id))
+        return [{"symbol_id": symbol_id}]
 
     async def code_interface_providers(kind, key):
         calls.append(("providers", kind, key))
@@ -129,7 +129,7 @@ def test_memory_symbols_await_the_definition(server, code):
 
     assert symbol == {
         "symbol_ref": ref,
-        "definition": [{"symbol_id": "https://github.com/test/repo#a.py::Course"}],
+        "definition": [{"symbol_id": ref}],
     }
 
 

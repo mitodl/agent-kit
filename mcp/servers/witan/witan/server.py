@@ -9271,13 +9271,12 @@ def _memory_symbols(node: dict | None) -> list[dict]:
     symbols: list[dict] = []
     for ref in node.get("symbol_refs") or []:
         entry = {"symbol_ref": ref}
-        # Only a well-formed symbol id (repo#path::Name) is worth resolving;
-        # skip the cross-store call for anything without the :: delimiter.
-        if code is not None and "::" in ref:
+        # Only a well-formed symbol id (repo#path::Name) is worth resolving.
+        # Look it up by id: a name lookup is capped at 50 rows, so a name that
+        # repeats across files (every `<module>`) could miss the ref's own.
+        if code is not None and "#" in ref and "::" in ref:
             try:
-                name = ref.split("::")[-1]
-                repo = ref.split("#", 1)[0] if "#" in ref else None
-                defs = _code_result(code.code_find_definition(name, repo))
+                defs = _code_result(code.code_find_definition(symbol_id=ref))
                 if defs:
                     entry["definition"] = defs
             except Exception:  # best-effort enrichment

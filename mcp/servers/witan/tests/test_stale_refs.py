@@ -283,6 +283,18 @@ def test_recall_memory_symbols_await_an_async_definition_lookup(server, code):
 
 
 @requires_omnigraph
+def test_recall_memory_symbols_find_a_name_that_repeats_past_the_cap(server, code):
+    modules = {f"{INDEXED}#pkg/m{i:02}.py::<module>" for i in range(3)}
+    target = f"{INDEXED}#pkg/m02.py::<module>"
+    code(_fake_code(modules, {INDEXED: 3}, name_cap=1))
+    slug = _lesson(server, "module", [target])
+
+    (symbol,) = server.recall(memory=slug, hops=0)["memory"]["symbols"]
+
+    assert symbol["definition"] == [{"symbol_id": target, "repo": INDEXED}]
+
+
+@requires_omnigraph
 def test_stale_refs_cli_lists_the_flagged_refs(server, code, monkeypatch, capsys):
     from witan.cli import _common
     from witan.cli.memory import stale_refs
