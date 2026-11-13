@@ -201,10 +201,13 @@ function staleTitle(entry: StaleMemory): string {
  *
  * Without a report no row is marked, so the note says the check is pending or
  * failed rather than letting an unmarked list read as "every ref resolves".
+ * A failed re-check keeps the last report (`LiveRead` retains `data` across a
+ * failure), so the note says the marks are from then rather than now.
  */
 function staleNote(
 	stale: Snapshot<StaleRefsReport> | null,
 	route: Route,
+	now: number,
 ): TemplateResult | typeof nothing {
 	const report = stale?.data ?? null;
 	if (report === null) {
@@ -220,15 +223,25 @@ function staleNote(
           </p>`
 			: nothing;
 	}
+	const refreshFailed = stale?.error
+		? html`<p class="stale-summary stale-refresh-failed" title=${stale.error.message}>
+        Could not re-check symbol refs against the code graph; the marks below
+        are from the last check that worked${
+					stale.loadedAt === null
+						? nothing
+						: html`, ${ago(new Date(stale.loadedAt), now)}`
+				}.
+      </p>`
+		: nothing;
 	const stales = report.memories.filter((m) => m.status === "stale").length;
 	const unknown = report.memories.filter((m) => m.status === "unknown").length;
 	if (stales === 0 && unknown === 0) {
-		return nothing;
+		return refreshFailed;
 	}
 	// The report names the scope it checked, which a topic or a recall widens
 	// past the repo filter.
 	const scope = report.repo ? repoLabel(report.repo) : "any repo";
-	return html`<p class="stale-summary">
+	return html`${refreshFailed}<p class="stale-summary">
     ${
 			stales
 				? html`${stales} ${stales === 1 ? "memory" : "memories"} in ${scope}
@@ -315,7 +328,7 @@ export function memoryView(
       ${page.mode === "browse" ? inbox(page.inbox, route, now) : nothing}
       ${page.mode === "recall" ? recallPairs(page.pairs, page.memories, route) : nothing}
       ${page.mode === "topic" ? topicHeading(page.topic, route) : nothing}
-      ${staleNote(stale, route)}
+      ${staleNote(stale, route, now)}
       ${staleOutsideList(page, route, stale?.data ?? null)}
       ${limitNotes(page, matching.length)}
       ${

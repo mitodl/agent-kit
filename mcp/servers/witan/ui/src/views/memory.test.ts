@@ -563,6 +563,44 @@ describe("stale symbol refs", () => {
 		);
 	});
 
+	it("keeps the last marks on a failed re-check, and says they are not current", () => {
+		const now = Date.now();
+		render(
+			memoryView(
+				browse,
+				{ ...route, stale: true },
+				vi.fn(),
+				{
+					data: report,
+					error: new Error("code graph unreachable"),
+					loadedAt: now - 5 * 60_000,
+					loading: false,
+				},
+				now,
+			),
+			root,
+		);
+
+		const warning = root.querySelector(".stale-refresh-failed");
+		expect(warning?.textContent).toMatch(/Could not re-check symbol refs/);
+		expect(warning?.textContent).toContain("5m ago");
+		expect(warning?.getAttribute("title")).toBe("code graph unreachable");
+		const rows = root.querySelectorAll("tbody tr");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.querySelector(".badge.stale-refs")).not.toBeNull();
+	});
+
+	it("says a failed re-check of a clean report is not current either", () => {
+		draw(browse, route, vi.fn(), {
+			data: { ...report, memories: [] },
+			error: new Error("code graph unreachable"),
+			loadedAt: 1,
+			loading: false,
+		});
+
+		expect(root.querySelector(".stale-refresh-failed")).not.toBeNull();
+	});
+
 	it("draws no note when every checked ref resolves", () => {
 		draw(
 			browse,

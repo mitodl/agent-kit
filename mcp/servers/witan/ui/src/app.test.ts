@@ -1179,6 +1179,28 @@ describe("App", () => {
 		expect(root.querySelector(".badge.stale-refs")).toBeNull();
 	});
 
+	it("keeps the marks when a re-check fails, and says they are not current", async () => {
+		await open("#memory");
+		await vi.waitFor(() =>
+			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
+		);
+		await vi.waitFor(() =>
+			expect(
+				root.querySelector<HTMLButtonElement>(".read-status button")?.disabled,
+			).toBe(false),
+		);
+		vi.mocked(mcp.memoryStaleRefs).mockRejectedValue(
+			new Error("code graph down"),
+		);
+
+		root.querySelector<HTMLButtonElement>(".read-status button")?.click();
+
+		await vi.waitFor(() =>
+			expect(root.querySelector(".stale-refresh-failed")).not.toBeNull(),
+		);
+		expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull();
+	});
+
 	it("re-checks symbol refs on the memory view's Refresh", async () => {
 		await open("#memory");
 		await vi.waitFor(() =>

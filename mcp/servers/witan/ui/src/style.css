@@ -1461,3 +1461,7 @@ ul.bridge-contracts li {
 .wv-bar.dim {
 	opacity: 0.3;
 }
+
+.stale-summary.stale-refresh-failed {
+	color: var(--warn);
+}
