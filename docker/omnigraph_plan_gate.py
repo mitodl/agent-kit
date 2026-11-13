@@ -15,6 +15,11 @@ beside the running server and needs neither the unlock Lease nor the pod
 check. It never unlocks and never applies. The entrypoint's `Cluster` picks
 the 0.13 or 0.14 argument shape.
 
+A schema change refused only because graphs in
+OMNIGRAPH_BRANCH_DROP_ALLOWLIST have branch views passes, because the boot
+drops those views before its apply. The same refusal on any other graph still
+fails the gate (see the entrypoint's ``views_to_drop``).
+
 The entrypoint still runs the same check on every boot. The gate only moves
 the first failure earlier: the `cluster.yaml` ConfigMap is updated before this
 Job runs and a failed Job does not roll it back.
@@ -41,10 +46,15 @@ from omnigraph_server_entrypoint import (
 def main(env: dict[str, str]) -> int:
     config_dir = Path(env.get("OMNIGRAPH_CLUSTER_DIR", DEFAULT_CLUSTER_DIR))
     try:
-        checked_plan(config_dir, env, NoPeers(may_unlock=False))
+        _, views = checked_plan(config_dir, env, NoPeers(may_unlock=False))
     except BootRefused as refusal:
         print(f"omnigraph-server: plan refused: {refusal}", file=sys.stderr)
         return 1
+    for graph, branches in views.items():
+        log(
+            f"{graph} has {len(branches)} branch views; the next boot drops "
+            "them so its schema change can apply"
+        )
     log(f"the plan for {config_dir} can be applied")
     return 0
 
