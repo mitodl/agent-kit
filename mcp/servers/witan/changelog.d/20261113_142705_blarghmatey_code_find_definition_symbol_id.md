@@ -1,0 +1,3 @@
+### Fixed
+
+- `memory_stale_refs` (`witan memory stale-refs`) decides liveness with witan-code's exact-id lookup, `code_find_definition(symbol_id=...)`, instead of reading the ref's file and falling back to a name lookup capped at 50 rows. The file read resolves a relative path against the cwd when a same-named file exists there, so a live symbol whose name also repeated past the cap read as missing. The name lookup now only supplies `candidates` for a missing ref. This needs a witan-code with that parameter; against an older one every indexed ref reports `unknown` ("definition lookup failed") rather than a wrong verdict.
