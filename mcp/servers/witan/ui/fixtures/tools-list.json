@@ -131,6 +131,14 @@
     },
     "wrapped": true
   },
+  "memory_stale_refs": {
+    "optional": false,
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "wrapped": false
+  },
   "recall": {
     "optional": false,
     "output_schema": {

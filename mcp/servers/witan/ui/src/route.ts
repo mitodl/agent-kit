@@ -76,6 +76,11 @@ export interface Route {
 	plain: boolean;
 	/** Whether superseded memories are shown. Off, as the tools default. */
 	superseded: boolean;
+	/**
+	 * Only memories with a symbol ref that no longer resolves. Applied in the
+	 * browser over `memory_stale_refs`, so not a tool argument.
+	 */
+	stale: boolean;
 	/** A `tp-` slug when the memory view is showing one topic, else `null`. */
 	topic: string | null;
 	facets: Record<MemoryFacet, string | null>;
@@ -137,6 +142,7 @@ export const DEFAULT_ROUTE: Route = {
 	kind: null,
 	plain: false,
 	superseded: false,
+	stale: false,
 	topic: null,
 	facets: {
 		language: null,
@@ -191,6 +197,7 @@ export function parseRoute(hash: string): Route {
 		kind: kind ?? null,
 		plain: params.get("plain") === "1",
 		superseded: params.get("superseded") === "1",
+		stale: params.get("stale") === "1",
 		topic: params.get("topic") || null,
 		facets: Object.fromEntries(
 			MEMORY_FACETS.map((facet) => [facet, params.get(facet) || null]),
@@ -268,6 +275,9 @@ export function formatRoute(route: Route): string {
 	}
 	if (route.superseded) {
 		params.set("superseded", "1");
+	}
+	if (route.stale) {
+		params.set("stale", "1");
 	}
 	if (route.topic) {
 		params.set("topic", route.topic);

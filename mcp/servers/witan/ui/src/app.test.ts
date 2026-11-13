@@ -17,6 +17,9 @@ import memoryGetFixture from "../fixtures/memory_get.json" with {
 import memoryListFixture from "../fixtures/memory_list.json" with {
 	type: "json",
 };
+import staleRefsFixture from "../fixtures/memory_stale_refs.json" with {
+	type: "json",
+};
 import recallFixture from "../fixtures/recall.json" with { type: "json" };
 import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 	type: "json",
@@ -52,6 +55,7 @@ import type {
 	ProjectStatus,
 	RecallResult,
 	RepoDependencies,
+	StaleRefsReport,
 	TaskDetail,
 	TaskRow,
 	TaskSearchRow,
@@ -86,6 +90,7 @@ vi.mock("./mcp.js", async (importOriginal) => ({
 	memoryList: vi.fn(),
 	memoryNeighbors: vi.fn(),
 	memorySearch: vi.fn(),
+	memoryStaleRefs: vi.fn(),
 	recall: vi.fn(),
 	topicGet: vi.fn(),
 	codeGraphAvailable: vi.fn(),
@@ -204,6 +209,9 @@ beforeEach(() => {
 	);
 	vi.mocked(mcp.memorySearch).mockResolvedValue(
 		unwrap<Memory[]>("memory_list", memoryListFixture),
+	);
+	vi.mocked(mcp.memoryStaleRefs).mockResolvedValue(
+		unwrap<StaleRefsReport>("memory_stale_refs", staleRefsFixture),
 	);
 	vi.mocked(mcp.recall).mockResolvedValue(
 		unwrap<RecallResult>("recall", recallFixture),
@@ -1105,6 +1113,131 @@ describe("App", () => {
 			),
 		);
 		expect(root.querySelector('[role="alert"]')).toBeNull();
+	});
+
+	it("checks symbol refs once for the view's repo, and marks the stale memory", async () => {
+		const repo = "https://github.com/mitodl/agent-kit";
+		await open(`#memory?repo=${encodeURIComponent(repo)}`);
+		await vi.waitFor(() =>
+			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
+		);
+
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo });
+		const marked = [...root.querySelectorAll("tbody tr")]
+			.filter((row) => row.querySelector(".badge.stale-refs"))
+			.map((row) => row.querySelector("a")?.textContent?.trim());
+		expect(marked).toEqual(["Service.run retries twice before it raises"]);
+
+		// A kind changes the list, not the refs in scope.
+		window.location.hash = `#memory?repo=${encodeURIComponent(repo)}&kind=pattern`;
+		await vi.waitFor(() =>
+			expect(mcp.memoryList).toHaveBeenCalledWith(
+				expect.objectContaining({ kind: "pattern" }),
+			),
+		);
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledTimes(1);
+	});
+
+	it("checks every repo's refs on a topic, which spans repos", async () => {
+		await open(
+			"#memory?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit&topic=tp-topic-witan-ui",
+		);
+		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
+
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo: "" });
+	});
+
+	it("checks every repo's refs on a recall query, whose expansion spans repos", async () => {
+		const repo = encodeURIComponent("https://github.com/mitodl/agent-kit");
+		await open(`#memory?repo=${repo}&q=retries`);
+		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
+
+		expect(mcp.recall).toHaveBeenCalledWith(
+			expect.objectContaining({ repo: "https://github.com/mitodl/agent-kit" }),
+		);
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo: "" });
+	});
+
+	it("keeps a plain search's check in the repo filter, as the search is", async () => {
+		const repo = "https://github.com/mitodl/agent-kit";
+		await open(`#memory?repo=${encodeURIComponent(repo)}&q=retries&plain=1`);
+		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
+
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo });
+	});
+
+	it("keeps the list when the stale check fails, and says nothing is marked", async () => {
+		vi.mocked(mcp.memoryStaleRefs).mockRejectedValue(
+			new Error("code graph down"),
+		);
+		await open("#memory");
+		await vi.waitFor(() =>
+			expect(text()).toContain("Could not check symbol refs"),
+		);
+
+		expect(root.querySelector("table.memories")).not.toBeNull();
+		expect(root.querySelector(".badge.stale-refs")).toBeNull();
+	});
+
+	it("keeps the marks when a re-check fails, and says they are not current", async () => {
+		await open("#memory");
+		await vi.waitFor(() =>
+			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
+		);
+		await vi.waitFor(() =>
+			expect(
+				root.querySelector<HTMLButtonElement>(".read-status button")?.disabled,
+			).toBe(false),
+		);
+		vi.mocked(mcp.memoryStaleRefs).mockRejectedValue(
+			new Error("code graph down"),
+		);
+
+		root.querySelector<HTMLButtonElement>(".read-status button")?.click();
+
+		await vi.waitFor(() =>
+			expect(root.querySelector(".stale-refresh-failed")).not.toBeNull(),
+		);
+		expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull();
+	});
+
+	it("says superseded memories go unchecked when the list shows them", async () => {
+		await open("#memory?superseded=1");
+		await vi.waitFor(() =>
+			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
+		);
+
+		expect(mcp.memoryList).toHaveBeenCalledWith(
+			expect.objectContaining({ include_superseded: true }),
+		);
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+	});
+
+	it("re-checks symbol refs on the memory view's Refresh", async () => {
+		await open("#memory");
+		await vi.waitFor(() =>
+			expect(mcp.memoryStaleRefs).toHaveBeenCalledTimes(1),
+		);
+		await vi.waitFor(() =>
+			expect(
+				root.querySelector<HTMLButtonElement>(".read-status button")?.disabled,
+			).toBe(false),
+		);
+
+		root.querySelector<HTMLButtonElement>(".read-status button")?.click();
+
+		await vi.waitFor(() =>
+			expect(mcp.memoryStaleRefs).toHaveBeenCalledTimes(2),
+		);
+	});
+
+	it("does not check symbol refs behind another tab", async () => {
+		await open("#board");
+		await vi.waitFor(() => expect(mcp.taskReady).toHaveBeenCalled());
+
+		expect(mcp.memoryStaleRefs).not.toHaveBeenCalled();
 	});
 
 	it("does not re-read the memory list when a memory is opened beside it", async () => {

@@ -11,8 +11,10 @@
 # 11. Witan UI read transport: the UI is an MCP client, same-origin, in both modes
 
 - Status: Accepted, amended 2026-09-22 (`memory_contradictions` joins the
-  bound set), 2026-09-23 (three optional code-graph reads) and 2026-11-10 (the
-  UI's token is limited to the bound set)
+  bound set), 2026-09-23 (three optional code-graph reads), 2026-11-10 (the
+  UI's token is limited to the bound set), 2026-11-12 (`memory_neighbors` and
+  `topic_get` fold into `recall`) and 2026-11-13 (`memory_stale_refs` joins
+  the bound set)
 - Date: 2026-09-17
 - Deciders: witan platform owners
 - Tracking: task `tk-decide-the-witan-ui-read-transport-cli-subproces-3b691b`,
@@ -188,9 +190,10 @@ layer binds exactly these and nothing else:
 - tasks: `task_ready`, `task_get`, `task_list`, `task_search`
 - projects and sessions: `workflow_project_get`, `workflow_project_status`,
   `workflow_project_list`, `workflow_session_list`
-- memory: `recall`, `memory_get`, `memory_list`, `memory_search`, and
-  `memory_contradictions` (added by the 2026-09-22 amendment below;
-  `memory_neighbors` and `topic_get` left with the 2026-11-12 amendment)
+- memory: `recall`, `memory_get`, `memory_list`, `memory_search`,
+  `memory_contradictions` (added by the 2026-09-22 amendment below) and
+  `memory_stale_refs` (added by the 2026-11-13 amendment below);
+  `memory_neighbors` and `topic_get` left with the 2026-11-12 amendment
 - code graph, _optional_: `code_repo_dependencies`,
   `code_interface_providers`, `code_interface_consumers` (added by the
   2026-09-23 amendment below)
@@ -460,6 +463,34 @@ through `recall`, which was already bound:
   every memory tagged to the topic (up to the limit), and its `topic` section
   is the Topic node or `null`. The rows are full memories rather than
   `topic_get`'s slim projection, ranked rather than in store order.
+
+`witan.ui_access.READ_TOOLS` and the fixtures moved with the set, as the
+2026-11-10 amendment requires.
+
+## Amendment (2026-11-13): `memory_stale_refs` joins the bound set
+
+`memory_stale_refs` reports the memories whose `symbol_refs` no longer resolve
+in the code graph, each ref `live`, `missing` (its repo is indexed and the
+symbol is not) or `unknown` (it could not be checked). The memory view marks
+the memories with a missing ref and can narrow to them (task
+`tk-show-stale-symbol-refs-in-the-web-ui-s-memory-vi-2774a1`), so the tool
+joins §3's memory reads. It is read-only and already in the other read
+allowlists (the CLI's local dispatch and the remote proxy). It is not one of
+the tools `witan.cli_only` hides from `tools/list`, so the page sees it like
+any other bound read.
+
+It is a witan tool that reads witan-code, which is what the 2026-09-23
+amendment's rules are about. They hold without a change, because the page
+never calls a `code_*` tool for this. The server calls `code_indexed_repos`,
+then `code_symbols_in_file` and `code_find_definition` in-process with no
+`Context`, and only for a ref whose repo is indexed, so `repo` is always
+explicit. With no `Context`, `witan_core.elicit` returns each prompt's
+default (`confirm` returns `False`), so neither the repo prompts nor
+`_confirm_and_reindex` can turn the read into an index.
+
+It is required, not optional. Without witan-code the tool is still registered
+and reports every ref `unknown`, and the page reads `unknown` as "could not
+check", never as stale: a repo nobody indexed is not evidence the code is gone.
 
 `witan.ui_access.READ_TOOLS` and the fixtures moved with the set, as the
 2026-11-10 amendment requires.

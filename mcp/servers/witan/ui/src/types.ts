@@ -355,6 +355,42 @@ export interface MemoryNeighbors {
 	symbols: MemorySymbol[];
 }
 
+/**
+ * One `symbol_refs` entry checked against the code graph. `missing` means its
+ * repo is indexed and the symbol is not; `unknown` means it could not be
+ * checked (an unindexed repo, no witan-code, a malformed id), which is not
+ * evidence the code is gone.
+ */
+export interface ResolvedSymbolRef {
+	symbol_ref: string;
+	status: "live" | "missing" | "unknown";
+	/** Why an `unknown` ref could not be checked. */
+	reason?: string;
+	/** On a `missing` ref: same-named indexed symbols, the likely move targets. */
+	candidates?: string[];
+}
+
+/** A memory with at least one ref that is not live. */
+export interface StaleMemory {
+	slug: string;
+	kind: MemoryKind;
+	title: string;
+	repo: string | null;
+	/** `stale` when any ref is missing, else `unknown`. */
+	status: "stale" | "unknown";
+	refs: ResolvedSymbolRef[];
+}
+
+/** `memory_stale_refs`: only memories with a ref that is not live are listed. */
+export interface StaleRefsReport {
+	/** The repo checked, `null` for every repo. */
+	repo: string | null;
+	/** How many memories carry refs at all. */
+	checked: number;
+	counts: Record<ResolvedSymbolRef["status"], number>;
+	memories: StaleMemory[];
+}
+
 export interface Topic {
 	slug: string;
 	name: string;
@@ -792,6 +828,34 @@ export function isMemoryContradiction(
 		a: isContradictionEndpoint,
 		b: isContradictionEndpoint,
 		edge: isEdgeMeta,
+	});
+}
+
+function isResolvedSymbolRef(value: unknown): value is ResolvedSymbolRef {
+	return matches(
+		value,
+		{ symbol_ref: str, status: oneOf("live", "missing", "unknown") },
+		{ reason: str, candidates: arrayOf(str) },
+	);
+}
+
+function isStaleMemory(value: unknown): value is StaleMemory {
+	return matches(value, {
+		slug: str,
+		kind: memoryKind,
+		title: str,
+		repo: nullable(str),
+		status: oneOf("stale", "unknown"),
+		refs: arrayOf(isResolvedSymbolRef),
+	});
+}
+
+export function isStaleRefsReport(value: unknown): value is StaleRefsReport {
+	return matches(value, {
+		repo: nullable(str),
+		checked: num,
+		counts: (v) => matches(v, { live: num, missing: num, unknown: num }),
+		memories: arrayOf(isStaleMemory),
 	});
 }
 
