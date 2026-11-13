@@ -39,7 +39,10 @@ dependencies = [
   # >=0.12: `witan setup --agent pi` only stops warning that pi-mcp-adapter
   # is missing when Pi's built-in MCP will load the entry from 0.12.0. Older
   # resolutions import and run, and print the false warning.
-  "agent-config-kit>=0.12,<1",
+  # >=0.15: witan/cli/memory.py and witan/memory_import.py import
+  # `MemoryEntry` and read `AgentPlatform.memory`, both added in 0.15.0, at
+  # module scope, so an older resolution fails `witan` at import.
+  "agent-config-kit>=0.15,<1",
   # >=0.13: witan/graph.py imports witan_core.omnigraph.StoreUnavailable at
   # module scope, which 0.12 does not export. A looser floor lets an external
   # install resolve a witan-core the server cannot even import — the failure

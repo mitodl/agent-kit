@@ -1,4 +1,9 @@
-"""``witan memory import``: Claude Code memory files into the shared graph."""
+"""``witan memory import``: agents' on-disk memory into the shared graph.
+
+Reading each agent's store is agent-config-kit's, and tested there
+(packages/agent-config-kit/tests/test_memory.py). These cover the witan side:
+resolving a project to a repo, and the command against a real graph.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from agent_config_kit import MemoryEntry
+from agent_config_kit.adapters import claude, codex, copilot
 from witan import memory_import as local
 from witan.cli import _common
 from witan.cli import output as output_module
@@ -41,7 +48,8 @@ def _memory(
     description: str = "a one-line summary",
     body: str = "the body of the memory",
 ) -> Path:
-    folder = projects / local.encode(str(project_path)) / "memory"
+    """A Claude Code auto-memory file."""
+    folder = projects / claude.encode_project(str(project_path)) / "memory"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{stem}.md"
     path.write_text(
@@ -51,12 +59,20 @@ def _memory(
     return path
 
 
+def _resolve(path: Path) -> local.Resolution:
+    """Resolve the Claude Code project directory ``path`` would be stored under."""
+    project = claude.encode_project(str(path))
+    return local.resolve(
+        MemoryEntry(path, "m", project, claude.project_candidates(project))
+    )
+
+
 # ── project directory → repo ─────────────────────────────────────────────────
 
 
 def test_a_checkout_resolves_to_its_origin(tmp_path):
     checkout = _checkout(tmp_path / "code" / "agent-kit.worktrees" / "wt_1")
-    resolved = local.resolve_project(local.encode(str(checkout)))
+    resolved = _resolve(checkout)
     assert resolved.repo == REPO
     assert resolved.checkout == checkout
 
@@ -65,7 +81,7 @@ def test_a_name_two_checkouts_encode_to_is_ambiguous(tmp_path):
     """``x-y`` and ``x.y`` both encode to ``x-y``; picking one would be a guess."""
     _checkout(tmp_path / "x-y", REPO)
     _checkout(tmp_path / "x.y", OTHER_REPO)
-    resolved = local.resolve_project(local.encode(str(tmp_path / "x-y")))
+    resolved = _resolve(tmp_path / "x-y")
     assert resolved.repo is None
     assert resolved.reason.startswith("ambiguous")
 
@@ -73,7 +89,7 @@ def test_a_name_two_checkouts_encode_to_is_ambiguous(tmp_path):
 def test_two_matches_on_one_repo_are_not_ambiguous(tmp_path):
     _checkout(tmp_path / "x-y", REPO)
     _checkout(tmp_path / "x.y", REPO)
-    assert local.resolve_project(local.encode(str(tmp_path / "x-y"))).repo == REPO
+    assert _resolve(tmp_path / "x-y").repo == REPO
 
 
 def test_a_directory_inside_a_checkout_does_not_borrow_its_remote(tmp_path):
@@ -81,107 +97,44 @@ def test_a_directory_inside_a_checkout_does_not_borrow_its_remote(tmp_path):
     _checkout(tmp_path / "home")
     inner = tmp_path / "home" / "code"
     inner.mkdir()
-    resolved = local.resolve_project(local.encode(str(inner)))
+    resolved = _resolve(inner)
     assert resolved.repo is None
     assert "not a git checkout" in resolved.reason
 
 
 def test_a_checkout_without_a_remote_is_unresolved(tmp_path):
-    checkout = _checkout(tmp_path / "bare", remote=None)
-    assert local.resolve_project(local.encode(str(checkout))).repo is None
-
-
-@pytest.mark.parametrize(
-    ("project_dir", "start"),
-    [
-        ("-home-me-repo", (Path("/"), "home-me-repo")),
-        ("C--Users-me-repo", (Path("C:\\"), "Users-me-repo")),
-        ("relative-name", None),
-    ],
-)
-def test_path_root_reads_posix_and_windows_drive_names(project_dir, start):
-    assert local.path_root(project_dir) == start
+    assert _resolve(_checkout(tmp_path / "bare", remote=None)).repo is None
 
 
 def test_a_moved_directory_is_unresolved(tmp_path):
-    resolved = local.resolve_project(local.encode(str(tmp_path / "gone")))
+    resolved = _resolve(tmp_path / "gone")
     assert resolved.repo is None
-    assert resolved.reason == "no directory on disk matches this name"
-
-
-# ── parsing ──────────────────────────────────────────────────────────────────
-
-
-def test_parse_reads_nested_and_top_level_type(tmp_path):
-    nested = _memory(tmp_path, tmp_path / "p", "nested", type="feedback")
-    flat = tmp_path / "flat.md"
-    flat.write_text("---\nname: flat\ndescription: d\ntype: reference\n---\nbody\n")
-
-    assert local.parse(nested, "p").kind == "lesson"
-    assert local.parse(flat, "p").kind == "project_fact"
-    assert (
-        local.parse(nested, "p").content
-        == "a one-line summary\n\nthe body of the memory"
-    )
-
-
-def test_unquoted_frontmatter_that_is_not_yaml_still_parses(tmp_path):
-    """Claude Code writes frontmatter by hand; a value opening with a quoted
-    phrase is invalid YAML but its meaning is plain."""
-    path = tmp_path / "m.md"
-    path.write_text(
-        '---\nname: ship\ndescription: "Ship PR N" means ready, not merge\n'
-        "metadata:\n  type: feedback\n---\nbody\n"
-    )
-    parsed = local.parse(path, "p")
-    assert parsed.error is None
-    assert parsed.description == '"Ship PR N" means ready, not merge'
-    assert parsed.kind == "lesson"
-
-
-def test_a_hash_in_an_unquoted_value_is_not_a_comment(tmp_path):
-    """As YAML, `` #`` would start a comment and drop the rest of the value."""
-    path = tmp_path / "m.md"
-    path.write_text(
-        "---\nname: Ship PR #614 first\ndescription: 'quoted: kept whole'\n"
-        "type: project\n---\nb\n"
-    )
-    parsed = local.parse(path, "p")
-    assert parsed.name == "Ship PR #614 first"
-    assert parsed.description == "quoted: kept whole"
+    assert resolved.reason == "no directory on disk matches this project"
 
 
 @pytest.mark.parametrize(
-    ("text", "error"),
+    ("type", "kind"),
     [
-        ("# Feedback\n\nType: feedback\n", "no frontmatter"),
-        ("---\nname: x\nmetadata:\n  type: secret\n---\nb\n", "unknown type 'secret'"),
-        ("---\nname: x\n---\nb\n", "no type"),
-        ("---\ndescription: d\ntype: project\n---\nb\n", "frontmatter has no name"),
+        ("project", "project_fact"),
+        ("reference", "project_fact"),
+        ("feedback", "lesson"),
+        ("user", "agent_context"),
+        (None, None),
     ],
 )
-def test_unimportable_files_carry_a_reason(tmp_path, text, error):
-    path = tmp_path / "m.md"
-    path.write_text(text)
-    assert local.parse(path, "p").error == error
+def test_each_memory_type_maps_to_a_kind(type, kind):
+    assert local.kind(MemoryEntry(Path("m.md"), "m", "p", type=type)) == kind
 
 
-def test_a_block_scalar_value_keeps_its_continuation_lines(tmp_path):
-    path = tmp_path / "m.md"
-    path.write_text(
-        "---\nname: folded\ndescription: >-\n  first line\n  second line\n"
-        "metadata:\n  type: project\n---\nb\n"
-    )
-    parsed = local.parse(path, "p")
-    assert parsed.error is None
-    assert parsed.description == "first line second line"
-    assert parsed.kind == "project_fact"
+def test_an_agent_without_a_memory_store_says_so():
+    assert local.harness("pi").missing == "keeps no memory on disk"
 
 
-def test_discover_skips_the_index(tmp_path):
-    path = _memory(tmp_path, tmp_path / "p", "one")
-    (path.parent / local.INDEX_FILE).write_text("- [one](one.md)\n")
-    assert [m.path for m in local.discover(tmp_path)] == [path]
+def test_an_absent_or_empty_store_says_which(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    assert local.harness("codex").missing.startswith("no memory store at ")
+    (tmp_path / "codex" / "memories").mkdir(parents=True)
+    assert local.harness("codex").missing.startswith("no memories in ")
 
 
 @pytest.mark.parametrize(
@@ -231,10 +184,11 @@ def cli(server, monkeypatch, capsys):
 
 
 @pytest.fixture
-def projects(tmp_path):
-    """One resolvable project with a fact, a feedback and a user memory, and one
-    project whose directory no longer exists."""
-    root = tmp_path / "projects"
+def projects(tmp_path, monkeypatch):
+    """Claude Code's store: one resolvable project with a fact, a feedback and a
+    user memory, and one project whose directory no longer exists."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    root = tmp_path / "claude" / "projects"
     checkout = _checkout(tmp_path / "src" / "repo")
     _memory(root, checkout, "fact", name="Fact: the cache lives on disk")
     _memory(root, checkout, "feedback", type="feedback", body="do not do the thing")
@@ -249,13 +203,13 @@ def _titles(server) -> list[str]:
 
 @requires_omnigraph
 def test_dry_run_lists_candidates_and_writes_nothing(cli, projects, server):
-    rows = cli(source=projects)
+    rows = cli()
 
     assert {k: (r["kind"], r["repo"], r["status"]) for k, r in rows.items()} == {
         "test/repo/fact": ("project_fact", REPO, "new"),
         "test/repo/feedback": ("lesson", REPO, "new"),
         "test/repo/who": ("agent_context", REPO, "user"),
-        f"{local.encode(str(projects.parent / 'moved')).lstrip('-')}/lost": (
+        f"{claude.encode_project(str(projects.parent.parent / 'moved')).strip('-')}/lost": (
             "project_fact",
             None,
             "unresolved",
@@ -268,7 +222,7 @@ def test_dry_run_lists_candidates_and_writes_nothing(cli, projects, server):
 def test_confirmed_import_stores_the_selection_and_a_rerun_stores_nothing(
     cli, projects, server
 ):
-    first = cli(source=projects, all_=True, confirm=True)
+    first = cli(all_=True, confirm=True)
     assert first["test/repo/fact"]["status"] == "stored"
     assert first["test/repo/feedback"]["status"] == "stored"
     assert first["test/repo/who"]["status"] == "user", "--all must skip user memories"
@@ -281,7 +235,7 @@ def test_confirmed_import_stores_the_selection_and_a_rerun_stores_nothing(
 
     assert stored["author"] == srv._current_author()
 
-    second = cli(source=projects, all_=True, confirm=True)
+    second = cli(all_=True, confirm=True)
     assert second["test/repo/fact"]["status"] == "duplicate"
     assert second["test/repo/fact"]["slug"] == first["test/repo/fact"]["slug"]
     assert second["test/repo/feedback"]["status"] == "duplicate"
@@ -290,17 +244,17 @@ def test_confirmed_import_stores_the_selection_and_a_rerun_stores_nothing(
 
 @requires_omnigraph
 def test_a_user_memory_is_stored_only_when_named_exactly(cli, projects, server):
-    globbed = cli(source=projects, select=["test/repo/*"], confirm=True)
+    globbed = cli(select=["test/repo/*"], confirm=True)
     assert globbed["test/repo/who"]["status"] == "user"
 
-    named = cli(source=projects, select=["who"], confirm=True)
+    named = cli(select=["who"], confirm=True)
     assert named["test/repo/who"]["status"] == "stored"
     assert server.memory_get(named["test/repo/who"]["slug"])["kind"] == "agent_context"
 
 
 @requires_omnigraph
 def test_select_without_confirm_is_still_a_dry_run(cli, projects, server):
-    rows = cli(source=projects, select=["fact"])
+    rows = cli(select=["fact"])
     assert rows["test/repo/fact"]["status"] == "would store"
     assert rows["test/repo/feedback"]["status"] == "new"
     assert _titles(server) == []
@@ -314,7 +268,7 @@ def test_the_scanner_blocks_a_secret_and_the_run_says_so(
     _memory(projects, checkout, "leak", body=f"the deploy key is {AWS_KEY}")
 
     with pytest.raises(SystemExit) as exc:
-        cli(source=projects, select=["leak"], confirm=True)
+        cli(select=["leak"], confirm=True)
     assert exc.value.code == 1
     assert _titles(server) == []
 
@@ -326,7 +280,7 @@ def test_the_scanner_result_is_reported_per_row(cli, tmp_path, projects, capsys)
     from witan.cli.memory import memory_import
 
     with pytest.raises(SystemExit):
-        memory_import(source=projects, select=["leak", "fact"], confirm=True)
+        memory_import(select=["leak", "fact"], confirm=True)
     rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)["rows"]}
     assert rows["test/repo/leak"]["status"] == "blocked"
     assert "aws_access_key" in rows["test/repo/leak"]["detail"]
@@ -350,13 +304,13 @@ def test_a_redacted_memory_is_still_a_duplicate_on_rerun(
         description="Alerts go to ops@example.org",
         body="Page ops@example.org first.",
     )
-    first = cli(source=projects, select=["mail"], confirm=True)
+    first = cli(select=["mail"], confirm=True)
     assert first["test/repo/mail"]["status"] == "stored"
     assert "redacted" in server.memory_get(first["test/repo/mail"]["slug"])["title"]
     assert first["test/repo/mail"]["detail"].endswith("(redacted: content, title)")
     assert "ALTERED" in first["test/repo/mail"]["redaction_note"]
 
-    second = cli(source=projects, select=["mail"], confirm=True)
+    second = cli(select=["mail"], confirm=True)
     assert second["test/repo/mail"]["status"] == "duplicate"
     assert len(_titles(server)) == 1
 
@@ -380,7 +334,7 @@ def test_an_exact_title_is_found_under_many_stronger_content_hits(
         content="worded differently",
         repo=REPO,
     )
-    rows = cli(source=projects)
+    rows = cli()
     assert rows["test/repo/fact"]["status"] == "duplicate"
     assert rows["test/repo/fact"]["slug"] == existing["slug"]
 
@@ -393,12 +347,12 @@ def test_one_stem_in_two_checkouts_of_a_repo_gets_two_ids(
     _memory(projects, tmp_path / "src" / "repo", "note", body="from the checkout")
     _memory(projects, worktree, "note", name="other note", body="from the worktree")
 
-    rows = cli(source=projects)
+    rows = cli()
     notes = sorted(k for k in rows if k.endswith("/note"))
     assert len(notes) == 2
     assert not any(k.startswith("test/repo/") for k in notes)
 
-    stored = cli(source=projects, select=[notes[0]], confirm=True)
+    stored = cli(select=[notes[0]], confirm=True)
     assert [stored[k]["status"] for k in notes] == ["stored", "new"]
 
 
@@ -408,7 +362,7 @@ def test_one_stem_in_two_checkouts_of_a_repo_gets_two_ids(
     [
         ({"confirm": True}, "--confirm writes only what --select or --all chooses."),
         ({"select": ["nope"]}, "--select matched no memory: nope"),
-        ({"source": Path("/nonexistent/projects")}, "No such directory"),
+        ({"harness": ["nope"]}, "--harness nope is not an agent agent-kit knows"),
     ],
 )
 def test_refusals_go_to_stderr_under_structured_output(
@@ -420,7 +374,7 @@ def test_refusals_go_to_stderr_under_structured_output(
 
     capsys.readouterr()
     with pytest.raises(SystemExit):
-        memory_import(**{"source": projects, **kwargs})
+        memory_import(**kwargs)
     out, err = capsys.readouterr()
     assert out == ""
     assert message in err
@@ -431,7 +385,7 @@ def test_a_stem_with_glob_characters_is_selectable_by_name(
     cli, tmp_path, projects, server
 ):
     _memory(projects, tmp_path / "src" / "repo", "contact[team]", type="user")
-    rows = cli(source=projects, select=["contact[team]"], confirm=True)
+    rows = cli(select=["contact[team]"], confirm=True)
     assert rows["test/repo/contact[team]"]["status"] == "stored"
 
 
@@ -449,9 +403,120 @@ def test_a_wholly_redacted_title_is_still_a_duplicate_on_rerun(
         description="Where production alerts are routed",
         body="Page the on-call engineer.",
     )
-    first = cli(source=projects, select=["addr"], confirm=True)
+    first = cli(select=["addr"], confirm=True)
     assert first["test/repo/addr"]["status"] == "stored"
 
-    second = cli(source=projects, select=["addr"], confirm=True)
+    second = cli(select=["addr"], confirm=True)
     assert second["test/repo/addr"]["status"] == "duplicate"
     assert second["test/repo/addr"]["slug"] == first["test/repo/addr"]["slug"]
+
+
+# ── other agents' stores ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def codex_store(tmp_path, monkeypatch):
+    """Codex's memories: one session in the checkout, one in a moved directory."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    root = tmp_path / "codex" / "memories"
+    root.mkdir(parents=True)
+
+    def thread(thread_id: str, cwd: Path, task: str, stem: str) -> str:
+        return (
+            f"## Thread `{thread_id}`\nupdated_at: 2026-11-01T10:00:00+00:00\n"
+            f"cwd: {cwd}\nrollout_path: /x/{thread_id}.jsonl\n"
+            f"rollout_summary_file: {stem}.md\n\n"
+            f"---\ndescription: {task}, and the fix\ntask: {task}\n"
+            f"task_group: repo\ntask_outcome: success\ncwd: {cwd}\n"
+            "keywords: pytest\n---\n\n### Task 1: x\n\nReusable knowledge:\n- y\n\n"
+        )
+
+    (root / codex.RAW_MEMORIES_FILE).write_text(
+        "# Raw Memories\n\n"
+        + thread("t-1", tmp_path / "src" / "repo", "fix the flaky test", "s-flaky")
+        + thread("t-2", tmp_path / "moved", "tidy the docs", "s-docs")
+    )
+    return root
+
+
+@pytest.fixture
+def copilot_store(tmp_path, monkeypatch):
+    """Copilot's repository memory for a workspace on the checkout."""
+    from agent_config_kit import registry
+
+    user_dir = tmp_path / "Code" / "User"
+    monkeypatch.setattr(registry, "vscode_user_dir", lambda: user_dir)
+    storage = user_dir / "workspaceStorage" / "abc"
+    folder = storage / copilot.REPO_MEMORY_DIR
+    folder.mkdir(parents=True)
+    (storage / "workspace.json").write_text(
+        json.dumps({"folder": (tmp_path / "src" / "repo").as_uri()})
+    )
+    (folder / "build.md").write_text("# Build commands\n\n- run `just test`\n")
+    return folder
+
+
+@requires_omnigraph
+def test_every_detected_agent_is_read_by_default(
+    cli, tmp_path, projects, codex_store, copilot_store, capsys
+):
+    rows = cli()
+    by_harness = {
+        k: (r["harness"], r["kind"], r["status"])
+        for k, r in rows.items()
+        if r["harness"] != "claude"
+    }
+    moved = str(tmp_path / "moved").strip("/")
+    assert by_harness == {
+        "test/repo/s-flaky": ("codex", "lesson", "new"),
+        f"{moved}/s-docs": ("codex", "lesson", "unresolved"),
+        "test/repo/build": ("copilot", "project_fact", "new"),
+    }
+    assert rows["test/repo/fact"]["status"] == "new"
+
+
+@requires_omnigraph
+def test_other_agents_memories_are_stored_and_a_rerun_stores_nothing(
+    cli, projects, codex_store, copilot_store, server
+):
+    first = cli(harness=["codex", "copilot"], all_=True, confirm=True)
+    assert first["test/repo/s-flaky"]["status"] == "stored"
+    assert first["test/repo/build"]["status"] == "stored"
+    assert "test/repo/fact" not in first, "--harness limits the agents read"
+
+    lesson = server.memory_get(first["test/repo/s-flaky"]["slug"])
+    assert (lesson["kind"], lesson["title"]) == ("lesson", "fix the flaky test")
+    fact = server.memory_get(first["test/repo/build"]["slug"])
+    assert (fact["kind"], fact["title"]) == ("project_fact", "Build commands")
+
+    second = cli(harness=["codex,copilot"], all_=True, confirm=True)
+    assert second["test/repo/s-flaky"]["status"] == "duplicate"
+    assert second["test/repo/build"]["status"] == "duplicate"
+
+
+@requires_omnigraph
+def test_agents_without_memory_are_named_not_skipped(cli, projects, capsys):
+    from witan.cli.memory import memory_import
+
+    capsys.readouterr()
+    memory_import(harness=["pi", "opencode", "codex", "claude"])
+    out, err = capsys.readouterr()
+    rows = json.loads(out)["rows"]
+    assert {r["harness"] for r in rows} == {"claude"}
+    assert "Pi: keeps no memory on disk." in err
+    assert "OpenCode: keeps no memory on disk." in err
+    assert "Codex CLI: no memory store at " in err
+
+
+@requires_omnigraph
+def test_one_title_in_two_agents_gets_two_ids_and_one_store(
+    cli, tmp_path, projects, copilot_store
+):
+    """Claude Code and Copilot can both hold a memory named ``fact`` for one
+    repo; each needs its own id, and the second is a duplicate of the first."""
+    (copilot_store / "fact.md").write_text("# Fact: the cache lives on disk\n\nx\n")
+    rows = cli(select=["fact"], confirm=True)
+    facts = {k: r for k, r in rows.items() if k.endswith("/fact")}
+    assert len(facts) == 2
+    assert not any(k.startswith("test/repo/") for k in facts)
+    assert sorted(r["status"] for r in facts.values()) == ["duplicate", "stored"]

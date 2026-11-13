@@ -443,7 +443,7 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 
 **Commands**:
 
-* [`import`](#witan-memory-import): Import Claude Code's local memory files into the shared graph.
+* [`import`](#witan-memory-import): Import the memory coding agents keep on disk into the shared graph.
 * [`stale-refs`](#witan-memory-stale-refs): List memories whose symbol_refs no longer resolve in the code graph.
 
 **Parameters**:
@@ -469,27 +469,33 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 witan memory import [OPTIONS]
 ```
 
-Import Claude Code's local memory files into the shared graph.
+Import the memory coding agents keep on disk into the shared graph.
 
-Reads ``<source>/<project>/memory/*.md`` and reports, for each file, the
-memory kind it maps to, the repo its project resolves to, and whether the
-graph already holds it. Nothing is written unless --confirm is passed with
---select or --all. Each write goes through memory_store, so the secret and
-PII scan applies, and a blocked write is reported rather than stored.
+Reads the memory store of every agent detected on this machine (Claude
+Code's auto memory, Codex's memories, Copilot's repository memory; the
+agent-kit platform registry says where each lives) and reports, for each
+memory, the kind it maps to, the repo its project resolves to, and whether
+the graph already holds it. An agent with no memory store, or an empty
+one, is named in the output. Nothing is written unless --confirm is passed
+with --select or --all. Each write goes through memory_store, so the
+secret and PII scan applies, and a blocked write is reported rather than
+stored.
 
-Claude Code types map to kinds as project and reference to project_fact,
-feedback to lesson, and user to agent_context. A user memory is about a
-person, so --all and glob patterns skip it; name it exactly in --select to
-include it.
+Memories map to kinds by what they are about: project facts and
+references to project_fact, feedback and lessons to lesson, and user
+memories to agent_context. A user memory is about a person, so --all and
+glob patterns skip it; name it exactly in --select to include it.
 
 **Parameters**:
 
-* `--source PATH`: Directory of Claude Code project folders. Defaults to
-    $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects.
+* `--harness STR..., --empty-harness`: Only read these agents' memory, by agent-kit platform name (e.g.
+    claude, codex, copilot). Repeatable or comma-separated. Defaults to
+    every agent detected on this machine.
 * `--repo STR`: Only consider memories whose project resolves to this repo, given as a
     URI or as org/name.
-* `--select STR..., --empty-select`: Memories to store, by the id shown in the dry run, by file stem, or by
-    a glob over either. Repeatable or comma-separated.
+* `--select STR..., --empty-select`: Memories to store, by the id shown in the dry run, by the memory's own
+    name in its store (a file stem), or by a glob over either. Repeatable
+    or comma-separated.
 * `--all, --no-all`: Select every memory that is not already in the graph, except user ones. *[default: False]*
 * `--confirm, --no-confirm`: Write the selected memories. Without it the command only reports. *[default: False]*
 
