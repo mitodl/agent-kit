@@ -533,8 +533,9 @@ async def _offload(fn, /, *args, **kwargs):
 #: so a tool cannot be registered without saying what it does to the graph.
 #: ``DESTRUCTIVE`` is for a call that can overwrite or remove what someone
 #: stored: field replacement (including a re-written memory link or session
-#: summary), deletes, closes, merges, link removal. ``WRITE`` covers creates,
-#: comments, new edges and phase advances. ``task_claim`` is ``WRITE`` though
+#: summary, and a phase advance, which can move backwards and replace the
+#: project's PR), deletes, closes, merges, link removal. ``WRITE`` covers
+#: creates, comments and new edges. ``task_claim`` is ``WRITE`` though
 #: ``force`` steals a live claim: it is the most frequent write, the result
 #: reports ``stole``, and the holder can reclaim. ``idempotentHint`` is
 #: set only where a repeat with the same arguments is documented to change
@@ -5905,7 +5906,7 @@ def workflow_project_update(
     return updated[0] if updated else payload
 
 
-@_tool(WRITE)
+@_tool(DESTRUCTIVE)
 async def workflow_project_advance(
     slug: str,
     phase: WorkflowPhase,
