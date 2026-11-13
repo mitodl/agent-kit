@@ -95,6 +95,33 @@ def test_every_tool_carries_annotations():
     assert not unannotated, f"tools missing MCP annotations: {unannotated}"
 
 
+def test_the_tools_that_overwrite_or_remove_are_annotated_destructive():
+    """Pinned rather than derived, so loosening one of these to a plain write
+    is a visible test change rather than a silent one."""
+    from witan import server as witan_server
+
+    tools = asyncio.run(witan_server.mcp._list_tools())
+    destructive = {
+        t.name
+        for t in tools
+        if not t.annotations.read_only_hint and t.annotations.destructive_hint
+    }
+    assert destructive == {
+        "claim_authorship",
+        "memory_delete",
+        "memory_link",
+        "memory_update",
+        "store_merge",
+        "task_close",
+        "task_link",
+        "task_release",
+        "task_update",
+        "workflow_project_complete",
+        "workflow_project_update",
+        "workflow_session_end",
+    }
+
+
 def test_the_local_read_allowlist_is_annotated_read_only():
     """``READ_TOOLS`` lets the CLI fall back to a local store; a tool on it that
     is annotated as a write means one of the two is wrong."""

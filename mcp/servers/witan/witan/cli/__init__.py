@@ -215,13 +215,17 @@ def serve(
 
         live_pr.annotate_tool_results()
 
+    from ..instructions import with_code_instructions
+
     try:
         from witan_code.server import mcp as code_mcp
 
         witan_mcp.mount(code_mcp)
         # `mount` carries tools, not instructions, and an agent only ever
         # connects to this server, so the code_* tools' shared text goes here.
-        witan_mcp.instructions = f"{witan_mcp.instructions}\n\n{code_mcp.instructions}"
+        witan_mcp.instructions = with_code_instructions(
+            witan_mcp.instructions, code_mcp.instructions
+        )
     except ImportError:
         pass
 

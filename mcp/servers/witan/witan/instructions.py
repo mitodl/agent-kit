@@ -13,7 +13,7 @@ instructions arrive once per session.
 
 from __future__ import annotations
 
-__all__ = ["INSTRUCTIONS"]
+__all__ = ["INSTRUCTIONS", "with_code_instructions"]
 
 INSTRUCTIONS = (
     "Team-wide, shared, persistent memory and work-coordination graph. PREFER "
@@ -53,7 +53,8 @@ INSTRUCTIONS = (
     "Shared parameters:\n"
     "  session_id: your agent session id: $CLAUDE_SESSION_ID, or under Pi "
     "and Codex the value of `echo $PI_SESSION_ID` / `echo $CODEX_SESSION_ID` "
-    "(they do not pass it to MCP servers). witan's CLI proxy fills it in and a "
+    "(they do not pass it to MCP servers); on any other client, a stable "
+    "unique string for the session. witan's CLI proxy fills it in and a "
     "local stdio server falls back to its own environment; pass it yourself "
     "when calling a deployed witan. On reads it is only logged.\n"
     "  session_slug: the ws- handle workflow_session_start returned, not the "
@@ -109,3 +110,8 @@ INSTRUCTIONS = (
     "contention) returns a status object with a reason; only malformed input "
     "raises."
 )
+
+
+def with_code_instructions(instructions: str | None, code_instructions: str) -> str:
+    """What ``witan serve`` sends once witan-code is mounted: witan's, then its."""
+    return f"{instructions}\n\n{code_instructions}"

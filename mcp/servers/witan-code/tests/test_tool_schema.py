@@ -55,18 +55,20 @@ def test_every_tool_carries_annotations():
     from witan_code import server as code_server
     from witan_code.remote.store import _READ_ONLY_STORE_TOOLS
 
-    code_server.register_store_tools()
-    tools = {t.name: t for t in asyncio.run(code_server.mcp._list_tools())}
-    assert _READ_ONLY_STORE_TOOLS <= tools.keys()
+    # The store tools are read off the registration table rather than
+    # registered here: registering mutates the module's server for every later
+    # test in the process.
+    annotations = {
+        t.name: t.annotations for t in asyncio.run(code_server.mcp._list_tools())
+    }
+    annotations |= {tool.__name__: hints for tool, hints in code_server._STORE_TOOLS}
+    assert len(annotations) > 20
     unannotated = sorted(
         name
-        for name, tool in tools.items()
-        if tool.annotations is None
-        or tool.annotations.read_only_hint is None
-        or (
-            not tool.annotations.read_only_hint
-            and tool.annotations.destructive_hint is None
-        )
+        for name, hints in annotations.items()
+        if hints is None
+        or hints.read_only_hint is None
+        or (not hints.read_only_hint and hints.destructive_hint is None)
     )
     assert not unannotated, f"tools missing MCP annotations: {unannotated}"
-    assert all(tools[n].annotations.read_only_hint for n in _READ_ONLY_STORE_TOOLS)
+    assert all(annotations[n].read_only_hint for n in _READ_ONLY_STORE_TOOLS)
