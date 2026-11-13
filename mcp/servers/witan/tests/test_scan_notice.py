@@ -12,6 +12,7 @@ from witan.scan import annotate, no_redactions, take_redactions, write_guard_fro
 from witan.scan.notice import describe
 
 from .conftest import requires_omnigraph
+from .test_enforce import FirstSightFails
 
 
 @pytest.fixture(autouse=True)
@@ -293,23 +294,21 @@ def _create_task(server):
     return server.task_create(title=f"ask {EMAIL} about it", description="d")
 
 
-@pytest.mark.parametrize(
-    "create",
-    [
-        lambda s: s.memory_store(
-            kind="agent_context", title=f"ask {EMAIL} about it", content="c"
-        ),
-        _create_task,
-        lambda s: s.workflow_project_create(
-            title=f"ask {EMAIL} about it", description="d"
-        ),
-        lambda s: s.task_comment(
-            slug=s.task_create(title="t", description="d")["slug"],
-            body=f"ask {EMAIL} about it",
-        ),
-    ],
-    ids=["memory_store", "task_create", "workflow_project_create", "task_comment"],
-)
+_CREATES = [
+    lambda s: s.memory_store(
+        kind="agent_context", title=f"ask {EMAIL} about it", content="c"
+    ),
+    _create_task,
+    lambda s: s.workflow_project_create(title=f"ask {EMAIL} about it", description="d"),
+    lambda s: s.task_comment(
+        slug=s.task_create(title="t", description="d")["slug"],
+        body=f"ask {EMAIL} about it",
+    ),
+]
+_CREATE_IDS = ["memory_store", "task_create", "workflow_project_create", "task_comment"]
+
+
+@pytest.mark.parametrize("create", _CREATES, ids=_CREATE_IDS)
 @requires_omnigraph
 def test_a_title_redacted_for_pii_leaves_no_pii_in_the_slug(guarded_server, create):
     slug = create(guarded_server)["slug"]
@@ -331,3 +330,44 @@ def test_the_slug_is_built_from_the_stored_title(guarded_server):
 def test_an_unguarded_store_still_slugs_from_the_title(server):
     """No guard, no scanning: the slug is the title's, as before."""
     assert "jane-doe-example-com" in _create_task(server)["slug"]
+
+
+# ── a scan that fails for the slug fails closed ──────────────────────────────
+#
+# The slug's scan and the write's scan are separate. Under
+# on_scanner_error="warn" a scanner can fail open for the slug and then catch
+# the email in the write, which would store a redacted title under a slug
+# still carrying the raw one.
+
+
+@pytest.fixture
+def flaky_server(server, monkeypatch):
+    from witan import server as srv
+    from witan.scan import ScannerRegistry, WriteGuard
+
+    config = ScanConfig(enabled=True, pii_action="redact", on_scanner_error="warn")
+    monkeypatch.setattr(
+        srv.client,
+        "guard",
+        WriteGuard(config, ScannerRegistry([FirstSightFails(EMAIL)])),
+    )
+    return server
+
+
+@pytest.mark.parametrize("create", _CREATES, ids=_CREATE_IDS)
+@requires_omnigraph
+def test_a_slug_whose_scan_failed_carries_none_of_the_title(flaky_server, create):
+    slug = create(flaky_server)["slug"]
+
+    assert "jane" not in slug
+    assert "ask" not in slug
+    assert "-unscanned-" in slug
+
+
+@requires_omnigraph
+def test_the_write_still_redacts_the_title_the_slug_could_not_scan(flaky_server):
+    created = _create_task(flaky_server)
+    assert (
+        flaky_server.task_get(created["slug"])["title"]
+        == "ask «redacted:email» about it"
+    )

@@ -69,6 +69,12 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+#: What :meth:`WriteGuard.stored_text` returns for a value it could not scan.
+#: A slug built from it reads ``tk-unscanned-<id>``; ``_make_slug``'s random
+#: suffix keeps it unique.
+UNSCANNED = "unscanned"
+
+
 #: NOTE: a ``RuntimeError`` subclass, so anything catching ``RuntimeError``
 #: broadly on the write path has to be sure it is not swallowing a refusal —
 #: see ``server._edge_property_errors``, which matches the engine's typecheck
@@ -243,17 +249,41 @@ class WriteGuard:
         A span the write would block is replaced too, though that write will
         fail anyway. Only ``warn`` (including an allowlisted finding) keeps it,
         matching what the write stores. Emits no audit event and records no
-        notice: the write that follows does both, for the field itself. A
-        scanner failing open under ``on_scanner_error="warn"`` still logs
-        ``scanner_failed`` here, so that field's failure is logged twice.
+        notice: the write that follows does both, for the field itself.
+
+        Fails closed: when ``value`` cannot be scanned (a scanner raises, under
+        either ``on_scanner_error`` setting, or ``query_name`` has no
+        ``FIELD_MAP`` entry) this returns :data:`UNSCANNED` instead of
+        ``value``. The write scans the field again on its own, so a scanner
+        that fails here and succeeds there would otherwise leave the stored
+        field redacted and the permanent slug carrying the raw text.
         """
-        node_type, _ = FIELD_MAP[query_name]
+        entry = FIELD_MAP.get(query_name)
+        if entry is None:
+            logger.warning(
+                "witan.scan.slug_unscanned",
+                query_name=query_name,
+                field=field,
+                reason="unmapped_query",
+            )
+            return UNSCANNED
+        node_type, _ = entry
         config, allowlist = self._policy(repo)
+        try:
+            findings = self._registry.scan(value, field, node_type)
+        except ScannerError as exc:
+            logger.warning(
+                "witan.scan.slug_unscanned",
+                query_name=query_name,
+                field=field,
+                reason="scanner_failed",
+                scanner=exc.scanner,
+                exc_info=True,
+            )
+            return UNSCANNED
         dropped = [
             f
-            for f, action, _ in self._resolve(
-                value, field, node_type, config, allowlist
-            )
+            for f, action, _ in self._classify(findings, value, config, allowlist)
             if action != "warn"
         ]
         return redact_spans(value, dropped) if dropped else value
@@ -279,8 +309,19 @@ class WriteGuard:
         config: ScanConfig,
         allowlist: list[re.Pattern[str]],
     ) -> list[tuple[Finding, ScanAction, str | None]]:
+        return self._classify(
+            self._scan(value, field, node_type, config), value, config, allowlist
+        )
+
+    def _classify(
+        self,
+        findings: list[Finding],
+        value: str,
+        config: ScanConfig,
+        allowlist: list[re.Pattern[str]],
+    ) -> list[tuple[Finding, ScanAction, str | None]]:
         resolved: list[tuple[Finding, ScanAction, str | None]] = []
-        for f in self._scan(value, field, node_type, config):
+        for f in findings:
             reason = suppression_reason(f, value, config, allowlist)
             action = (
                 "warn" if reason else f.action or self._action_for(f.category, config)
