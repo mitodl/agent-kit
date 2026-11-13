@@ -325,7 +325,7 @@ def uncapped_search_cap(server, tmp_path, monkeypatch):
     """Lower the uncapped search pairs' `limit 10000` to 3 for this test.
 
     Reaching the real cap would take 10,001 tasks; a copy of the query files
-    with only those four queries' limits rewritten exercises the same boundary.
+    with only those queries' limits rewritten exercises the same boundary.
     """
     import re
     import shutil
@@ -394,11 +394,13 @@ def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
     """With a limit above 20, the unscoped half and the assignee filter also
     run ahead of the uncapped pair's cap: higher-ranked matches in other repos,
     or held by someone else, cannot fill it first."""
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
     for i in range(uncapped_search_cap):
         crowd = server.task_create(
             title=f"quokka narwhal {i}",
             description="quokka narwhal quokka",
             repo="https://github.com/test/crowd",
+            project_slug=proj["slug"],
         )
         server.task_claim(crowd["slug"], assignee="someone-else")
     unscoped = server.task_create(
@@ -412,6 +414,7 @@ def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
         description="a long description that mentions a quokka only once, "
         "somewhere among a great many other words about compaction",
         repo="https://github.com/test/crowd",
+        project_slug=proj["slug"],
     )
     server.task_claim(held["slug"], assignee="agentA#5e313f6d")
     lookalike = server.task_create(
@@ -419,6 +422,7 @@ def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
         description="a long description that mentions a quokka only once, "
         "somewhere among a great many other words about compaction",
         repo="https://github.com/test/crowd",
+        project_slug=proj["slug"],
     )
     server.task_claim(lookalike["slug"], assignee="xagentA")
 
@@ -428,6 +432,10 @@ def test_task_search_unscoped_and_assignee_apply_before_the_uncapped_cap(
         "quokka", all_repos=True, assignee="agentA", limit=21
     )
     assert [h["slug"] for h in by_assignee] == [held["slug"]]
+    by_project = server.task_search(
+        "quokka", project_slug=proj["slug"], assignee="agentA", limit=21
+    )
+    assert [h["slug"] for h in by_project] == [held["slug"]]
 
 
 @requires_omnigraph
