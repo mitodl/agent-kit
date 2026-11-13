@@ -329,9 +329,12 @@ workflow_session_end(
 )
 ```
 
-The `Stop` hook auto-closes sessions that skip this call, but with a placeholder
-summary. Calling `workflow_session_end` explicitly produces a richer corpus trace
-and better context for the next session.
+The `Stop` hook auto-closes sessions that skip this call, with a summary derived
+from what the session recorded: tasks in the project it claimed or closed,
+memories it stored,
+commits on its branch, and uncommitted files. That says what happened but not why
+or what is left, so calling `workflow_session_end` explicitly still produces a
+richer corpus trace and better context for the next session.
 
 ## Completing a Project
 

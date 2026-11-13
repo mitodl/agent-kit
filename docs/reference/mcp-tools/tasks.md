@@ -193,7 +193,7 @@ unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
 | `title` | str? | `null` | New short label for the work. |
 | `description` | str? | `null` | New full description. Replaces the existing text; it is not appended to. |
 | `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | ``bug`` \| ``feature`` \| ``task`` \| ``chore`` \| ``epic``. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,<br>on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this<br>task's dependents**, exactly as ``task_close`` does. Prefer<br>``task_claim`` / ``task_close`` for those two transitions — they carry<br>the ownership checks this does not.<br>``closed_at`` follows the status whatever value you pass: set on<br>arrival at ``closed``, cleared on any move away from it, so reopening<br>a task here does not leave it carrying its old close time.<br>Setting ``in_progress`` with no ``assignee`` on a task that has none<br>recorded defaults it via ``_claim_holder`` — the same identity<br>``task_claim`` would use — rather than leaving<br>``(in_progress, claimed_at set, assignee null)`` reachable: that<br>combination is a live lease with nobody named on it, which<br>``task_claim`` correctly refuses and correctly cannot say who holds.<br>A task that already has an assignee keeps it; this only fills a gap,<br>never reassigns. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,<br>on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this<br>task's dependents**, exactly as ``task_close`` does. Prefer<br>``task_claim`` / ``task_close`` for those two transitions. ``closed``<br>is refused here as ``task_close`` refuses it, with the same answer,<br>while another person holds a live claim (see ``force``); nothing else<br>is written either. ``in_progress`` carries none of ``task_claim``'s<br>checks.<br>``closed_at`` follows the status whatever value you pass: set on<br>arrival at ``closed``, cleared on any move away from it, so reopening<br>a task here does not leave it carrying its old close time.<br>Setting ``in_progress`` with no ``assignee`` on a task that has none<br>recorded defaults it via ``_claim_holder`` — the same identity<br>``task_claim`` would use — rather than leaving<br>``(in_progress, claimed_at set, assignee null)`` reachable: that<br>combination is a live lease with nobody named on it, which<br>``task_claim`` correctly refuses and correctly cannot say who holds.<br>A task that already has an assignee keeps it; this only fills a gap,<br>never reassigns. |
 | `priority` | `p0` \| `p1` \| `p2` \| `p3`? | `null` | ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering. |
 | `repo` | str? | `null` | Canonical repo URI to (re)assign this task to. Pass an explicit value to<br>correct tasks that were created without proper repo context. |
 | `assignee` | str? | `null` | Holder identity to reassign the task to. Prefer ``task_claim`` to take a<br>task for yourself — it checks nobody else holds it, which this does not. |
@@ -203,6 +203,7 @@ unexplored.) With ``status="closed"`` the dependents' sweep behaves as in
 | `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns.<br>Replaces the existing list. |
 | `tags` | list[str]? | `null` | Free-form tags. Replaces the existing list rather than merging into it. |
 | `session_id` | str? | `null` | The calling agent session's id, used only to qualify the ``assignee``<br>this defaults when ``status="in_progress"`` leaves one to fill in —<br>see ``task_claim``'s ``session_id`` for why a deployed caller needs to<br>pass this explicitly (no shared environment to infer it from). Has no<br>effect when an explicit ``assignee`` is given, or when one already<br>exists on the task. Appended after every other parameter, not placed<br>near ``assignee``, so inserting it cannot shift what an existing<br>positional caller's later arguments bind to. |
+| `force` | bool | `False` | With ``status="closed"``, close even while another person's claim is<br>live. The holder compared is the caller, never ``assignee``: here<br>that names who the task goes to, not who is closing it. |
 
 ## `task_claim`
 
@@ -212,7 +213,16 @@ A successful claim that is not a renewal also returns ``memories``: up to
 three that the task links to or its title closely matches, each with an
 excerpt. Read them before the first edit; ``memory_get`` has the full text.
 The list is often empty, because a weak match is left out, which does not
-mean nothing exists: ``recall(query=...)`` searches more widely.
+mean nothing exists: ``recall(query=...)`` searches more widely. A
+non-empty list comes with ``memories_note``, which says they are teammates'
+notes rather than instructions.
+
+It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
+share a symbol (``symbols``) or only a file (``files``) with this task's,
+shared symbols first. It is advisory, never a refusal, since work in the
+same file often merges cleanly. A shared symbol is a likely merge conflict:
+read the other task before editing that code, and ``task_comment`` it if
+the two plans collide. Empty when this task has no ``symbol_refs``.
 
 The coordination primitive for parallel/multi-user agents — call it before
 starting a ready task so others see it is taken. Returns ``{"claimed": true,
@@ -283,6 +293,14 @@ Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 Closing a blocker is what unblocks its dependents — they become visible to
 ``task_ready`` once every blocker is closed.
 
+Refuses, writing nothing, while another person holds a live claim on the
+task: ``{"closed": false, "reason": "held", "held_by", "claimed_at",
+"remedy"}``. That stops a worker whose lease lapsed, and whose task was
+taken over, from closing the new holder's work when it finishes late. A
+claim held by any session of your own identity, an expired lease, and a
+task nobody is named as holding all close as before. The check is made on
+the row the close is fenced on, so a claim that lands first is seen.
+
 The close is fenced like ``task_update`` and has the same trade: under
 write load elsewhere on the graph it can run out of attempts and raise
 ``WriteContention`` with nothing written (see ``task_update`` for the
@@ -298,6 +316,8 @@ next close anywhere or a claim of one of them reopens it.
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to close. |
 | `resolution` | str? | `null` | Short note on what was actually done. Worth writing: this is what a<br>later reader sees when asking why the task ended, and closing without<br>one leaves that unanswerable. |
+| `assignee` | str? | `null` | Holder identity closing the task. Defaults to the calling user, same<br>resolution as ``task_claim``'s ``assignee``. Compared at the identity<br>level, ignoring the ``#<session>`` qualifier, as ``task_release``<br>does; pass it when the claim was taken under an explicit name (a<br>worker, a CI job). |
+| `force` | bool | `False` | Close even while another person's claim is live. |
 
 ## `task_comment`
 

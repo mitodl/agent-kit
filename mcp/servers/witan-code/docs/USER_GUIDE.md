@@ -132,6 +132,7 @@ copy the matching snippet from `config/` into your agent's config — see
 
    ```bash
    code_callers(symbol_id="https://github.com/org/repo#app/client.py::ServiceClient.run")
+   code_callers(symbol_id="...", direction="callees")  # what it calls
    code_impact(symbol_id="...", max_depth=5, max_nodes=200)  # transitive callers
    ```
 

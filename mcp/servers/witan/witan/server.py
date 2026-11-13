@@ -1,3 +1,4 @@
+import asyncio
 import contextvars
 import functools
 import hashlib
@@ -52,6 +53,7 @@ from witan_core.omnigraph import (
     store_cli_args,
 )
 from witan_core.refusal import Refusal
+from witan_core.timeutil import parse_timestamp
 
 from . import config as cfg_module
 from . import (
@@ -59,9 +61,11 @@ from . import (
     live_pr,
     merge_bounds,
     merge_report,
+    provenance,
     readiness,
     scan,
     session_state,
+    session_summary,
     ui_access,
     ui_routes,
     ui_widgets,
@@ -1033,11 +1037,9 @@ def _lease_expiry(lease_started_at: str | None) -> str | None:
     if not lease_started_at:
         return None
     try:
-        started = datetime.fromisoformat(lease_started_at)
+        started = parse_timestamp(lease_started_at)
     except (ValueError, TypeError):
         return None
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
     return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
 
 
@@ -1132,6 +1134,65 @@ def _claim_refusal(
             "remedy": _claim_remedy(slug, held_by, lease_started_at),
         }
     return None
+
+
+def _close_refusal(
+    slug: str, row: dict, closer: str, force: bool, override: str
+) -> dict | None:
+    """The refusal for closing ``row`` as ``closer``, or ``None`` if it may close.
+
+    Only a live claim by another person refuses. A worker whose lease lapsed
+    and whose task someone else then claimed would otherwise finish late and
+    close the new holder's work, unblocking its dependents with it; runners
+    make that an ordinary sequence, not a rare one. Everything else closes:
+
+    - another session of the closer's own identity, which is a handover
+      (``_same_person``, as ``task_release`` decides it), and is what the
+      witan-project-tracker reconcile step does when it closes tasks its
+      earlier sessions held;
+    - an expired lease, which nobody is working;
+    - a row that is not ``in_progress``, including one already closed, so a
+      retry of a close that landed still answers with the task;
+    - an ``in_progress`` row naming no holder. ``task_claim`` refuses that as
+      held by someone unknown, but a close has to be refused *as* someone,
+      and there is nobody to name or ask.
+
+    ``override`` is the command that closes it anyway, quoted in ``remedy``.
+    """
+    if force or row.get("status") != "in_progress":
+        return None
+    holder = row.get("assignee")
+    lease_started_at = row.get("claimed_at") or row.get("updated_at")
+    if not holder or _same_person(holder, closer) or _lease_expired(lease_started_at):
+        return None
+    expiry = _lease_expiry(lease_started_at)
+    when = f" Its lease lapses at {expiry}." if expiry else ""
+    return {
+        "slug": slug,
+        "closed": False,
+        "reason": "held",
+        "held_by": holder,
+        "claimed_at": row.get("claimed_at"),
+        "remedy": (
+            f"{slug} is held by {holder}, not {closer}.{when} Leave it to that "
+            f"holder, or if their work is done or abandoned close it anyway "
+            f"with `{override}`."
+        ),
+    }
+
+
+def _require_closable(
+    slug: str, closer: str, force: bool, override: str
+) -> Callable[[dict], None]:
+    """An ``_update_task`` ``require`` that raises :func:`_close_refusal`'s answer."""
+
+    def require(current: dict) -> None:
+        if (
+            refusal := _close_refusal(slug, current, closer, force, override)
+        ) is not None:
+            raise _TaskWriteRefused(refusal)
+
+    return require
 
 
 # Bounded re-tries for a fenced task write (`_update_task`): on each refused
@@ -1512,15 +1573,16 @@ def migrate_topics() -> dict:
     }
 
 
-_AUTOCLOSE_PREFIX = "Session ended (auto-closed by Stop hook"
+_AUTOCLOSE_PREFIX = session_summary.AUTOCLOSE_PREFIX
 
 
 def _has_own_summary(session: dict) -> bool:
     """True when a session carries a summary someone actually wrote.
 
-    The Stop hook's auto-close placeholder is treated as no summary: it says
-    only that the session ended, so a session carrying it holds nothing the
-    corpus would lose.
+    The Stop hook's auto-close summary is treated as no summary, whether it is
+    the placeholder or one derived from recorded activity: nobody wrote it, and
+    what it lists is already recorded (tasks and memories in the graph, commits
+    in git), so a session carrying it holds nothing the corpus would lose.
     """
     summary = (session.get("summary") or "").strip()
     return bool(summary) and not summary.startswith(_AUTOCLOSE_PREFIX)
@@ -4026,6 +4088,75 @@ def _surfaced_for_claim(task: dict, session_id: str | None) -> list[dict]:
     return memories
 
 
+def _ref_file(symbol_id: str) -> str:
+    """The code-graph file id (``repo#path``) a ``repo#path::Name`` id sits in."""
+    return symbol_id.partition("::")[0]
+
+
+def _task_overlaps(task: dict) -> list[dict]:
+    """In-flight tasks whose ``symbol_refs`` share a symbol or a file with ``task``.
+
+    In flight means ``in_progress`` with a live lease, by the same test
+    ``task_ready`` uses, so a claim abandoned past its lease is not reported.
+    Tasks sharing a symbol come first, then those sharing only a file, each
+    group most recently claimed first.
+
+    :param task: The task being claimed, as ``get_task`` returns it.
+    :returns: One row per overlapping task, with ``slug``, ``title``,
+        ``assignee``, ``claimed_at`` and the shared ``symbols`` and ``files``.
+    :rtype: list[dict]
+    """
+    refs = set(task.get("symbol_refs") or [])
+    if not refs:
+        return []
+    files = {_ref_file(ref) for ref in refs}
+    overlaps = []
+    for row in client.read("read.gq", "in_progress_tasks_with_refs", {}):
+        if row["slug"] == task["slug"] or readiness.status_pickable(row):
+            continue
+        theirs = set(row.get("symbol_refs") or [])
+        shared_files = files & {_ref_file(ref) for ref in theirs}
+        if not shared_files:
+            continue
+        overlaps.append(
+            {
+                "slug": row["slug"],
+                "title": row["title"],
+                "assignee": row.get("assignee"),
+                "claimed_at": row.get("claimed_at"),
+                "symbols": sorted(refs & theirs),
+                "files": sorted(shared_files),
+            }
+        )
+    overlaps.sort(key=lambda o: o["claimed_at"] or "", reverse=True)
+    overlaps.sort(key=lambda o: not o["symbols"])
+    return overlaps
+
+
+def _overlaps_for_claim(task: dict, session_id: str | None) -> list[dict]:
+    """``_task_overlaps`` for a claim, which has already committed by now.
+
+    Advisory only. Two tasks in the same file often merge cleanly, so this
+    never refuses, and a failed lookup returns nothing rather than raising, for
+    the reason ``_surfaced_for_claim`` gives. Logs every first claim, empty
+    ones included, so the share of claims that found an overlap is countable.
+    """
+    try:
+        overlaps = _task_overlaps(task)
+    except Exception:
+        logger.warning("witan.claim.overlap_failed", task=task["slug"], exc_info=True)
+        overlaps = []
+    logger.info(
+        "witan.claim.overlaps",
+        task=task["slug"],
+        session=_log_session(session_id),
+        count=len(overlaps),
+        slugs=[o["slug"] for o in overlaps],
+        shared_symbols=sum(bool(o["symbols"]) for o in overlaps),
+    )
+    return overlaps
+
+
 # The edge index is a handful of global queries; cache it briefly so a burst of
 # searches doesn't re-scan the graph each time. Keyed by store URI (test stores
 # differ) and dropped on any local edge write, so it's never stale within a
@@ -4095,11 +4226,9 @@ def _age_days(ts: str | None, now: datetime) -> float:
     if not ts:
         return 0.0
     try:
-        dt = datetime.fromisoformat(ts)
+        dt = parse_timestamp(ts)
     except (ValueError, TypeError):
         return 0.0
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 
@@ -6136,7 +6265,7 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
 
 @_tool
 def workflow_project_memories(
-    project_slug: str, group_by_session: bool = False
+    project_slug: str, group_by_session: bool = False, session: str | None = None
 ) -> dict:
     """
     "What did we learn during project X" — the provenance walk.
@@ -6160,10 +6289,27 @@ def workflow_project_memories(
         Also return a ``by_session`` breakdown of which session produced what.
         Costs one extra query per session, so leave it off unless you need the
         attribution.
+    session:
+        A ``ws-`` slug. Return only the memories that one session produced,
+        in one query, instead of the project's. ``group_by_session`` is
+        ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it
+        auto-closes; named ``session`` rather than ``session_slug`` because
+        the remote proxy fills an omitted ``session_slug`` with the caller's
+        active session, which would silently narrow every project-wide call.
 
     Returns ``{"project_slug": ..., "memories": [...], "by_session": {...}}``
     (``by_session`` is empty unless ``group_by_session`` is set).
     """
+    if session:
+        return {
+            "project_slug": project_slug,
+            "memories": client.read(
+                "read.gq",
+                "session_produced_memories",
+                {"project_slug": project_slug, "session_slug": session},
+            ),
+            "by_session": {},
+        }
     merged: dict[str, dict] = {}
     for query in ("project_produced_memories", "informed_memories"):
         for row in client.read("read.gq", query, {"project_slug": project_slug}):
@@ -6172,14 +6318,14 @@ def workflow_project_memories(
     by_session: dict[str, list[dict]] = {}
     if group_by_session:
         sessions = _project_sessions(project_slug)
-        for session in sessions:
+        for sess in sessions:
             produced = client.read(
                 "read.gq",
                 "session_produced_memories",
-                {"session_slug": session["slug"]},
+                {"project_slug": project_slug, "session_slug": sess["slug"]},
             )
             if produced:
-                by_session[session["slug"]] = produced
+                by_session[sess["slug"]] = produced
 
     return {
         "project_slug": project_slug,
@@ -6893,7 +7039,8 @@ def workflow_session_end(
 
     Call this before ending a session to produce a high-quality corpus record.
     The ``Stop`` hook will auto-close sessions that did not call this, but
-    with a placeholder summary.
+    with a summary it can only derive from what was recorded (tasks claimed
+    and closed, memories stored, commits, uncommitted files), not why.
 
     For best corpus quality, write a summary that includes:
     - What was done this session
@@ -6954,14 +7101,9 @@ def _ended_at_or_after(ended_at: str | None, since: datetime) -> bool:
     if not ended_at:
         return True
     try:
-        return _as_utc(datetime.fromisoformat(ended_at)) >= since
+        return parse_timestamp(ended_at) >= since
     except (ValueError, TypeError):
         return True
-
-
-def _as_utc(moment: datetime) -> datetime:
-    """Read a naive timestamp as UTC, so two of them are always comparable."""
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _parse_since(since: str) -> datetime:
@@ -6972,7 +7114,7 @@ def _parse_since(since: str) -> datetime:
     ``since`` there would make every row compare true.
     """
     try:
-        return _as_utc(datetime.fromisoformat(since))
+        return parse_timestamp(since)
     except (ValueError, TypeError):
         msg = f"since must be an ISO timestamp, got {since!r}"
         raise ValueError(msg) from None
@@ -8040,6 +8182,7 @@ def task_update(
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
     session_id: str | None = None,
+    force: bool = False,
 ) -> dict | None:
     """
     Update a task's mutable fields. Only non-null arguments are applied.
@@ -8081,8 +8224,11 @@ def task_update(
         side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,
         on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this
         task's dependents**, exactly as ``task_close`` does. Prefer
-        ``task_claim`` / ``task_close`` for those two transitions — they carry
-        the ownership checks this does not.
+        ``task_claim`` / ``task_close`` for those two transitions. ``closed``
+        is refused here as ``task_close`` refuses it, with the same answer,
+        while another person holds a live claim (see ``force``); nothing else
+        is written either. ``in_progress`` carries none of ``task_claim``'s
+        checks.
 
         ``closed_at`` follows the status whatever value you pass: set on
         arrival at ``closed``, cleared on any move away from it, so reopening
@@ -8131,6 +8277,10 @@ def task_update(
         exists on the task. Appended after every other parameter, not placed
         near ``assignee``, so inserting it cannot shift what an existing
         positional caller's later arguments bind to.
+    force:
+        With ``status="closed"``, close even while another person's claim is
+        live. The holder compared is the caller, never ``assignee``: here
+        that names who the task goes to, not who is closing it.
     """
     # A blank ``assignee`` is "not provided", not "provided as nothing".
     # ``_claim_holder`` already reads it that way (``if assignee:``), and
@@ -8210,12 +8360,28 @@ def task_update(
             ("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
         )
 
-    updated = _update_task(
-        slug,
-        changes,
-        extra_steps=extra_steps,
-        default_if_missing=default_if_missing or None,
+    # The close check runs here too, or `task_close`'s refusal is one call
+    # away from being sidestepped.
+    require = (
+        _require_closable(
+            slug,
+            _claim_holder(None, session_id),
+            force,
+            f"witan task update {slug} --status closed --force",
+        )
+        if status == "closed"
+        else None
     )
+    try:
+        updated = _update_task(
+            slug,
+            changes,
+            extra_steps=extra_steps,
+            default_if_missing=default_if_missing or None,
+            require=require,
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
@@ -8225,12 +8391,25 @@ def task_update(
 
 
 @_tool
-def task_close(slug: str, resolution: str | None = None) -> dict | None:
+def task_close(
+    slug: str,
+    resolution: str | None = None,
+    assignee: str | None = None,
+    force: bool = False,
+) -> dict | None:
     """
     Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
 
     Closing a blocker is what unblocks its dependents — they become visible to
     ``task_ready`` once every blocker is closed.
+
+    Refuses, writing nothing, while another person holds a live claim on the
+    task: ``{"closed": false, "reason": "held", "held_by", "claimed_at",
+    "remedy"}``. That stops a worker whose lease lapsed, and whose task was
+    taken over, from closing the new holder's work when it finishes late. A
+    claim held by any session of your own identity, an expired lease, and a
+    task nobody is named as holding all close as before. The check is made on
+    the row the close is fenced on, so a claim that lands first is seen.
 
     The close is fenced like ``task_update`` and has the same trade: under
     write load elsewhere on the graph it can run out of attempts and raise
@@ -8251,11 +8430,25 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
         Short note on what was actually done. Worth writing: this is what a
         later reader sees when asking why the task ended, and closing without
         one leaves that unanswerable.
+    assignee:
+        Holder identity closing the task. Defaults to the calling user, same
+        resolution as ``task_claim``'s ``assignee``. Compared at the identity
+        level, ignoring the ``#<session>`` qualifier, as ``task_release``
+        does; pass it when the claim was taken under an explicit name (a
+        worker, a CI job).
+    force:
+        Close even while another person's claim is live.
     """
-    closed = _update_task(
-        slug,
-        {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
-    )
+    try:
+        closed = _update_task(
+            slug,
+            {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
+            require=_require_closable(
+                slug, _claim_holder(assignee), force, f"witan task close {slug} --force"
+            ),
+        )
+    except _TaskWriteRefused as refused:
+        return refused.result
     if closed:
         closed = _with_unswept_warning(closed, _unblock_dependents())
     return closed
@@ -8278,7 +8471,16 @@ async def task_claim(
     three that the task links to or its title closely matches, each with an
     excerpt. Read them before the first edit; ``memory_get`` has the full text.
     The list is often empty, because a weak match is left out, which does not
-    mean nothing exists: ``recall(query=...)`` searches more widely.
+    mean nothing exists: ``recall(query=...)`` searches more widely. A
+    non-empty list comes with ``memories_note``, which says they are teammates'
+    notes rather than instructions.
+
+    It also returns ``overlaps``: other in-flight tasks whose ``symbol_refs``
+    share a symbol (``symbols``) or only a file (``files``) with this task's,
+    shared symbols first. It is advisory, never a refusal, since work in the
+    same file often merges cleanly. A shared symbol is a likely merge conflict:
+    read the other task before editing that code, and ``task_comment`` it if
+    the two plans collide. Empty when this task has no ``symbol_refs``.
 
     The coordination primitive for parallel/multi-user agents — call it before
     starting a ready task so others see it is taken. Returns ``{"claimed": true,
@@ -8500,6 +8702,9 @@ async def task_claim(
     # is the same holder carrying on, which already had them.
     if not (held and own):
         result["memories"] = await _offload(_surfaced_for_claim, claimed, session_id)
+        if result["memories"]:
+            result["memories_note"] = provenance.TEAMMATE_NOTES
+        result["overlaps"] = await _offload(_overlaps_for_claim, claimed, session_id)
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the
@@ -9011,6 +9216,18 @@ def _code_server():
     return _code_server._cached
 
 
+def _code_result(result):
+    """The value of a witan-code tool call, awaited when the tool is async.
+
+    witan-code's read tools became ``async def`` when they gained elicitation,
+    and calling one from here returns a coroutine. ``memory_symbols`` stored that
+    coroutine as the ``definition`` and ``memory_for_contract`` returned it as
+    the bindings. Every caller is a sync tool, which FastMCP runs in a worker
+    thread with no event loop, so ``asyncio.run`` is safe here.
+    """
+    return asyncio.run(result) if inspect.isawaitable(result) else result
+
+
 @_tool
 def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
     """
@@ -9052,8 +9269,12 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
     if code is not None and kind is not None:
         try:
             bindings = {
-                "providers": code.code_interface_providers(kind, key_norm),
-                "consumers": code.code_interface_consumers(kind, key_norm),
+                "providers": _code_result(
+                    code.code_interface_providers(kind, key_norm)
+                ),
+                "consumers": _code_result(
+                    code.code_interface_consumers(kind, key_norm)
+                ),
             }
         except Exception:  # cross-store lookup is best-effort
             # Info: the contract answer is still returned, just without its
@@ -9104,7 +9325,7 @@ def memory_symbols(slug: str) -> dict:
             try:
                 name = ref.split("::")[-1]
                 repo = ref.split("#", 1)[0] if "#" in ref else None
-                defs = code.code_find_definition(name, repo)
+                defs = _code_result(code.code_find_definition(name, repo))
                 if defs:
                     entry["definition"] = defs
             except Exception:  # best-effort enrichment
@@ -9116,6 +9337,143 @@ def memory_symbols(slug: str) -> dict:
                 )
         symbols.append(entry)
     return {"slug": slug, "symbols": symbols}
+
+
+def _unknown(refs: Iterable[str], reason: str) -> dict[str, dict]:
+    return {ref: {"status": "unknown", "reason": reason} for ref in refs}
+
+
+def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
+    """Classify each ref against the code graph as live, missing or unknown.
+
+    A ref is ``missing`` only when its repo has a readable index and the id is
+    not in it. Everything that stops us asking (witan-code absent, the graph
+    unreachable, the repo never indexed) is ``unknown``, because reporting those
+    as stale would flag every memory in a repo nobody indexed.
+
+    :param refs: Distinct ``symbol_refs`` values.
+    :returns: Each ref mapped to ``{"status", "reason"?, "candidates"?}``.
+    :rtype: dict[str, dict]
+    """
+    refs = list(refs)
+    code = _code_server()
+    if code is None:
+        return _unknown(refs, "witan-code is not installed")
+    try:
+        indexed = {row["repo"]: row for row in code.code_indexed_repos()}
+    except Exception:  # cross-store lookup is best-effort
+        logger.info("witan.stale_refs.code_graph_unreachable", exc_info=True)
+        return _unknown(refs, "code graph unreachable")
+
+    out: dict[str, dict] = {}
+    file_symbols: dict[tuple[str, str], set[str]] = {}
+    for ref in refs:
+        # The repo has to be in the ref. Borrowing the cwd's, as symbol_context
+        # does for a bare id, would judge the ref against whichever repo the
+        # caller happens to run from.
+        repo, _, rest = ref.partition("#")
+        path, _, name = rest.rpartition("::")
+        if not (repo and path and name):
+            out[ref] = {"status": "unknown", "reason": "not a repo#path::Name id"}
+            continue
+        repo = repo_module.normalise(repo)
+        row = indexed.get(repo)
+        if row is None:
+            out[ref] = {"status": "unknown", "reason": f"{repo} is not indexed"}
+            continue
+        if row.get("files") is None:
+            out[ref] = {
+                "status": "unknown",
+                "reason": f"{repo}'s code graph is unreadable: {row.get('unreadable')}",
+            }
+            continue
+        symbol_id = f"{repo}#{path}::{name}"
+        try:
+            # Liveness is an exact-id check against the file's symbols. A name
+            # lookup is capped at 50 rows in no stable order, so a qualified
+            # name that repeats across files (every `<module>`, Django's
+            # `Command.handle`) would report a live symbol as missing.
+            if (repo, path) not in file_symbols:
+                file_symbols[repo, path] = {
+                    s["symbol_id"]
+                    for s in _code_result(code.code_symbols_in_file(path, repo))
+                }
+            if symbol_id in file_symbols[repo, path]:
+                out[ref] = {"status": "live"}
+                continue
+            defs = _code_result(code.code_find_definition(name, repo))
+        except Exception:  # cross-store lookup is best-effort
+            logger.info("witan.stale_refs.lookup_failed", ref=ref, exc_info=True)
+            out[ref] = {"status": "unknown", "reason": "definition lookup failed"}
+            continue
+        ids = {d["symbol_id"] for d in defs}
+        # The file read can miss: witan-code resolves a relative path against
+        # the cwd when it exists there, which names a different file.
+        if symbol_id in ids:
+            out[ref] = {"status": "live"}
+            continue
+        # Same-named symbols elsewhere in the repo: the likely rename/move
+        # targets a reviewer checks before deciding the memory is stale.
+        out[ref] = {"status": "missing", "candidates": sorted(ids)}
+    return out
+
+
+@_tool
+def memory_stale_refs(repo: str | None = None) -> dict:
+    """
+    Memories whose ``symbol_refs`` no longer resolve in the code graph.
+
+    A review list, never an edit. Resolves every current memory's
+    ``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+    symbol is still defined), ``missing`` (its repo is indexed and the symbol is
+    not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
+    index, or witan-code is unreachable). A missing symbol may have been renamed
+    or moved, so the memory can still be true: ``candidates`` lists the indexed
+    symbols with the same name to check first, then ``memory_update`` the refs
+    or supersede the memory.
+
+    Parameters
+    ----------
+    repo:
+        Repo scoping — see instructions. ``""`` checks every repo's memories.
+
+    Returns ``{"repo", "checked", "counts", "memories"}``. ``checked`` is how
+    many memories carry refs; ``counts`` tallies refs by status. ``memories``
+    holds only those with a ref that is not live, each with ``status``
+    (``stale`` when any ref is missing, else ``unknown``) and its ``refs``.
+    """
+    detected = repo_module.detect(override=repo)
+    rows = [
+        r
+        for r in client.read("read.gq", "current_memory_refs", {"repo": detected})
+        if r.get("symbol_refs")
+    ]
+    resolved = _resolve_symbol_refs({ref for r in rows for ref in r["symbol_refs"]})
+
+    counts: Counter[str] = Counter({"live": 0, "missing": 0, "unknown": 0})
+    flagged = []
+    for row in rows:
+        refs = [{"symbol_ref": ref, **resolved[ref]} for ref in row["symbol_refs"]]
+        statuses = {r["status"] for r in refs}
+        counts.update(r["status"] for r in refs)
+        if statuses == {"live"}:
+            continue
+        flagged.append(
+            {
+                "slug": row["slug"],
+                "kind": row.get("kind"),
+                "title": row.get("title"),
+                "repo": row.get("repo"),
+                "status": "stale" if "missing" in statuses else "unknown",
+                "refs": refs,
+            }
+        )
+    return {
+        "repo": detected,
+        "checked": len(rows),
+        "counts": dict(counts),
+        "memories": flagged,
+    }
 
 
 # ── Graph-aware recall (spec §8) ──────────────────────────────────
@@ -9265,8 +9623,8 @@ def recall(
     ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
     With no edges in the graph the result equals ``memory_search`` — expansion is
-    additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
-    (default off); ``recall`` works with BM25 only and needs no embedding provider.
+    additive, never lossy. Embeddings are not implemented: ``recall`` seeds from
+    BM25 only and needs no embedding provider.
 
     Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
     Past a total content budget a memory's ``content`` is cut, marked by

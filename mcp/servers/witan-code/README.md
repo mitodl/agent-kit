@@ -474,10 +474,10 @@ indexer first).
 |------|---------|
 | `code_find_definition(name)` | symbols whose name / qualified name matches |
 | `code_find_references(symbol_id)` | incoming `References` + `Calls` |
-| `code_callers(symbol_id)` | incoming `Calls` |
+| `code_callers(symbol_id, direction="callers")` | incoming `Calls`; `direction="callees"` for outgoing |
 | `code_impact(symbol_id, max_depth=5, max_nodes=200)` | transitive callers via BFS |
 | `code_symbols_in_file(path)` | symbols defined in a file |
-| `code_search_symbol(query)` | BM25 search over symbol qualified names |
+| `code_search_symbol(query)` | BM25 search over symbol qualified names, then docstrings (name matches first) |
 | `code_reindex(path=None)` | index/re-index the repo or a subpath |
 
 Cross-repo bridge tools (resolve the shared `_bridge.omni` store; return `[]` /

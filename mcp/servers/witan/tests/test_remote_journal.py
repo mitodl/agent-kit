@@ -36,6 +36,11 @@ def _data_home(tmp_path, monkeypatch):
 def proxy(server, monkeypatch):
     import witan.server as srv
 
+    # A replayed call carries the journal holder's token, so a deployment acts
+    # as that person. `task_close` checks the claim against it.
+    monkeypatch.setattr(
+        srv, "cfg", srv.cfg.model_copy(update={"author": "ada@example.org"})
+    )
     p = RemoteServerProxy(REMOTE_CFG, lambda: "tok")
     monkeypatch.setattr(p, "_new_client", lambda _token: Client(srv.mcp))
     return p
@@ -118,6 +123,59 @@ def test_a_queued_close_on_a_task_someone_else_holds_becomes_a_comment(proxy):
     assert f"by {HOLDER} not applied" in comment["body"]
     assert "held by bob@example.org#11112222" in comment["body"]
     assert '"resolution": "done"' in comment["body"]
+
+
+@requires_omnigraph
+def test_a_queued_forced_close_applies_over_someone_elses_claim(proxy):
+    # `witan task close --force` queued during an outage was told it would
+    # replay; turning it into a comment would drop the override silently.
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee="bob@example.org#11112222")
+    _queue(proxy, "task_close", {"slug": slug, "resolution": "done", "force": True})
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["status"] == "closed"
+    assert task["comments"] == []
+
+
+@pytest.mark.parametrize(
+    "queued",
+    [
+        ("task_close", {"resolution": "done"}),
+        ("task_update", {"status": "closed"}),
+    ],
+    ids=["close", "update"],
+)
+@requires_omnigraph
+def test_a_claim_landing_after_the_replay_check_turns_the_close_into_a_comment(
+    proxy, monkeypatch, queued
+):
+    # The holder check passes on replay's read, then someone claims the task
+    # before the write. The tool refuses with an answer, not an error, so the
+    # close has to come back as a comment rather than be reported applied.
+    rival = "bob@example.org#11112222"
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee=HOLDER)
+    plan_after_read = proxy._replay_plan
+
+    async def rival_claims_after_the_read(entry, call):
+        plan = await plan_after_read(entry, call)
+        await call("task_claim", {"slug": slug, "assignee": rival, "force": True})
+        return plan
+
+    monkeypatch.setattr(proxy, "_replay_plan", rival_claims_after_the_read)
+    tool, args = queued
+    _queue(proxy, tool, {"slug": slug, **args})
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["status"] == "in_progress"
+    assert task["assignee"] == rival
+    [comment] = task["comments"]
+    assert f"buffered {tool}" in comment["body"]
+    assert f"held by {rival}" in comment["body"]
+    assert not proxy.journal.has_pending()
 
 
 @requires_omnigraph

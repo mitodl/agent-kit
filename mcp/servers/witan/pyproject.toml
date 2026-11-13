@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.47.0"
+version = "0.48.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -271,7 +271,19 @@ dependencies = [
   # remote/proxy.py chunk through it, so on 0.51.0 a merge whose rows fit one
   # batch still commits nodes and edges separately: one extra commit, no
   # wrong result.
-  "witan-core[cli,remote,observability,sentry]>=0.51.1,<1",
+  #
+  # ★ >=0.54 IS A BEHAVIOUR FLOOR: `remote/proxy.py` overrides
+  # `_replay_result`, which witan-core's journal replay calls only from
+  # 0.54.0. On 0.53 the override is never called, so a queued close that the
+  # server refuses on replay (a claim landed after replay checked the holder)
+  # is reported applied and dropped instead of becoming a comment. It imports
+  # fine, so `just check-core-floor` cannot see it.
+  #
+  # ★ >=0.55 IS AN IMPORT FLOOR: server.py, readiness.py, context.py,
+  # session_summary.py, cli/session.py and remote/proxy.py import
+  # `witan_core.timeutil.parse_timestamp` at module scope, added in witan-core
+  # 0.55.0 in the same change (#629), so 0.54 cannot import the server.
+  "witan-core[cli,remote,observability,sentry]>=0.55.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -338,7 +350,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.47.0"
+current_version = "0.48.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

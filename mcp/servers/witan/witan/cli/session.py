@@ -16,6 +16,8 @@ from datetime import UTC
 
 import cyclopts
 
+from witan_core.timeutil import parse_timestamp
+
 from .. import session_state
 from ._common import (
     WorkflowPhase,
@@ -196,12 +198,10 @@ def session_sweep(
             running += 1
             continue
         try:
-            when = datetime.fromisoformat(started)
+            when = parse_timestamp(started)
         except ValueError:
             running += 1
             continue
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=UTC)
         if when < cutoff:
             stale.append(sess)
         else:

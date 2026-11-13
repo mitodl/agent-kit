@@ -51,6 +51,18 @@ def test_reindex_then_query_tools(sample_repo, monkeypatch):
     assert "Service.run" in {c["qualified_name"] for c in callers}
     assert all("symbol_id" in c and "slug" not in c for c in callers)
 
+    run_id = next(
+        d["symbol_id"]
+        for d in _fn(srv.code_find_definition)("run")
+        if d["qualified_name"] == "Service.run"
+    )
+    callees = _fn(srv.code_callers)(run_id, direction="callees")
+    assert {c["qualified_name"] for c in callees} == {"helper"}
+    assert all("symbol_id" in c and "slug" not in c for c in callees)
+    # helper calls nothing, and the default direction still answers "who calls".
+    assert _fn(srv.code_callers)(helper_id, direction="callees") == []
+    assert _fn(srv.code_callers)(helper_id) == callers
+
     impact = _fn(srv.code_impact)(helper_id)
     assert impact["root"] == helper_id
     assert "Service.run" in {s["qualified_name"] for s in impact["impacted"]}

@@ -368,6 +368,59 @@ def test_task_close_cli(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_task_close_cli_refuses_a_live_claim_by_someone_else(server, monkeypatch):
+    """task close exits 1 with the way out when someone else holds the task, and
+    --force closes it."""
+    import pytest
+
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.tasks import task_close_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    t = _fn(srv.task_create)(title="t", description="d")
+    _fn(srv.task_claim)(t["slug"], assignee="alice")
+
+    with pytest.raises(SystemExit) as exc:
+        task_close_cmd(t["slug"], resolution="late")
+    assert exc.value.code == 1
+    combined = "\n".join(printed)
+    assert "Not closed" in combined
+    assert "held by alice" in combined
+    assert f"witan task close {t['slug']} --force" in combined
+    assert _fn(srv.task_get)(t["slug"])["status"] == "in_progress"
+
+    task_close_cmd(t["slug"], resolution="done", force=True)
+    assert _fn(srv.task_get)(t["slug"])["status"] == "closed"
+
+
+def test_task_close_and_update_cli_send_force_only_when_set(monkeypatch):
+    """A deployment older than `force` on task_close/task_update rejects it as an
+    unexpected argument, and the remote proxy keeps a False (it drops only None),
+    so an unforced call must not carry it at all."""
+    from types import SimpleNamespace
+
+    from witan.cli.tasks import task_close_cmd, task_update_cmd
+
+    calls: list[dict] = []
+
+    def record(**kwargs):
+        calls.append(kwargs)
+        return {"slug": kwargs["slug"], "status": "closed", "priority": "p2"}
+
+    _patch_server(monkeypatch, SimpleNamespace(task_close=record, task_update=record))
+
+    task_close_cmd("tk-a")
+    task_update_cmd("tk-a", status="closed")
+    assert ["force" in kw for kw in calls] == [False, False]
+
+    calls.clear()
+    task_close_cmd("tk-a", force=True)
+    task_update_cmd("tk-a", status="closed", force=True)
+    assert [kw.get("force") for kw in calls] == [True, True]
+
+
+@requires_omnigraph
 def test_task_claim_and_release_cli(server, monkeypatch):
     """task claim then release round-trips ownership."""
     from witan import server as srv

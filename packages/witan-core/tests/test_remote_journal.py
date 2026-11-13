@@ -456,6 +456,77 @@ def test_a_custom_replay_plan_can_skip_or_substitute(monkeypatch):
     ]
 
 
+def test_a_replayed_write_is_applied_whatever_it_returns_by_default():
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_close(slug="tk-1")
+
+    _up(deployment)
+    report = asyncio.run(proxy.replay_journal())
+
+    assert [line["outcome"] for line in report] == ["applied"]
+    assert [name for name, _ in deployment.calls] == ["task_close"]
+    assert not proxy.journal.has_pending()
+
+
+def _substitute_refused_closes(monkeypatch, proxy):
+    """Treat every replayed task_close's answer as a refusal, as a binding whose
+    tool refuses by returning would."""
+
+    def result(entry, plan, answer):
+        assert answer == {"tool": plan.tool, **plan.args}
+        if plan.tool != "task_close":
+            return None
+        return dataclasses.replace(
+            entry, tool="task_comment", args={"slug": "tk-1", "text": "refused"}
+        )
+
+    monkeypatch.setattr(proxy, "_replay_result", result)
+
+
+def test_a_custom_replay_result_substitutes_for_a_refused_answer(monkeypatch):
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_close(slug="tk-1")
+    proxy.task_comment(slug="tk-1", text="after")
+    _substitute_refused_closes(monkeypatch, proxy)
+
+    _up(deployment)
+    report = asyncio.run(proxy.replay_journal())
+
+    assert [(line["outcome"], line["detail"]) for line in report] == [
+        ("substituted", "task_comment"),
+        ("applied", ""),
+    ]
+    assert [name for name, _ in deployment.calls] == [
+        "task_close",
+        "task_comment",
+        "task_comment",
+    ]
+    assert not proxy.journal.has_pending()
+
+
+def test_a_retryable_write_whose_substitute_is_unsent_is_kept(monkeypatch):
+    # The write was refused, and nothing recorded that. Kept, the next replay
+    # plans it again from a fresh read.
+    deployment = _Deployment()
+    _down(deployment)
+    proxy = _Proxy(deployment)
+    proxy.task_close(slug="tk-1")
+    _substitute_refused_closes(monkeypatch, proxy)
+
+    _up(deployment)
+    deployment.fail_tools["task_comment"] = ExceptionGroup(
+        "x", [httpx2.ReadError("reset")]
+    )
+    report = asyncio.run(proxy.replay_journal())
+
+    assert [line["outcome"] for line in report] == ["kept"]
+    assert [e.tool for e in proxy.journal.entries()] == ["task_close"]
+
+
 def test_each_deployment_has_its_own_journal():
     deployment = _Deployment()
     _down(deployment)
