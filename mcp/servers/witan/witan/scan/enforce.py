@@ -9,6 +9,7 @@ that turns detector findings into policy, for every node type.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 from witan_core.observability import get_logger
@@ -161,16 +162,7 @@ class WriteGuard:
             return params
         node_type, fields = entry
         slug = params.get("slug")
-        config = self._config.for_repo(_repo_of(params))
-        # Compare values, not identity: an overlay that matched but didn't
-        # touch `allowlist` (e.g. it only overrides secret_action) still
-        # returns a *new* ScanConfig from for_repo(), and recompiling the
-        # same patterns on every such write would be pure waste.
-        allowlist = (
-            self._allowlist
-            if config.allowlist == self._config.allowlist
-            else compile_allowlist(config.allowlist)
-        )
+        config, allowlist = self._policy(_repo_of(params))
 
         # Resolve every field's findings to an action first, without emitting
         # audit events or mutating anything, so the write's fate (blocked or
@@ -196,18 +188,9 @@ class WriteGuard:
         blocked: list[tuple[str, Finding]] = []
         for field, index, value in _scannable(params, fields):
             label = field if index is None else f"{field}[{index}]"
-            findings = self._scan(value, field, node_type, config)
-            if not findings:
+            resolved = self._resolve(value, field, node_type, config, allowlist)
+            if not resolved:
                 continue
-            resolved: list[tuple[Finding, ScanAction, str | None]] = []
-            for f in findings:
-                reason = suppression_reason(f, value, config, allowlist)
-                action = (
-                    "warn"
-                    if reason
-                    else f.action or self._action_for(f.category, config)
-                )
-                resolved.append((f, action, reason))
             per_field.append((field, index, label, value, resolved))
             blocked.extend((label, f) for f, a, _ in resolved if a == "block")
 
@@ -246,6 +229,62 @@ class WriteGuard:
         if redactions:
             return flag_redacted({**params, **redactions})
         return params
+
+    def stored_text(
+        self, query_name: str, field: str, value: str, repo: str | None
+    ) -> str:
+        """``value`` with every span a ``query_name`` write would not store as-is.
+
+        For a caller that derives something permanent from a field before the
+        write that scans it, e.g. a slug built from a title. The slug is the
+        node's ``@key`` and is never scanned, so a span redacted out of the
+        title would otherwise live on in it.
+
+        A span the write would block is replaced too, though that write will
+        fail anyway. Only ``warn`` (including an allowlisted finding) keeps it,
+        matching what the write stores. Emits no audit event and records no
+        notice: the write that follows does both, for the field itself.
+        """
+        node_type, _ = FIELD_MAP[query_name]
+        config, allowlist = self._policy(repo)
+        dropped = [
+            f
+            for f, action, _ in self._resolve(
+                value, field, node_type, config, allowlist
+            )
+            if action != "warn"
+        ]
+        return redact_spans(value, dropped) if dropped else value
+
+    def _policy(self, repo: str | None) -> tuple[ScanConfig, list[re.Pattern[str]]]:
+        config = self._config.for_repo(repo)
+        # Compare values, not identity: an overlay that matched but didn't
+        # touch `allowlist` (e.g. it only overrides secret_action) still
+        # returns a *new* ScanConfig from for_repo(), and recompiling the
+        # same patterns on every such write would be pure waste.
+        allowlist = (
+            self._allowlist
+            if config.allowlist == self._config.allowlist
+            else compile_allowlist(config.allowlist)
+        )
+        return config, allowlist
+
+    def _resolve(
+        self,
+        value: str,
+        field: str,
+        node_type: str,
+        config: ScanConfig,
+        allowlist: list[re.Pattern[str]],
+    ) -> list[tuple[Finding, ScanAction, str | None]]:
+        resolved: list[tuple[Finding, ScanAction, str | None]] = []
+        for f in self._scan(value, field, node_type, config):
+            reason = suppression_reason(f, value, config, allowlist)
+            action = (
+                "warn" if reason else f.action or self._action_for(f.category, config)
+            )
+            resolved.append((f, action, reason))
+        return resolved
 
     def _scan(
         self, value: str, field: str, node_type: str, config: ScanConfig

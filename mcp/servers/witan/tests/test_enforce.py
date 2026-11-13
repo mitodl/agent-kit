@@ -411,3 +411,65 @@ def test_workflow_project_update_scans_title_and_description():
             "update_workflow_project_fields",
             {"slug": "wp-1", "title": "t", "description": "key AKIASECRET"},
         )
+
+
+# ── stored_text: what a slug is built from ──────────────────────────────────────
+# A slug is the node's permanent @key and is never scanned, so it is built from
+# the field as the write will store it, not from what the caller sent.
+
+
+def test_stored_text_drops_a_redacted_span():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="redact")
+    assert (
+        guard.stored_text("insert_memory", "title", "ping a@b.com", None)
+        == "ping «redacted:email»"
+    )
+
+
+def test_stored_text_drops_a_span_the_write_would_block():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")])
+    assert "AKIA" not in guard.stored_text("insert_task", "title", "key AKIA", None)
+
+
+def test_stored_text_keeps_a_warned_span_as_the_write_does():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="warn")
+    assert guard.stored_text("insert_task", "title", "a@b.com", None) == "a@b.com"
+
+
+def test_stored_text_keeps_an_allowlisted_span():
+    guard = _guard(
+        [MatchScanner("email", "pii", "a@b.com")],
+        pii_action="redact",
+        allowlist=["a@b\\.com"],
+    )
+    assert guard.stored_text("insert_task", "title", "a@b.com", None) == "a@b.com"
+
+
+def test_stored_text_follows_the_repo_overlay():
+    guard = _guard(
+        [MatchScanner("email", "pii", "a@b.com")],
+        pii_action="redact",
+        overlay={"github.com/example/legacy": {"pii_action": "warn"}},
+    )
+    legacy = "github.com/example/legacy"
+    assert guard.stored_text("insert_task", "title", "a@b.com", legacy) == "a@b.com"
+    assert "a@b.com" not in guard.stored_text(
+        "insert_task", "title", "a@b.com", "github.com/other/repo"
+    )
+
+
+def test_stored_text_audits_and_records_nothing(monkeypatch):
+    """The write that follows audits and reports the field itself, so a second
+    record from building the slug would describe one redaction twice."""
+    from witan.scan import audit, no_redactions, take_redactions
+
+    emitted = []
+    monkeypatch.setattr(audit, "emit", lambda **kw: emitted.append(kw))
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="redact")
+    with no_redactions():
+        guard.stored_text("insert_memory", "title", "a@b.com", None)
+        assert take_redactions() == ()
+        assert emitted == []
+        # Sanity: the patch is live, so the empty list above means something.
+        guard("insert_memory", {"title": "a@b.com"})
+        assert emitted

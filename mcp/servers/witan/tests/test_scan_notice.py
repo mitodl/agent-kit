@@ -278,3 +278,56 @@ def test_task_claim_surfaces_a_redaction_it_did_not_build_its_result_from(
     claimed = guarded_server.task_claim(slug=created["slug"], assignee="pytest")
     assert "redaction_note" in claimed
     assert claimed["redactions"][0]["slug"] == created["slug"]
+
+
+# ── a slug is built from the title as stored, not as sent ────────────────────
+#
+# The slug is the node's permanent @key, and it is never scanned. Built from
+# the raw title it kept the very address the guard had redacted out of that
+# title, in every link, log line and comment that names the node.
+
+EMAIL = "jane.doe@example.com"
+
+
+def _create_task(server):
+    return server.task_create(title=f"ask {EMAIL} about it", description="d")
+
+
+@pytest.mark.parametrize(
+    "create",
+    [
+        lambda s: s.memory_store(
+            kind="agent_context", title=f"ask {EMAIL} about it", content="c"
+        ),
+        _create_task,
+        lambda s: s.workflow_project_create(
+            title=f"ask {EMAIL} about it", description="d"
+        ),
+        lambda s: s.task_comment(
+            slug=s.task_create(title="t", description="d")["slug"],
+            body=f"ask {EMAIL} about it",
+        ),
+    ],
+    ids=["memory_store", "task_create", "workflow_project_create", "task_comment"],
+)
+@requires_omnigraph
+def test_a_title_redacted_for_pii_leaves_no_pii_in_the_slug(guarded_server, create):
+    slug = create(guarded_server)["slug"]
+
+    assert "jane" not in slug
+    assert "example" not in slug
+    assert "-ask-redacted-email-about-it-" in slug
+
+
+@requires_omnigraph
+def test_the_slug_is_built_from_the_stored_title(guarded_server):
+    created = _create_task(guarded_server)
+    stored = guarded_server.task_get(created["slug"])
+    assert stored["title"] == "ask «redacted:email» about it"
+    assert created["slug"].startswith("tk-ask-redacted-email-about-it-")
+
+
+@requires_omnigraph
+def test_an_unguarded_store_still_slugs_from_the_title(server):
+    """No guard, no scanning: the slug is the title's, as before."""
+    assert "jane-doe-example-com" in _create_task(server)["slug"]
