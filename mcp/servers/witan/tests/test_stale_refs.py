@@ -138,6 +138,31 @@ def test_liveness_needs_only_the_exact_id_lookup(server, code):
 
 
 @requires_omnigraph
+def test_a_live_symbol_the_exact_lookup_misses_mid_reindex_is_live(server, code):
+    # A reindex deletes a file's rows and loads them back as separate writes, so
+    # an exact lookup between the two misses while the name lookup after it
+    # returns the reloaded id. That id is the ref's own, so the ref is live.
+    fake = _fake_code({LIVE}, {INDEXED: 10})
+    by_name = fake.code_find_definition
+
+    async def code_find_definition(
+        name=None, repo=None, branch=None, symbol_id=None, ctx=None
+    ):
+        if symbol_id is not None:
+            return []
+        return await by_name(name, repo)
+
+    fake.code_find_definition = code_find_definition
+    code(fake)
+    slug = _lesson(server, "mid-reindex", [LIVE])
+
+    out = server.memory_stale_refs(repo=INDEXED)
+
+    assert slug not in _by_slug(out)
+    assert out["counts"]["live"] == 1
+
+
+@requires_omnigraph
 def test_missing_symbol_lists_same_named_candidates(server, code):
     # A move to another file is the common "stale" case: the memory may still be
     # true, so the report names where the symbol went rather than editing it.

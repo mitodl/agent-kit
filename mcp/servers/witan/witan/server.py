@@ -9352,12 +9352,16 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
             logger.info("witan.stale_refs.lookup_failed", ref=ref, exc_info=True)
             out[ref] = {"status": "unknown", "reason": "definition lookup failed"}
             continue
+        ids = {d["symbol_id"] for d in defs}
+        # A reindex deletes a file's rows and loads their replacements as
+        # separate writes, so the exact lookup can land between the two and
+        # miss while the later name lookup sees the reloaded id.
+        if symbol_id in ids:
+            out[ref] = {"status": "live"}
+            continue
         # Same-named symbols elsewhere in the repo: the likely rename/move
         # targets a reviewer checks before deciding the memory is stale.
-        out[ref] = {
-            "status": "missing",
-            "candidates": sorted(d["symbol_id"] for d in defs),
-        }
+        out[ref] = {"status": "missing", "candidates": sorted(ids)}
     return out
 
 
