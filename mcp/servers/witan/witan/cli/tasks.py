@@ -108,7 +108,8 @@ def tasks(
         Free-text search over title and description, ranked by relevance.
         A search returns at most 20 hits, counted after ``--status``,
         ``--project`` and ``--assignee`` apply, and before ``--ready`` and the
-        default closed-task elision. ``--limit`` does not apply to it yet.
+        default closed-task elision. ``--limit`` can trim those hits but
+        cannot raise a search past 20 yet.
     repo:
         Scope to a specific repo URI (default: the current git repo).
     status:
@@ -123,8 +124,9 @@ def tasks(
     all_repos:
         Span every repo in the graph.
     limit:
-        Max rows. Does not apply to a search (``QUERY``) yet: sending it would
-        break against a server that predates ``task_search``'s ``limit``.
+        Max rows. A search (``QUERY``) is trimmed to it but not sent it yet,
+        so it stays capped at 20: sending it would break against a server
+        that predates ``task_search``'s ``limit``.
     """
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
