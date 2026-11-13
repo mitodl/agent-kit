@@ -208,7 +208,7 @@ files scanned/indexed/skipped and symbols/edges written.
 Supports task-augmented execution (`io.modelcontextprotocol/tasks`) for a
 client that would rather poll than hold the call open.
 
-*Writes (non-destructive, idempotent).*
+*Writes (destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

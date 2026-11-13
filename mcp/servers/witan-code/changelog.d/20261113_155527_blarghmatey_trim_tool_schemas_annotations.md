@@ -1,9 +1,11 @@
 ### Added
 
 - Every tool carries MCP annotations. The `code_*` queries and the read-only
-  `code_store_*` tools are `readOnlyHint`; `code_reindex` and
-  `code_store_open` are non-destructive and idempotent; the
-  `code_store_mutate*` and `code_store_load` tools are destructive.
+  `code_store_*` tools are `readOnlyHint`; `code_store_open` is
+  non-destructive and idempotent; `code_reindex` is destructive and
+  idempotent, because it deletes a changed file's rows before loading their
+  replacements; the `code_store_mutate*` and `code_store_load` tools are
+  destructive.
 
 ### Changed
 

@@ -458,9 +458,15 @@ def _file_id(path: str, repo: str) -> str:
 #: index can offer to build it (``_confirm_and_reindex``), but only after the
 #: user accepts an elicitation, so those reads still count as read-only.
 READ = ToolAnnotations(read_only_hint=True)
-#: Writes derived data a re-run reproduces: an index, a branch view.
+#: Writes derived data a re-run reproduces without deleting any: a branch view.
 REBUILD = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=True
+)
+#: Rebuilds an index a re-run reproduces, but deletes the stale rows of changed,
+#: vanished and newly ignored files before loading their replacements, so a
+#: load that fails part-way leaves those files missing from the index.
+REINDEX = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=True
 )
 #: Runs arbitrary named mutations or loads, which can overwrite or delete rows.
 MUTATE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
@@ -1368,7 +1374,7 @@ async def code_interface_search(
     return _filter_by_precision(rows, min_precision)
 
 
-@mcp.tool(task=TASKS_ENABLED, annotations=REBUILD)
+@mcp.tool(task=TASKS_ENABLED, annotations=REINDEX)
 async def code_reindex(path: str | None = None, force: bool = False) -> dict:
     """
     Index (or re-index) the current repo, or a subpath of it.
