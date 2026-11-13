@@ -378,11 +378,11 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:        ★ THE HEADLINE UPSTREAM NUMBER DOES NOT APPLY TO US, and it is worth
 #:        saying so rather than quoting it: their ~13 GB/OOM case is a
 #:        never-referenced `Vector(3072)` column dominating the read, and
-#:        witan defaults `WITAN_EMBED_ENABLED` OFF — `recall` runs BM25-only
-#:        and needs no embedding provider, so our Memory rows carry no vector
-#:        to skip. What we get is the narrower win of not reading unreferenced
+#:        witan has no embeddings: `recall` seeds from BM25 only and no
+#:        schema declares a `Vector` column, so our rows carry no vector to
+#:        skip. What we get is the narrower win of not reading unreferenced
 #:        scalar columns. The big version of this only arrives if embeddings
-#:        are ever switched on, at which point re-read this.
+#:        are ever implemented, at which point re-read this.
 #:
 #: The rest is benchmark/DST harness work (#527, #555-#560, #568/#570/#577),
 #: merge-lineage internals (#540/#541, #573), CI, and docs.
