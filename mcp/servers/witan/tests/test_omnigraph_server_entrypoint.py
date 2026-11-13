@@ -22,6 +22,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -520,7 +521,12 @@ class FakeOmnigraph:
         return observed
 
     def __call__(
-        self, args: list[str], lease, timeout_seconds=None, interrupt=None
+        self,
+        args: list[str],
+        lease,
+        timeout_seconds=None,
+        interrupt=None,
+        termination=None,
     ) -> object:
         if args[0] == "branch":
             self.calls.append(args)
@@ -858,11 +864,11 @@ def test_a_delete_past_its_timeout_is_unlocked_and_refuses(
     fake = code_cli()
     real = entrypoint.run_omnigraph
 
-    def stall_deletes(args, lease, timeout_seconds=None, interrupt=None):
+    def stall_deletes(args, lease, **kwargs):
         if "delete" in args:
             fake.lock = {"id": "01STALLED", "operation": "graph_operation"}
             raise entrypoint.CommandTimedOut("`omnigraph branch delete` did not finish")
-        return real(args, lease, timeout_seconds, interrupt)
+        return real(args, lease, **kwargs)
 
     monkeypatch.setattr(entrypoint, "run_omnigraph", stall_deletes)
     with pytest.raises(BootRefused, match="did not finish"):
@@ -935,6 +941,18 @@ def test_sigterm_before_the_drop_stops_the_boot_before_any_delete(code_cli, tmp_
     assert fake.deleted == []
     assert fake.lock is None
     assert "apply" not in fake.commands
+
+
+def test_the_cleanup_budget_is_the_grace_less_the_margin():
+    margin = entrypoint.SIGTERM_CLEANUP_MARGIN_SECONDS
+    assert entrypoint.sigterm_cleanup_seconds({}) == (
+        entrypoint.DEFAULT_TERMINATION_GRACE_SECONDS - margin
+    )
+    env = {"OMNIGRAPH_TERMINATION_GRACE_SECONDS": "65"}
+    assert entrypoint.sigterm_cleanup_seconds(env) == 65 - margin
+    env = {"OMNIGRAPH_TERMINATION_GRACE_SECONDS": "30"}
+    with pytest.raises(BootRefused, match="leaves no time"):
+        entrypoint.sigterm_cleanup_seconds(env)
 
 
 @pytest.mark.parametrize("graph", ["council", "bridge"])
@@ -1012,6 +1030,98 @@ def test_a_running_command_is_stopped_when_the_lease_is_lost(tmp_path, monkeypat
         entrypoint.run_omnigraph(["cluster", "apply"], Lost(may_unlock=True))
     assert stopped.exists()
     assert time.monotonic() - started < 10
+
+
+SIGTERM_AT_SECONDS = 0.5
+
+
+@pytest.fixture
+def slow_cli(tmp_path, monkeypatch) -> Path:
+    """A real `omnigraph` on PATH whose `branch delete` runs until stopped.
+
+    ``SLOW_STOP=1`` makes the delete ignore SIGTERM, so only SIGKILL ends
+    it, and ``STALL=status`` or ``STALL=force-unlock`` makes that command
+    hang. Returns the file each call's first two arguments are logged to.
+    """
+    calls = tmp_path / "calls"
+    script = tmp_path / "omnigraph"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$1 $2" >> {calls}\n'
+        'case "$1 $2" in\n'
+        "  'branch --target')\n"
+        "    [ -n \"$SLOW_STOP\" ] && trap '' TERM\n"
+        "    exec sleep 60 ;;\n"
+        "  'cluster status')\n"
+        '    [ "$STALL" = status ] && exec sleep 60\n'
+        '    echo \'{"lock_id": "01BRANCHOP1"}\' ;;\n'
+        "  'cluster force-unlock')\n"
+        '    [ "$STALL" = force-unlock ] && exec sleep 60\n'
+        "    echo '{}' ;;\n"
+        "esac\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    monkeypatch.delenv("SLOW_STOP", raising=False)
+    monkeypatch.delenv("STALL", raising=False)
+    monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: True)
+    monkeypatch.setattr(entrypoint, "SIGTERM_STOP_SECONDS", 1)
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {CODE_GRAPH: {}}})
+    )
+    return calls
+
+
+def delete_under_sigterm(config_dir: Path, budget: float) -> tuple[str, float]:
+    """Delete a branch, with SIGTERM arriving while the delete runs.
+
+    :returns: the refusal, and the seconds from SIGTERM until it was raised.
+    """
+    cluster = entrypoint.Cluster(config_dir, None, entrypoint.NoPeers(may_unlock=True))
+    termination = entrypoint.Termination(budget)
+    timer = threading.Timer(SIGTERM_AT_SECONDS, termination.note)
+    started = time.monotonic()
+    timer.start()
+    try:
+        with pytest.raises(BootRefused) as refused:
+            cluster.delete_branch(CODE_GRAPH, "act-0ebb3a7b/_detached", termination)
+    finally:
+        timer.cancel()
+    return str(refused.value), time.monotonic() - started - SIGTERM_AT_SECONDS
+
+
+def test_a_delete_slow_to_stop_on_sigterm_still_has_its_lock_removed(
+    slow_cli, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("SLOW_STOP", "1")
+    budget = 4
+    refusal, elapsed = delete_under_sigterm(tmp_path, budget)
+    assert "SIGTERM while deleting" in refusal
+    assert slow_cli.read_text().splitlines() == [
+        "branch --target",
+        "cluster status",
+        "cluster force-unlock",
+    ]
+    assert elapsed < budget
+
+
+@pytest.mark.parametrize("stalled", ["status", "force-unlock"])
+def test_a_stalled_unlock_after_sigterm_ends_inside_the_budget(
+    slow_cli, tmp_path, monkeypatch, capsys, stalled
+):
+    """Stopping the delete, `cluster status` and `force-unlock` share one
+    budget from SIGTERM, so the boot exits before the kubelet's SIGKILL and
+    says the lock may be left."""
+    monkeypatch.setenv("STALL", stalled)
+    budget = 3
+    refusal, elapsed = delete_under_sigterm(tmp_path, budget)
+    assert "cleanup budget after SIGTERM" in refusal
+    # One poll interval past the budget, then SIGKILL with no stop wait.
+    assert elapsed < budget + 1.5
+    assert slow_cli.read_text().splitlines()[-1] == f"cluster {stalled}"
+    logged = capsys.readouterr().out
+    assert "may still be on the root" in logged
+    assert "runbook: clear the lock" in logged
 
 
 # ── The two CLI dialects ─────────────────────────────────────────────────────

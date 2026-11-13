@@ -136,7 +136,12 @@ class FakeCli(FakeOmnigraph):
         self._op_ids = (f"01GRAPHOP{n}" for n in itertools.count(1))
 
     def __call__(
-        self, args: list[str], lease, timeout_seconds=None, interrupt=None
+        self,
+        args: list[str],
+        lease,
+        timeout_seconds=None,
+        interrupt=None,
+        termination=None,
     ) -> object:
         if args[0] not in ("optimize", "cleanup"):
             if self.lock_output is not None and args[1] == self.dialect.lock_command:

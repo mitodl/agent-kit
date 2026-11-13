@@ -52,7 +52,9 @@ BOOT SEQUENCE
     if that schema change is pending:
         per non-main branch: delete it, force-unlock the lock it left
                              (SIGTERM: stop, unlock, exit 1; the next boot
-                             carries on)
+                             carries on. The stop and the unlock share one
+                             budget that ends inside the pod's termination
+                             grace: `Termination`)
         plan again -> exit 1 on any plan error
     apply
     lock    -> force-unlock the deployment lock apply left
@@ -172,6 +174,19 @@ MAIN_BRANCH = "main"
 CODE_GRAPH_PREFIX = "code-"
 # A branch delete writes one graph's branch manifest and the cluster lock.
 BRANCH_DELETE_TIMEOUT_SECONDS = 120
+
+# The server pod's terminationGracePeriodSeconds, which the kubelet's SIGKILL
+# follows its SIGTERM by during the boot too (ol-infrastructure
+# applications/omnigraph/data_tier.py SERVER_TERMINATION_GRACE_SECONDS).
+DEFAULT_TERMINATION_GRACE_SECONDS = 125
+# The part of that grace the SIGTERM cleanup leaves unspent: a Lease confirm
+# begun just inside the budget (up to three Kubernetes calls of
+# KUBERNETES_TIMEOUT_SECONDS), the once-a-second poll, and the exit.
+SIGTERM_CLEANUP_MARGIN_SECONDS = 20
+# How long a command stopped by SIGTERM gets to exit before SIGKILL. It comes
+# out of the cleanup budget, so it is short enough to leave the lock commands
+# after it their turn.
+SIGTERM_STOP_SECONDS = 10
 
 # `omnigraph version --json` reports this for 0.14's `--target` addressing.
 # Upstream: clients selecting a CLI must require the exact protocol, because
@@ -619,11 +634,47 @@ class CommandTimedOut(Exception):
     """An omnigraph command outlived its timeout and was stopped."""
 
 
+class Termination:
+    """Whether SIGTERM has arrived, and what is left of the cleanup after it.
+
+    The kubelet's SIGKILL follows its SIGTERM by the pod's termination grace,
+    so from SIGTERM on, stopping the running command and removing the lock it
+    left share one budget that ends inside that grace.
+
+    :param cleanup_seconds: the budget, counted from SIGTERM
+        (``sigterm_cleanup_seconds``).
+    """
+
+    def __init__(self, cleanup_seconds: float) -> None:
+        self.cleanup_seconds = cleanup_seconds
+        self._deadline: float | None = None
+
+    def note(self) -> None:
+        """Record SIGTERM. A second one does not move the deadline."""
+        if self._deadline is None:
+            self._deadline = time.monotonic() + self.cleanup_seconds
+
+    def is_set(self) -> bool:
+        return self._deadline is not None
+
+    def remaining(self) -> float:
+        """Seconds left of the budget, unbounded before SIGTERM."""
+        if self._deadline is None:
+            return float("inf")
+        return max(0.0, self._deadline - time.monotonic())
+
+    def interrupt(self) -> None:
+        """For ``run_omnigraph``: stop the command once SIGTERM has arrived."""
+        if self.is_set():
+            raise DropInterrupted
+
+
 def run_omnigraph(
     args: list[str],
     lease: UnlockLease | NoPeers,
     timeout_seconds: float | None = None,
     interrupt: Callable[[], None] | None = None,
+    termination: Termination | None = None,
 ) -> CommandResult:
     """Run one omnigraph CLI command, stopping it if the Lease is lost.
 
@@ -636,12 +687,22 @@ def run_omnigraph(
 
     :param interrupt: called about once a second while the command runs. It
         raises to stop the command, and that exception propagates.
+    :param termination: once it records SIGTERM, the command runs and is
+        stopped (``SIGTERM_STOP_SECONDS``) within what is left of its cleanup
+        budget, and does not start once that is spent.
     :raises BootRefused: if the Lease was lost while the command ran. Nothing
         is unlocked.
-    :raises CommandTimedOut: if the command ran longer than ``timeout_seconds``.
+    :raises CommandTimedOut: if the command ran longer than ``timeout_seconds``
+        or than the cleanup budget ``termination`` has left.
     """
     command = f"`omnigraph {' '.join(args)}`"
     deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    if termination is not None and termination.remaining() <= 0:
+        msg = (
+            f"the {termination.cleanup_seconds:.0f}s cleanup budget after SIGTERM "
+            f"ran out before {command}"
+        )
+        raise CommandTimedOut(msg)
     with subprocess.Popen(
         ["omnigraph", *args],
         stdout=subprocess.PIPE,
@@ -658,14 +719,24 @@ def run_omnigraph(
                     if deadline is not None and time.monotonic() >= deadline:
                         msg = f"{command} did not finish in {timeout_seconds:.0f}s"
                         raise CommandTimedOut(msg) from None
+                    if termination is not None and termination.remaining() <= 0:
+                        msg = (
+                            f"{command} outlived the "
+                            f"{termination.cleanup_seconds:.0f}s cleanup budget "
+                            "after SIGTERM"
+                        )
+                        raise CommandTimedOut(msg) from None
                     if interrupt is not None:
                         interrupt()
                 else:
                     return CommandResult(child.returncode, stdout)
         except BaseException:
+            stop_seconds: float = CHILD_STOP_SECONDS
+            if termination is not None and termination.is_set():
+                stop_seconds = min(SIGTERM_STOP_SECONDS, termination.remaining())
             child.terminate()
             try:
-                child.wait(timeout=CHILD_STOP_SECONDS)
+                child.wait(timeout=stop_seconds)
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
@@ -760,17 +831,20 @@ class Cluster:
     def _run(self, *args: str) -> CommandResult:
         return run_omnigraph(["cluster", *args], self._lease)
 
-    def _run_lock_command(self, *args: str) -> CommandResult:
+    def _run_lock_command(
+        self, *args: str, termination: Termination | None = None
+    ) -> CommandResult:
         try:
             return run_omnigraph(
                 ["cluster", *args],
                 self._lease,
                 timeout_seconds=LOCK_COMMAND_TIMEOUT_SECONDS,
+                termination=termination,
             )
         except CommandTimedOut as exc:
             raise BootRefused(str(exc)) from exc
 
-    def lock(self) -> dict[str, Any]:
+    def lock(self, termination: Termination | None = None) -> dict[str, Any]:
         """The lock's ``state_observations``.
 
         0.13 reads them from `cluster status`. 0.14's `status` reports no
@@ -778,10 +852,13 @@ class Cluster:
         they come from `cluster plan`, which reads the root without taking
         the lock.
 
+        :param termination: see ``run_omnigraph``.
         :raises BootRefused: if the lock's state cannot be read.
         """
         if not self._targets:
-            result = self._run_lock_command("status", *self._source, "--json")
+            result = self._run_lock_command(
+                "status", *self._source, "--json", termination=termination
+            )
             if result.returncode != 0:
                 msg = f"`cluster status` failed (exit {result.returncode})"
                 raise BootRefused(msg)
@@ -790,7 +867,9 @@ class Cluster:
             except (ValueError, KeyError) as exc:
                 msg = f"`cluster status` printed no lock state: {result.stdout[:200]!r}"
                 raise BootRefused(msg) from exc
-        result = self._run_lock_command("plan", *self._source, "--json")
+        result = self._run_lock_command(
+            "plan", *self._source, "--json", termination=termination
+        )
         try:
             plan = result.json()
             observations = plan["state_observations"]
@@ -836,11 +915,16 @@ class Cluster:
             msg = f"`cluster apply` failed (exit {result.returncode})"
             raise BootRefused(msg)
 
-    def force_unlock(self, lock_id: str) -> None:
+    def force_unlock(
+        self, lock_id: str, termination: Termination | None = None
+    ) -> None:
+        """:param termination: see ``run_omnigraph``."""
         self._lease.confirm(UNLOCK_BUDGET_SECONDS)
         # 0.14's force-unlock takes no `--config` and needs an explicit target.
         scope = self._target if self._targets else self._source
-        result = self._run_lock_command("force-unlock", *scope, lock_id)
+        result = self._run_lock_command(
+            "force-unlock", *scope, lock_id, termination=termination
+        )
         if result.returncode != 0:
             msg = f"`cluster force-unlock {lock_id}` failed (exit {result.returncode})"
             raise BootRefused(msg)
@@ -916,16 +1000,16 @@ class Cluster:
             if step.get("kind") == "unsupported_change"
         ] or [json.dumps(planned["steps"])]
 
-    def delete_branch(
-        self, graph: str, branch: str, interrupt: Callable[[], None]
-    ) -> None:
+    def delete_branch(self, graph: str, branch: str, termination: Termination) -> None:
         """Delete one branch, then remove the lock the delete left.
 
         A direct `branch delete` keeps its `graph_operation` lock after it
         exits, whether it deleted anything or not, so the next delete would be
         refused. The lock is removed even when the delete fails, is stopped
-        on its timeout, or is stopped by ``interrupt`` (SIGTERM), so a boot
-        that ends there leaves the root unlocked for the next one. It is not
+        on its timeout, or is stopped by SIGTERM, so a boot that ends there
+        leaves the root unlocked for the next one. After SIGTERM, stopping
+        the delete and removing its lock share ``termination``'s cleanup
+        budget, so the removal ends before the kubelet's SIGKILL. It is not
         removed when the Lease was lost (``run_omnigraph`` raises
         ``BootRefused`` before that): nothing may unlock without it.
 
@@ -940,13 +1024,17 @@ class Cluster:
                 args,
                 self._lease,
                 timeout_seconds=BRANCH_DELETE_TIMEOUT_SECONDS,
-                interrupt=interrupt,
+                interrupt=termination.interrupt,
+                termination=termination,
             )
-        except (CommandTimedOut, DropInterrupted) as exc:
-            self.release_own_lock()
-            msg = str(exc) or f"SIGTERM while deleting {branch} on {graph}"
+        except CommandTimedOut as exc:
+            self._release_delete_lock(graph, termination)
+            raise BootRefused(str(exc)) from exc
+        except DropInterrupted as exc:
+            self._release_delete_lock(graph, termination)
+            msg = f"SIGTERM while deleting {branch} on {graph}"
             raise BootRefused(msg) from exc
-        self.release_own_lock()
+        self._release_delete_lock(graph, termination)
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
             msg = (
@@ -954,7 +1042,18 @@ class Cluster:
             )
             raise BootRefused(msg)
 
-    def release_own_lock(self) -> None:
+    def _release_delete_lock(self, graph: str, termination: Termination) -> None:
+        try:
+            self.release_own_lock(termination)
+        except BootRefused as refusal:
+            log(
+                f"!!! the graph_operation lock a `branch delete` on {graph} left "
+                f"may still be on the root ({refusal}); every later boot refuses "
+                "it until it is cleared (runbook: clear the lock)"
+            )
+            raise
+
+    def release_own_lock(self, termination: Termination | None = None) -> None:
         """Remove the lock the direct command this boot just ran left.
 
         Called only once the root was unlocked before that command, with the
@@ -964,14 +1063,17 @@ class Cluster:
         graphs, because this runs once per deleted branch and 0.14's lock
         read is a whole `cluster plan`.
 
+        :param termination: see ``run_omnigraph``.
         :raises BootRefused: if the lock cannot be read or removed.
         """
         if not self._targets:
-            lock = self.lock()
+            lock = self.lock(termination)
             if lock["locked"]:
-                self.force_unlock(lock["lock_id"])
+                self.force_unlock(lock["lock_id"], termination)
             return
-        result = self._run_lock_command("status", *self._target, "--json")
+        result = self._run_lock_command(
+            "status", *self._target, "--json", termination=termination
+        )
         if result.returncode != 0:
             msg = f"`cluster status` failed (exit {result.returncode})"
             raise BootRefused(msg)
@@ -981,7 +1083,7 @@ class Cluster:
             msg = f"`cluster status` printed no lock id: {result.stdout[:200]!r}"
             raise BootRefused(msg) from exc
         if lock_id:
-            self.force_unlock(lock_id)
+            self.force_unlock(lock_id, termination)
 
 
 # ── Boot sequence ────────────────────────────────────────────────────────────
@@ -1188,18 +1290,46 @@ def views_to_drop(
     return branched
 
 
+def sigterm_cleanup_seconds(env: dict[str, str]) -> float:
+    """The cleanup budget after SIGTERM: the pod's grace less a margin.
+
+    :raises BootRefused: if the grace leaves no time to unlock after stopping
+        a command.
+    """
+    grace = float(
+        env.get(
+            "OMNIGRAPH_TERMINATION_GRACE_SECONDS", DEFAULT_TERMINATION_GRACE_SECONDS
+        )
+    )
+    budget = grace - SIGTERM_CLEANUP_MARGIN_SECONDS
+    if budget <= SIGTERM_STOP_SECONDS:
+        msg = (
+            f"OMNIGRAPH_TERMINATION_GRACE_SECONDS={grace:.0f} leaves no time to "
+            "remove a lock after SIGTERM; it has to exceed "
+            f"{SIGTERM_CLEANUP_MARGIN_SECONDS + SIGTERM_STOP_SECONDS}"
+        )
+        raise BootRefused(msg)
+    return budget
+
+
 @contextlib.contextmanager
-def sigterm_noted() -> Iterator[threading.Event]:
-    """Record SIGTERM in an event for as long as the boot runs.
+def sigterm_noted(
+    cleanup_seconds: float = DEFAULT_TERMINATION_GRACE_SECONDS
+    - SIGTERM_CLEANUP_MARGIN_SECONDS,
+) -> Iterator[Termination]:
+    """Record SIGTERM for as long as the boot runs.
 
     As PID 1 with no handler the entrypoint ignores SIGTERM, and the kill
     comes as SIGKILL at the end of the grace period. Only the branch-view
-    drop acts on the event (``drop_branch_views``). It is installed before
-    the Lease is taken, so a SIGTERM that arrives while the boot is still
-    planning stops it before its first delete.
+    drop acts on it (``drop_branch_views``). It is installed
+    before the Lease is taken, so a SIGTERM that arrives while the boot is
+    still planning stops it before its first delete.
+
+    :param cleanup_seconds: the budget SIGTERM starts
+        (``sigterm_cleanup_seconds``).
     """
-    terminated = threading.Event()
-    previous = signal.signal(signal.SIGTERM, lambda signum, frame: terminated.set())
+    terminated = Termination(cleanup_seconds)
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: terminated.note())
     try:
         yield terminated
     finally:
@@ -1207,7 +1337,7 @@ def sigterm_noted() -> Iterator[threading.Event]:
 
 
 def drop_branch_views(
-    cluster: Cluster, views: dict[str, list[str]], terminated: threading.Event
+    cluster: Cluster, views: dict[str, list[str]], terminated: Termination
 ) -> None:
     """Delete every branch in ``views``, logging what went.
 
@@ -1219,14 +1349,9 @@ def drop_branch_views(
     kill would come mid-delete and leave a `graph_operation` lock that every
     later boot refuses.
 
-    :param terminated: set once SIGTERM has arrived (``sigterm_noted``).
+    :param terminated: records SIGTERM (``sigterm_noted``).
     :raises BootRefused: see ``Cluster.delete_branch``.
     """
-
-    def interrupt() -> None:
-        if terminated.is_set():
-            raise DropInterrupted
-
     for graph, branches in views.items():
         log(
             f"dropping {len(branches)} branch views on {graph} so its "
@@ -1237,7 +1362,7 @@ def drop_branch_views(
                 if terminated.is_set():
                     msg = "SIGTERM while dropping branch views"
                     raise BootRefused(msg)
-                cluster.delete_branch(graph, branch, interrupt)
+                cluster.delete_branch(graph, branch, terminated)
             except BootRefused:
                 log(
                     f"dropped {dropped} of {len(branches)} branch views on "
@@ -1339,16 +1464,18 @@ def converge(
     config_dir: Path,
     env: dict[str, str],
     lease: UnlockLease | NoPeers,
-    terminated: threading.Event | None = None,
+    terminated: Termination | None = None,
 ) -> None:
     """Bring the cluster root to the baked configuration, unlocked.
 
-    :param terminated: set once SIGTERM has arrived (``sigterm_noted``).
+    :param terminated: records SIGTERM (``sigterm_noted``).
     """
+    if terminated is None:
+        terminated = Termination(sigterm_cleanup_seconds(env))
     cluster, views = checked_plan(config_dir, env, lease)
     release_previous_lock(cluster)
     if views:
-        drop_branch_views(cluster, views, terminated or threading.Event())
+        drop_branch_views(cluster, views, terminated)
         # The first plan saw only the branch refusal, which can hide another
         # one behind it, so the apply waits for a plan with no refusal at all.
         remaining = planned_views(cluster, config_dir, env)
@@ -1405,7 +1532,7 @@ def main(argv: list[str]) -> NoReturn:
         log(f"--cluster is a storage URI ({cluster_arg}); skipping cluster bootstrap")
     else:
         try:
-            with sigterm_noted() as terminated:
+            with sigterm_noted(sigterm_cleanup_seconds(env)) as terminated:
                 lease = take_over(env)
                 converge(Path(cluster_arg), env, lease, terminated)
                 lease.hand_over()

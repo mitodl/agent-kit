@@ -175,10 +175,13 @@ stub in tests). See `witan_code/github_app.py`.
   exits, and the next container carries on from the views left, so the drop
   finishes over several restarts (with CrashLoopBackOff delays between them)
   and nothing serves until it does. Raise `omnigraph:boot_budget_seconds` to
-  finish in one boot. A failed or timed-out delete ends the boot the same
-  way. A lost Lease, or a `cluster status` or `force-unlock` that fails,
-  leaves the delete's `graph_operation` lock, which the next boot refuses
-  (runbook: clear the lock).
+  finish in one boot. From SIGTERM on, stopping the delete (at most 10s),
+  `cluster status` and `force-unlock` share one budget, the pod's
+  termination grace less 20s, so the lock is gone before the kubelet's
+  SIGKILL. A failed or timed-out delete ends the boot the same way. A lost
+  Lease, or a `cluster status` or `force-unlock` that fails or
+  runs out of that budget, leaves the delete's `graph_operation` lock, which
+  the boot logs and the next boot refuses (runbook: clear the lock).
 - **Speaks the 0.13 and the 0.14 CLI.** The scripts read `omnigraph version
   --json` (0.13 has no `--json`) and pick the argument shapes: 0.13's
   `--config <dir>` and `--cluster <root>`, or 0.14's `--config <dir> --target
@@ -223,6 +226,7 @@ The entrypoint reads these from the environment:
 | `OMNIGRAPH_POD_SELECTOR` | in Kubernetes | Label selector of the server Deployment's pods. The ServiceAccount needs `list` on pods. |
 | `POD_NAME` | no | This pod's name. Defaults to `HOSTNAME`. |
 | `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default 50). |
+| `OMNIGRAPH_TERMINATION_GRACE_SECONDS` | no | The pod's `terminationGracePeriodSeconds` (default 125, the `omnigraph` stack's). The cleanup after a SIGTERM during the branch-view drop ends 20s inside it. At 30 or below the boot refuses. |
 | `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
 | `OMNIGRAPH_BRANCH_DROP_ALLOWLIST` | no | Comma-separated graph ids whose non-main branches are derived views the boot may delete so a schema change can apply: the code graphs and the bridge, never the council graph. An id that does not start with `code-`, or that `cluster.yaml` does not declare, fails the plan. Unset, a schema change on a graph with branches refuses the boot as before. |
 | `OMNIGRAPH_UNLOCK_WITHOUT_PEERS` | outside Kubernetes | `1` allows force-unlock with no Lease or pod check. Ignored in Kubernetes. |
