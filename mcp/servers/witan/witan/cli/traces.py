@@ -203,9 +203,11 @@ def _load_proposals(path: Path) -> tuple[list, list]:
     as the write call, so a typo'd key or two empty lists would exit 0 having
     created nothing.
 
-    Each proposal with no ``repo`` gets the caller's detected repo. A
-    deployment has no checkout to detect one from, and the remote proxy fills
-    only a tool's top-level ``repo``, not one nested in a proposal.
+    Each proposal with neither ``repo`` nor ``all_repos`` gets the caller's
+    detected repo. A deployment has no checkout to detect one from, and the
+    remote proxy fills only a tool's top-level ``repo``, not one nested in a
+    proposal. One with ``all_repos`` is left alone, because the server refuses
+    ``repo`` beside it.
     """
     spec = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(spec, dict):
@@ -229,7 +231,11 @@ def _load_proposals(path: Path) -> tuple[list, list]:
     repo = _detect_repo_for_display()
     if repo is not None:
         for item in (*patterns, *lessons):
-            if isinstance(item, dict) and item.get("repo") is None:
+            if (
+                isinstance(item, dict)
+                and item.get("repo") is None
+                and not item.get("all_repos")
+            ):
                 item["repo"] = repo
     return patterns, lessons
 
@@ -257,7 +263,8 @@ def trace_mine_cmd(
         JSON file of the form ``{"patterns": [...], "lessons": [...]}``. Each
         entry needs ``title`` and ``content``. A pattern may add ``repo``,
         ``language`` and ``tags``; a lesson may add ``repo``, ``severity`` and
-        ``tags``.
+        ``tags``. Either may set ``all_repos`` to file it under no repo
+        instead of the current one.
     session_slug:
         The ``ws-`` session to record as the provenance of every mined memory.
     """

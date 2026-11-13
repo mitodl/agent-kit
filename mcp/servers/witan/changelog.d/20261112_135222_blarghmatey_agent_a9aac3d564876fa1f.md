@@ -1,7 +1,8 @@
 ### Added
 
 - `witan trace mine <slug>` prints a completed trace's material to mine, and
-  with `--proposals <file.json>` creates the pattern and lesson memories.
+  with `--proposals <file.json>` creates the pattern and lesson memories,
+  each under the current repo unless it names a `repo` or sets `all_repos`.
   `witan trace annotate <slug> --lesson … --pattern …` records memories already
   written. Both accept the `wp-` or `wt-` slug.
 

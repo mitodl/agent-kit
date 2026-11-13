@@ -1433,7 +1433,8 @@ trace's project and recorded on the trace.
 * `--proposals PATH`: JSON file of the form ``{"patterns": [...], "lessons": [...]}``. Each
     entry needs ``title`` and ``content``. A pattern may add ``repo``,
     ``language`` and ``tags``; a lesson may add ``repo``, ``severity`` and
-    ``tags``.
+    ``tags``. Either may set ``all_repos`` to file it under no repo
+    instead of the current one.
 * `--session-slug STR`: The ``ws-`` session to record as the provenance of every mined memory.
 
 ## witan ui

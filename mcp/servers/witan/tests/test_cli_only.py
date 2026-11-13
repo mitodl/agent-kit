@@ -186,6 +186,23 @@ def test_trace_mine_fills_the_callers_repo_into_proposals(monkeypatch, tmp_path)
     ]
 
 
+def test_trace_mine_leaves_an_all_repos_proposal_unscoped(monkeypatch, tmp_path):
+    from witan.cli.traces import trace_mine_cmd
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/acme/widgets")
+    calls, _ = _fake_trace_server(
+        monkeypatch, {"created_patterns": [], "created_lessons": []}
+    )
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps({"lessons": [{"title": "l", "content": "c", "all_repos": True}]})
+    )
+
+    trace_mine_cmd("wt-x", proposals=proposals)
+
+    assert "repo" not in calls[0]["lessons"][0]
+
+
 def test_trace_mine_leaves_repo_unset_when_none_is_detected(monkeypatch, tmp_path):
     from witan.cli.traces import trace_mine_cmd
 
