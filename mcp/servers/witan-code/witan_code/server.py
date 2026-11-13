@@ -1279,6 +1279,54 @@ def code_store_health() -> dict:
     }
 
 
+def use_config(config: cfg_module.Config) -> None:
+    """Read ``config``'s stores from here on, instead of the import-time load.
+
+    For the CLI commands that call this module in-process (``doctor``,
+    ``why``): the import-time :func:`config.load` takes no target, so a
+    ``--target`` forwarded into :mod:`witan_code.selected_target` never
+    reaches it. Clients and branch listings cached under the old config are
+    dropped with it.
+    """
+    global cfg
+    cfg = config
+    _clients.clear()
+    _store_branches.clear()
+
+
+def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:
+    """``rel_path``'s row in the view the ``code_*`` tools read for ``checkout``.
+
+    The view is the one :func:`_resolve_branch` picks for a read from inside
+    ``checkout``: this actor's view of its branch, else anyone's, else main.
+    Resolved from ``checkout`` rather than the cwd, so a file in another
+    checkout is looked up where that checkout's reads go.
+
+    Returns ``{"store", "view", "file"}``: the store's label (``None`` with
+    ``view`` when the repo has no code graph at all), the view name (``None``
+    for main), and the ``CodeFile`` row, or ``None`` when the view has none.
+
+    :raises store.ClusterUnreachable: when a cluster graph cannot be asked
+        about at all (a rejected token, a closed port), which
+        :meth:`StoreRef.exists` would report as an absent graph.
+    """
+    absent = {"store": None, "view": None, "file": None}
+    store = store_module.store_for_repo(repo, cfg)
+    if store.is_remote:
+        try:
+            store_module.probe_cluster_graph(store, f"{repo}'s code graph", cfg)
+        except store_module.ClusterGraphMissing:
+            return absent
+    elif not store.exists(cfg):
+        return absent
+    branch = repo_module.store_branch(checkout)
+    view = _view_for_branch(store, branch) if branch else None
+    rows = _client_for_ref(store, view).read(
+        "code_read.gq", "get_file", {"id": f"{repo}#{rel_path}"}
+    )
+    return {"store": store.label, "view": view, "file": rows[0] if rows else None}
+
+
 @mcp.tool
 def code_indexed_branches(branch: str | None = None) -> list[dict]:
     """
