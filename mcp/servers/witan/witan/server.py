@@ -9271,13 +9271,12 @@ def _memory_symbols(node: dict | None) -> list[dict]:
     symbols: list[dict] = []
     for ref in node.get("symbol_refs") or []:
         entry = {"symbol_ref": ref}
-        # Only a well-formed symbol id (repo#path::Name) is worth resolving;
-        # skip the cross-store call for anything without the :: delimiter.
-        if code is not None and "::" in ref:
+        # Only a well-formed symbol id (repo#path::Name) is worth resolving.
+        # Look it up by id: a name lookup is capped at 50 rows, so a name that
+        # repeats across files (every `<module>`) could miss the ref's own.
+        if code is not None and "#" in ref and "::" in ref:
             try:
-                name = ref.split("::")[-1]
-                repo = ref.split("#", 1)[0] if "#" in ref else None
-                defs = _code_result(code.code_find_definition(name, repo))
+                defs = _code_result(code.code_find_definition(symbol_id=ref))
                 if defs:
                     entry["definition"] = defs
             except Exception:  # best-effort enrichment
@@ -9318,7 +9317,6 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
         return _unknown(refs, "code graph unreachable")
 
     out: dict[str, dict] = {}
-    file_symbols: dict[tuple[str, str], set[str]] = {}
     for ref in refs:
         # The repo has to be in the ref. Borrowing the cwd's, as symbol_context
         # does for a bare id, would judge the ref against whichever repo the
@@ -9341,16 +9339,12 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
             continue
         symbol_id = f"{repo}#{path}::{name}"
         try:
-            # Liveness is an exact-id check against the file's symbols. A name
-            # lookup is capped at 50 rows in no stable order, so a qualified
-            # name that repeats across files (every `<module>`, Django's
-            # `Command.handle`) would report a live symbol as missing.
-            if (repo, path) not in file_symbols:
-                file_symbols[repo, path] = {
-                    s["symbol_id"]
-                    for s in _code_result(code.code_symbols_in_file(path, repo))
-                }
-            if symbol_id in file_symbols[repo, path]:
+            # Liveness is an exact-id lookup. A name lookup is capped at 50 rows
+            # in no stable order, so a qualified name that repeats across files
+            # (every `<module>`, Django's `Command.handle`) would report a live
+            # symbol as missing; a file read resolves a relative path against
+            # the cwd when it exists there, which names a different file.
+            if _code_result(code.code_find_definition(symbol_id=symbol_id)):
                 out[ref] = {"status": "live"}
                 continue
             defs = _code_result(code.code_find_definition(name, repo))
@@ -9359,8 +9353,9 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
             out[ref] = {"status": "unknown", "reason": "definition lookup failed"}
             continue
         ids = {d["symbol_id"] for d in defs}
-        # The file read can miss: witan-code resolves a relative path against
-        # the cwd when it exists there, which names a different file.
+        # A reindex deletes a file's rows and loads their replacements as
+        # separate writes, so the exact lookup can land between the two and
+        # miss while the later name lookup sees the reloaded id.
         if symbol_id in ids:
             out[ref] = {"status": "live"}
             continue

@@ -36,7 +36,8 @@ mcp = FastMCP(
         "(a whole module is `<repo>#<path/to/file.py>::<module>`). Name-based "
         "tools return this id in the `symbol_id` field; pass it straight back to "
         "the id-routed tools (code_find_references / code_callers / code_impact / "
-        "code_cross_repo_impact). Symbol ids compose with witan memory via soft "
+        "code_cross_repo_impact), or to code_find_definition(symbol_id=...) to "
+        "check that one id still exists. Symbol ids compose with witan memory via soft "
         "references.\n\n"
         "Repo scoping: tools auto-detect the current repo from `.git/config`. Pass "
         "`repo` (a canonical URI like `https://github.com/mitodl/ol-django`) to "
@@ -454,9 +455,10 @@ def _file_id(path: str, repo: str) -> str:
 
 @mcp.tool
 async def code_find_definition(
-    name: str,
+    name: str | None = None,
     repo: str | None = None,
     branch: str | None = None,
+    symbol_id: str | None = None,
     ctx: Context | None = None,
 ) -> list[dict]:
     """
@@ -465,12 +467,14 @@ async def code_find_definition(
     Returns matching symbols (function, method, class, module, …) with their
     ``symbol_id``, file, line range, signature, docstring, and ``repo`` of
     origin. Feed a returned ``symbol_id`` to code_find_references / code_callers
-    / code_impact.
+    / code_impact. A name lookup returns at most 50 rows per repo; to check
+    whether one known id still exists, pass ``symbol_id`` instead.
 
     Parameters
     ----------
     name:
-        Bare name (``run``) or qualified name (``Service.run``).
+        Bare name (``run``) or qualified name (``Service.run``). Pass this or
+        ``symbol_id``, not both.
     repo:
         Canonical repo URI to search. Defaults to the repo detected from the
         checkout, and fans out across every indexed repo only when no repo is
@@ -481,7 +485,25 @@ async def code_find_definition(
         branch). Defaults to the checkout's branch when querying the current
         repo; when ``repo`` names a different repo and ``branch`` is omitted,
         reads that store's default (main) view.
+    symbol_id:
+        One exact id (``<repo>#<path>::<QualifiedName>``) to look up instead
+        of a name. Returns that symbol alone, or ``[]`` when the id's repo has
+        no index or the index has no such symbol. Routed by the id's repo, so
+        ``repo`` is ignored; ``branch`` still selects the view.
     """
+    if (name is None) == (symbol_id is None):
+        msg = (
+            "Pass name or symbol_id, not both or neither "
+            f"(got name={name!r}, symbol_id={symbol_id!r})."
+        )
+        raise ValueError(msg)
+    if symbol_id is not None:
+        client = _client_for_symbol(symbol_id, branch)
+        if client is None:
+            return []
+        return _as_symbol_id(
+            client.read("code_read.gq", "get_symbol", {"id": symbol_id})
+        )
 
     def _query(client: OmnigraphClient) -> list[dict]:
         rows = client.read(

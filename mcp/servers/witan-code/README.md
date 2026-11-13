@@ -472,7 +472,7 @@ indexer first).
 
 | Tool | Returns |
 |------|---------|
-| `code_find_definition(name)` | symbols whose name / qualified name matches |
+| `code_find_definition(name)` / `code_find_definition(symbol_id=...)` | symbols whose name / qualified name matches (at most 50 per repo), or the one symbol with that exact id |
 | `code_find_references(symbol_id)` | incoming `References` + `Calls` |
 | `code_callers(symbol_id, direction="callers")` | incoming `Calls`; `direction="callees"` for outgoing |
 | `code_impact(symbol_id, max_depth=5, max_nodes=200)` | transitive callers via BFS |
