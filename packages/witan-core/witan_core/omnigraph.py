@@ -32,6 +32,14 @@ Each server subclasses to add its own tail:
 - ``witan_code`` adds omnigraph *branch* support (``_extra_args`` override,
   ``ensure_branch``/…) and bulk ``load``.
 
+What a store can do is declared, not inferred: ``OmnigraphClient.profile`` is a
+frozen :class:`SubstrateProfile` naming the backend and one predicate per
+capability that differs between them (shared ownership, who runs maintenance,
+actor assertion, the HTTP transport, the write admission gate).
+``require(capability)`` raises :class:`CapabilityUnsupported` and logs a
+``witan.capability.gap`` record for a miss, so a caller asks the object instead
+of re-deriving the answer from the URI scheme.
+
 Subclass knobs:
 - ``_SETUP_HINT`` — the install command named in the "binary not found" error.
 - ``_STORAGE_MISMATCH_HINT`` — remediation text for a storage-version mismatch;
@@ -46,6 +54,7 @@ as ``witan_core.omnigraph``.
 from __future__ import annotations
 
 import atexit
+import dataclasses
 import functools
 import hashlib
 import ipaddress
@@ -66,7 +75,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import NamedTuple, TypeVar
+from typing import Literal, NamedTuple, TypeVar
 from urllib.request import url2pathname
 
 from witan_core import _filelock
@@ -2163,6 +2172,126 @@ def _cli_payload(
         yield str(params_file), None if source_file is None else str(source_file)
 
 
+Backend = Literal["local", "s3", "az", "server", "mcp"]
+#: The capabilities :meth:`OmnigraphClient.require` can be asked for. Each is a
+#: predicate on :class:`SubstrateProfile`; ``client_maintenance`` is
+#: ``maintenance == "client"``.
+Capability = Literal[
+    "shared",
+    "client_maintenance",
+    "asserts_actor",
+    "http_transport",
+    "admission_gated",
+]
+
+_gap_log = logging.getLogger("witan.capability")
+
+
+@dataclasses.dataclass(frozen=True)
+class SubstrateProfile:
+    """What one omnigraph backend can do, declared once per client.
+
+    This replaces reading one ``is_remote`` bit as several capabilities that
+    happen to coincide today. Each gets its own field so a caller names the
+    one it means:
+
+    - ``shared``: more than one writer reaches this store, so a write needs
+      view ownership. A direct ``s3://``/``az://`` root is NOT shared: direct
+      object storage from more than one process is not a supported writer
+      topology (docs/guides/store-quarantine-runbook.md), and the deployed
+      data tier's bucket is granted only to omnigraph-server's own role.
+    - ``maintenance``: who compacts and cleans up the store. ``"server"`` means
+      the data tier's maintenance job, and the CLI's ``optimize``/``cleanup``
+      cannot address it. A direct object store is ``"client"`` because
+      ``witan optimize --store s3://...`` runs against it, but the Stop hook's
+      opportunistic optimize deliberately skips it
+      (``witan_core.maintenance.REMOTE_PREFIXES``); that hook is a separate
+      choice and must not move to this predicate unchanged.
+    - ``asserts_actor``: requests carry ``Omnigraph-If-Actor`` (``--as`` on a
+      0.14 CLI write). On a local or object store ``--as`` would SET the actor
+      rather than assert it, so it is never sent there.
+    - ``http_transport``: the backend has an omnigraph-server to reach over the
+      pooled HTTP transport. Whether a given call uses it is still decided per
+      call (the env opt-out and the extra-args check, ``_http_transport``).
+    - ``admission_gated``: writes pass the process-wide admission gate and the
+      remote call budget, and an unreachable server is waited out.
+    - ``http_contract``: the omnigraph HTTP contract the server stamped on
+      ``HEAD /healthz``, once the transport has negotiated one. ``None`` before
+      the first HTTP call and for a backend with no HTTP transport. Reading it
+      never probes. It is the one thing a server declares about itself today,
+      so per-server feature flags belong next to it.
+
+    ``mcp`` is witan-code's ``RemoteStoreClient``, which writes through the
+    witan MCP tier. It is listed so that client can declare the same profile;
+    no ``OmnigraphClient`` has it.
+    """
+
+    backend: Backend
+    shared: bool
+    maintenance: Literal["client", "server"]
+    asserts_actor: bool
+    http_transport: bool
+    admission_gated: bool
+    http_contract: str | None = None
+
+    @classmethod
+    def for_backend(cls, backend: Backend) -> SubstrateProfile:
+        """The declared profile of ``backend``, with no contract negotiated."""
+        match backend:
+            case "local" | "s3" | "az":
+                return cls(backend, False, "client", False, False, False)
+            case "server":
+                return cls(backend, True, "server", True, True, True)
+            case "mcp":
+                return cls(backend, True, "server", False, False, False)
+            case _:
+                raise ValueError(f"unknown omnigraph backend {backend!r}")
+
+    @classmethod
+    def for_uri(cls, graph_uri: str) -> SubstrateProfile:
+        """The profile of the store ``graph_uri`` names, by its scheme."""
+        if graph_uri.startswith(_SERVER_SCHEMES):
+            return cls.for_backend("server")
+        if graph_uri.startswith("s3://"):
+            return cls.for_backend("s3")
+        if graph_uri.startswith("az://"):
+            return cls.for_backend("az")
+        return cls.for_backend("local")
+
+    def supports(self, capability: Capability) -> bool:
+        """Whether this backend has ``capability``. Never logs."""
+        match capability:
+            case "client_maintenance":
+                return self.maintenance == "client"
+            case "shared":
+                return self.shared
+            case "asserts_actor":
+                return self.asserts_actor
+            case "http_transport":
+                return self.http_transport
+            case "admission_gated":
+                return self.admission_gated
+            case _:
+                raise ValueError(f"unknown capability {capability!r}")
+
+
+class CapabilityUnsupported(RuntimeError, Refusal):
+    """The store's backend lacks a capability the caller required.
+
+    ``backend`` and ``capability`` are fields so a caller that degrades can
+    branch on them instead of on the message. A ``RuntimeError`` so every
+    existing ``except RuntimeError`` still renders it as one line.
+    """
+
+    # Opted in: the message is built from the two literals alone.
+    log_safe_message = True
+
+    def __init__(self, backend: Backend, capability: Capability) -> None:
+        self.backend = backend
+        self.capability = capability
+        super().__init__(f"{backend} store does not support {capability}")
+
+
 class OmnigraphClient:
     """Subprocess wrapper for the omnigraph CLI (shared base)."""
 
@@ -2209,7 +2338,10 @@ class OmnigraphClient:
         # plus graph id; local paths and s3:// roots are opened directly.
         # Resolve the split once at construction so a bad graph id fails fast
         # rather than on the first subprocess.
-        self.is_remote = graph_uri.startswith(_SERVER_SCHEMES)
+        self._profile = SubstrateProfile.for_uri(graph_uri)
+        # Kept for witan and witan-code callers until they move to the
+        # specific predicate they mean (see SubstrateProfile).
+        self.is_remote = self._profile.backend == "server"
         if self.is_remote:
             self.server_url, self.graph_id = _split_server_uri(graph_uri, graph_id)
         else:
@@ -2217,6 +2349,40 @@ class OmnigraphClient:
         self._binary = self._find_binary()
 
     # ── Public API ────────────────────────────────────────────────
+
+    @property
+    def profile(self) -> SubstrateProfile:
+        """This store's :class:`SubstrateProfile`, with the HTTP contract the
+        shared transport has negotiated so far (never probes for one)."""
+        # A lookup, not shared_transport(): reading the profile must not
+        # allocate a transport for a server this process never called.
+        transport = _TRANSPORTS.get(self.server_url) if self.server_url else None
+        if transport is None:
+            return self._profile
+        return dataclasses.replace(
+            self._profile, http_contract=transport.negotiated_contract
+        )
+
+    def require(self, capability: Capability) -> None:
+        """Raise :class:`CapabilityUnsupported` unless this store has
+        ``capability``.
+
+        A miss is logged first as ``witan.capability.gap`` with
+        ``key=f"{backend}:{capability}"``, so how often callers reach for what
+        a backend lacks is countable whether or not the caller then degrades.
+        The key is in the message as well as ``extra`` because the structlog
+        formatter does not render a stdlib record's extras.
+        """
+        if self._profile.supports(capability):
+            return
+        backend = self._profile.backend
+        key = f"{backend}:{capability}"
+        _gap_log.warning(
+            "witan.capability.gap %s",
+            key,
+            extra={"key": key, "backend": backend, "capability": capability},
+        )
+        raise CapabilityUnsupported(backend, capability)
 
     def read_with_commit(
         self,
@@ -2585,6 +2751,7 @@ class OmnigraphClient:
         write lock and can run for tens of seconds, so callers throttle it and
         keep it off the hot path (see each server's ``maintenance``).
         """
+        self.require("client_maintenance")
         return self._run("optimize")
 
     def cleanup(self, *, keep: int | None = None, older_than: str | None = None) -> str:
@@ -2601,6 +2768,7 @@ class OmnigraphClient:
         """
         if keep is None and older_than is None:
             raise ValueError("cleanup requires keep and/or older_than")
+        self.require("client_maintenance")
         args = ["--confirm"]
         if keep is not None:
             args += ["--keep", str(keep)]
@@ -2732,7 +2900,9 @@ class OmnigraphClient:
         Empty without an actor, so a client built without one calls the
         transport exactly as before.
         """
-        return {"actor": self.actor} if self.actor and self.is_remote else {}
+        if self.actor and self._profile.asserts_actor:
+            return {"actor": self.actor}
+        return {}
 
     def _actor_args(self, subcommand: str) -> list[str]:
         """``--as <actor>`` for a remote write with a 0.14 CLI, or nothing.
@@ -2802,7 +2972,7 @@ class OmnigraphClient:
         thread-locals inside the transport, so they are what actually needs to
         outlive the client — see ``_TRANSPORTS``.
         """
-        if not self.is_remote:
+        if not self._profile.http_transport:
             return None
         if os.environ.get(HTTP_TRANSPORT_ENV_VAR, "").strip().lower() in _FALSEY:
             return None
@@ -3392,10 +3562,11 @@ class OmnigraphClient:
         # has no server to saturate, and reads do not queue (~5 req/s flat from
         # 8 to 36 concurrent readers) so bounding them would only add latency to
         # the one path that has none.
-        gate_write = is_write and self.is_remote
+        gated = self._profile.admission_gated
+        gate_write = is_write and gated
         budget = (
             _env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
-            if self.is_remote
+            if gated
             else 0.0
         )
         origin = time.monotonic() if started is None else started
@@ -3449,7 +3620,7 @@ class OmnigraphClient:
                     _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
                 ) from None
             if kind == _http.UNAVAILABLE and not (
-                self.is_remote and self.connect_retry
+                self._profile.admission_gated and self.connect_retry
             ):
                 # A connect failure against a LOCAL store is not a restarting
                 # server, and a caller that opted out of the wait wants an

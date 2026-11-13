@@ -778,6 +778,7 @@ EXPECTED_LOG_SAFE = {
     # opted in: identifiers, counts, or masked by the detectors' contract
     ("witan_core.identity", "ActorTokenMissing"): True,
     ("witan_core.omnigraph", "WriteQueueFull"): True,
+    ("witan_core.omnigraph", "CapabilityUnsupported"): True,
     ("witan.server", "MissingReference"): True,
     ("witan.scan.enforce", "WriteBlocked"): True,
     ("witan_code.store", "ClusterGraphMissing"): True,

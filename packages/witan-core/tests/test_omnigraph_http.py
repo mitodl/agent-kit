@@ -1295,6 +1295,26 @@ def test_a_remote_store_uses_http(monkeypatch, queries_dir):
     assert client._http_transport() is not None
 
 
+def test_the_profile_carries_the_negotiated_contract_without_probing(
+    monkeypatch, queries_dir, _fake_http, probing
+):
+    _fake_http.script = [stamped("0.13"), stamped("0.13", body='{"rows": []}')]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    assert client.profile.http_contract is None
+    assert _fake_http.sent == []
+
+    client.read("read.gq", "find_memory", {"slug": "m-1"})
+
+    assert client.profile.http_contract == "0.13"
+    assert [r["path"] for r in _fake_http.sent].count("/healthz") == 1
+
+
+@pytest.mark.parametrize("uri", ["/var/lib/witan/graph.omni", "s3://bucket/graph"])
+def test_a_direct_store_profile_has_no_contract(monkeypatch, queries_dir, uri):
+    assert _client(monkeypatch, uri, queries_dir).profile.http_contract is None
+
+
 class BranchedClient(OmnigraphClient):
     """witan-code's branched view, as far as the base client can see it."""
 

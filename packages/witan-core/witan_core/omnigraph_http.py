@@ -667,6 +667,13 @@ class PooledTransport:
 
     # ── the HTTP contract ─────────────────────────────────────────
 
+    @property
+    def negotiated_contract(self) -> str | None:
+        """The contract a probe or a refusal has settled on, or ``None`` before
+        one has. Unlike :meth:`contract`, never probes."""
+        with self._contract_lock:
+            return self._contract
+
     def contract(self) -> str:
         """The contract to send this server, discovered on first use.
 
