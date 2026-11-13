@@ -7,10 +7,10 @@ handle is parked in between, since the two run as separate processes.
 
 The file is written by whichever process is **client-side**: the CLI after
 ``witan session start``, or the server itself only when it is the local stdio
-server (same machine, same filesystem). A deployed server never writes it — with
-several replicas behind a round-robin load balancer, the replica that served
-``workflow_session_start`` shares nothing with the machine running the hook, so a
-server-written file is at best useless and at worst a stale handle. This is the
+server (same machine, same filesystem). A deployed server never writes it: it
+shares no filesystem with the machine running the hook, and every deploy replaces
+its pod, so a server-written file is at best useless and at worst a stale handle.
+This is the
 state-management guidance in MCP 2026-07-28: applications needing state thread an
 explicit tool-returned handle through the interaction rather than relying on
 transport- or filesystem-level session state.
