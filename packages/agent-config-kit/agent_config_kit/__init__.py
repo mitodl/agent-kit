@@ -10,6 +10,7 @@ from .manifest import (
     default_cache_dir,
     load_manifest,
 )
+from .memory import MEMORY_TYPES, MemoryEntry, MemoryStore, MemoryType
 from .models import (
     AgentPlatform,
     ApprovalMode,
@@ -51,6 +52,7 @@ from .registry import detect_installed_platforms, get_platform, known_platforms
 from .version import resolve_version
 
 __all__ = [
+    "MEMORY_TYPES",
     "AgentPlatform",
     "ApprovalMode",
     "ApprovalPolicy",
@@ -69,6 +71,9 @@ __all__ = [
     "ManifestError",
     "ManifestOptions",
     "McpServer",
+    "MemoryEntry",
+    "MemoryStore",
+    "MemoryType",
     "MergeStrategy",
     "PlatformState",
     "PluginRegistration",

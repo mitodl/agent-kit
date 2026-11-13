@@ -149,8 +149,10 @@ _CLEARED = (
     "CLAUDE_SESSION_ID",
     "PI_SESSION_ID",
     "CODEX_SESSION_ID",
-    # agent-config-kit resolves Codex's config dir from this, ahead of HOME.
+    # agent-config-kit resolves Codex's and Claude Code's config dirs from
+    # these, ahead of HOME.
     "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
     # Observability: an exporter endpoint set on a developer's box would have
     # the suite emit spans at a real collector.
     "OTEL_EXPORTER_OTLP_ENDPOINT",
