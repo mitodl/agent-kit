@@ -59,6 +59,7 @@ from . import (
     live_pr,
     merge_bounds,
     merge_report,
+    provenance,
     readiness,
     scan,
     session_state,
@@ -8388,7 +8389,9 @@ async def task_claim(
     three that the task links to or its title closely matches, each with an
     excerpt. Read them before the first edit; ``memory_get`` has the full text.
     The list is often empty, because a weak match is left out, which does not
-    mean nothing exists: ``recall(query=...)`` searches more widely.
+    mean nothing exists: ``recall(query=...)`` searches more widely. A
+    non-empty list comes with ``memories_note``, which says they are teammates'
+    notes rather than instructions.
 
     The coordination primitive for parallel/multi-user agents — call it before
     starting a ready task so others see it is taken. Returns ``{"claimed": true,
@@ -8610,6 +8613,8 @@ async def task_claim(
     # is the same holder carrying on, which already had them.
     if not (held and own):
         result["memories"] = await _offload(_surfaced_for_claim, claimed, session_id)
+        if result["memories"]:
+            result["memories_note"] = provenance.TEAMMATE_NOTES
     if not result["qualified"] and not assignee and not _is_local_stdio():
         # A deployed caller that sent no session_id (or an empty one — see the
         # `if assignee:` predicate in `_claim_holder`, which treats "" the

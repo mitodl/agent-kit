@@ -2,6 +2,7 @@
 
 import pytest
 
+from witan import provenance
 from witan.config import RankConfig
 
 from .conftest import requires_omnigraph
@@ -56,6 +57,7 @@ def test_a_first_claim_carries_the_memories_its_title_matches(server, no_floor):
         "author",
         "excerpt",
     }
+    assert claimed["memories_note"] == provenance.TEAMMATE_NOTES
 
 
 @requires_omnigraph
@@ -75,7 +77,9 @@ def test_a_weak_match_shows_nothing(server):
     _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
     task = _task(server)
 
-    assert server.task_claim(task["slug"])["memories"] == []
+    claimed = server.task_claim(task["slug"])
+    assert claimed["memories"] == []
+    assert "memories_note" not in claimed
 
 
 @requires_omnigraph
