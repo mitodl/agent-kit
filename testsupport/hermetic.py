@@ -141,6 +141,11 @@ _CLEARED = (
     "WITAN_SCAN_DISABLED_DETECTORS",
     "WITAN_SCAN_PLUGINS",
     "WITAN_SCAN_ALLOWLIST",
+    # The screening classifier. Read when `witan.server` is imported, during
+    # collection, so a developer's provider would be built (or fail to load)
+    # before any fixture runs.
+    "WITAN_SCREEN_PROVIDER",
+    "WITAN_SCREEN_MODEL",
     # Identity of the calling agent session, which several code paths record
     # as provenance. Pi's is a fallback for Claude's (see
     # witan.session_state.current_session_id), so a suite run from inside a Pi

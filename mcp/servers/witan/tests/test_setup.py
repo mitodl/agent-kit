@@ -144,7 +144,11 @@ def test_install_default_config_writes_starter_file(tmp_path, monkeypatch):
 
     assert dest.exists()
     parsed = tomllib.loads(dest.read_text())
-    assert parsed == {"rank": {}, "scan": {}}  # everything ships commented out
+    assert parsed == {
+        "rank": {},
+        "scan": {},
+        "screen": {},
+    }  # everything ships commented out
 
 
 def test_install_default_config_skips_existing_file(tmp_path, monkeypatch):

@@ -19,6 +19,7 @@ import urllib.request
 import pytest
 from testsupport.omnigraph_server import requires_omnigraph_server
 
+from witan.screen import UNSCREENED
 from witan_core.omnigraph_http import HTTP_API_CONTRACT_HEADER, PooledTransport
 
 from .conftest import SERVED_GRAPH, SERVED_REPO
@@ -292,6 +293,7 @@ def test_a_server_refused_fence_spares_the_writes_riding_with_it(served, burst):
                 "updated_at",
             )
         }
+        params.update(UNSCREENED)
         srv.client.change("mutations.gq", "update_task", params, if_commit=old_head)
 
     def comment(body):

@@ -64,6 +64,7 @@ from . import (
     provenance,
     readiness,
     scan,
+    screen,
     session_state,
     session_summary,
     ui_access,
@@ -190,7 +191,12 @@ rank_cfg = cfg_module.load_rank_config()
 scan_cfg = cfg_module.load_scan_config()
 identity_cfg = cfg_module.load_identity_config()
 _ensure_graph(cfg.graph_uri)
-_write_guard = scan.write_guard_from_config(scan_cfg)
+# Scanning first, so the screen classifies the text that is stored after any
+# redaction.
+_write_guard = screen.compose_guards(
+    scan.write_guard_from_config(scan_cfg),
+    screen.screener_from_config(cfg_module.load_screen_config()),
+)
 _default_client = OmnigraphClient(
     cfg.graph_uri,
     cfg.queries_dir,
@@ -1877,7 +1883,13 @@ def migrate_repo_keys() -> dict:
         client.change(
             "mutations.gq",
             "update_memory",
-            {**row, "repo": new_repo, "symbol_refs": new_refs, "updated_at": now},
+            {
+                **row,
+                "repo": new_repo,
+                "symbol_refs": new_refs,
+                "updated_at": now,
+                **screen.UNSCREENED,
+            },
         )
         counts["memories_updated"] += 1
 
@@ -4085,6 +4097,7 @@ def _task_memories(task: dict) -> tuple[list[dict], dict[str, tuple]]:
     superseded = {
         row["slug"] for row in client.read("read.gq", "all_superseded_slugs", {})
     }
+    current = [row for row in rows.values() if row["slug"] not in superseded]
     memories = [
         {
             "slug": row["slug"],
@@ -4092,10 +4105,10 @@ def _task_memories(task: dict) -> tuple[list[dict], dict[str, tuple]]:
             "title": row["title"],
             "author": row["author"],
             "excerpt": row["content"][:_RESULT_EXCERPT_CHARS],
+            "screening": row["screening"],
         }
-        for row in rows.values()
-        if row["slug"] not in superseded
-    ][:_SURFACED_MEMORY_LIMIT]
+        for row in screen.attach(client, "Memory", current[:_SURFACED_MEMORY_LIMIT])
+    ]
     return memories, scores
 
 
@@ -4539,6 +4552,9 @@ def _update_memory(slug: str, changes: dict) -> dict | None:
         "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
         "confidence": changes.get("confidence", current.get("confidence")),
         "updated_at": now_iso(),
+        **screen.UNSCREENED,
+        # For the screener, as in `_update_task_once`.
+        "author": current.get("author"),
     }
     client.change("mutations.gq", "update_memory", merged)
     rows = client.read("read.gq", "get_memory", {"slug": slug})
@@ -4594,6 +4610,7 @@ def _store_memory(
                 "confidence": confidence,
                 "created_at": now,
                 "updated_at": now,
+                **screen.UNSCREENED,
             },
         )
     ]
@@ -4770,7 +4787,7 @@ def memory_get(
     if not rows:
         _log_memory_read("memory_get", [], session_id)
         return None
-    node = rows[0]
+    node = screen.attach(client, "Memory", rows)[0]
     if include_topics:
         # Same de-duplication as _memory_neighbors, and for the same reason: the
         # traversal is bound now, so a memory tagged to one Topic twice arrives
@@ -7522,6 +7539,11 @@ def _update_task_once(
         # two a few milliseconds apart.
         "first_claimed_at": merged_first_claimed_at,
         "updated_at": now_iso(),
+        **screen.UNSCREENED,
+        # For the screener, not the graph (`update_task` does not declare it):
+        # the classifier sees the author, so an update must show it the same
+        # payload the insert did, or a claim re-classifies unchanged text.
+        "author": current.get("author"),
     }
     update: _Step = ("mutations.gq", "update_task", merged)
     # ★ THE PRECONDITION IS THE COMMIT FROM THIS ATTEMPT'S OWN READ, not one the
@@ -7663,6 +7685,7 @@ async def task_create(
                 # so since before this field existed.
                 "claimed_at": None,
                 "first_claimed_at": None,
+                **screen.UNSCREENED,
             },
         )
     ]
@@ -7749,8 +7772,8 @@ def task_get(slug: str) -> dict | None:
         "task_get",
         _with_ui_url(
             {
-                **_with_lease_flag(rows[0]),
-                "comments": _task_comments(slug),
+                **_with_lease_flag(screen.attach(client, "Task", rows)[0]),
+                "comments": screen.attach(client, "TaskComment", _task_comments(slug)),
                 "blocks": [r["slug"] for r in blocks],
                 "children": [
                     {k: c.get(k) for k in ("slug", "title", "status")} for c in children
@@ -7885,6 +7908,7 @@ def task_comment(slug: str, body: str) -> dict:
                 "body": body,
                 "author": author,
                 "created_at": now,
+                **screen.UNSCREENED,
                 # For the write guard, not for the graph: `_repo_of(params)` is
                 # how a `[scan.overlay]` table keyed on a repo reaches a node
                 # that has no repo of its own. `insert_task_comment` does not

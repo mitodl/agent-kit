@@ -100,7 +100,8 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	// The seed sections, each present only when its seed was passed.
 	recall: ["memory", "topic", "symbol", "contract"],
 	// `topics` only with `include_topics`, which the UI always passes.
-	memory_get: [...MEMORY_OPTIONAL, "topics"],
+	// `screening` is on `memory_get` alone, so `Memory` declares it optional.
+	memory_get: [...MEMORY_OPTIONAL, "topics", "screening"],
 	memory_list: MEMORY_OPTIONAL,
 	memory_search: MEMORY_OPTIONAL,
 	memory_contradictions: [],

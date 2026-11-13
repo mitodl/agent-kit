@@ -1233,6 +1233,42 @@ query list_task_comments($task_slug: String) {
     order { $c.created_at }
 }
 
+// ── Screening verdicts (witan/screen/label.py) ─────────────────────
+// Separate from the record reads so the screen columns reach only the reads
+// that label a record, not every listing that projects the row.
+
+query memory_screens($slugs: [String]) {
+    match {
+        $m: Memory
+        $m.slug in $slugs
+    }
+    return {
+        $m.slug, $m.screen_verdict, $m.screen_reason,
+        $m.screen_version, $m.screen_digest
+    }
+}
+
+query task_screens($slugs: [String]) {
+    match {
+        $t: Task
+        $t.slug in $slugs
+    }
+    return {
+        $t.slug, $t.screen_verdict, $t.screen_reason,
+        $t.screen_version, $t.screen_digest
+    }
+}
+
+query task_comment_screens($task_slug: String) {
+    match {
+        $c: TaskComment { task_slug: $task_slug }
+    }
+    return {
+        $c.slug, $c.screen_verdict, $c.screen_reason,
+        $c.screen_version, $c.screen_digest
+    }
+}
+
 // ── Reverse symbol references (Layer 1 ← Layer 2 composition) ──────
 // Return nodes carrying symbol_refs so the server can filter for a specific
 // code-graph symbol id in Python (list-membership, scoped by repo).

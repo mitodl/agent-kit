@@ -770,13 +770,14 @@ def test_default_config_toml_is_valid_and_fully_commented():
     """Every setting ships commented out — loading it must change nothing."""
     import tomllib
 
-    from witan.config import RankConfig, ScanConfig, default_config_toml
+    from witan.config import RankConfig, ScanConfig, ScreenConfig, default_config_toml
 
     text = default_config_toml()
     parsed = tomllib.loads(text)
-    assert parsed == {"rank": {}, "scan": {}}
+    assert parsed == {"rank": {}, "scan": {}, "screen": {}}
     assert RankConfig(**parsed["rank"]) == RankConfig()
     assert ScanConfig(**parsed["scan"]) == ScanConfig()
+    assert ScreenConfig(**parsed["screen"]) == ScreenConfig()
 
 
 def test_default_config_toml_reflects_actual_defaults():
