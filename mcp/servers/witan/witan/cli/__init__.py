@@ -35,7 +35,7 @@ from . import (
     traces,  # noqa: F401
     ui,  # noqa: F401
 )
-from ._common import app, print_error, stderr_console
+from ._common import app, mount_witan_code, print_error, stderr_console
 from .code_routing import warn_if_code_graph_is_local
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
@@ -215,19 +215,7 @@ def serve(
 
         live_pr.annotate_tool_results()
 
-    from ..instructions import with_code_instructions
-
-    try:
-        from witan_code.server import mcp as code_mcp
-
-        witan_mcp.mount(code_mcp)
-        # `mount` carries tools, not instructions, and an agent only ever
-        # connects to this server, so the code_* tools' shared text goes here.
-        witan_mcp.instructions = with_code_instructions(
-            witan_mcp.instructions, code_mcp.instructions
-        )
-    except ImportError:
-        pass
+    mount_witan_code(witan_mcp)
 
     if transport == "stdio":
         witan_mcp.run()
