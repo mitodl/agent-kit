@@ -736,26 +736,45 @@ _NO_FTS_INDEX = "T27:"
 #: in ``code_search_symbol`` has placed it. Never reaches a caller.
 _DOCSTRING_ONLY = "_docstring_only"
 
+#: Marks the row a store adds to its results when it skipped the docstring
+#: run, carrying the reason. ``code_search_symbol`` turns these into its
+#: ``note``; the row itself never reaches a caller.
+_DOCSTRING_SKIPPED = "_docstring_skipped"
+
 
 def _docstring_search(
     client: "OmnigraphClient | RemoteStoreClient", name: str, params: dict
-) -> list[dict]:
-    """The docstring BM25 run, or no rows from a store or tier that cannot run it.
+) -> tuple[list[dict], str | None]:
+    """The docstring BM25 run's rows, and why it was skipped if it was.
 
-    Two cases answer with no rows instead of failing the search. A store whose
-    schema lacks the index refuses the run with ``T27``: a local store gains the
-    index on its next index, which applies the schema (``store.ensure_store``),
-    and a cluster graph when the data tier's ``cluster apply`` runs with the new
-    schema. And a deployed MCP tier older than the query (``code_transport =
-    "mcp"``, ``RemoteStoreClient``) looks the name up in its own bundled
-    ``code_read.gq`` and refuses one it does not have. Either way the name run
-    still answers, so the mismatch costs docstring matches, not the search.
+    Two cases answer with no rows and a reason instead of failing the search. A
+    store whose schema lacks the index refuses the run with ``T27``: a local
+    store gains the index on its next index, which applies the schema
+    (``store.ensure_store``), and a cluster graph when the data tier's
+    ``cluster apply`` runs with the new schema. And a deployed MCP tier older
+    than the query (``code_transport = "mcp"``, ``RemoteStoreClient``) looks
+    the name up in its own bundled ``code_read.gq`` and refuses one it does not
+    have. Either way the name run still answers, so the mismatch costs
+    docstring matches, not the search. The reason goes back to the caller as
+    well as to the log, because against a deployed store the log line lands in
+    the server's log, which the agent holding the partial result never sees.
     """
     try:
-        return client.read("code_read.gq", name, params)
+        return client.read("code_read.gq", name, params), None
     except RuntimeError as exc:
         text = str(exc)
-        if _NO_FTS_INDEX not in text and f"{name!r} not found in source" not in text:
+        if _NO_FTS_INDEX in text:
+            reason = (
+                "the store has no full-text index on Symbol.docstring (reindex "
+                "the repo for a local store; a deployed store gains it when the "
+                "data tier applies the current schema)"
+            )
+        elif f"{name!r} not found in source" in text:
+            reason = (
+                "the witan-code tier serving the store predates docstring "
+                "search (roll out the witan-code tier)"
+            )
+        else:
             raise
         logger.warning(
             "witan.code.search.docstring_search_unavailable",
@@ -766,7 +785,7 @@ def _docstring_search(
                 "witan-code tier (deployment)"
             ),
         )
-        return []
+        return [], reason
 
 
 @mcp.tool
@@ -775,7 +794,7 @@ def code_search_symbol(
     kind: SymbolKind | None = None,
     repo: str | None = None,
     branch: str | None = None,
-) -> list[dict]:
+) -> dict:
     """
     Full-text search over symbol qualified names and docstrings (BM25-ranked).
 
@@ -790,6 +809,15 @@ def code_search_symbol(
     policy, and this is the policy. Within each group, BM25 ranking is
     per-store, and a cross-repo fan-out concatenates each store's ranked
     results. Each group holds up to 50 results per store.
+
+    Only the first 500 characters of a docstring are indexed, so a phrase that
+    appears later in a long docstring does not match.
+
+    Returns ``{"symbols": [...]}``. When a store could not run the docstring
+    search (its schema has no docstring index, or the deployed tier predates
+    the query), the result also carries a ``note`` starting with ``docstring
+    search unavailable`` that says why. Results from that store are then name
+    matches only, so a symbol findable only by its docstring is missing.
 
     Parameters
     ----------
@@ -823,12 +851,16 @@ def code_search_symbol(
 
     def _query(client: "OmnigraphClient | RemoteStoreClient") -> list[dict]:
         names = client.read("code_read.gq", f"search_symbols{suffix}", params)
-        docstrings = _docstring_search(
+        docstrings, skipped = _docstring_search(
             client, f"search_symbols_docstring{suffix}", params
         )
-        return [*names, *({**r, _DOCSTRING_ONLY: True} for r in docstrings)]
+        rows = [*names, *({**r, _DOCSTRING_ONLY: True} for r in docstrings)]
+        return rows if skipped is None else [*rows, {_DOCSTRING_SKIPPED: skipped}]
 
-    rows = _fan_out(_resolve_clients(repo, branch), _query)
+    clients = _resolve_clients(repo, branch)
+    rows = _fan_out(clients, _query)
+    skipped = [r[_DOCSTRING_SKIPPED] for r in rows if _DOCSTRING_SKIPPED in r]
+    rows = [r for r in rows if _DOCSTRING_SKIPPED not in r]
     named = [r for r in rows if _DOCSTRING_ONLY not in r]
     seen = {r["slug"] for r in named}
     named.extend(
@@ -836,7 +868,18 @@ def code_search_symbol(
         for r in rows
         if _DOCSTRING_ONLY in r and r["slug"] not in seen
     )
-    return _as_symbol_id(named)
+    result: dict = {"symbols": _as_symbol_id(named)}
+    if skipped:
+        scope = (
+            ", so these are name matches only"
+            if len(clients) == 1
+            else f" in {len(skipped)} of the {len(clients)} stores searched, so "
+            "results from those stores are name matches only"
+        )
+        result["note"] = (
+            f"docstring search unavailable{scope}: {'; '.join(sorted(set(skipped)))}."
+        )
+    return result
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]

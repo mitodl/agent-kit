@@ -50,8 +50,8 @@ def srv(monkeypatch):
     return server
 
 
-def _names(hits):
-    return [h["qualified_name"] for h in hits]
+def _names(result):
+    return [h["qualified_name"] for h in result["symbols"]]
 
 
 @requires_stack
@@ -76,7 +76,7 @@ def test_a_query_matching_only_a_docstring_finds_the_symbol(doc_repo, srv):
     assert _names(_fn(srv.code_search_symbol)("request", kind="function")) == [
         "throttle"
     ]
-    assert _fn(srv.code_search_symbol)("request", kind="class") == []
+    assert _fn(srv.code_search_symbol)("request", kind="class") == {"symbols": []}
 
 
 @requires_stack
@@ -103,7 +103,9 @@ def test_a_store_without_the_docstring_index_gains_it_on_the_next_index(
     srv._clients.clear()
     _fn(srv.code_reindex)(path=str(doc_repo))
 
-    assert _names(_fn(srv.code_search_symbol)("request")) == ["throttle"]
+    result = _fn(srv.code_search_symbol)("request")
+    assert _names(result) == ["throttle"]
+    assert "note" not in result
 
 
 class _FakeClient:
@@ -134,12 +136,59 @@ T27 = RuntimeError(
 )
 
 
-def test_a_missing_docstring_index_yields_no_docstring_rows():
+def test_a_missing_docstring_index_yields_no_docstring_rows_and_a_reason():
     from witan_code import server
 
     client = _FakeClient({"search_symbols_docstring": T27})
 
-    assert server._docstring_search(client, "search_symbols_docstring", {}) == []
+    rows, reason = server._docstring_search(client, "search_symbols_docstring", {})
+    assert rows == []
+    assert "no full-text index on Symbol.docstring" in reason
+
+
+def test_a_store_without_the_docstring_index_says_its_results_are_partial(
+    monkeypatch,
+):
+    """The production case: name matches, plus a note the caller can see."""
+    from witan_code import server
+
+    client = _FakeClient(
+        {"search_symbols": [_row("a_name")], "search_symbols_docstring": T27}
+    )
+    monkeypatch.setattr(server, "_resolve_clients", lambda _repo, _branch: [client])
+
+    result = _fn(server.code_search_symbol)("x")
+
+    assert _names(result) == ["a_name"]
+    assert result["note"].startswith(
+        "docstring search unavailable, so these are name matches only: "
+    )
+    assert "no full-text index on Symbol.docstring" in result["note"]
+
+
+def test_a_fan_out_note_counts_the_stores_that_skipped_docstrings(monkeypatch):
+    from witan_code import server
+
+    indexed = _FakeClient(
+        {
+            "search_symbols": [_row("a_name")],
+            "search_symbols_docstring": [_row("a_doc")],
+        }
+    )
+    b_repo = "https://github.com/test/b"
+    unindexed = _FakeClient(
+        {"search_symbols": [_row("b_name", b_repo)], "search_symbols_docstring": T27}
+    )
+    monkeypatch.setattr(
+        server, "_resolve_clients", lambda _repo, _branch: [indexed, unindexed]
+    )
+
+    result = _fn(server.code_search_symbol)("x")
+
+    assert _names(result) == ["a_name", "b_name", "a_doc"]
+    assert result["note"].startswith(
+        "docstring search unavailable in 1 of the 2 stores searched"
+    )
 
 
 def test_any_other_docstring_search_failure_is_raised():
@@ -171,12 +220,13 @@ def test_name_matches_from_every_store_precede_docstring_only_ones(monkeypatch):
     )
     monkeypatch.setattr(server, "_resolve_clients", lambda _repo, _branch: [a, b])
 
-    hits = _fn(server.code_search_symbol)("x")
+    result = _fn(server.code_search_symbol)("x")
 
-    names = _names(hits)
+    names = _names(result)
     assert sorted(names[:2]) == ["a_name", "b_name"]
     assert sorted(names[2:]) == ["a_doc", "b_doc"]
-    assert all(set(h) == {"symbol_id", "qualified_name"} for h in hits)
+    assert all(set(h) == {"symbol_id", "qualified_name"} for h in result["symbols"])
+    assert set(result) == {"symbols"}
 
 
 def test_a_failing_store_keeps_the_other_stores_name_matches(monkeypatch):
@@ -222,10 +272,11 @@ def test_a_tier_without_the_docstring_query_still_answers_by_name(
     indexer.index_path(src, config=old_tier)
 
     client = RemoteStoreClient(REMOTE_REPO, session)
-    assert (
-        srv._docstring_search(client, "search_symbols_docstring", {"query": "request"})
-        == []
+    rows, reason = srv._docstring_search(
+        client, "search_symbols_docstring", {"query": "request"}
     )
+    assert rows == []
+    assert "predates docstring search" in reason
     assert "budget_report" in _names(
-        client.read("code_read.gq", "search_symbols", {"query": "budget"})
+        {"symbols": client.read("code_read.gq", "search_symbols", {"query": "budget"})}
     )

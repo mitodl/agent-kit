@@ -72,7 +72,7 @@ def test_token_provider_is_called_per_invocation(proxy):
 
 @requires_stack
 def test_keyword_args_reach_the_server(proxy):
-    hits = proxy.code_search_symbol(query="helper")
+    hits = proxy.code_search_symbol(query="helper")["symbols"]
     assert any(h["name"] == "helper" for h in hits)
 
 

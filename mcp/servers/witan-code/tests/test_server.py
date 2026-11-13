@@ -67,7 +67,7 @@ def test_reindex_then_query_tools(sample_repo, monkeypatch):
     assert impact["root"] == helper_id
     assert "Service.run" in {s["qualified_name"] for s in impact["impacted"]}
 
-    hits = _fn(srv.code_search_symbol)("helper")
+    hits = _fn(srv.code_search_symbol)("helper")["symbols"]
     assert any(h["name"] == "helper" for h in hits)
     assert all("symbol_id" in h for h in hits)
 
