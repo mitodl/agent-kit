@@ -895,10 +895,12 @@ query list_all_sessions_key() {
 }
 
 // Memories produced during a session (provenance walk). Edge predicate is the
-// type name lowercased with underscores stripped: `sessionproduced`.
-query session_produced_memories($session_slug: String) {
+// type name lowercased with underscores stripped: `sessionproduced`. Keyed on
+// the project too, so a session slug from another project matches nothing
+// rather than returning that project's memories under this one's slug.
+query session_produced_memories($project_slug: String, $session_slug: String) {
     match {
-        $s: WorkflowSession { slug: $session_slug }
+        $s: WorkflowSession { slug: $session_slug, project_slug: $project_slug }
         $m: Memory
         $s sessionproduced $m
     }

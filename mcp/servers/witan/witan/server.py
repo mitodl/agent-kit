@@ -52,6 +52,7 @@ from witan_core.omnigraph import (
     store_cli_args,
 )
 from witan_core.refusal import Refusal
+from witan_core.timeutil import parse_timestamp
 
 from . import config as cfg_module
 from . import (
@@ -63,6 +64,7 @@ from . import (
     readiness,
     scan,
     session_state,
+    session_summary,
     ui_access,
     ui_routes,
     ui_widgets,
@@ -1034,11 +1036,9 @@ def _lease_expiry(lease_started_at: str | None) -> str | None:
     if not lease_started_at:
         return None
     try:
-        started = datetime.fromisoformat(lease_started_at)
+        started = parse_timestamp(lease_started_at)
     except (ValueError, TypeError):
         return None
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
     return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
 
 
@@ -1572,15 +1572,16 @@ def migrate_topics() -> dict:
     }
 
 
-_AUTOCLOSE_PREFIX = "Session ended (auto-closed by Stop hook"
+_AUTOCLOSE_PREFIX = session_summary.AUTOCLOSE_PREFIX
 
 
 def _has_own_summary(session: dict) -> bool:
     """True when a session carries a summary someone actually wrote.
 
-    The Stop hook's auto-close placeholder is treated as no summary: it says
-    only that the session ended, so a session carrying it holds nothing the
-    corpus would lose.
+    The Stop hook's auto-close summary is treated as no summary, whether it is
+    the placeholder or one derived from recorded activity: nobody wrote it, and
+    what it lists is already recorded (tasks and memories in the graph, commits
+    in git), so a session carrying it holds nothing the corpus would lose.
     """
     summary = (session.get("summary") or "").strip()
     return bool(summary) and not summary.startswith(_AUTOCLOSE_PREFIX)
@@ -4224,11 +4225,9 @@ def _age_days(ts: str | None, now: datetime) -> float:
     if not ts:
         return 0.0
     try:
-        dt = datetime.fromisoformat(ts)
+        dt = parse_timestamp(ts)
     except (ValueError, TypeError):
         return 0.0
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 
@@ -6265,7 +6264,7 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
 
 @_tool
 def workflow_project_memories(
-    project_slug: str, group_by_session: bool = False
+    project_slug: str, group_by_session: bool = False, session: str | None = None
 ) -> dict:
     """
     "What did we learn during project X" — the provenance walk.
@@ -6289,10 +6288,27 @@ def workflow_project_memories(
         Also return a ``by_session`` breakdown of which session produced what.
         Costs one extra query per session, so leave it off unless you need the
         attribution.
+    session:
+        A ``ws-`` slug. Return only the memories that one session produced,
+        in one query, instead of the project's. ``group_by_session`` is
+        ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it
+        auto-closes; named ``session`` rather than ``session_slug`` because
+        the remote proxy fills an omitted ``session_slug`` with the caller's
+        active session, which would silently narrow every project-wide call.
 
     Returns ``{"project_slug": ..., "memories": [...], "by_session": {...}}``
     (``by_session`` is empty unless ``group_by_session`` is set).
     """
+    if session:
+        return {
+            "project_slug": project_slug,
+            "memories": client.read(
+                "read.gq",
+                "session_produced_memories",
+                {"project_slug": project_slug, "session_slug": session},
+            ),
+            "by_session": {},
+        }
     merged: dict[str, dict] = {}
     for query in ("project_produced_memories", "informed_memories"):
         for row in client.read("read.gq", query, {"project_slug": project_slug}):
@@ -6301,14 +6317,14 @@ def workflow_project_memories(
     by_session: dict[str, list[dict]] = {}
     if group_by_session:
         sessions = _project_sessions(project_slug)
-        for session in sessions:
+        for sess in sessions:
             produced = client.read(
                 "read.gq",
                 "session_produced_memories",
-                {"session_slug": session["slug"]},
+                {"project_slug": project_slug, "session_slug": sess["slug"]},
             )
             if produced:
-                by_session[session["slug"]] = produced
+                by_session[sess["slug"]] = produced
 
     return {
         "project_slug": project_slug,
@@ -7022,7 +7038,8 @@ def workflow_session_end(
 
     Call this before ending a session to produce a high-quality corpus record.
     The ``Stop`` hook will auto-close sessions that did not call this, but
-    with a placeholder summary.
+    with a summary it can only derive from what was recorded (tasks claimed
+    and closed, memories stored, commits, uncommitted files), not why.
 
     For best corpus quality, write a summary that includes:
     - What was done this session
@@ -7083,14 +7100,9 @@ def _ended_at_or_after(ended_at: str | None, since: datetime) -> bool:
     if not ended_at:
         return True
     try:
-        return _as_utc(datetime.fromisoformat(ended_at)) >= since
+        return parse_timestamp(ended_at) >= since
     except (ValueError, TypeError):
         return True
-
-
-def _as_utc(moment: datetime) -> datetime:
-    """Read a naive timestamp as UTC, so two of them are always comparable."""
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _parse_since(since: str) -> datetime:
@@ -7101,7 +7113,7 @@ def _parse_since(since: str) -> datetime:
     ``since`` there would make every row compare true.
     """
     try:
-        return _as_utc(datetime.fromisoformat(since))
+        return parse_timestamp(since)
     except (ValueError, TypeError):
         msg = f"since must be an ISO timestamp, got {since!r}"
         raise ValueError(msg) from None

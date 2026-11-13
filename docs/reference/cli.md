@@ -302,6 +302,12 @@ sessions open forever.
 Under Codex, whose hooks get no session variable, the session id comes
 from the hook's stdin payload instead.
 
+The summary is derived from what the session left behind (see
+``witan.session_summary``), because the next session's handoff shows it
+and agents rarely write one. A session already ended, by an explicit
+``workflow_session_end`` or an earlier Stop, is not closed again: its
+summary stands and only the stale handle is dropped.
+
 **Parameters**:
 
 * `--output-format CHOICE`: txt | json | toml | yaml.
