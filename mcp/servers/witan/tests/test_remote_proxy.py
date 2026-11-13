@@ -125,6 +125,7 @@ _ALL_REPOS_CALLS = {
     "memory_contradictions": {},
     "memory_list": {},
     "memory_search": {"query": "anything"},
+    "memory_stale_refs": {},
     "memory_store": {"kind": "pattern", "title": "everywhere", "content": "c"},
     "recall": {"query": "anything"},
     "task_create": {"title": "everywhere", "description": "d"},
