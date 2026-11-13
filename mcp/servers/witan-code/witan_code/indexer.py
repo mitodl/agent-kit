@@ -1290,8 +1290,9 @@ def _cross_file_records(
     would silently drop all of its cross-file callers. A caller written before
     the module it calls has no edge to keep in the first place. With
     ``relink`` set to the git root, the stored files that mention a parsed
-    file's module name as a word are parsed again and their cross-file edges
-    written back, which covers both. Their own rows are left as stored. One
+    file's module name as a word are parsed again and their edges into the
+    parsed files written back, which covers both. Their own rows are left as
+    stored. One
     that changed on disk since it was indexed is skipped: its stored symbols no
     longer match a fresh parse, and its own reindex links it. A forced
     full-repo run passes ``None``, since it parses every caller anyway.
@@ -1350,6 +1351,10 @@ def _cross_file_records(
             )
             origin = by_qualified.get(origin_qn) or fallback
             if resolved is None or resolved[0] == parsed.path or origin is None:
+                continue
+            # A re-linked file's edges into files outside the batch were never
+            # deleted. Most word-search candidates stop here, before any read.
+            if parsed.path not in batch and resolved[0] not in batch:
                 continue
             target_id = f"{prefix}{resolved[0]}::{resolved[1]}"
             # A re-linked file's symbols are the stored ones, which an indexer
