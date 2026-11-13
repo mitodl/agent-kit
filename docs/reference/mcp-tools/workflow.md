@@ -137,7 +137,7 @@ Advance a workflow project to the next phase.
 Call when transitioning from e.g. spec to implementation. Optionally
 record a PR URL when moving to or through the delivery phase.
 
-*Writes (non-destructive).*
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

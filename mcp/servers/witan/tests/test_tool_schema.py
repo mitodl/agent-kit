@@ -116,6 +116,7 @@ def test_the_tools_that_overwrite_or_remove_are_annotated_destructive():
         "task_link",
         "task_release",
         "task_update",
+        "workflow_project_advance",
         "workflow_project_complete",
         "workflow_project_update",
         "workflow_session_end",

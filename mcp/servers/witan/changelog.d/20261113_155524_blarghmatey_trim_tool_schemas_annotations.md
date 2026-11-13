@@ -2,7 +2,8 @@
 
 - Every tool carries MCP annotations: `readOnlyHint` on reads, and on writes
   `destructiveHint` (true for deletes, closes, merges, field overwrites,
-  rewritten memory links and session summaries, and link removal) plus
+  rewritten memory links and session summaries, phase advances, and link
+  removal) plus
   `idempotentHint` where a repeat changes nothing more.
   Clients can auto-approve the reads. `witan serve` against a deployed target
   republishes the deployment's annotations.
