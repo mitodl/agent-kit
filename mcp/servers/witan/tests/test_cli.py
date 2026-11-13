@@ -853,6 +853,25 @@ def test_serve_carries_the_mounted_code_servers_instructions(monkeypatch):
     assert fake.instructions == "WITAN\n\nCODE"
 
 
+def test_ui_carries_the_mounted_code_servers_instructions(monkeypatch):
+    """`witan ui` serves the same /mcp an agent can connect to, so it needs the
+    code_* guidance that `witan serve` appends, not only the tools."""
+    import sys
+    import types
+
+    from witan.cli.ui import _serve_local
+
+    fake = _patch_mcp(monkeypatch)
+    fake.instructions = "WITAN"
+    code_mcp = types.SimpleNamespace(instructions="CODE")
+    monkeypatch.setitem(
+        sys.modules, "witan_code.server", types.SimpleNamespace(mcp=code_mcp)
+    )
+    _serve_local(8765, browser=False)
+    assert fake.run_calls[0]["path"] == "/mcp"
+    assert fake.instructions == "WITAN\n\nCODE"
+
+
 def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):
     from witan.cli import serve
     from witan_core.observability.asgi import TraceContextASGIMiddleware
