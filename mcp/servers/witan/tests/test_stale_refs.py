@@ -3,8 +3,8 @@
 witan-code is not installed in this package's test env, so a stand-in code
 server answers ``code_indexed_repos``, ``code_symbols_in_file`` and
 ``code_find_definition``. The last two are ``async`` like the real ones, which
-is what caught ``memory_symbols`` storing an un-awaited coroutine as the
-definition.
+is what caught ``recall(memory=...)``'s symbols storing an un-awaited coroutine
+as the definition.
 """
 
 from __future__ import annotations
@@ -271,11 +271,11 @@ def test_all_repos_checks_every_repo(server, code):
 
 
 @requires_omnigraph
-def test_memory_symbols_awaits_an_async_definition_lookup(server, code):
+def test_recall_memory_symbols_await_an_async_definition_lookup(server, code):
     code(_fake_code({LIVE}, {INDEXED: 10}))
     slug = _lesson(server, "symbols", [LIVE])
 
-    (symbol,) = server.memory_symbols(slug)["symbols"]
+    (symbol,) = server.recall(memory=slug, hops=0)["memory"]["symbols"]
 
     assert symbol["definition"] == [{"symbol_id": LIVE, "repo": INDEXED}]
 

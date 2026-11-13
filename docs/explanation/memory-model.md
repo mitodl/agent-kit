@@ -53,7 +53,7 @@ relate to each other, and five edge kinds carry those relationships:
 ### An edge knows how it got there
 
 An edge is not just a connection; it carries four properties of its own —
-`confidence`, `role`, `author`, `created_at`. `memory_neighbors` returns them
+`confidence`, `role`, `author`, `created_at`. `recall(memory=...)` returns them
 alongside each neighbour, so "why are these two linked" has an answer that the
 edge kind alone cannot give: `related_to` says *some* relation exists, and
 `role` says it is "both configure the Vault sidecar".
@@ -115,8 +115,9 @@ service, library, or concept), and `symbol` (reserved; symbols stay soft refs
 for now).
 
 The `contract` kind is the interesting one: it is the join between the memory
-graph and the code graph. `memory_for_contract("DATABASE_URL")` returns both the
-memories tagged to that contract and the code that provides or consumes it.
+graph and the code graph. `recall(contract="DATABASE_URL", contract_kind="env_var")`
+returns both the memories tagged to that contract and the code that provides or
+consumes it.
 
 ## How `recall` composes all of it
 

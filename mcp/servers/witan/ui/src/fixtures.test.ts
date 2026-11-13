@@ -8,10 +8,10 @@ import memoryGetFixture from "../fixtures/memory_get.json" with {
 import memoryListFixture from "../fixtures/memory_list.json" with {
 	type: "json",
 };
-import memoryNeighborsFixture from "../fixtures/memory_neighbors.json" with {
+import recallFixture from "../fixtures/recall.json" with { type: "json" };
+import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 	type: "json",
 };
-import recallFixture from "../fixtures/recall.json" with { type: "json" };
 import taskGetFixture from "../fixtures/task_get.json" with { type: "json" };
 import taskGetMissingFixture from "../fixtures/task_get.missing.json" with {
 	type: "json",
@@ -57,11 +57,7 @@ import {
  */
 
 /** The tools unwrapped on the server: each returns a bare `dict`. */
-const UNWRAPPED = new Set([
-	"recall",
-	"memory_neighbors",
-	"code_repo_dependencies",
-]);
+const UNWRAPPED = new Set(["recall", "code_repo_dependencies"]);
 
 /** A `tools/list` that agrees with every recorded flag. */
 function agreeing(): {
@@ -123,14 +119,12 @@ describe("the recorded wrap flags", () => {
 			"memory_contradictions",
 			"memory_get",
 			"memory_list",
-			"memory_neighbors",
 			"memory_search",
 			"recall",
 			"task_get",
 			"task_list",
 			"task_ready",
 			"task_search",
-			"topic_get",
 			"workflow_project_get",
 			"workflow_project_list",
 			"workflow_project_status",
@@ -266,13 +260,11 @@ describe("the types match what the server actually returns", () => {
 		).toBe(true);
 	});
 
-	it("memory_neighbors is a bare dict keyed by slug", () => {
-		const neighbors = unwrap<{ slug: string }>(
-			"memory_neighbors",
-			memoryNeighborsFixture,
-		);
+	it("recall(memory=...) carries the memory section", () => {
+		const result = unwrap<RecallResult>("recall", recallMemoryFixture);
 
-		expect(typeof neighbors.slug).toBe("string");
+		expect(typeof result.memory?.slug).toBe("string");
+		expect(Array.isArray(result.memory?.symbols)).toBe(true);
 	});
 
 	it("memory_contradictions carries both endpoints and the link", () => {

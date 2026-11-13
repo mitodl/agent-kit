@@ -81,7 +81,7 @@ def test_writes_to_other_fields_leave_the_envelope_intact(server):
     server.workflow_project_update(slug, title="renamed", tags=["t"])
     server.workflow_project_update(slug, add_repos=["https://github.com/x/new"])
     server.workflow_project_advance(slug, phase="spec")
-    server.workflow_project_block(other["slug"], slug)
+    server.workflow_project_update(slug, add_blocked_by=[other["slug"]])
     server.workflow_session_start(
         project_slug=slug,
         session_id=uuid.uuid4().hex,

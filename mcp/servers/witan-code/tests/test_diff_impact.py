@@ -476,18 +476,28 @@ def fixture_graph(tmp_path, monkeypatch):
 
 @requires_stack
 def test_diff_impact_on_a_fixture_graph(fixture_graph, monkeypatch, capsys):
-    contexts = {
-        f"{REPO}#svc.py::helper": {
-            "tasks": [
-                {"slug": "tk-fix-helper", "title": "Fix helper", "status": "open"}
-            ],
-            "memories": [{"slug": "les-helper-is-hot", "title": "helper is hot"}],
+    helper_id = f"{REPO}#svc.py::helper"
+    helper_tasks = [{"slug": "tk-fix-helper", "title": "Fix helper", "status": "open"}]
+    helper_memories = [{"slug": "les-helper-is-hot", "title": "helper is hot"}]
+
+    def recall(symbol_id, hops, include_superseded, limit):
+        # Exactly the seed set, as the removed symbol_context returned it.
+        assert (hops, include_superseded) == (0, True)
+        found = symbol_id == helper_id
+        return {
+            "memories": helper_memories if found else [],
+            "contradictions": [],
+            "seeds": {},
+            "symbol": {
+                "symbol_id": symbol_id,
+                "tasks": helper_tasks if found else [],
+            },
         }
-    }
+
+    # Only tools witan still has: a removed one is a KeyError, as it is an
+    # unknown tool against the real server.
     work = {
-        "symbol_context": lambda symbol_id: (
-            {"tasks": [], "memories": []} | contexts.get(symbol_id, {})
-        ),
+        "recall": recall,
         "task_for_branch": lambda branch, repo: [
             {
                 "slug": "tk-feature",

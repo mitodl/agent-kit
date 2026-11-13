@@ -2,7 +2,7 @@
 
 import pytest
 
-from .conftest import requires_omnigraph
+from .conftest import requires_omnigraph, topic_of
 
 
 @requires_omnigraph
@@ -452,12 +452,12 @@ def test_neighbors_superseded_by_is_the_inbound_side(server):
     new = server.memory_store(kind="pattern", title="new", content="second take")
     server.memory_link(new["slug"], old["slug"], "supersedes", role="rewrite")
 
-    replaced = server.memory_neighbors(old["slug"])["neighbors"]
+    replaced = server.recall(memory=old["slug"], hops=0)["memory"]["neighbors"]
     assert [n["slug"] for n in replaced["superseded_by"]] == [new["slug"]]
     assert replaced["superseded_by"][0]["edge"]["role"] == "rewrite"
     assert replaced["supersedes"] == []
 
-    replacing = server.memory_neighbors(new["slug"])["neighbors"]
+    replacing = server.recall(memory=new["slug"], hops=0)["memory"]["neighbors"]
     assert [n["slug"] for n in replacing["supersedes"]] == [old["slug"]]
     assert replacing["superseded_by"] == []
 
@@ -469,7 +469,7 @@ def test_related_to_is_symmetric(server):
     server.memory_link(a["slug"], b["slug"], "related_to")
 
     # stored a -> b, but b's neighbours union both directions
-    nb = server.memory_neighbors(b["slug"])
+    nb = server.recall(memory=b["slug"], hops=0)["memory"]
     related = {n["slug"] for n in nb["neighbors"]["related_to"]}
     assert a["slug"] in related
 
@@ -483,7 +483,7 @@ def test_contradicts_not_hidden(server):
     slugs = {h["slug"] for h in server.memory_search("contradiction topic")}
     assert {a["slug"], b["slug"]} <= slugs
 
-    nb = server.memory_neighbors(a["slug"])
+    nb = server.recall(memory=a["slug"], hops=0)["memory"]
     assert b["slug"] in {n["slug"] for n in nb["neighbors"]["contradicts"]}
 
 
@@ -494,7 +494,10 @@ def test_link_missing_slug_is_noop(server):
     assert res["linked"] is False
     assert "pat-does-not-exist" in res["missing"]
     # no dead edge surfaces in a typed read
-    assert server.memory_neighbors(a["slug"])["neighbors"]["related_to"] == []
+    assert (
+        server.recall(memory=a["slug"], hops=0)["memory"]["neighbors"]["related_to"]
+        == []
+    )
 
 
 @requires_omnigraph
@@ -504,24 +507,20 @@ def test_link_self_is_rejected(server):
     assert res["linked"] is False
     assert res["reason"] == "cannot link a memory to itself"
     # no self-loop written
-    assert server.memory_neighbors(a["slug"])["neighbors"]["supersedes"] == []
+    assert (
+        server.recall(memory=a["slug"], hops=0)["memory"]["neighbors"]["supersedes"]
+        == []
+    )
 
 
 @requires_omnigraph
-def test_neighbors_kinds_subset_and_empty(server):
+def test_memory_section_names_every_neighbor_kind(server):
     a = server.memory_store(kind="pattern", title="a", content="alpha")
     b = server.memory_store(kind="pattern", title="b", content="beta")
     server.memory_link(a["slug"], b["slug"], "related_to")
 
-    # explicit subset returns only the requested kind
-    only_related = server.memory_neighbors(a["slug"], kinds=["related_to"])
-    assert list(only_related["neighbors"]) == ["related_to"]
-
-    # explicit empty list returns no kinds (not "all kinds")
-    assert server.memory_neighbors(a["slug"], kinds=[])["neighbors"] == {}
-
-    # omitting kinds (None) returns all kinds
-    assert set(server.memory_neighbors(a["slug"])["neighbors"]) == {
+    neighbors = server.recall(memory=a["slug"], hops=0)["memory"]["neighbors"]
+    assert set(neighbors) == {
         "supersedes",
         "superseded_by",
         "refines",
@@ -529,6 +528,7 @@ def test_neighbors_kinds_subset_and_empty(server):
         "contradicts",
         "related_to",
     }
+    assert [n["slug"] for n in neighbors["related_to"]] == [b["slug"]]
 
 
 @requires_omnigraph
@@ -536,14 +536,14 @@ def test_tags_create_and_reuse_topics(server):
     a = server.memory_store(kind="pattern", title="a", content="content a", tags=["uv"])
     b = server.memory_store(kind="pattern", title="b", content="content b", tags=["uv"])
 
-    got = server.topic_get("tp-topic-uv")
+    got = topic_of(server, "tp-topic-uv")
     assert got["topic"]["name"] == "uv"
     assert got["topic"]["kind"] == "topic"
     slugs = {m["slug"] for m in got["memories"]}
     assert {a["slug"], b["slug"]} <= slugs
 
     # the second store re-used the node — no duplicate
-    by_name = server.topic_get("uv:topic")
+    by_name = topic_of(server, "uv:topic")
     assert by_name["topic"]["slug"] == "tp-topic-uv"
 
 
@@ -563,7 +563,7 @@ def test_memories_for_topic_cross_repo(server):
         repo="https://github.com/test/two",
         tags=["cryptography"],
     )
-    got = server.topic_get("tp-topic-cryptography")
+    got = topic_of(server, "tp-topic-cryptography")
     slugs = {m["slug"] for m in got["memories"]}
     assert {a["slug"], b["slug"]} <= slugs
 
@@ -590,19 +590,61 @@ def test_migrate_topics_is_idempotent_after_dual_write(server):
     second = server.migrate_topics()
     assert second["edges_created"] == 0
     assert second["topics_created"] == 0
-    got = server.topic_get("tp-topic-ruff")
+    got = topic_of(server, "tp-topic-ruff")
     assert got is not None and got["memories"]
 
 
 @requires_omnigraph
-def test_topic_get_resolves_name_kind_case_insensitively(server):
+def test_topic_seed_resolves_name_kind_case_insensitively(server):
     # Stored tag keeps its casing in the node name, but the slug is normalised.
     m = server.memory_store(kind="pattern", title="cased", content="x", tags=["UV"])
     # Querying with different casing still resolves to tp-topic-uv.
-    got = server.topic_get("uv:topic")
+    got = topic_of(server, "uv:topic")
     assert got is not None
     assert got["topic"]["slug"] == "tp-topic-uv"
     assert m["slug"] in {x["slug"] for x in got["memories"]}
+
+
+@requires_omnigraph
+def test_topic_seed_reports_a_missing_topic_as_null(server):
+    out = server.recall(topic="nothing-here:topic", hops=0)
+    assert out["topic"] is None
+    assert out["memories"] == []
+
+
+@requires_omnigraph
+def test_a_spec_whose_name_starts_with_tp_resolves_as_a_spec(server):
+    # The write path parses `tp-client:contract` as a spec once it is not a
+    # Topic slug; the read path has to agree or the tag cannot be found.
+    m = server.memory_store(kind="pattern", title="tp", content="x")
+    server.memory_link(m["slug"], "tp-client:contract", "tagged")
+
+    by_contract = server.recall(contract="tp-client", hops=0)
+    assert by_contract["contract"]["topic"]["name"] == "tp-client"
+    assert [x["slug"] for x in by_contract["memories"]] == [m["slug"]]
+    by_topic = server.recall(topic="tp-client:contract", hops=0)
+    assert [x["slug"] for x in by_topic["memories"]] == [m["slug"]]
+
+
+@requires_omnigraph
+def test_topic_seed_lists_superseded_memories_only_when_asked(server):
+    old = server.memory_store(kind="pattern", title="old", content="o", tags=["t"])
+    new = server.memory_store(kind="pattern", title="new", content="n", tags=["t"])
+    server.memory_link(new["slug"], old["slug"], "supersedes")
+
+    current = server.recall(topic="t:topic", hops=0)
+    assert [m["slug"] for m in current["memories"]] == [new["slug"]]
+    assert {m["slug"] for m in topic_of(server, "t:topic")["memories"]} == {
+        old["slug"],
+        new["slug"],
+    }
+
+
+@requires_omnigraph
+def test_sections_appear_only_for_their_seed(server):
+    server.memory_store(kind="pattern", title="plain", content="plain words")
+    out = server.recall(query="plain words")
+    assert set(out) == {"memories", "contradictions", "seeds"}
 
 
 @requires_omnigraph

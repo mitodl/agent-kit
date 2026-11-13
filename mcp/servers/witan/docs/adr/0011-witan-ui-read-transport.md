@@ -178,9 +178,9 @@ layer binds exactly these and nothing else:
 - tasks: `task_ready`, `task_get`, `task_list`, `task_search`
 - projects and sessions: `workflow_project_get`, `workflow_project_status`,
   `workflow_project_list`, `workflow_session_list`
-- memory: `recall`, `memory_get`, `memory_list`, `memory_search`,
-  `memory_neighbors`, `topic_get`, and `memory_contradictions` (added by the
-  2026-09-22 amendment below)
+- memory: `recall`, `memory_get`, `memory_list`, `memory_search`, and
+  `memory_contradictions` (added by the 2026-09-22 amendment below;
+  `memory_neighbors` and `topic_get` left with the 2026-11-12 amendment)
 - code graph, _optional_: `code_repo_dependencies`,
   `code_interface_providers`, `code_interface_consumers` (added by the
   2026-09-23 amendment below)
@@ -433,3 +433,23 @@ A Keycloak scope (a `witan:write` default scope on every client but the UI's)
 would also work. It was not chosen because it needs a realm change deployed
 ahead of the witan release that requires it, and a second list of which tools
 count as writes.
+
+## Amendment (2026-11-12): `memory_neighbors` and `topic_get` fold into `recall`
+
+Both tools were removed from the server when witan's narrow memory reads were
+folded into `recall` (task
+`tk-fold-witan-s-redundant-tools-project-blockers-me-409381`), so they leave
+the bound set and nothing joins it. The memory view reads the same data
+through `recall`, which was already bound:
+
+- The detail panel calls `recall(memory=<slug>, hops=0, limit=1)` and reads
+  its `memory` section: the neighbours by edge kind, as `memory_neighbors`
+  returned them, plus the memory's code symbols.
+- A topic page calls `recall(topic=<topic>, hops=0, include_superseded=True)`
+  with a limit of 500. With no expansion and no pruning, its ranked list is
+  every memory tagged to the topic (up to the limit), and its `topic` section
+  is the Topic node or `null`. The rows are full memories rather than
+  `topic_get`'s slim projection, ranked rather than in store order.
+
+`witan.ui_access.READ_TOOLS` and the fixtures moved with the set, as the
+2026-11-10 amendment requires.

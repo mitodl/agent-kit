@@ -357,6 +357,7 @@ export function recall(args: {
 	repo: string;
 	task?: string;
 	topic?: string;
+	memory?: string;
 	kind?: MemoryKind;
 	limit?: number;
 	hops?: number;
@@ -391,11 +392,29 @@ export function memorySearch(args: {
 	return read("memory_search", scoped(args));
 }
 
-export function memoryNeighbors(args: {
+/**
+ * A memory's links by kind and the code symbols it names: `recall`'s
+ * `memory` section. `hops: 0` and `limit: 1` keep the ranked list to the
+ * memory itself, which the panel already has from `memory_get`.
+ */
+export async function memoryNeighbors(args: {
 	slug: string;
-	kinds?: string[];
 }): Promise<MemoryNeighbors> {
-	return read("memory_neighbors", args);
+	const result = await recall({
+		memory: args.slug,
+		repo: "",
+		hops: 0,
+		limit: 1,
+	});
+	return memorySectionOf(result);
+}
+
+/** `recall`'s `memory` section, which a call passing `memory` always gets. */
+export function memorySectionOf(result: RecallResult): MemoryNeighbors {
+	if (!result.memory) {
+		throw new Error("recall(memory=...) returned no memory section");
+	}
+	return result.memory;
 }
 
 /**
@@ -410,9 +429,37 @@ export function memoryContradictions(args: {
 	return read("memory_contradictions", scoped(args));
 }
 
-/** `topic` is a `tp-` slug or a `name:kind` spec, e.g. `witan-ui:topic`. */
-export function topicGet(topic: string): Promise<TopicResult | null> {
-	return read("topic_get", { topic });
+/**
+ * `recall`'s limit on a topic read. The Kind select and the facets narrow a
+ * topic in the browser (`recall`'s `kind` narrows only a query seed), so the
+ * read has to hold the whole topic: a limit at the page's row cap would rank a
+ * lesson out behind that many patterns before the filter saw it. Far past any
+ * topic in a real graph, and a read that reaches it is flagged on the page.
+ */
+export const TOPIC_READ_LIMIT = 5000;
+
+/**
+ * A topic and every memory tagged to it, superseded ones included, or `null`
+ * when no such Topic exists: `recall` seeded from the topic alone, with no
+ * expansion. `topic` is a `tp-` slug or a `name:kind` spec, e.g.
+ * `witan-ui:topic`. A topic is a cross-repo join surface, so `repo` is `""`.
+ */
+export async function topicGet(topic: string): Promise<TopicResult | null> {
+	const result = await recall({
+		topic,
+		repo: "",
+		hops: 0,
+		limit: TOPIC_READ_LIMIT,
+		include_superseded: true,
+	});
+	return topicResultOf(result);
+}
+
+/** A topic page from `recall(topic=...)`, or `null` when no such Topic exists. */
+export function topicResultOf(result: RecallResult): TopicResult | null {
+	return result.topic
+		? { topic: result.topic, memories: result.memories }
+		: null;
 }
 
 // The code graph (witan-code). Optional: check `codeGraphAvailable` first.

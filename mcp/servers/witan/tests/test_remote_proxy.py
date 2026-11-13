@@ -133,7 +133,6 @@ _ALL_REPOS_CALLS = {
     "task_ready": {},
     "task_search": {"query": "anything"},
     "workflow_project_list": {},
-    "workflow_project_search": {"query": "anything"},
     "workflow_session_start": {"session_id": "s-1", "phase": "discovery"},
     "workflow_trace_list": {},
 }
@@ -1044,7 +1043,7 @@ def test_claim_without_a_client_session_id_sends_none(proxy, monkeypatch):
 # call `s.client.read(...)` directly instead of going through a tool.
 # `RemoteServerProxy` has no `client` — `__getattr__` handed back a plain
 # dispatch closure, and `.read(...)` on that raised `AttributeError`. They now
-# go through `workflow_project_get_blockers`/`workflow_trace_get`/
+# go through `workflow_project_get`/`workflow_trace_get`/
 # `workflow_session_list`, which dispatch correctly against either target.
 
 
@@ -1069,7 +1068,9 @@ def test_project_show_works_against_a_remote_target(proxy, _cli_against_proxy):
     printed = _cli_against_proxy
     blocker = proxy.workflow_project_create(title="blocker", description="d")
     blocked = proxy.workflow_project_create(title="blocked", description="d")
-    proxy.workflow_project_block(slug=blocker["slug"], blocks_slug=blocked["slug"])
+    proxy.workflow_project_update(
+        slug=blocked["slug"], add_blocked_by=[blocker["slug"]]
+    )
 
     sid = "11111111-1111-1111-1111-111111111111"
     sess = proxy.workflow_session_start(

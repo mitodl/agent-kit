@@ -65,7 +65,7 @@ Every other task write is fenced the same way. A task write replaces the whole
 row, so an unfenced edit that read the task before your claim would put back
 the old status and assignee and leave the task open for a second claimer.
 Instead, `task_update`, `task_close`, `task_release`, `task_link`,
-`task_unlink` and the unblock sweep each state the commit of the read they
+`task_link(remove=True)` and the unblock sweep each state the commit of the read they
 merged from, and a refused write re-reads and merges again.
 
 `store_merge` (`witan migrate merge`) writes the same way when a winning source
@@ -93,7 +93,7 @@ Two details make the loop work:
    one write can still have landed an earlier one: `task_close` commits the
    close and then reopens each dependent with its own fenced write, so a
    dependent that runs out comes back as a `warning` on the closed task rather
-   than as an error. `task_unlink` deletes the edge before it clears
+   than as an error. `task_link(remove=True)` deletes the edge before it clears
    `parent_slug`, and re-running it clears a `parent_slug` left behind.
 
 ### The cost: refusals under unrelated load

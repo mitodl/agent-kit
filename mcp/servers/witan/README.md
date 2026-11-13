@@ -172,15 +172,12 @@ See [`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](./witan/sk
 | Tool | Description |
 |---|---|
 | `workflow_project_create` | Create a new project (`wp-` slug) to track an engineering objective |
-| `workflow_project_get` | Fetch a single project by slug |
-| `workflow_project_list` | List projects filtered by repo, status, or phase; defaults to active |
-| `workflow_project_update` | Correct title/description/repos/tags/issue post-creation, or mark a project abandoned |
+| `workflow_project_get` | Fetch a single project by slug, with its blockers' status and the projects it blocks |
+| `workflow_project_list` | List projects filtered by repo, status, or phase (defaults to active), or BM25-search them with `query` |
+| `workflow_project_update` | Correct title/description/repos/tags/issue post-creation, mark a project abandoned, or declare which projects must complete before it can begin (`add_blocked_by`/`remove_blocked_by`) |
 | `workflow_project_advance` | Advance a project to the next phase (discovery → spec → implementation → delivery) |
 | `workflow_project_complete` | Mark project done; assembles a `WorkflowTrace` corpus record from all sessions |
 | `workflow_project_link_memory` | Attach a memory (pattern/lesson/project_fact) to a project via an `Informed` edge |
-| `workflow_project_block` | Declare that one project must complete before another can begin |
-| `workflow_project_unblock` | Remove a project dependency declared with `workflow_project_block` |
-| `workflow_project_get_blockers` | Return all projects currently blocking the given project |
 | `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook. Re-entrant — a retry returns the open session rather than minting a second one |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
 
@@ -207,9 +204,8 @@ tasks hard-link to projects, sessions, and memories. See
 | `task_release` | Drop a claim: clear assignee/lease, return the task to `open` |
 | `task_close` | Close a task with an optional resolution; unblocks its dependents |
 | `task_ready` | **Ready work**: open/unblocked tasks (plus `in_progress` tasks whose lease has lapsed) ordered by priority — the core coordination primitive |
-| `task_link` | Link tasks: `blocks` / `parent` / `discovered_from`, or `addresses` a Memory node |
-| `task_unlink` | Remove any of those links — for one recorded backwards or against the wrong slug. A no-op when the link isn't there |
-| `context_for_symbol` | Reverse lookup: given a code-graph symbol id (`repo#path::Name`), return the memories and tasks whose `symbolRefs` include it |
+| `task_link` | Link tasks: `blocks` / `parent` / `discovered_from`, or `addresses` a Memory node. `remove=True` removes any of those links, for one recorded backwards or against the wrong slug (a no-op when the link isn't there) |
+| `recall(symbol_id=…)` | Reverse lookup: given a code-graph symbol id (`repo#path::Name`), return the memories, and in its `symbol` section the tasks, whose `symbol_refs` include it |
 
 Tasks are **hierarchical** (an `epic` decomposes into sub-issues via `parent`, with
 `parentSlug` denormalized for fast child lookup) and **dependency-aware** (`blocked_by`

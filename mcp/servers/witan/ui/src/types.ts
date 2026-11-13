@@ -168,10 +168,20 @@ export interface WorkflowProjectDetail extends WorkflowProject {
 	blocked_by: string[] | null;
 	/** Slugs of the projects THIS one holds back. Always present. */
 	blocks: string[];
+	/** `blocked_by` resolved, in its order. Always present, possibly empty. */
+	blockers: ProjectBlocker[];
 	github_issue: string | null;
 	tags: string[] | null;
 	created_at: string;
 	completed_at: string | null;
+}
+
+/** One project that has to complete before another can begin. */
+export interface ProjectBlocker {
+	slug: string;
+	title: string;
+	status: string;
+	phase: WorkflowPhase;
 }
 
 export interface WorkflowSession {
@@ -267,6 +277,10 @@ export interface RecallResult {
 	memories: Memory[];
 	seeds: unknown;
 	contradictions: Contradiction[];
+	/** Present when the call passed `memory`: that memory's links and code. */
+	memory?: MemoryNeighbors;
+	/** Present when the call passed `topic`; `null` when no such Topic. */
+	topic?: Topic | null;
 }
 
 /** One side of a `memory_contradictions` pair: a projection, not a `Memory`. */
@@ -302,7 +316,7 @@ export interface MemoryContradiction {
 }
 
 /**
- * The groups `memory_neighbors` returns, in the order the detail panel shows
+ * The groups `recall(memory=...)` returns, in the order the detail panel shows
  * them. `superseded_by` is the inbound side of `supersedes`, not a link kind
  * of its own.
  */
@@ -327,10 +341,18 @@ export interface MemoryNeighbor {
 	edge: EdgeMeta;
 }
 
+/** One of a memory's `symbol_refs`, with its definition when witan-code has one. */
+export interface MemorySymbol {
+	symbol_ref: string;
+	definition?: unknown;
+}
+
+/** `recall(memory=...)`'s `memory` section. */
 export interface MemoryNeighbors {
 	slug: string;
-	/** Every kind is present when none were asked for, each possibly empty. */
+	/** Every kind is present, each possibly empty. */
 	neighbors: Partial<Record<NeighborKind, MemoryNeighbor[]>>;
+	symbols: MemorySymbol[];
 }
 
 export interface Topic {
@@ -340,9 +362,9 @@ export interface Topic {
 	created_at: string;
 }
 
+/** A topic and the memories tagged to it, read through `recall(topic=...)`. */
 export interface TopicResult {
 	topic: Topic;
-	/** Slim rows: no `content`, no `author`. */
 	memories: Memory[];
 }
 
@@ -645,6 +667,9 @@ export function isWorkflowProjectDetail(
 		description: nullable(str),
 		blocked_by: strList,
 		blocks: arrayOf(str),
+		blockers: arrayOf((v) =>
+			matches(v, { slug: str, title: str, status: str, phase: workflowPhase }),
+		),
 		github_issue: nullable(str),
 		tags: strList,
 		created_at: str,
@@ -725,11 +750,15 @@ export function isContradiction(value: unknown): value is Contradiction {
 }
 
 export function isRecallResult(value: unknown): value is RecallResult {
-	return matches(value, {
-		memories: arrayOf(isMemory),
-		seeds: anything,
-		contradictions: arrayOf(isContradiction),
-	});
+	return matches(
+		value,
+		{
+			memories: arrayOf(isMemory),
+			seeds: anything,
+			contradictions: arrayOf(isContradiction),
+		},
+		{ memory: isMemoryNeighbors, topic: nullable(isTopic) },
+	);
 }
 
 function isContradictionEndpoint(
@@ -789,15 +818,14 @@ export function isMemoryNeighbors(value: unknown): value is MemoryNeighbors {
 			Object.entries(v).every(
 				([kind, rows]) => neighborKind(kind) && arrayOf(isMemoryNeighbor)(rows),
 			),
+		symbols: arrayOf((v) =>
+			matches(v, { symbol_ref: str }, { definition: anything }),
+		),
 	});
 }
 
-export function isTopicResult(value: unknown): value is TopicResult {
-	return matches(value, {
-		topic: (v) =>
-			matches(v, { slug: str, name: str, kind: str, created_at: str }),
-		memories: arrayOf(isMemory),
-	});
+function isTopic(value: unknown): value is Topic {
+	return matches(value, { slug: str, name: str, kind: str, created_at: str });
 }
 
 const contractKind = oneOf("env_var", "endpoint", "package", "service");

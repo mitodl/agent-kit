@@ -9,13 +9,13 @@ import memoryGetFixture from "../../fixtures/memory_get.json" with {
 import memoryListFixture from "../../fixtures/memory_list.json" with {
 	type: "json",
 };
-import neighborsFixture from "../../fixtures/memory_neighbors.json" with {
-	type: "json",
-};
-import supersededFixture from "../../fixtures/memory_neighbors.superseded.json" with {
-	type: "json",
-};
 import recallFixture from "../../fixtures/recall.json" with { type: "json" };
+import neighborsFixture from "../../fixtures/recall.memory.json" with {
+	type: "json",
+};
+import supersededFixture from "../../fixtures/recall.memory.superseded.json" with {
+	type: "json",
+};
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import type {
 	Memory,
@@ -33,15 +33,15 @@ import {
 	type MemoryPage,
 	memoryDetail,
 	memoryView,
+	TOPIC_ROW_CAP,
 } from "./memory.js";
 
 const memory = unwrap<Memory>("memory_get", memoryGetFixture);
 const listed = unwrap<Memory[]>("memory_list", memoryListFixture);
-const neighbors = unwrap<MemoryNeighbors>("memory_neighbors", neighborsFixture);
-const superseded = unwrap<MemoryNeighbors>(
-	"memory_neighbors",
-	supersededFixture,
-);
+const neighbors = unwrap<RecallResult>("recall", neighborsFixture)
+	.memory as MemoryNeighbors;
+const superseded = unwrap<RecallResult>("recall", supersededFixture)
+	.memory as MemoryNeighbors;
 const pairs = unwrap<MemoryContradiction[]>(
 	"memory_contradictions",
 	contradictionsFixture,
@@ -261,7 +261,7 @@ describe("facets", () => {
 describe("the search form", () => {
 	it("submits the query and leaves a topic", () => {
 		const onNavigate = draw(
-			{ mode: "topic", topic: null, memories: [] },
+			{ mode: "topic", topic: null, memories: [], readAtLimit: false },
 			{ ...route, topic: "tp-x" },
 		);
 		const input = root.querySelector<HTMLInputElement>("input[name=q]");
@@ -279,7 +279,7 @@ describe("the search form", () => {
 describe("the topic list", () => {
 	it("names a missing topic as a stale link", () => {
 		draw(
-			{ mode: "topic", topic: null, memories: [] },
+			{ mode: "topic", topic: null, memories: [], readAtLimit: false },
 			{ ...route, topic: "tp-gone" },
 		);
 
@@ -287,7 +287,7 @@ describe("the topic list", () => {
 		expect(root.querySelector("table")).toBeNull();
 	});
 
-	it("offers no control topic_get cannot honour, and no column it does not send", () => {
+	it("offers no control the topic read cannot honour, and no column it does not send", () => {
 		draw(
 			{
 				mode: "topic",
@@ -298,6 +298,7 @@ describe("the topic list", () => {
 					created_at: memory.created_at,
 				},
 				memories: [memory],
+				readAtLimit: false,
 			},
 			{ ...route, topic: "tp-topic-mcp" },
 		);
@@ -308,6 +309,44 @@ describe("the topic list", () => {
 		);
 		expect(headings).not.toContain("Author");
 		expect(headings).not.toContain("Tags");
+	});
+});
+
+describe("a topic at its limits", () => {
+	const topic = {
+		slug: "tp-topic-mcp",
+		name: "mcp",
+		kind: "topic",
+		created_at: memory.created_at,
+	};
+	const at = { ...route, topic: topic.slug };
+
+	it("warns a filtered empty topic that its read was cut", () => {
+		draw({ mode: "topic", topic, memories: [], readAtLimit: true }, at);
+
+		expect(root.querySelector(".note")?.textContent).toContain(
+			"came back at its limit",
+		);
+		expect(text()).toContain("No memories are tagged with this topic.");
+	});
+
+	it("caps the rows after narrowing, and says how many it left out", () => {
+		const many = Array.from({ length: TOPIC_ROW_CAP + 3 }, (_, i) => ({
+			...memory,
+			slug: `pat-${i}`,
+		}));
+		draw({ mode: "topic", topic, memories: many, readAtLimit: false }, at);
+
+		expect(root.querySelectorAll("tbody tr")).toHaveLength(TOPIC_ROW_CAP);
+		expect(root.querySelector(".note")?.textContent).toContain(
+			`first ${TOPIC_ROW_CAP} of ${TOPIC_ROW_CAP + 3}`,
+		);
+	});
+
+	it("says nothing about limits for a topic under them", () => {
+		draw({ mode: "topic", topic, memories: [memory], readAtLimit: false }, at);
+
+		expect(root.querySelector(".note")).toBeNull();
 	});
 });
 
@@ -386,6 +425,7 @@ describe("memoryDetail", () => {
 			neighbors: Object.fromEntries(
 				Object.keys(neighbors.neighbors).map((kind) => [kind, []]),
 			),
+			symbols: [],
 		};
 		panel(none, bare);
 

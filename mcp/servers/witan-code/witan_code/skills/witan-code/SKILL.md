@@ -148,6 +148,6 @@ is not necessarily an error, see **Check readiness** above.
 (`task_create(..., symbol_refs=[...])`, see `/witan-task`) or memory
 (`memory_store(..., symbol_refs=[...])`, see `/witan-memory`) so the work or
 lesson is discoverable from the code later. Going the other way,
-`symbol_context(symbol_id)` (a witan tool) lists the tasks and memories
-already attached to a symbol — call it before editing code that might have
-open work or known gotchas attached.
+`recall(symbol_id=…)` (a witan tool) lists the memories already attached to a
+symbol, and its `symbol` section the tasks. Call it before editing code that
+might have open work or known gotchas attached.

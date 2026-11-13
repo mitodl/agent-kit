@@ -237,8 +237,8 @@ def clean_desc(text: str | None) -> str:
 
 # Which page each tool lands on, and the order the pages are listed in. Grouped
 # by the concept a reader is holding in their head ("I want to record something"
-# / "I want to coordinate work"), not by module or prefix — `recall` and
-# `topic_get` belong with memory even though they share no prefix with it.
+# / "I want to coordinate work"), not by module or prefix: `recall` belongs with
+# memory even though it shares no prefix with it.
 TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
     (
         "memory",
@@ -258,13 +258,8 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "memory_list",
             "memory_search",
             "memory_link",
-            "memory_neighbors",
             "memory_contradictions",
-            "memory_symbols",
             "memory_stale_refs",
-            "memory_for_contract",
-            "symbol_context",
-            "topic_get",
         ],
     ),
     (
@@ -291,7 +286,6 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "task_close",
             "task_comment",
             "task_link",
-            "task_unlink",
             "task_for_branch",
         ],
     ),
@@ -309,13 +303,9 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "workflow_project_get",
             "workflow_project_status",
             "workflow_project_list",
-            "workflow_project_search",
             "workflow_project_update",
             "workflow_project_advance",
             "workflow_project_complete",
-            "workflow_project_block",
-            "workflow_project_unblock",
-            "workflow_project_get_blockers",
             "workflow_project_link_memory",
             "workflow_project_memories",
             "workflow_session_start",

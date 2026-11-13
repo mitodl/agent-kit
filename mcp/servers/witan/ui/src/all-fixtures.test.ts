@@ -3,14 +3,12 @@ import {
 	isInterfaceBinding,
 	isMemory,
 	isMemoryContradiction,
-	isMemoryNeighbors,
 	isProjectStatus,
 	isRecallResult,
 	isRepoDependencies,
 	isTaskDetail,
 	isTaskRow,
 	isTaskSearchRow,
-	isTopicResult,
 	isWorkflowProjectDetail,
 	isWorkflowProjectSummary,
 	isWorkflowSession,
@@ -27,8 +25,8 @@ import { BOUND_TOOLS, unwrap } from "./unwrap.js";
  *
  * Checking only the MCP envelope was not enough: a renamed field in a result
  * nothing else guarded (`task_search`, `workflow_project_get`/`list`,
- * `workflow_session_list`, `topic_get`) survived a regeneration and left the
- * hand-written type quietly stale.
+ * `workflow_session_list`, and the since-folded `topic_get`) survived a
+ * regeneration and left the hand-written type quietly stale.
  *
  * ★ EXHAUSTIVE OVER TOOLS AND OVER FIELDS, and both halves are pinned here
  * rather than asserted in a comment. `has a validator for every bound tool`
@@ -60,10 +58,8 @@ const VALIDATORS: Record<string, (value: unknown) => boolean> = {
 	memory_get: (v) => v === null || isMemory(v),
 	memory_list: (v) => Array.isArray(v) && v.every(isMemory),
 	memory_search: (v) => Array.isArray(v) && v.every(isMemory),
-	memory_neighbors: isMemoryNeighbors,
 	memory_contradictions: (v) =>
 		Array.isArray(v) && v.every(isMemoryContradiction),
-	topic_get: (v) => v === null || isTopicResult(v),
 	code_repo_dependencies: isRepoDependencies,
 	code_interface_providers: (v) =>
 		Array.isArray(v) && v.every(isInterfaceBinding),
@@ -101,14 +97,13 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	workflow_project_status: [],
 	workflow_project_list: [],
 	workflow_session_list: ["session_id", "tools_used", "files_changed"],
-	recall: [],
+	// The seed sections, each present only when its seed was passed.
+	recall: ["memory", "topic", "symbol", "contract"],
 	// `topics` only with `include_topics`, which the UI always passes.
 	memory_get: [...MEMORY_OPTIONAL, "topics"],
 	memory_list: MEMORY_OPTIONAL,
 	memory_search: MEMORY_OPTIONAL,
-	memory_neighbors: [],
 	memory_contradictions: [],
-	topic_get: [],
 	code_repo_dependencies: [],
 	// `InterfaceBinding.confidence`: a witan-code older than the field omits it.
 	code_interface_providers: ["confidence"],

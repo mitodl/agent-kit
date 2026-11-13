@@ -40,6 +40,12 @@ import {
  */
 export const MEMORY_LIST_CAP = 100;
 
+/**
+ * The most rows a topic page draws. A topic read holds the whole topic, so
+ * the Kind select and the facets narrow all of it before this cuts the list.
+ */
+export const TOPIC_ROW_CAP = 500;
+
 /** What the memory view's main area renders from. One read per route. */
 export type MemoryPage =
 	| {
@@ -66,7 +72,10 @@ export type MemoryPage =
 			mode: "topic";
 			/** `null` when no such Topic exists: a stale link, not a failure. */
 			topic: Topic | null;
+			/** Every memory of the selected kind, before the facets and the row cap. */
 			memories: Memory[];
+			/** The read came back at its limit, so memories may be missing. */
+			readAtLimit: boolean;
 	  };
 
 /** What the panel renders from for a memory slug. */
@@ -159,21 +168,16 @@ export function memoryView(
 	onNavigate: (patch: Partial<Route>) => void,
 	now = Date.now(),
 ): TemplateResult {
-	const shown = applyFacets(page.memories, route.facets);
+	const matching = applyFacets(page.memories, route.facets);
+	const shown =
+		page.mode === "topic" ? matching.slice(0, TOPIC_ROW_CAP) : matching;
 	return html`
     <div class="memory-view">
       ${toolbar(route, facetOptions(page.memories), onNavigate)}
       ${page.mode === "browse" ? inbox(page.inbox, route, now) : nothing}
       ${page.mode === "recall" ? recallPairs(page.pairs, page.memories, route) : nothing}
       ${page.mode === "topic" ? topicHeading(page.topic, route) : nothing}
-      ${
-				page.mode === "browse" && page.memories.length >= MEMORY_LIST_CAP
-					? html`<p class="note">
-              The list came back at its ${MEMORY_LIST_CAP}-memory limit, so
-              older memories may not be shown. Narrow by kind, or search.
-            </p>`
-					: nothing
-			}
+      ${limitNotes(page, matching.length)}
       ${
 				page.mode === "topic" && page.topic === null
 					? nothing
@@ -181,6 +185,33 @@ export function memoryView(
 			}
     </div>
   `;
+}
+
+/**
+ * Why a list may be missing memories, drawn above the table so a filtered
+ * empty state carries it too.
+ */
+function limitNotes(page: MemoryPage, matching: number): TemplateResult[] {
+	const notes: TemplateResult[] = [];
+	if (page.mode === "browse" && page.memories.length >= MEMORY_LIST_CAP) {
+		notes.push(html`<p class="note">
+      The list came back at its ${MEMORY_LIST_CAP}-memory limit, so older
+      memories may not be shown. Narrow by kind, or search.
+    </p>`);
+	}
+	if (page.mode === "topic" && page.readAtLimit) {
+		notes.push(html`<p class="note">
+      The topic's read came back at its limit, so lower-ranked memories may
+      not be shown, whatever the filters.
+    </p>`);
+	}
+	if (page.mode === "topic" && matching > TOPIC_ROW_CAP) {
+		notes.push(html`<p class="note">
+      Showing the first ${TOPIC_ROW_CAP} of ${matching} memories. Narrow by
+      kind or a facet to see the rest.
+    </p>`);
+	}
+	return notes;
 }
 
 function toolbar(
@@ -196,7 +227,7 @@ function toolbar(
 				event.preventDefault();
 				const form = event.currentTarget as HTMLFormElement;
 				const q = new FormData(form).get("q");
-				// A search replaces a topic rather than narrowing it: topic_get takes
+				// A search replaces a topic rather than narrowing it: `topicGet` takes
 				// no query, so keeping both would show a search box that does nothing.
 				onNavigate({ q: typeof q === "string" ? q.trim() : "", topic: null });
 			}}
@@ -241,8 +272,8 @@ function toolbar(
         Plain search
       </label>
       ${
-				// `topic_get` takes no superseded flag, so in a topic the toggle
-				// would be a control that changes nothing.
+				// `topicGet` always includes superseded memories, so in a topic the
+				// toggle would be a control that changes nothing.
 				route.topic
 					? nothing
 					: html`<label>
@@ -483,8 +514,10 @@ function memoryTable(
 			? page.pairs.flatMap((pair) => [pair.a, pair.b])
 			: [],
 	);
-	// `topic_get` returns slim rows with no author and no tags, and a column of
-	// dashes reads as "nobody wrote these" rather than "not in this read".
+	// A topic page keeps the columns it had when its read was `topic_get`,
+	// whose slim rows had no author and no tags (a column of dashes would have
+	// read as "nobody wrote these"). `recall` sends both now, so showing them
+	// is open as a follow-up.
 	const full = page.mode !== "topic";
 	return html`
     <section>
@@ -679,8 +712,8 @@ function topics(
 									topic: topic.slug,
 									q: "",
 									slug: null,
-									// `topic_get` rows are slim, with none of the facet fields,
-									// so a facet carried over would filter every row out.
+									// Facets reset on entering a topic, as they did when its rows
+									// were `topic_get`'s slim ones with none of the facet fields.
 									facets: DEFAULT_ROUTE.facets,
 								})}
                 >${topic.name}</a

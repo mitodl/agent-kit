@@ -17,10 +17,13 @@ import memoryGetFixture from "../fixtures/memory_get.json" with {
 import memoryListFixture from "../fixtures/memory_list.json" with {
 	type: "json",
 };
-import neighborsFixture from "../fixtures/memory_neighbors.json" with {
+import recallFixture from "../fixtures/recall.json" with { type: "json" };
+import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 	type: "json",
 };
-import recallFixture from "../fixtures/recall.json" with { type: "json" };
+import recallTopicFixture from "../fixtures/recall.topic.json" with {
+	type: "json",
+};
 import taskGetFixture from "../fixtures/task_get.json" with { type: "json" };
 import taskListFixture from "../fixtures/task_list.json" with { type: "json" };
 import taskReadyFixture from "../fixtures/task_ready.json" with {
@@ -29,7 +32,6 @@ import taskReadyFixture from "../fixtures/task_ready.json" with {
 import taskSearchFixture from "../fixtures/task_search.json" with {
 	type: "json",
 };
-import topicGetFixture from "../fixtures/topic_get.json" with { type: "json" };
 import projectGetFixture from "../fixtures/workflow_project_get.json" with {
 	type: "json",
 };
@@ -53,7 +55,7 @@ import type {
 	TaskDetail,
 	TaskRow,
 	TaskSearchRow,
-	TopicResult,
+	Topic,
 	WorkflowProjectDetail,
 	WorkflowProjectSummary,
 	WorkflowSession,
@@ -68,7 +70,9 @@ import { unwrap } from "./unwrap.js";
  * a given route, and what it does when the route changes under an in-flight
  * read.
  */
-vi.mock("./mcp.js", () => ({
+vi.mock("./mcp.js", async (importOriginal) => ({
+	TOPIC_READ_LIMIT: (await importOriginal<typeof import("./mcp.js")>())
+		.TOPIC_READ_LIMIT,
 	workflowProjectList: vi.fn(),
 	workflowProjectGet: vi.fn(),
 	workflowProjectStatus: vi.fn(),
@@ -195,7 +199,8 @@ beforeEach(() => {
 		unwrap<Memory[]>("memory_list", memoryListFixture),
 	);
 	vi.mocked(mcp.memoryNeighbors).mockResolvedValue(
-		unwrap<MemoryNeighbors>("memory_neighbors", neighborsFixture),
+		unwrap<RecallResult>("recall", recallMemoryFixture)
+			.memory as MemoryNeighbors,
 	);
 	vi.mocked(mcp.memorySearch).mockResolvedValue(
 		unwrap<Memory[]>("memory_list", memoryListFixture),
@@ -203,9 +208,11 @@ beforeEach(() => {
 	vi.mocked(mcp.recall).mockResolvedValue(
 		unwrap<RecallResult>("recall", recallFixture),
 	);
-	vi.mocked(mcp.topicGet).mockResolvedValue(
-		unwrap<TopicResult>("topic_get", topicGetFixture),
-	);
+	const topicPage = unwrap<RecallResult>("recall", recallTopicFixture);
+	vi.mocked(mcp.topicGet).mockResolvedValue({
+		topic: topicPage.topic as Topic,
+		memories: topicPage.memories,
+	});
 
 	window.location.hash = "";
 	root = document.createElement("div");
@@ -1041,7 +1048,7 @@ describe("App", () => {
 		expect(mcp.memoryList).not.toHaveBeenCalled();
 	});
 
-	it("narrows a topic by kind in the browser, since topic_get takes none", async () => {
+	it("narrows a topic by kind in the browser, since the topic read takes none", async () => {
 		await open("#memory?topic=tp-topic-witan-ui&kind=lesson");
 		await vi.waitFor(() =>
 			expect(root.querySelector(".topic-heading")).not.toBeNull(),
@@ -1052,6 +1059,26 @@ describe("App", () => {
 		);
 		expect(kinds.length).toBeGreaterThan(0);
 		expect(new Set(kinds)).toEqual(new Set(["lesson"]));
+	});
+
+	it("warns a kind-filtered topic whose read came back at its limit", async () => {
+		const topicPage = unwrap<RecallResult>("recall", recallTopicFixture);
+		vi.mocked(mcp.topicGet).mockResolvedValue({
+			topic: topicPage.topic as Topic,
+			memories: Array.from({ length: mcp.TOPIC_READ_LIMIT }, () => ({
+				...memory,
+				kind: "pattern" as const,
+			})),
+		});
+		await open("#memory?topic=tp-topic-witan-ui&kind=lesson");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".topic-heading")).not.toBeNull(),
+		);
+
+		expect(root.querySelector(".note")?.textContent).toContain(
+			"came back at its limit",
+		);
+		expect(root.querySelector("tbody")).toBeNull();
 	});
 
 	it("opens a memory slug as a memory, not a task", async () => {

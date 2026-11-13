@@ -82,14 +82,17 @@ Reach for a narrower read only for a specific need:
 | One memory by slug | `memory_get` |
 | Browse all of one kind (no query) | `memory_list(kind=…)` |
 | Plain BM25, no graph expansion | `memory_search` |
-| A known memory's neighbours, by edge kind | `memory_neighbors` |
+| A known memory's neighbours by edge kind, and the code symbols it names | `recall(memory=slug)`, read its `memory` section |
 | Every pair of memories that contradict each other | `memory_contradictions` |
-| Everything tagged to a topic (cross-repo) | `topic_get` |
-| Memories + code for a contract key | `memory_for_contract` |
-| Memories/tasks for a code symbol | `symbol_context` |
-| The code symbols a memory concerns | `memory_symbols` |
+| Everything tagged to a topic (cross-repo) | `recall(topic="uv:topic")`, whose `topic` section is the Topic |
+| Memories + code for a contract key | `recall(contract="DATABASE_URL", contract_kind="env_var")`, whose `contract` section holds the code bindings |
+| Memories/tasks for a code symbol | `recall(symbol_id=…)`, whose `symbol` section lists the tasks |
 | Memories whose symbol refs no longer resolve | `memory_stale_refs` |
 | Memories a project produced | `workflow_project_memories` |
+
+Pass `hops=0, include_superseded=True` and a high `limit` to any of those
+`recall` calls to list exactly what the seed resolves to, with nothing ranked
+out, expanded in, or pruned.
 
 ### `memory_list` — browse a kind without a query
 
@@ -176,11 +179,13 @@ memory_store(
 )
 ```
 
-To go the other way — "what lessons or tasks concern this symbol?" — call
-`symbol_context(symbol_id)` before editing it. It returns the memories and tasks
-whose `symbol_refs` include that id. The forward direction — "what code does this
-memory concern?" — is `memory_symbols(slug)`. (Both require the witan-code server;
-symbol ids are soft references, so a stale one simply resolves to nothing.)
+To go the other way ("what lessons or tasks concern this symbol?"), call
+`recall(symbol_id=…)` before editing it. Its memories are the ones whose
+`symbol_refs` include that id, and its `symbol` section lists the tasks that
+do. The forward direction ("what code does this memory concern?") is the
+`symbols` list in `recall(memory=slug)`'s `memory` section. (Symbol ids come
+from the witan-code server, and are soft references, so a stale one simply
+resolves to nothing.)
 `memory_stale_refs()` lists the memories whose refs no longer resolve, with
 same-named symbols as rename candidates. It only reports: fix the refs with
 `memory_update`, or supersede the memory if the code it described is gone.
@@ -215,11 +220,11 @@ Memories are a graph. Connect them with `memory_link(from_slug, to_slug, kind)`:
 
 Tags you pass to `memory_store` are also dual-written as `topic` Topics, so two
 memories sharing a tag are one hop apart. Explore the graph with
-`memory_neighbors(slug)` (a memory's links by kind) and `topic_get("uv:topic")`
-(everything tagged to a topic, across repos).
+`recall(memory=slug)` (its `memory` section holds the memory's links by kind)
+and `recall(topic="uv:topic")` (everything tagged to a topic, across repos).
 
 **Pass `role=` whenever the kind alone does not say why.** The edge carries it,
-and `memory_neighbors` hands it back, so a later reader sees "both configure the
+and `recall(memory=…)` hands it back, so a later reader sees "both configure the
 Vault sidecar" instead of guessing from a bare `related_to`. Add
 `confidence="inferred"` when the link is a hunch worth recording but not worth
 ranking on — `recall` prefers asserted edges when it expands, so an unmarked

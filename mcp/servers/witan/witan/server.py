@@ -411,18 +411,21 @@ mcp = FastMCP(
         "Loading context: call recall(query=…) — it composes every memory read "
         "(BM25 + graph expansion + superseded-pruning + re-ranking) and degrades "
         "to a plain search when the graph has no edges. Seed it with symbol_id, "
-        "task, or topic instead of/along with query. Reach for a narrower read "
-        "only for a specific need:\n"
+        "task, topic, contract, or memory instead of/along with query; those "
+        "seeds also return a section about the seed itself:\n"
+        "  symbol_id=… — also the tasks attached to a code symbol\n"
+        "  topic=…     — also the Topic node (everything tagged to it, cross-repo)\n"
+        "  contract=…, contract_kind=… — also the code providing/consuming the key\n"
+        "  memory=…    — also its neighbours by edge kind and the code symbols it "
+        "names\n"
+        "Pass hops=0, include_superseded=True and a high limit to list exactly "
+        "what a seed resolves to. Reach for a narrower read only for a specific "
+        "need:\n"
         '  recall           — default; contextual load / "what do we know about X"\n'
         "  memory_get       — one memory by slug\n"
         "  memory_list      — browse all of one kind (no query); optional language\n"
         "  memory_search    — plain BM25, no graph expansion\n"
-        "  memory_neighbors — a known memory's neighbours, by edge kind\n"
         "  memory_contradictions — every contradicting pair, no seed needed\n"
-        "  topic_get        — everything tagged to a topic (cross-repo)\n"
-        "  memory_for_contract — memories + code for a contract key\n"
-        "  symbol_context   — memories/tasks for a code symbol\n"
-        "  memory_symbols   — the code symbols a memory concerns\n"
         "  workflow_project_memories — memories a project produced\n\n"
         "Repo scoping: every tool auto-detects the current repo from .git/config. "
         "Pass repo (a canonical URI like https://github.com/mitodl/ol-django) to "
@@ -456,7 +459,7 @@ mcp = FastMCP(
         "for long-running calls. A task_* slug is a unit of work someone is "
         "assigned; an MCP task id is a handle on a call still executing.\n\n"
         "Errors: a lookup that finds nothing returns null/empty, never raises; an "
-        "invalid-but-well-formed mutation (self-link, self-block, claim "
+        "invalid-but-well-formed mutation (self-link, claim "
         "contention) returns a status object with a reason; only malformed input "
         "raises."
     ),
@@ -657,11 +660,6 @@ MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 MemoryLinkKind = Literal[
     "supersedes", "refines", "applies_to", "contradicts", "related_to", "tagged"
 ]
-
-#: What ``memory_neighbors`` can group by: every link kind, plus
-#: ``superseded_by``, the inbound side of ``supersedes``. It is a read-only
-#: direction, not a kind ``memory_link`` can write.
-MemoryNeighborKind = Literal[MemoryLinkKind, "superseded_by"]
 
 TopicKind = Literal["topic", "contract", "symbol", "entity"]
 
@@ -1394,17 +1392,30 @@ def _resolve_topic_steps(ref: str) -> tuple[str | None, list[tuple[str, str, dic
     return None, []
 
 
-def _lookup_topic_slug(topic: str) -> str | None:
-    """Resolve a topic ref (slug or ``name:kind``) to a slug WITHOUT creating it."""
-    if client.read("read.gq", "get_topic", {"slug": topic}):
-        return topic
+def _resolve_topic(topic: str) -> dict | None:
+    """The Topic a ref (``tp-`` slug or ``name:kind`` spec) names, WITHOUT creating it.
+
+    A spec resolves through the same deterministic ``_topic_slug`` used on
+    write, so a tag stored as ``UV`` is found by ``uv:topic``, and falls back to
+    an exact name and kind match.
+    """
+    # A spec's name can start with tp- too (``tp-client:contract``), so a miss
+    # here falls through to parsing, as the write path does.
+    if topic.startswith("tp-"):
+        rows = client.read("read.gq", "get_topic", {"slug": topic})
+        if rows:
+            return rows[0]
     name, sep, kind = topic.rpartition(":")
-    if sep and kind in ("topic", "contract", "symbol", "entity") and name:
-        rows = client.read(
-            "read.gq", "topic_by_name_kind", {"name": name, "kind": kind}
-        )
-        return rows[0]["slug"] if rows else None
-    return None
+    if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
+        return None
+    rows = client.read("read.gq", "get_topic", {"slug": _topic_slug(kind, name)})
+    if rows:
+        return rows[0]
+    named = client.read("read.gq", "topic_by_name_kind", {"name": name, "kind": kind})
+    if not named:
+        return None
+    rows = client.read("read.gq", "get_topic", {"slug": named[0]["slug"]})
+    return rows[0] if rows else None
 
 
 def _tag_memory_steps(
@@ -4761,7 +4772,7 @@ def memory_get(
         return None
     node = rows[0]
     if include_topics:
-        # Same de-duplication as memory_neighbors, and for the same reason: the
+        # Same de-duplication as _memory_neighbors, and for the same reason: the
         # traversal is bound now, so a memory tagged to one Topic twice arrives
         # on two rows. read.gq orders newest-first, so `setdefault` keeps the
         # most recent link's provenance.
@@ -4919,7 +4930,7 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
     left with no memories.
 
     That is not the only way to remove an edge — edges are deletable on their
-    own (``task_unlink``, ``_unlink_edge``). Deleting the node is still the
+    own (``task_link(remove=True)``, ``_unlink_edge``). Deleting the node is still the
     only route for a *memory* edge, since no unlink tool covers those yet.
 
     Parameters
@@ -5006,7 +5017,7 @@ async def memory_link(
         return.
     role:
         Free text saying WHY these two are linked, stored on the edge and
-        returned by ``memory_neighbors``. The edge kind says what KIND of
+        returned by ``recall(memory=...)``. The edge kind says what KIND of
         relation it is; this says what the relation is ABOUT ("both configure
         the Vault sidecar", "same incident"). Worth a sentence on a
         ``related_to``, where the kind alone tells a later reader nothing.
@@ -5014,7 +5025,7 @@ async def memory_link(
         Scanned on the way in like any other free text, so it can be redacted
         before it lands. The returned ``edge`` therefore reports the three
         machine-set properties and NOT ``role`` — read it back with
-        ``memory_neighbors`` to see what was actually stored.
+        ``recall(memory=...)`` to see what was actually stored.
     confidence:
         ``asserted`` (default) when you are naming both endpoints because you
         know they belong together; ``inferred`` when the link is a guess worth
@@ -5123,47 +5134,25 @@ async def memory_link(
     }
 
 
-@_tool
-def memory_neighbors(slug: str, kinds: list[MemoryNeighborKind] | None = None) -> dict:
+def _memory_neighbors(slug: str) -> dict[str, list[dict]]:
+    """The memories directly linked to ``slug``, grouped by edge kind.
+
+    For ``recall(memory=...)``. For symmetric kinds (``contradicts``,
+    ``related_to``) both directions are unioned and de-duplicated.
+    ``superseded_by`` is the inbound side of ``supersedes``. Every kind is a
+    key, each possibly empty. Each neighbour carries an ``edge`` dict
+    (``{confidence, role, author, created_at}``) describing the link.
     """
-    Return the memories directly linked to ``slug``, grouped by edge kind.
-
-    For symmetric kinds (``contradicts``, ``related_to``) both directions are
-    unioned and de-duplicated. ``superseded_by`` is the inbound side of
-    ``supersedes``: the memories that replaced this one, which is what a reader
-    who landed on a superseded memory needs next. Use after ``memory_get`` to
-    see what a memory connects to.
-
-    Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
-    created_at}`` — describing the LINK rather than either endpoint. ``role``
-    is what answers "why are these two connected", which the edge kind alone
-    does not; ``created_at`` is when the link was made, which neither node's
-    timestamps record. All four are ``null`` on edges written before the
-    properties existed, and nothing backfills them.
-
-    Parameters
-    ----------
-    slug:
-        The memory whose neighbours to fetch.
-    kinds:
-        Optional subset of edge kinds to include. Omit (``None``) for all kinds;
-        an explicit empty list returns no kinds.
-    """
-    wanted = list(_MEMORY_NEIGHBOR_QUERIES) if kinds is None else kinds
     neighbors: dict[str, list[dict]] = {}
-    for kind in wanted:
-        if (
-            kind not in _MEMORY_NEIGHBOR_QUERIES
-        ):  # e.g. "tagged" → use memory_get/topic_get
-            continue
+    for kind, query_names in _MEMORY_NEIGHBOR_QUERIES.items():
         merged: dict[str, dict] = {}
-        for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
+        for query_name in query_names:
             for row in client.read("read.gq", query_name, {"slug": slug}):
                 # ONE ROW PER EDGE now that the traversal is bound. Keyed edges
                 # hold at most one row per direction, but a symmetric kind
                 # unions both directions and a→b, b→a are different keys, so a
                 # neighbour can still arrive twice. One entry per neighbour is
-                # this tool's documented contract: the survivor is the NEWEST
+                # recall's documented contract: the survivor is the NEWEST
                 # link, so re-linking a pair the other way reads as an update
                 # rather than as a second neighbour.
                 #
@@ -5184,7 +5173,7 @@ def memory_neighbors(slug: str, kinds: list[MemoryNeighborKind] | None = None) -
                 ):
                     merged[row["slug"]] = {**row, "edge": edge}
         neighbors[kind] = list(merged.values())
-    return {"slug": slug, "neighbors": neighbors}
+    return neighbors
 
 
 # `content` and `confidence` because reviewing a conflict means reading both
@@ -5232,8 +5221,8 @@ def memory_contradictions(
 
     An unranked enumeration of the ``contradicts`` edges, for reviewing
     conflicts rather than loading context. ``recall`` reports a contradiction
-    only when both memories land in its result, and ``memory_neighbors`` needs a
-    slug to start from; this needs neither. Both apply the same ``repo`` rule
+    only when both memories land in its result, and ``recall(memory=...)`` needs
+    a slug to start from; this needs neither. Both apply the same ``repo`` rule
     (below), so every pair ``recall`` reports is one this lists for the same
     ``repo`` and ``include_superseded``. The exception is no repo detected and
     none passed: ``recall``'s ``query`` seed then spans every repo, so it
@@ -5247,7 +5236,7 @@ def memory_contradictions(
 
     One row per unordered pair. ``contradicts`` is symmetric but can be stored
     in both directions; when it is, the newer link is the one reported, the same
-    newest-wins rule as ``memory_neighbors``.
+    newest-wins rule as ``recall(memory=...)``.
 
     Superseding either side is how a contradiction gets resolved, so a pair
     with a superseded memory in it is dropped by default. That is also what
@@ -5278,7 +5267,7 @@ def memory_contradictions(
             continue
         edge = _edge_meta(row)
         key = frozenset((a["slug"], b["slug"]))
-        # Compared explicitly for the reason memory_neighbors gives: an
+        # Compared explicitly for the reason _memory_neighbors gives: an
         # unstamped edge sorts oldest, so any stamped one beats it.
         previous = pairs.get(key)
         if previous is None or (edge["created_at"] or "") > (
@@ -5288,44 +5277,6 @@ def memory_contradictions(
     return sorted(
         pairs.values(), key=lambda p: p["edge"]["created_at"] or "", reverse=True
     )
-
-
-@_tool
-def topic_get(topic: str) -> dict | None:
-    """
-    Resolve a Topic and return it with the memories tagged to it.
-
-    ``topic`` is either a Topic slug (``tp-...``) or a ``name:kind`` spec
-    (e.g. ``uv:topic``). Because topics are a cross-repo join surface, the
-    returned memories may span repositories — this is the traversal-based
-    retrieval primitive: two memories in different repos sharing a topic are
-    one hop apart.
-
-    Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
-
-    Parameters
-    ----------
-    topic:
-        Either a Topic slug (``tp-...``) or a ``name:kind`` spec (``uv:topic``,
-        ``DATABASE_URL:contract``). A spec resolves through the same
-        deterministic slugify used on write rather than an exact name match, so
-        a tag stored as ``UV`` is still found by ``uv:topic``.
-    """
-    # A tp- slug hits get_topic directly. A name:kind spec resolves through the
-    # deterministic _topic_slug (NOT an exact name match) so that casing/whitespace
-    # differences — stored tag "UV" queried as "uv:topic" — still find tp-topic-uv.
-    if topic.startswith("tp-"):
-        slug = topic
-    else:
-        name, sep, kind = topic.rpartition(":")
-        if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
-            return None
-        slug = _topic_slug(kind, name)
-    topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
-    if not topic_rows:
-        return None
-    memories = client.read("read.gq", "memories_for_topic", {"topic_slug": slug})
-    return {"topic": topic_rows[0], "memories": memories}
 
 
 # ── Code Branch Tracking ───────────────────────────────────────────
@@ -5699,8 +5650,12 @@ def workflow_project_get(slug: str) -> dict | None:
     in-session instructions, or a repo's AGENTS.md.
 
     ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
-    before this one is ready. ``blocks`` lists projects this project is
-    currently blocking (derived by scanning all active projects).
+    before this one is ready, and ``blockers`` resolves each of them to
+    ``{slug, title, status, phase}`` in the same order, so a blocker that has
+    already completed is visible without a second read. A slug in
+    ``blocked_by`` whose project no longer exists has no ``blockers`` row.
+    ``blocks`` lists projects this project is currently blocking (derived by
+    scanning all active projects).
 
     When ``github_pr`` is set and witan runs on your machine, the project also
     carries ``live_pr``: that PR's state fetched from GitHub just now
@@ -5727,6 +5682,7 @@ def workflow_project_get(slug: str) -> dict | None:
     all_rows = client.read("read.gq", "list_projects_by_status", {"status": "active"})
     blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
     project["blocks"] = blocks
+    project["blockers"] = _project_blockers(project.get("blocked_by") or [])
     return live_pr.tool_result(
         "workflow_project_get", _with_ui_url(project, ui_routes.project_url(slug))
     )
@@ -5877,14 +5833,23 @@ def workflow_project_list(
     status: WorkflowStatus | None = "active",
     phase: WorkflowPhase | None = None,
     ready: bool = False,
+    query: str | None = None,
     all_repos: bool = False,
 ) -> list[dict]:
     """
-    List workflow projects, optionally filtered by repo, status, and phase.
+    List workflow projects, optionally filtered by repo, status, and phase, or
+    search them with ``query``.
 
     Defaults to listing only ``active`` projects. Pass ``status=None`` to see
     all statuses. The ``UserPromptSubmit`` hook calls this to inject project
     context into new sessions.
+
+    With ``query``, this is a plain BM25 search (no graph expansion) matched
+    against ``description`` and ``title``: up to 20 projects, ranked by
+    relevance, after the other filters. Run it before
+    ``workflow_project_create`` to check whether the objective is already
+    tracked; ``workflow_project_create`` also runs the search itself and
+    returns the top matches as ``similar``.
 
     Parameters
     ----------
@@ -5899,6 +5864,11 @@ def workflow_project_list(
     ready:
         When ``True``, only return active projects whose blockers are all
         completed (i.e. projects that are unblocked and actionable).
+    query:
+        Free-text search query. The repo, phase and ready filters apply to
+        every match the BM25 fetch returns (it is unbounded), and the 20-row
+        cap after them, so a filter never hides a match that scored below a
+        query-level cap.
     all_repos:
         List projects across all repos instead of filtering to one.
     """
@@ -5906,7 +5876,9 @@ def workflow_project_list(
 
     # `repos` is a list, so membership can't be a graph match-filter — fetch by
     # status (or all) and filter on set membership in Python.
-    if status:
+    if query:
+        rows = _search_project_rows(query, status)
+    elif status:
         rows = client.read("read.gq", "list_projects_by_status", {"status": status})
     else:
         rows = client.read("read.gq", "list_all_projects", {})
@@ -5926,7 +5898,7 @@ def workflow_project_list(
         }
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
-    return rows
+    return rows[:_SEARCH_LIMIT] if query else rows
 
 
 def _search_project_rows(query: str, status: str | None) -> list[dict]:
@@ -5950,47 +5922,6 @@ def _search_project_rows(query: str, status: str | None) -> list[dict]:
 
 
 @_tool
-def workflow_project_search(
-    query: str,
-    repo: str | None = None,
-    status: WorkflowStatus | None = "active",
-    all_repos: bool = False,
-) -> list[dict]:
-    """
-    Plain BM25 text search over workflow projects (no graph expansion).
-
-    Returns up to 20 projects ranked by BM25 relevance, matched against
-    ``description`` and ``title``. Run this before ``workflow_project_create``
-    to check whether the objective is already tracked; ``workflow_project_create``
-    also runs it automatically and returns the top matches as ``similar`` in
-    its response.
-
-    Parameters
-    ----------
-    query:
-        Free-text search query.
-    repo:
-        Canonical repo URI to filter to (membership test against each
-        project's repo set). Auto-detected from ``.git/config`` if omitted.
-        Applied in Python after the BM25 fetch (``repos`` is a list, not
-        match-filterable) — the underlying query is unbounded so this filter
-        sees every match, not just a small top-N, then the real ``limit 20``
-        is applied after.
-    status:
-        ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
-        Defaults to ``active`` — the useful default for a dedup check is
-        "is someone already working on this."
-    all_repos:
-        Search projects across all repos instead of filtering to one.
-    """
-    detected_repo = _scope(repo, all_repos)
-    rows = _search_project_rows(query, status)
-    if detected_repo:
-        rows = [r for r in rows if detected_repo in _project_repos(r)]
-    return rows[:_SEARCH_LIMIT]
-
-
-@_tool
 def workflow_project_update(
     slug: str,
     title: str | None = None,
@@ -6003,25 +5934,38 @@ def workflow_project_update(
     status: Literal["active", "abandoned"] | None = None,
     preauthorized: list[str] | None = None,
     reserved_decisions: list[str] | None = None,
+    add_blocked_by: list[str] | None = None,
+    remove_blocked_by: list[str] | None = None,
 ) -> dict | None:
     """
-    Correct a project's metadata after creation.
+    Correct a project's metadata after creation, or change what blocks it.
 
     The escape hatch for everything ``workflow_project_advance`` (phase,
-    ``github_pr``), ``workflow_project_complete`` (completion) and
-    ``workflow_project_block``/``_unblock`` (dependencies) don't cover. Every
-    parameter is optional and only what you pass is touched; omitting a field
-    leaves it exactly as it was, so this can never blank something by accident.
-    Returns the updated project, or ``None`` if the slug doesn't exist.
+    ``github_pr``) and ``workflow_project_complete`` (completion) don't
+    cover. Every parameter is optional and only what you pass is touched;
+    omitting a field leaves it exactly as it was, so this can never blank
+    something by accident. Returns the updated project, or ``None`` if the
+    slug doesn't exist.
+
+    Project dependencies are coarse ordering between whole projects; for
+    ordering between individual tasks use ``task_link(kind="blocks")``.
+    ``add_blocked_by`` declares projects that must complete before this one
+    can begin: each gets a ``ProjectBlocks`` edge (blocker -> this project)
+    and is appended to this project's ``blocked_by``, which is what the
+    ready-work check in ``workflow_project_list(ready=True)`` reads.
+    ``remove_blocked_by`` deletes the edge and the ``blocked_by`` entry.
+    A slug in both lists ends up removed. A project cannot block itself, so
+    naming ``slug`` in ``add_blocked_by`` raises ``ValueError``. A blocker
+    slug that does not exist is refused by the store, and none of the call's
+    other writes land with it except the edge deletes, which the store makes
+    commit on their own, ahead of the rest.
 
     The common case is repos. A project's real blast radius is rarely known
     during discovery, and until the set is right, repo-scoped recall from the
     repos where the work actually lands won't surface the project at all. Pass
     ``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
     nudge it (both may be passed together; removals are applied after
-    additions). Repos are a plain list field on the project node, not edges, so
-    a removal really removes — unlike ``workflow_project_unblock``, which can
-    only update its denormalized field because omnigraph edges are append-only.
+    additions).
 
     Two things this deliberately can't do:
 
@@ -6066,7 +6010,15 @@ def workflow_project_update(
     reserved_decisions:
         Replacement list of decisions kept for a human. Pass ``[]`` to clear.
         Replaces the whole list, as ``preauthorized`` does.
+    add_blocked_by:
+        ``wp-`` slugs of projects that must complete before this one can
+        begin. One already in ``blocked_by`` is left as it is.
+    remove_blocked_by:
+        ``wp-`` slugs to drop from ``blocked_by``, deleting their
+        ``ProjectBlocks`` edges. One that is not a blocker is a no-op.
     """
+    if slug in (add_blocked_by or []):
+        raise ValueError(f"a project cannot block itself: {slug}")
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     if not rows:
         return None
@@ -6098,13 +6050,17 @@ def workflow_project_update(
         ),
         "updated_at": now,
     }
-    # The envelope lists are written only when passed, each by its own
-    # mutation, never copied forward from `current`: a stale copy would restore
-    # a grant another session just revoked, or drop a reservation it just
-    # added. The general fields are skipped on an envelope-only call for the
-    # same reason. Every step lands in one commit.
-    envelope_only = (
-        preauthorized is not None or reserved_decisions is not None
+    # The envelope lists and `blocked_by` are written only when passed, each by
+    # its own mutation, so a call that changes one of them never rewrites the
+    # others from a stale `current`: that would restore a grant another session
+    # just revoked, or drop a reservation it just added. The general fields are
+    # skipped on a call that touches only those lists for the same reason.
+    # `blocked_by` itself is still read-modify-write from `current`, so two
+    # concurrent `add_blocked_by` calls can drop one entry (the edge survives);
+    # the removed `workflow_project_block` had the same race.
+    lists_only = any(
+        v is not None
+        for v in (preauthorized, reserved_decisions, add_blocked_by, remove_blocked_by)
     ) and all(
         v is None
         for v in (
@@ -6120,9 +6076,13 @@ def workflow_project_update(
     )
     steps = (
         []
-        if envelope_only
+        if lists_only
         else [("mutations.gq", "update_workflow_project_fields", payload)]
     )
+    unlinks, blocker_steps = _blocked_by_steps(
+        slug, current, add_blocked_by or [], remove_blocked_by or [], now
+    )
+    steps += blocker_steps
     for key, value in (
         ("preauthorized", preauthorized),
         ("reserved_decisions", reserved_decisions),
@@ -6139,6 +6099,12 @@ def workflow_project_update(
                     },
                 )
             )
+    # The engine refuses a body that mixes deletes with inserts and updates,
+    # so the edge deletes go first, in their own commit. A failure between the
+    # two leaves `blocked_by` still naming the blocker, and a retry finds no
+    # edge to delete and drops it.
+    if unlinks:
+        client.change_many(unlinks)
     client.change_many(steps)
 
     updated = client.read("read.gq", "get_workflow_project", {"slug": slug})
@@ -6715,119 +6681,58 @@ def workflow_trace_mine(
     return {"created_patterns": created_patterns, "created_lessons": created_lessons}
 
 
-@_tool
-def workflow_project_block(slug: str, blocks_slug: str) -> dict:
+def _blocked_by_steps(
+    slug: str, current: dict, add: list[str], remove: list[str], now: str
+) -> tuple[list[_Step], list[_Step]]:
+    """The edge writes and ``blocked_by`` sync for ``workflow_project_update``.
+
+    An added blocker's edge is written even when ``blocked_by`` already names
+    it, so a project whose edge went missing gets it back. A removed one's edge
+    is deleted only when it exists, since the delete is matched on both
+    endpoints and a no-op delete would still cost a write. A slug in both
+    lists is removed, so it is not linked first.
+
+    :param slug: The blocked project.
+    :param current: Its row, as read for this update.
+    :param add: Blocker slugs to add.
+    :param remove: Blocker slugs to remove, applied after ``add``.
+    :param now: The update's timestamp.
+    :returns: The edge deletes, which need a commit of their own, and the
+        inserts and updates for the update's main commit.
+    :rtype: tuple[list[_Step], list[_Step]]
     """
-    Declare that one project must complete before another can begin.
-
-    Project-level sequencing — coarse ordering between whole projects. For
-    fine-grained ordering between individual tasks use ``task_link(kind="blocks")``;
-    the two are deliberately separate (Project vs Task nodes).
-
-    Adds a ``ProjectBlocks`` graph edge (``slug`` → ``blocks_slug``) and
-    appends ``slug`` to ``blocks_slug.blocked_by`` so the ready-work check
-    in ``workflow_project_list`` can filter without traversing edges.
-
-    Parameters
-    ----------
-    slug:
-        The ``wp-`` slug of the *blocking* project (must finish first).
-    blocks_slug:
-        The ``wp-`` slug of the project being *blocked*.
-    """
-    if slug == blocks_slug:
-        return {
-            "blocker": slug,
-            "blocked": blocks_slug,
-            "linked": False,
-            "reason": "a project cannot block itself",
-        }
-    now = now_iso()
-    # The edge always lands; the denormalized `blocked_by` sync only when
-    # there's something new to add. Read BEFORE writing so both can land in
-    # ONE commit via `change_many` when the sync applies — the edge write
-    # doesn't touch `blocks_slug`'s own row, so reading it first changes
-    # nothing about what's read.
-    steps: list[_Step] = [
-        ("mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug})
-    ]
-    blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
-    if blocked:
-        existing = blocked[0].get("blocked_by") or []
-        if slug not in existing:
-            steps.append(
-                (
-                    "mutations.gq",
-                    "update_workflow_project_blocked_by",
-                    {
-                        "slug": blocks_slug,
-                        "blocked_by": [*existing, slug],
-                        "updated_at": now,
-                    },
-                )
+    dropped = set(remove)
+    unlinks: list[_Step] = []
+    for blocker in dict.fromkeys(remove):
+        out = client.read("read.gq", "project_blocks_to_slugs", {"from": blocker})
+        if slug in {r["slug"] for r in out}:
+            unlinks.append(
+                ("mutations.gq", "unlink_project_blocks", {"from": blocker, "to": slug})
             )
-    client.change_many(steps)
-    return {"blocker": slug, "blocked": blocks_slug, "linked": True}
-
-
-@_tool
-def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
-    """
-    Remove a project dependency declared with ``workflow_project_block``.
-
-    Removes ``slug`` from ``blocks_slug.blocked_by`` AND deletes the
-    ``ProjectBlocks`` edge, so the graph and the denormalized field (which
-    drives the ready-work check) agree.
-
-    Earlier versions left the edge in place, on the belief that omnigraph
-    edges were append-only. They are not — see ``_unlink_edge``.
-
-    Parameters
-    ----------
-    slug:
-        The ``wp-`` slug of the *blocking* project to remove.
-    blocks_slug:
-        The ``wp-`` slug of the project to unblock.
-    """
-    now = now_iso()
-    _unlink_edge("project_blocks", slug, blocks_slug)
-    blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
-    if blocked:
-        existing = blocked[0].get("blocked_by") or []
-        updated = [s for s in existing if s != slug]
-        client.change(
-            "mutations.gq",
-            "update_workflow_project_blocked_by",
-            {
-                "slug": blocks_slug,
-                "blocked_by": updated or None,
-                "updated_at": now,
-            },
+    steps: list[_Step] = [
+        ("mutations.gq", "link_project_blocks", {"from": blocker, "to": slug})
+        for blocker in dict.fromkeys(add)
+        if blocker not in dropped
+    ]
+    existing = current.get("blocked_by") or []
+    blocked_by = [
+        b
+        for b in [*existing, *(a for a in dict.fromkeys(add) if a not in existing)]
+        if b not in dropped
+    ]
+    if blocked_by != existing:
+        steps.append(
+            (
+                "mutations.gq",
+                "update_workflow_project_blocked_by",
+                {"slug": slug, "blocked_by": blocked_by or None, "updated_at": now},
+            )
         )
-    return {
-        "blocker": slug,
-        "blocked": blocks_slug,
-        "removed": slug in (blocked[0].get("blocked_by") or [] if blocked else []),
-    }
+    return unlinks, steps
 
 
-@_tool
-def workflow_project_get_blockers(slug: str) -> list[dict]:
-    """
-    Return all projects that are blocking the given project.
-
-    Resolves each slug in the project's ``blocked_by`` list and returns the
-    full node for each blocker, including its current status.
-
-    Parameters
-    ----------
-    slug:
-        The ``wp-`` slug of the project to check.
-    """
-    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
-    if not rows:
-        return []
-    blocked_by = rows[0].get("blocked_by") or []
+def _project_blockers(blocked_by: list[str]) -> list[dict]:
+    """``{slug, title, status, phase}`` for each blocker, in ``blocked_by`` order."""
     if not blocked_by:
         return []
     by_slug = {
@@ -6836,7 +6741,11 @@ def workflow_project_get_blockers(slug: str) -> list[dict]:
             "read.gq", "get_workflow_projects_by_slugs", {"slugs": blocked_by}
         )
     }
-    return [by_slug[s] for s in blocked_by if s in by_slug]
+    return [
+        {k: by_slug[b].get(k) for k in ("slug", "title", "status", "phase")}
+        for b in blocked_by
+        if b in by_slug
+    ]
 
 
 def _project_blocker_status(blocker_slug: str, status_cache: dict[str, str]) -> str:
@@ -8388,7 +8297,7 @@ def task_update(
         other. **Re-parenting does not retract the previous edge**: the field
         moves to the new parent while the old ``ParentOf`` remains, so a task
         re-parented this way is reachable from both. Call
-        ``task_unlink(kind="parent")`` on the old pair first if the edge
+        ``task_link(kind="parent", remove=True)`` on the old pair first if the edge
         matters to you.
     external_uri:
         Reference URI — e.g. the GitHub issue or PR this task tracks.
@@ -9061,9 +8970,11 @@ def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
 
 
 @_tool
-def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
+def task_link(
+    from_slug: str, to_slug: str, kind: TaskLinkKind, remove: bool = False
+) -> dict:
     """
-    Link two tasks (or a task to a memory).
+    Link two tasks (or a task to a memory), or with ``remove=True`` unlink them.
 
     The meaning of ``from``/``to`` depends on ``kind``:
     - ``blocks``          — ``from`` is the blocker, ``to`` is the blocked task.
@@ -9077,8 +8988,15 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
     fields on the affected task are kept in sync so ``task_ready`` stays correct.
 
-    Reversible: ``task_unlink`` removes any of these, including one recorded in
-    the wrong direction.
+    Reversible: ``remove=True`` removes any of these, including one recorded in
+    the wrong direction. Pass the endpoints as the link was written, not
+    reversed. Removing a ``blocks`` link is how a task wrongly marked blocked
+    becomes ready again, and for ``blocks`` and ``parent`` the denormalized
+    fields are updated to match: unblocking a task whose remaining blockers
+    are all closed returns it from ``blocked`` to ``open``. A removal returns
+    ``{"from", "to", "kind", "removed"}``, where ``removed`` is ``False`` when
+    the edge was not there. That is not an error, so removing twice, or
+    removing a link that never existed, is a safe no-op.
 
     Parameters
     ----------
@@ -9094,7 +9012,11 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         ``blocks`` | ``parent`` | ``discovered_from`` | ``addresses``. Getting
         the direction wrong is the common mistake here, and it matters: for
         ``blocks`` it decides which task ``task_ready`` withholds.
+    remove:
+        Remove the ``from -> to`` edge of ``kind`` instead of adding it.
     """
+    if remove:
+        return _task_unlink(from_slug, to_slug, kind)
     if kind == "blocks":
         # The edge always lands; the denormalized `blocked_by`/`status` sync
         # only when there's something new to sync. Both land in ONE commit via
@@ -9157,10 +9079,6 @@ _EDGE_OPS: dict[str, dict[str, str]] = {
         "unlink": "unlink_discovered_from",
     },
     "addresses": {"to_q": "addresses_to_slugs", "unlink": "unlink_addresses"},
-    "project_blocks": {
-        "to_q": "project_blocks_to_slugs",
-        "unlink": "unlink_project_blocks",
-    },
 }
 
 
@@ -9179,38 +9097,8 @@ def _unlink_edge(kind: str, from_slug: str, to_slug: str) -> bool:
     return True
 
 
-@_tool
-def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
-    """
-    Remove a link between two tasks (or a task and a memory) — the inverse of
-    ``task_link``, with the same ``from``/``to`` meanings.
-
-    Use it when a link was recorded the wrong way round or against the wrong
-    slug. Removing a ``blocks`` link is how a task wrongly marked blocked
-    becomes ready again.
-
-    For ``blocks`` and ``parent`` the denormalized ``blocked_by`` /
-    ``parent_slug`` fields are updated to match, so ``task_ready`` stays
-    correct. Unblocking a task whose remaining blockers are all closed returns
-    it from ``blocked`` to ``open`` — the mirror of what ``task_link`` does.
-
-    Returns ``{"from", "to", "kind", "removed"}``. ``removed`` is ``False``
-    when the edge was not there, which is not an error: calling this twice, or
-    on a link that never existed, is a safe no-op.
-
-    Parameters
-    ----------
-    from_slug:
-        The ``tk-`` slug the edge points **from** — the same direction it was
-        written with. Pass the endpoints as ``task_link`` received them, not
-        reversed.
-    to_slug:
-        The slug the edge points **to**, or a ``Memory`` slug for
-        ``kind="addresses"``.
-    kind:
-        Which edge to remove: ``blocks`` | ``parent`` | ``discovered_from`` |
-        ``addresses``.
-    """
+def _task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
+    """``task_link(remove=True)``: delete one edge and resync the denormalized fields."""
     removed = _unlink_edge(kind, from_slug, to_slug)
 
     # Both syncs are computed from the row their write is fenced on, so a
@@ -9247,28 +9135,6 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         _update_task(to_slug, orphan)
 
     return {"from": from_slug, "to": to_slug, "kind": kind, "removed": removed}
-
-
-@_tool
-def symbol_context(symbol_id: str) -> dict:
-    """
-    Memories and tasks attached to a code symbol (direction: symbol → work).
-
-    The reverse of ``memory_symbols``: given a symbol id, returns the memories and
-    tasks whose ``symbol_refs`` include it — "what lessons and open tasks concern
-    this function?". Call it after locating a symbol with the witan-code ``code_*``
-    tools, before editing.
-
-    ``symbol_id`` has the form ``<repo>#<path/to/file.py>::<QualifiedName>``; the
-    repo prefix scopes the lookup, or the current repo when the id has no ``#``.
-
-    Parameters
-    ----------
-    symbol_id:
-        The symbol to look up, as returned in the ``symbol_id`` field of the
-        witan-code ``code_*`` tools.
-    """
-    return _context_for_symbol(symbol_id)
 
 
 def _symbol_repo(symbol_id: str) -> str | None:
@@ -9353,53 +9219,22 @@ def _code_result(result):
     """The value of a witan-code tool call, awaited when the tool is async.
 
     witan-code's read tools became ``async def`` when they gained elicitation,
-    and calling one from here returns a coroutine. ``memory_symbols`` stored that
-    coroutine as the ``definition`` and ``memory_for_contract`` returned it as
-    the bindings. Every caller is a sync tool, which FastMCP runs in a worker
-    thread with no event loop, so ``asyncio.run`` is safe here.
+    and calling one from here returns a coroutine. Every caller is a sync tool,
+    which FastMCP runs in a worker thread with no event loop, so
+    ``asyncio.run`` is safe here.
     """
     return asyncio.run(result) if inspect.isawaitable(result) else result
 
 
-@_tool
-def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
+def _contract_bindings(key_norm: str, kind: ContractKind) -> dict:
+    """witan-code's providers and consumers of a contract, best-effort.
+
+    The two stores are joined in Python on the shared ``key_norm``, never by an
+    edge across them. Empty when witan-code is absent or the lookup fails.
     """
-    What do we know about a contract (env_var / endpoint / package / service)?
-
-    Resolves the ``Topic{kind:"contract", name:key_norm}`` anchor and walks
-    ``Tagged`` to the memories about it (a single Layer-1 traversal, cross-repo by
-    nature), then — best-effort — asks witan-code for the bridge bindings that
-    share the same ``key_norm`` so callers can pivot to the code that produces or
-    consumes it. The two halves are joined in Python on the shared key, never an
-    edge across stores.
-
-    Tag a memory to a contract first with
-    ``memory_link(memory_slug, "<key_norm>:contract", "tagged")`` (``from`` is the
-    memory's slug).
-
-    Parameters
-    ----------
-    key_norm:
-        The normalised contract key (e.g. ``DATABASE_URL`` or
-        ``GET /api/v1/courses/``).
-    kind:
-        The bridge binding kind (``env_var`` / ``endpoint`` / ``package`` /
-        ``service``) used to look up bindings. Omit to skip the bridge lookup.
-
-    Returns ``{"key_norm", "kind", "memories": [...], "bindings": {...}}``.
-    """
-    rows = client.read(
-        "read.gq", "topic_by_name_kind", {"name": key_norm, "kind": "contract"}
-    )
-    memories = (
-        client.read("read.gq", "memories_for_topic", {"topic_slug": rows[0]["slug"]})
-        if rows
-        else []
-    )
-
     bindings: dict = {"providers": [], "consumers": []}
     code = _code_server()
-    if code is not None and kind is not None:
+    if code is not None:
         try:
             bindings = {
                 "providers": _code_result(
@@ -9420,34 +9255,18 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
                 exc_info=True,
             )
 
-    return {
-        "key_norm": key_norm,
-        "kind": kind,
-        "memories": memories,
-        "bindings": bindings,
-    }
+    return bindings
 
 
-@_tool
-def memory_symbols(slug: str) -> dict:
+def _memory_symbols(node: dict | None) -> list[dict]:
+    """Each of a memory's ``symbol_refs``, with its live definition when found.
+
+    For ``recall(memory=...)``. The definition comes from witan-code when it is
+    reachable; otherwise, or for a ref that is not a ``repo#path::Name`` id,
+    the entry is the raw ref alone.
     """
-    Code symbols a memory concerns (direction: memory → symbols).
-
-    The reverse of ``symbol_context``: returns each of the memory's ``symbol_refs``,
-    enriched with the live definition when witan-code is reachable, or the raw ref
-    strings otherwise.
-
-    Parameters
-    ----------
-    slug:
-        The memory whose ``symbol_refs`` to resolve. An unknown slug returns an
-        empty ``symbols`` list rather than raising.
-    """
-    rows = client.read("read.gq", "get_memory", {"slug": slug})
-    if not rows:
-        return {"slug": slug, "symbols": []}
-    node = rows[0]
-
+    if node is None:
+        return []
     code = _code_server()
     symbols: list[dict] = []
     for ref in node.get("symbol_refs") or []:
@@ -9469,7 +9288,7 @@ def memory_symbols(slug: str) -> dict:
                     "witan.symbol.definition_lookup_failed", ref=ref, exc_info=True
                 )
         symbols.append(entry)
-    return {"slug": slug, "symbols": symbols}
+    return symbols
 
 
 def _unknown(refs: Iterable[str], reason: str) -> dict[str, dict]:
@@ -9722,15 +9541,19 @@ def recall(
     limit: int = 20,
     include_superseded: bool = False,
     session_id: str | None = None,
+    memory: str | None = None,
+    contract: str | None = None,
+    contract_kind: ContractKind | None = None,
     all_repos: bool = False,
 ) -> dict:
     """
     Graph-aware contextual recall — the composition of every other memory tool.
 
-    Seeds from any combination of ``query`` (BM25), ``symbol_id``
-    (``symbol_context``), ``task`` (memories it Addresses, those sharing its
-    symbol_refs, and those its title closely matches), and ``topic`` (memories
-    tagged to it). Expands ``hops``
+    Seeds from any combination of ``query`` (BM25), ``symbol_id`` (memories
+    whose symbol_refs include it), ``task`` (memories it Addresses, those
+    sharing its symbol_refs, and those its title closely matches), ``topic``
+    and ``contract`` (memories tagged to it), and ``memory`` (that memory).
+    Expands ``hops``
     (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
     provenance siblings; prunes superseded memories (unless
     ``include_superseded``); flags Contradicts pairs; and re-ranks with the
@@ -9768,6 +9591,31 @@ def recall(
     ``content_truncated`` and ``content_chars``; ``memory_get`` returns the full
     text.
 
+    Some seeds also add a section about the seed itself, which the ranked list
+    has no room for. Each key is present only when its argument was passed:
+
+    - ``topic``: the resolved Topic node, or ``null`` when there is none.
+    - ``symbol``: ``{"symbol_id", "tasks"}``, the tasks whose ``symbol_refs``
+      include it (direction: symbol -> work).
+    - ``memory``: ``{"slug", "neighbors", "symbols"}``. ``neighbors`` holds the
+      memories directly linked to it, grouped by edge kind (``supersedes``,
+      ``superseded_by``, ``refines``, ``applies_to``, ``related_to``,
+      ``contradicts``; every kind present, each possibly empty, symmetric kinds
+      unioned over both directions), each carrying an ``edge`` dict
+      (``{confidence, role, author, created_at}``, all ``null`` on links made
+      before edge properties existed). ``symbols`` is each of its
+      ``symbol_refs`` as ``{"symbol_ref", "definition"?}`` (direction: memory
+      -> symbols), the definition looked up in witan-code when it is reachable.
+    - ``contract``: ``{"key_norm", "kind", "topic", "bindings"}``, where
+      ``bindings`` is ``{"providers", "consumers"}`` from witan-code's bridge
+      store when ``contract_kind`` is given and witan-code is reachable, and
+      empty lists otherwise.
+
+    To list exactly what a seed resolves to, with nothing ranked out or pruned,
+    pass ``hops=0``, ``include_superseded=True`` and a ``limit`` above the
+    expected count: e.g. every memory tagged to a topic, or every memory citing
+    a symbol.
+
     Parameters
     ----------
     query:
@@ -9785,7 +9633,9 @@ def recall(
     topic:
         A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,
         ``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join
-        surface, so this seed in particular can pull in other repositories.
+        surface, so this seed in particular can pull in other repositories. A
+        spec resolves through the same slugify used on write, so a tag stored
+        as ``UV`` is found by ``uv:topic``.
     repo:
         Repo scoping — see instructions. Applies to the ``query`` seed and to
         which contradiction pairs are reported (see above); symbol, task, and
@@ -9810,6 +9660,21 @@ def recall(
     session_id:
         The calling agent session's id. Only logged, never changes the result;
         see ``memory_get``.
+    memory:
+        A memory slug to seed from, which adds the ``memory`` section: its
+        links by kind and the code symbols it names. Use after ``memory_get``
+        to see what a memory connects to.
+    contract:
+        A normalised contract key (e.g. ``DATABASE_URL`` or
+        ``GET /api/v1/courses/``) to seed from: the memories tagged to its
+        ``<key>:contract`` Topic, cross-repo by nature. Adds the ``contract``
+        section. Tag a memory to a contract with
+        ``memory_link(<memory slug>, "<key_norm>:contract", "tagged")``.
+    contract_kind:
+        ``env_var`` | ``endpoint`` | ``package`` | ``service``. With
+        ``contract``, also asks witan-code for the code that provides or
+        consumes the key, so you can pivot from what we know to where it lives.
+        Omit to skip that lookup.
     all_repos:
         Seed the ``query`` from every repo and report every contradiction pair,
         instead of scoping both to the detected repo — see instructions.
@@ -9825,7 +9690,16 @@ def recall(
     # dedupes by slug, so a slug reaches it once. The task seed comes later and
     # can meet a slug again, so it says what happens then.
     seed_relevance: dict[str, float] = {}
-    seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
+    seeds: dict[str, list[str]] = {
+        "query": [],
+        "symbol": [],
+        "task": [],
+        "topic": [],
+        "memory": [],
+        "contract": [],
+    }
+    # The sections a seed adds about itself; see the docstring.
+    sections: dict = {}
     # slug → cheapest distance from a seed. FRACTIONAL, not the hop count: an
     # inferred edge costs `w_inferred_edge` extra, so a neighbour reached only
     # by a guessed link sits further out than one reached by an asserted link
@@ -9844,8 +9718,10 @@ def recall(
             seed_relevance[r["slug"]] = r[_RELEVANCE_KEY]
             add_seed(r["slug"], "query")
     if symbol_id:
-        for m in _context_for_symbol(symbol_id)["memories"]:
+        found = _context_for_symbol(symbol_id)
+        for m in found["memories"]:
             add_seed(m["slug"], "symbol")
+        sections["symbol"] = {"symbol_id": symbol_id, "tasks": found["tasks"]}
     if task:
         # A link someone chose gets the top of the content band and a title
         # match the band below it. That leads rather than guarantees: recency,
@@ -9866,12 +9742,40 @@ def recall(
                 seed_relevance.setdefault(m["slug"], m[_RELEVANCE_KEY])
                 add_seed(m["slug"], "task")
     if topic:
-        topic_slug = _lookup_topic_slug(topic)
-        if topic_slug:
+        sections["topic"] = _resolve_topic(topic)
+        if sections["topic"]:
             for m in client.read(
-                "read.gq", "memories_for_topic", {"topic_slug": topic_slug}
+                "read.gq",
+                "memories_for_topic",
+                {"topic_slug": sections["topic"]["slug"]},
             ):
                 add_seed(m["slug"], "topic")
+    if contract:
+        contract_topic = _resolve_topic(f"{contract}:contract")
+        if contract_topic:
+            for m in client.read(
+                "read.gq", "memories_for_topic", {"topic_slug": contract_topic["slug"]}
+            ):
+                add_seed(m["slug"], "contract")
+        sections["contract"] = {
+            "key_norm": contract,
+            "kind": contract_kind,
+            "topic": contract_topic,
+            "bindings": (
+                _contract_bindings(contract, contract_kind)
+                if contract_kind
+                else {"providers": [], "consumers": []}
+            ),
+        }
+    if memory:
+        rows = client.read("read.gq", "get_memory", {"slug": memory})
+        if rows:
+            add_seed(memory, "memory")
+        sections["memory"] = {
+            "slug": memory,
+            "neighbors": _memory_neighbors(memory),
+            "symbols": _memory_symbols(rows[0] if rows else None),
+        }
 
     # ── Expand ────────────────────────────────────────────────────
     _expand_from_seeds(candidates, hops)
@@ -9879,7 +9783,7 @@ def recall(
     # No seeds matched (and nothing to expand from) — skip the global edge scan.
     if not candidates:
         _log_memory_read("recall", [], session_id, logged_task)
-        return {"memories": [], "contradictions": [], "seeds": {}}
+        return {"memories": [], "contradictions": [], "seeds": {}, **sections}
 
     # ── Prune + score ─────────────────────────────────────────────
     edge_index = _edge_index()
@@ -9959,4 +9863,5 @@ def recall(
         "memories": returned,
         "contradictions": contradictions,
         "seeds": {k: v for k, v in seeds.items() if v},
+        **sections,
     }

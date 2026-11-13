@@ -201,7 +201,7 @@ query memory_score_columns($slugs: [String]) {
 // schema.pg's edge properties become projectable columns — which is the only
 // way to read them at all. It also drops set semantics: the unbound form yields
 // one row per matched (src, dst) pair, the bound form one row PER EDGE, so two
-// parallel edges between the same pair are two rows. `memory_neighbors`
+// parallel edges between the same pair are two rows. `recall(memory=...)`
 // de-duplicates on the neighbour slug to hold its documented contract; the
 // `order { $w.created_at desc }` below is what makes the survivor the newest
 // link rather than an arbitrary one.
@@ -698,7 +698,7 @@ query patterns_by_repo($repo: String) {
 // ── Workflow Projects ─────────────────────────────────────────────
 
 // Search (BM25 on description, then title). No by-repo variant: `repos` is a
-// list, so membership isn't a graph match-filter — `workflow_project_search`
+// list, so membership isn't a graph match-filter — `workflow_project_list(query=)`
 // filters on repo membership in Python after fetching, same as
 // `workflow_project_list` does for its listing.
 //
@@ -706,7 +706,7 @@ query patterns_by_repo($repo: String) {
 // small query-level cap applied *before* the Python repo filter could let 20
 // higher-scoring matches in other repos crowd out a real match in the
 // requested repo, so a repo-scoped search would incorrectly come back empty.
-// `workflow_project_search` re-applies the real `_SEARCH_LIMIT` cap in Python
+// `workflow_project_list(query=)` re-applies the real `_SEARCH_LIMIT` cap in Python
 // after filtering. Safe to leave unbounded — corpus size is WorkflowProject
 // count, not Task/Memory count, so orders of magnitude smaller.
 
@@ -718,8 +718,8 @@ query search_projects($query: String, $status: String?) {
     }
     return {
         $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
-        $p.tags, $p.github_issue, $p.updated_at,
-        $p.preauthorized, $p.reserved_decisions,
+        $p.author, $p.tags, $p.github_issue, $p.github_pr, $p.updated_at,
+        $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
         $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
     order { bm25($p.description, $query) desc }
@@ -734,8 +734,8 @@ query search_projects_title($query: String, $status: String?) {
     }
     return {
         $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
-        $p.tags, $p.github_issue, $p.updated_at,
-        $p.preauthorized, $p.reserved_decisions,
+        $p.author, $p.tags, $p.github_issue, $p.github_pr, $p.updated_at,
+        $p.blocked_by, $p.preauthorized, $p.reserved_decisions,
         $p.preauthorized_set_by, $p.reserved_decisions_set_by
     }
     order { bm25($p.title, $query) desc }
@@ -797,7 +797,7 @@ query list_all_projects() {
 }
 
 // One project's status and blockers, for `_project_blocker_status`'s cached
-// per-blocker lookup. `workflow_project_get_blockers` reads all of a project's
+// per-blocker lookup. `workflow_project_get` resolves all of a project's
 // blockers at once with `get_workflow_projects_by_slugs` below.
 query get_workflow_project_by_slug($slug: String) {
     match {
@@ -1343,8 +1343,8 @@ query task_code_branches($task_slug: String) {
 }
 
 // ── Edge enumeration, for removal ─────────────────────────────────
-// `task_unlink` checks the edge exists before deleting it, so it can report
-// `removed`. Each query returns the slugs `$from` points at.
+// `task_link(remove=True)` checks the edge exists before deleting it, so it
+// can report `removed`. Each query returns the slugs `$from` points at.
 
 query blocks_to_slugs($from: String) {
     match {

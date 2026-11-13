@@ -44,12 +44,12 @@ node Memory {
 //               free-string `tags`. This is what recall weights its expansion
 //               by: an inferred neighbour is further away than an asserted one.
 // role        — free text saying WHY the two are linked, so a reader of
-//               memory_neighbors does not have to guess from the edge kind
+//               recall(memory=...) does not have to guess from the edge kind
 //               alone. Set by the caller; never derived.
 // author      — who/what wrote the edge. Node-level `author` answers who wrote
 //               the memory, which is a different question.
 // created_at  — when the edge was written, which is NOT derivable from either
-//               endpoint's timestamps. `memory_neighbors` orders on it so a
+//               endpoint's timestamps. `recall(memory=...)` orders on it so a
 //               re-link reads as an update rather than a parallel edge.
 //
 // ALL FOUR ARE NULLABLE AND EVERY EDGE WRITTEN BEFORE 2026-09 HAS THEM NULL.
@@ -152,7 +152,7 @@ edge Tagged: Memory -> Topic {
 node WorkflowProject {
     slug:        String @key
     title:       String @index
-    description: String @index    // @index enables BM25 search($p.description, …) in workflow_project_search
+    description: String @index    // @index enables BM25 search($p.description, …) in workflow_project_list(query=)
     // Set of canonical repo URIs this project spans (may be many, or none —
     // a "floating" cross-repo objective). Membership is filtered in Python;
     // list fields aren't indexed/match-filterable in this engine.

@@ -73,10 +73,10 @@ do we know about vault?" is a graph query, not a grep.
 One topic kind is worth calling out: a `contract` topic's name is a bridge
 key — an environment variable, an HTTP endpoint, a package. That's the join
 between the memory graph and the [code graph](../getting-started/code-graph.md):
-`memory_for_contract("DATABASE_URL", kind="env_var")` returns both what's been
-*written down* about that env var and what code *actually provides or
-consumes it* — the `kind` argument is what turns on the second half; omit it
-and you get only the memories, no code-graph lookup.
+`recall(contract="DATABASE_URL", contract_kind="env_var")` returns both what's
+been *written down* about that env var and what code *actually provides or
+consumes it*. The `contract_kind` argument is what turns on the second half;
+omit it and you get only the memories, no code-graph lookup.
 
 ## How you actually read this back
 

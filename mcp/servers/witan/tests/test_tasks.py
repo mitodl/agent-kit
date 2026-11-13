@@ -615,7 +615,7 @@ def test_update_to_closed_unblocks_dependents(server):
     assert b["slug"] in {t["slug"] for t in server.task_ready()}
 
 
-# ── Unlinking (task_unlink) ────────────────────────────────────────
+# ── Unlinking (task_link(remove=True)) ─────────────────────────────
 
 
 @requires_omnigraph
@@ -625,7 +625,7 @@ def test_unlink_blocks_clears_field_and_reopens(server):
     server.task_link(a["slug"], b["slug"], kind="blocks")
     assert server.task_get(b["slug"])["status"] == "blocked"
 
-    res = server.task_unlink(a["slug"], b["slug"], kind="blocks")
+    res = server.task_link(a["slug"], b["slug"], kind="blocks", remove=True)
     assert res["removed"] is True
     nb = server.task_get(b["slug"])
     assert not (nb["blocked_by"] or [])
@@ -644,7 +644,7 @@ def test_unlink_one_of_several_blockers_keeps_the_rest(server):
     for blocker in (a, b, c):
         server.task_link(blocker["slug"], t["slug"], kind="blocks")
 
-    server.task_unlink(b["slug"], t["slug"], kind="blocks")
+    server.task_link(b["slug"], t["slug"], kind="blocks", remove=True)
 
     node = server.task_get(t["slug"])
     assert set(node["blocked_by"] or []) == {a["slug"], c["slug"]}
@@ -663,7 +663,7 @@ def test_unlink_leaves_other_tasks_edges_alone(server):
     server.task_link(blocker["slug"], keep["slug"], kind="blocks")
     server.task_link(blocker["slug"], drop["slug"], kind="blocks")
 
-    server.task_unlink(blocker["slug"], drop["slug"], kind="blocks")
+    server.task_link(blocker["slug"], drop["slug"], kind="blocks", remove=True)
 
     assert blocker["slug"] in (server.task_get(keep["slug"])["blocked_by"] or [])
     assert not (server.task_get(drop["slug"])["blocked_by"] or [])
@@ -686,7 +686,7 @@ def test_unlink_with_both_endpoints_crowded(server):
         server.task_link(blocker["slug"], target["slug"], kind="blocks")
     server.task_link(b["slug"], other["slug"], kind="blocks")
 
-    server.task_unlink(b["slug"], target["slug"], kind="blocks")
+    server.task_link(b["slug"], target["slug"], kind="blocks", remove=True)
 
     # The intended edge is gone.
     assert set(server.task_get(target["slug"])["blocked_by"] or []) == {
@@ -698,10 +698,16 @@ def test_unlink_with_both_endpoints_crowded(server):
     assert server.task_get(other["slug"])["status"] == "blocked"
     # Re-running finds nothing; the sibling edge is still there to remove.
     assert (
-        server.task_unlink(b["slug"], target["slug"], kind="blocks")["removed"] is False
+        server.task_link(b["slug"], target["slug"], kind="blocks", remove=True)[
+            "removed"
+        ]
+        is False
     )
     assert (
-        server.task_unlink(b["slug"], other["slug"], kind="blocks")["removed"] is True
+        server.task_link(b["slug"], other["slug"], kind="blocks", remove=True)[
+            "removed"
+        ]
+        is True
     )
 
 
@@ -710,12 +716,21 @@ def test_unlink_is_idempotent_and_reports_absence(server):
     a = server.task_create(title="A", description="x")
     b = server.task_create(title="B", description="y")
     # Never linked at all.
-    assert server.task_unlink(a["slug"], b["slug"], kind="blocks")["removed"] is False
+    assert (
+        server.task_link(a["slug"], b["slug"], kind="blocks", remove=True)["removed"]
+        is False
+    )
 
     server.task_link(a["slug"], b["slug"], kind="blocks")
-    assert server.task_unlink(a["slug"], b["slug"], kind="blocks")["removed"] is True
+    assert (
+        server.task_link(a["slug"], b["slug"], kind="blocks", remove=True)["removed"]
+        is True
+    )
     # Second removal is a no-op, not an error.
-    assert server.task_unlink(a["slug"], b["slug"], kind="blocks")["removed"] is False
+    assert (
+        server.task_link(a["slug"], b["slug"], kind="blocks", remove=True)["removed"]
+        is False
+    )
 
 
 @requires_omnigraph
@@ -727,7 +742,7 @@ def test_unlink_wrong_direction_leaves_the_correct_edge(server):
     server.task_link(a["slug"], b["slug"], kind="blocks")  # correct
     server.task_link(b["slug"], a["slug"], kind="blocks")  # backwards
 
-    server.task_unlink(b["slug"], a["slug"], kind="blocks")
+    server.task_link(b["slug"], a["slug"], kind="blocks", remove=True)
 
     assert not (server.task_get(a["slug"])["blocked_by"] or [])
     assert a["slug"] in (server.task_get(b["slug"])["blocked_by"] or [])
@@ -739,7 +754,7 @@ def test_unlink_parent_clears_parent_slug(server):
     child = server.task_create(title="child", description="y", parent=epic["slug"])
     assert server.task_get(child["slug"])["parent_slug"] == epic["slug"]
 
-    server.task_unlink(epic["slug"], child["slug"], kind="parent")
+    server.task_link(epic["slug"], child["slug"], kind="parent", remove=True)
 
     assert server.task_get(child["slug"])["parent_slug"] is None
     assert child["slug"] not in {
@@ -760,7 +775,7 @@ def test_unlink_addresses_removes_the_memory_link(server):
 
     assert m["slug"] in seeded_by_task()
 
-    res = server.task_unlink(t["slug"], m["slug"], kind="addresses")
+    res = server.task_link(t["slug"], m["slug"], kind="addresses", remove=True)
     assert res["removed"] is True
     assert m["slug"] not in seeded_by_task()
 
@@ -769,16 +784,16 @@ def test_unlink_addresses_removes_the_memory_link(server):
 def test_project_unblock_deletes_the_edge_not_just_the_field(server):
     a = server.workflow_project_create(title="PA", description="d")
     b = server.workflow_project_create(title="PB", description="d")
-    server.workflow_project_block(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_update(slug=b["slug"], add_blocked_by=[a["slug"]])
     assert a["slug"] in (server.workflow_project_get(b["slug"])["blocked_by"] or [])
 
-    server.workflow_project_unblock(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_update(slug=b["slug"], remove_blocked_by=[a["slug"]])
 
     assert not (server.workflow_project_get(b["slug"])["blocked_by"] or [])
     # The edge is gone too, so re-blocking then unblocking stays consistent
     # rather than accumulating duplicates.
-    server.workflow_project_block(slug=a["slug"], blocks_slug=b["slug"])
-    server.workflow_project_unblock(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_update(slug=b["slug"], add_blocked_by=[a["slug"]])
+    server.workflow_project_update(slug=b["slug"], remove_blocked_by=[a["slug"]])
     assert not (server.workflow_project_get(b["slug"])["blocked_by"] or [])
 
 
@@ -2074,11 +2089,11 @@ def test_unlink_parent_clears_a_parent_slug_left_by_an_exhausted_sync(
     _refuse_task_rows(srv, monkeypatch, child["slug"])
 
     with pytest.raises(WriteContention):
-        server.task_unlink(epic["slug"], child["slug"], kind="parent")
+        server.task_link(epic["slug"], child["slug"], kind="parent", remove=True)
     assert server.task_get(child["slug"])["parent_slug"] == epic["slug"]
 
     monkeypatch.setattr(srv.client, "change", real_change)
-    retried = server.task_unlink(epic["slug"], child["slug"], kind="parent")
+    retried = server.task_link(epic["slug"], child["slug"], kind="parent", remove=True)
 
     assert retried["removed"] is False
     assert server.task_get(child["slug"])["parent_slug"] is None

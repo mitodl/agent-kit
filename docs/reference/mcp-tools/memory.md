@@ -12,10 +12,11 @@ Recording durable knowledge in the shared graph, and reading it back. `recall` i
 
 Graph-aware contextual recall — the composition of every other memory tool.
 
-Seeds from any combination of ``query`` (BM25), ``symbol_id``
-(``symbol_context``), ``task`` (memories it Addresses, those sharing its
-symbol_refs, and those its title closely matches), and ``topic`` (memories
-tagged to it). Expands ``hops``
+Seeds from any combination of ``query`` (BM25), ``symbol_id`` (memories
+whose symbol_refs include it), ``task`` (memories it Addresses, those
+sharing its symbol_refs, and those its title closely matches), ``topic``
+and ``contract`` (memories tagged to it), and ``memory`` (that memory).
+Expands ``hops``
 (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
 provenance siblings; prunes superseded memories (unless
 ``include_superseded``); flags Contradicts pairs; and re-ranks with the
@@ -53,18 +54,46 @@ Past a total content budget a memory's ``content`` is cut, marked by
 ``content_truncated`` and ``content_chars``; ``memory_get`` returns the full
 text.
 
+Some seeds also add a section about the seed itself, which the ranked list
+has no room for. Each key is present only when its argument was passed:
+
+- ``topic``: the resolved Topic node, or ``null`` when there is none.
+- ``symbol``: ``{"symbol_id", "tasks"}``, the tasks whose ``symbol_refs``
+  include it (direction: symbol -> work).
+- ``memory``: ``{"slug", "neighbors", "symbols"}``. ``neighbors`` holds the
+  memories directly linked to it, grouped by edge kind (``supersedes``,
+  ``superseded_by``, ``refines``, ``applies_to``, ``related_to``,
+  ``contradicts``; every kind present, each possibly empty, symmetric kinds
+  unioned over both directions), each carrying an ``edge`` dict
+  (``{confidence, role, author, created_at}``, all ``null`` on links made
+  before edge properties existed). ``symbols`` is each of its
+  ``symbol_refs`` as ``{"symbol_ref", "definition"?}`` (direction: memory
+  -> symbols), the definition looked up in witan-code when it is reachable.
+- ``contract``: ``{"key_norm", "kind", "topic", "bindings"}``, where
+  ``bindings`` is ``{"providers", "consumers"}`` from witan-code's bridge
+  store when ``contract_kind`` is given and witan-code is reachable, and
+  empty lists otherwise.
+
+To list exactly what a seed resolves to, with nothing ranked out or pruned,
+pass ``hops=0``, ``include_superseded=True`` and a ``limit`` above the
+expected count: e.g. every memory tagged to a topic, or every memory citing
+a symbol.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str? | `null` | Free-text BM25 query, matched against ``content`` and ``title``. |
 | `symbol_id` | str? | `null` | A code-graph symbol id (``repo#path::Name``) to seed from — the memories<br>and tasks whose ``symbol_refs`` include it. Use this before editing a<br>symbol: "what do we already know about this function?" |
 | `task` | str? | `null` | A ``tk-`` slug to seed from — the memories it ``Addresses``, those<br>sharing its ``symbol_refs``, and those its title closely matches. A first<br>``task_claim`` already returns the best of these, so this is the one-call<br>way to load context for a task you are resuming or looking at without<br>claiming. |
-| `topic` | str? | `null` | A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,<br>``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join<br>surface, so this seed in particular can pull in other repositories. |
+| `topic` | str? | `null` | A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,<br>``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join<br>surface, so this seed in particular can pull in other repositories. A<br>spec resolves through the same slugify used on write, so a tag stored<br>as ``UV`` is found by ``uv:topic``. |
 | `repo` | str? | `null` | Repo scoping — see instructions. Applies to the ``query`` seed and to<br>which contradiction pairs are reported (see above); symbol, task, and<br>topic seeds resolve wherever they live, and expansion crosses repos. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Restrict the ``query`` seed to one memory kind: ``pattern``,<br>``project_fact``, ``lesson``, or ``agent_context``. |
 | `hops` | int | `1` | How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``<br>edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``<br>disables expansion and returns the seeds alone; ``1`` (the default) is<br>almost always right, since each extra hop widens results faster than it<br>deepens them. Counts HOPS, not the fractional distance the inferred-edge<br>surcharge produces — the surcharge only reranks, it never truncates the<br>walk. |
 | `limit` | int | `20` | Maximum memories to return after re-ranking. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` hides them, which is what makes recall return current<br>knowledge rather than its history. |
 | `session_id` | str? | `null` | The calling agent session's id. Only logged, never changes the result;<br>see ``memory_get``. |
+| `memory` | str? | `null` | A memory slug to seed from, which adds the ``memory`` section: its<br>links by kind and the code symbols it names. Use after ``memory_get``<br>to see what a memory connects to. |
+| `contract` | str? | `null` | A normalised contract key (e.g. ``DATABASE_URL`` or<br>``GET /api/v1/courses/``) to seed from: the memories tagged to its<br>``<key>:contract`` Topic, cross-repo by nature. Adds the ``contract``<br>section. Tag a memory to a contract with<br>``memory_link(<memory slug>, "<key_norm>:contract", "tagged")``. |
+| `contract_kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | ``env_var`` \| ``endpoint`` \| ``package`` \| ``service``. With<br>``contract``, also asks witan-code for the code that provides or<br>consumes the key, so you can pivot from what we know to where it lives.<br>Omit to skip that lookup. |
 | `all_repos` | bool | `False` | Seed the ``query`` from every repo and report every contradiction pair,<br>instead of scoping both to the detected repo — see instructions. |
 
 ## `memory_store`
@@ -159,7 +188,7 @@ behind. Topic nodes on the far end of a ``Tagged`` edge survive and may be
 left with no memories.
 
 That is not the only way to remove an edge — edges are deletable on their
-own (``task_unlink``, ``_unlink_edge``). Deleting the node is still the
+own (``task_link(remove=True)``, ``_unlink_edge``). Deleting the node is still the
 only route for a *memory* edge, since no unlink tool covers those yet.
 
 | Parameter | Type | Default | Description |
@@ -237,30 +266,8 @@ link to itself. Returns ``linked: False`` in those cases rather than raising.
 | `from_slug` | str | **required** | The memory the edge points **from**. Direction is load-bearing for the<br>asymmetric kinds — for ``supersedes`` this is the *newer* memory. |
 | `to_slug` | str | **required** | The memory the edge points **to** — for ``supersedes``, the older memory<br>being replaced. For ``kind="tagged"`` this is a Topic instead: either an<br>existing ``tp-`` slug or a ``name:kind`` spec, which auto-creates it. |
 | `kind` | `supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` | **required** | Which edge to write: ``supersedes`` \| ``refines`` \| ``applies_to`` \|<br>``contradicts`` \| ``related_to`` \| ``tagged``. See the descriptions<br>above — ``supersedes`` is the one that changes what default reads<br>return. |
-| `role` | str? | `null` | Free text saying WHY these two are linked, stored on the edge and<br>returned by ``memory_neighbors``. The edge kind says what KIND of<br>relation it is; this says what the relation is ABOUT ("both configure<br>the Vault sidecar", "same incident"). Worth a sentence on a<br>``related_to``, where the kind alone tells a later reader nothing.<br>Scanned on the way in like any other free text, so it can be redacted<br>before it lands. The returned ``edge`` therefore reports the three<br>machine-set properties and NOT ``role`` — read it back with<br>``memory_neighbors`` to see what was actually stored. |
+| `role` | str? | `null` | Free text saying WHY these two are linked, stored on the edge and<br>returned by ``recall(memory=...)``. The edge kind says what KIND of<br>relation it is; this says what the relation is ABOUT ("both configure<br>the Vault sidecar", "same incident"). Worth a sentence on a<br>``related_to``, where the kind alone tells a later reader nothing.<br>Scanned on the way in like any other free text, so it can be redacted<br>before it lands. The returned ``edge`` therefore reports the three<br>machine-set properties and NOT ``role`` — read it back with<br>``recall(memory=...)`` to see what was actually stored. |
 | `confidence` | `asserted` \| `inferred` | `'asserted'` | ``asserted`` (default) when you are naming both endpoints because you<br>know they belong together; ``inferred`` when the link is a guess worth<br>recording but not worth ranking on. ``recall`` expands along asserted<br>edges in preference to inferred ones, so this is the knob that decides<br>whether a speculative link pulls its neighbour into other people's<br>results. |
-
-## `memory_neighbors`
-
-Return the memories directly linked to ``slug``, grouped by edge kind.
-
-For symmetric kinds (``contradicts``, ``related_to``) both directions are
-unioned and de-duplicated. ``superseded_by`` is the inbound side of
-``supersedes``: the memories that replaced this one, which is what a reader
-who landed on a superseded memory needs next. Use after ``memory_get`` to
-see what a memory connects to.
-
-Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
-created_at}`` — describing the LINK rather than either endpoint. ``role``
-is what answers "why are these two connected", which the edge kind alone
-does not; ``created_at`` is when the link was made, which neither node's
-timestamps record. All four are ``null`` on edges written before the
-properties existed, and nothing backfills them.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `slug` | str | **required** | The memory whose neighbours to fetch. |
-| `kinds` | list[`supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` \| `superseded_by`]? | `null` | Optional subset of edge kinds to include. Omit (``None``) for all kinds;<br>an explicit empty list returns no kinds. |
 
 ## `memory_contradictions`
 
@@ -268,8 +275,8 @@ List every pair of memories that contradict each other, newest link first.
 
 An unranked enumeration of the ``contradicts`` edges, for reviewing
 conflicts rather than loading context. ``recall`` reports a contradiction
-only when both memories land in its result, and ``memory_neighbors`` needs a
-slug to start from; this needs neither. Both apply the same ``repo`` rule
+only when both memories land in its result, and ``recall(memory=...)`` needs
+a slug to start from; this needs neither. Both apply the same ``repo`` rule
 (below), so every pair ``recall`` reports is one this lists for the same
 ``repo`` and ``include_superseded``. The exception is no repo detected and
 none passed: ``recall``'s ``query`` seed then spans every repo, so it
@@ -283,7 +290,7 @@ all ``null`` on links written before edge properties existed.
 
 One row per unordered pair. ``contradicts`` is symmetric but can be stored
 in both directions; when it is, the newer link is the one reported, the same
-newest-wins rule as ``memory_neighbors``.
+newest-wins rule as ``recall(memory=...)``.
 
 Superseding either side is how a contradiction gets resolved, so a pair
 with a superseded memory in it is dropped by default. That is also what
@@ -295,18 +302,6 @@ before it looks for pairs.
 | `repo` | str? | `null` | Repo scoping — see instructions. A pair is included when EITHER memory<br>is in scope, since a contradiction across two repos concerns both. With<br>no repo detected and none passed, only pairs touching an unscoped memory<br>(``repo`` null) are returned. |
 | `include_superseded` | bool | `False` | When ``True``, keep pairs where either memory has been superseded, i.e.<br>the resolved ones. |
 | `all_repos` | bool | `False` | Report every pair, in any repo — see instructions. |
-
-## `memory_symbols`
-
-Code symbols a memory concerns (direction: memory → symbols).
-
-The reverse of ``symbol_context``: returns each of the memory's ``symbol_refs``,
-enriched with the live definition when witan-code is reachable, or the raw ref
-strings otherwise.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `slug` | str | **required** | The memory whose ``symbol_refs`` to resolve. An unknown slug returns an<br>empty ``symbols`` list rather than raising. |
 
 ## `memory_stale_refs`
 
@@ -325,55 +320,3 @@ or supersede the memory.
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Repo scoping — see instructions. |
 | `all_repos` | bool | `False` | Check every repo's memories instead of the detected repo's — see<br>instructions. |
-
-## `memory_for_contract`
-
-What do we know about a contract (env_var / endpoint / package / service)?
-
-Resolves the ``Topic{kind:"contract", name:key_norm}`` anchor and walks
-``Tagged`` to the memories about it (a single Layer-1 traversal, cross-repo by
-nature), then — best-effort — asks witan-code for the bridge bindings that
-share the same ``key_norm`` so callers can pivot to the code that produces or
-consumes it. The two halves are joined in Python on the shared key, never an
-edge across stores.
-
-Tag a memory to a contract first with
-``memory_link(memory_slug, "<key_norm>:contract", "tagged")`` (``from`` is the
-memory's slug).
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `key_norm` | str | **required** | The normalised contract key (e.g. ``DATABASE_URL`` or<br>``GET /api/v1/courses/``). |
-| `kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | The bridge binding kind (``env_var`` / ``endpoint`` / ``package`` /<br>``service``) used to look up bindings. Omit to skip the bridge lookup. |
-
-## `symbol_context`
-
-Memories and tasks attached to a code symbol (direction: symbol → work).
-
-The reverse of ``memory_symbols``: given a symbol id, returns the memories and
-tasks whose ``symbol_refs`` include it — "what lessons and open tasks concern
-this function?". Call it after locating a symbol with the witan-code ``code_*``
-tools, before editing.
-
-``symbol_id`` has the form ``<repo>#<path/to/file.py>::<QualifiedName>``; the
-repo prefix scopes the lookup, or the current repo when the id has no ``#``.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `symbol_id` | str | **required** | The symbol to look up, as returned in the ``symbol_id`` field of the<br>witan-code ``code_*`` tools. |
-
-## `topic_get`
-
-Resolve a Topic and return it with the memories tagged to it.
-
-``topic`` is either a Topic slug (``tp-...``) or a ``name:kind`` spec
-(e.g. ``uv:topic``). Because topics are a cross-repo join surface, the
-returned memories may span repositories — this is the traversal-based
-retrieval primitive: two memories in different repos sharing a topic are
-one hop apart.
-
-Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `topic` | str | **required** | Either a Topic slug (``tp-...``) or a ``name:kind`` spec (``uv:topic``,<br>``DATABASE_URL:contract``). A spec resolves through the same<br>deterministic slugify used on write rather than an exact name match, so<br>a tag stored as ``UV`` is still found by ``uv:topic``. |
