@@ -21,8 +21,8 @@ import { copyButton } from "./parts.js";
  */
 
 /**
- * `task_search`'s cap (`_SEARCH_LIMIT` in `server.py`). The tool takes no
- * limit, so a result this long may have left matches out.
+ * `task_search`'s default `limit` (`_SEARCH_LIMIT` in `server.py`). The view
+ * does not pass one, so a result this long may have left matches out.
  */
 export const SEARCH_LIMIT = 20;
 

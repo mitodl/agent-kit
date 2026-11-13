@@ -96,7 +96,12 @@ def test_nullable_filters_match_every_combination(server):
                 and (status is None or r["status"] == status)
             }
             params = {"query": "zorblat", "repo": repo, "status": status}
-            for name in ("search_tasks", "search_tasks_title"):
+            for name in (
+                "search_tasks",
+                "search_tasks_title",
+                "search_tasks_all_uncapped",
+                "search_tasks_all_uncapped_title",
+            ):
                 rows = srv.client.read("read.gq", name, params)
                 assert {r["slug"] for r in rows} == expected, (name, params)
             if repo is not None:
@@ -252,6 +257,98 @@ def test_task_search_filters_reach_past_the_unfiltered_cap(server):
     assert [h["slug"] for h in by_project] == [buried["slug"]]
     by_assignee = server.task_search("quokka", all_repos=True, assignee="agentA")
     assert [h["slug"] for h in by_assignee] == [buried["slug"]]
+
+    everything = [
+        h["slug"] for h in server.task_search("quokka", all_repos=True, limit=50)
+    ]
+    assert len(everything) == 23
+    assert buried["slug"] in everything
+
+
+_UNCAPPED_SEARCH_PAIRS = (
+    "search_tasks_all_uncapped",
+    "search_tasks_all_uncapped_title",
+    "search_tasks_by_project",
+    "search_tasks_by_project_title",
+)
+
+
+@pytest.fixture
+def uncapped_search_cap(server, tmp_path, monkeypatch):
+    """Lower the uncapped search pairs' `limit 10000` to 3 for this test.
+
+    Reaching the real cap would take 10,001 tasks; a copy of the query files
+    with only those four queries' limits rewritten exercises the same boundary.
+    """
+    import re
+    import shutil
+
+    from witan import server as srv
+
+    cap = 3
+    queries = tmp_path / "queries"
+    shutil.copytree(srv.client.queries_dir, queries)
+    read_gq = queries / "read.gq"
+    source = read_gq.read_text()
+    for name in _UNCAPPED_SEARCH_PAIRS:
+        source, n = re.subn(
+            rf"(query {name}\(.*?\n    limit )10000",
+            rf"\g<1>{cap}",
+            source,
+            count=1,
+            flags=re.DOTALL,
+        )
+        assert n == 1, name
+    read_gq.write_text(source)
+    monkeypatch.setattr(srv.client, "queries_dir", queries)
+    return cap
+
+
+@requires_omnigraph
+def test_task_search_filters_apply_before_the_uncapped_cap(server, uncapped_search_cap):
+    """A limit above 20 reads the uncapped pair, whose cap must come after the
+    status, repo and project filters: more higher-ranked matches outside the
+    requested scope than the cap would otherwise leave no room for the
+    lower-ranked ones inside it."""
+    proj = server.workflow_project_create(title="P", description="d", phase="spec")
+    crowd_repo = "https://github.com/test/crowd"
+    for i in range(uncapped_search_cap):
+        closed = server.task_create(
+            title=f"quokka narwhal {i}",
+            description="quokka narwhal quokka",
+            repo=crowd_repo,
+            project_slug=proj["slug"],
+        )
+        server.task_close(closed["slug"], resolution="done")
+    buried = server.task_create(
+        title="unrelated title",
+        description="a long description that mentions a quokka only once, "
+        "somewhere among a great many other words about compaction",
+        repo="https://github.com/test/wanted",
+        project_slug=proj["slug"],
+    )
+
+    by_status = server.task_search("quokka", all_repos=True, status="open", limit=21)
+    assert [h["slug"] for h in by_status] == [buried["slug"]]
+    by_repo = server.task_search(
+        "quokka", repo="https://github.com/test/wanted", limit=21
+    )
+    assert [h["slug"] for h in by_repo] == [buried["slug"]]
+    by_project = server.task_search(
+        "quokka", project_slug=proj["slug"], status="open", limit=21
+    )
+    assert [h["slug"] for h in by_project] == [buried["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_limit_trims_and_is_bounded(server):
+    for i in range(3):
+        server.task_create(title=f"quokka {i}", description="quokka", all_repos=True)
+
+    assert len(server.task_search("quokka", all_repos=True, limit=2)) == 2
+    for bad in (0, 10001):
+        with pytest.raises(ValueError, match="limit must be between"):
+            server.task_search("quokka", all_repos=True, limit=bad)
 
 
 @requires_omnigraph
@@ -2024,7 +2121,7 @@ def test_comment_is_attributed_and_read_back_by_task_get(server):
     t = server.task_create(title="held work", description="the original premise")
     before = server.task_get(t["slug"])
 
-    res = server.task_comment(slug=t["slug"], text="  your premise is wrong  ")
+    res = server.task_comment(slug=t["slug"], body="  your premise is wrong  ")
     assert res["commented"] is True
     assert res["slug"].startswith("tc-")
     assert res["author"] == srv.cfg.author
@@ -2043,7 +2140,7 @@ def test_comment_is_attributed_and_read_back_by_task_get(server):
 def test_comments_come_back_oldest_first(server):
     t = server.task_create(title="threaded", description="x")
     for n in ("first", "second", "third"):
-        server.task_comment(slug=t["slug"], text=n)
+        server.task_comment(slug=t["slug"], body=n)
     assert [c["body"] for c in server.task_get(t["slug"])["comments"]] == [
         "first",
         "second",
@@ -2055,11 +2152,11 @@ def test_comments_come_back_oldest_first(server):
 def test_comment_refuses_empty_text_and_unknown_task(server):
     t = server.task_create(title="real", description="x")
 
-    blank = server.task_comment(slug=t["slug"], text="   \n  ")
+    blank = server.task_comment(slug=t["slug"], body="   \n  ")
     assert blank["commented"] is False
     assert "empty" in blank["reason"]
 
-    missing = server.task_comment(slug="tk-nope-000000", text="hello")
+    missing = server.task_comment(slug="tk-nope-000000", body="hello")
     assert missing["commented"] is False
     assert "tk-nope-000000" in missing["reason"]
 
@@ -2070,7 +2167,7 @@ def test_comment_refuses_empty_text_and_unknown_task(server):
 def test_comments_are_scoped_to_their_own_task(server):
     a = server.task_create(title="task a", description="x")
     b = server.task_create(title="task b", description="x")
-    server.task_comment(slug=a["slug"], text="about a")
+    server.task_comment(slug=a["slug"], body="about a")
 
     assert len(server.task_get(a["slug"])["comments"]) == 1
     assert server.task_get(b["slug"])["comments"] == []
@@ -2122,14 +2219,14 @@ def test_comment_refuses_rather_than_reporting_a_write_that_did_not_happen(
         raise RuntimeError("type error: T10: unknown node/edge type `TaskComment`")
 
     monkeypatch.setattr(srv.client, "change", change)
-    res = server.task_comment(slug=t["slug"], text="this must not be lost silently")
+    res = server.task_comment(slug=t["slug"], body="this must not be lost silently")
     assert res["commented"] is False
     assert "witan migrate schema" in res["reason"]
 
     # Against a deployment the same refusal must not name a command the remote
     # CLI refuses (apply_schema is admin-only there).
     monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
-    res = server.task_comment(slug=t["slug"], text="still not lost")
+    res = server.task_comment(slug=t["slug"], body="still not lost")
     assert res["commented"] is False
     assert "run `witan migrate schema`" not in res["reason"]
     assert "omnigraph-server image" in res["reason"]

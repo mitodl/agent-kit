@@ -145,8 +145,8 @@ def test_concurrent_claims_still_grant_exactly_one(served, burst):
     def claim(agent):
         return lambda: tools.task_claim(task["slug"], assignee=agent)
 
-    def comment(text):
-        return lambda: tools.task_comment(other["slug"], text)
+    def comment(body):
+        return lambda: tools.task_comment(other["slug"], body)
 
     notes = [f"note {i}" for i in range(6)]
     outcomes, sizes = burst(
@@ -180,8 +180,8 @@ def test_a_fresh_fenced_write_leads_the_writes_queued_with_it(served, burst):
     other = tools.task_create(title="chatter", description="d", repo=REPO)
     before = _commit_count(url)
 
-    def comment(text):
-        return lambda: tools.task_comment(other["slug"], text)
+    def comment(body):
+        return lambda: tools.task_comment(other["slug"], body)
 
     outcomes, sizes = burst(
         comment("held"),
@@ -294,8 +294,8 @@ def test_a_server_refused_fence_spares_the_writes_riding_with_it(served, burst):
         }
         srv.client.change("mutations.gq", "update_task", params, if_commit=old_head)
 
-    def comment(text):
-        return lambda: tools.task_comment(other["slug"], text)
+    def comment(body):
+        return lambda: tools.task_comment(other["slug"], body)
 
     outcomes, sizes = burst(
         comment("held"), [fenced_on_old_head, comment("r1"), comment("r2")]

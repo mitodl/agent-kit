@@ -157,7 +157,7 @@ real `p0`s; a `parent` edge was written onto someone else's claimed row; and
 closing it would have meant "I read this", which is not what closing a task
 means anywhere else.
 
-`task_comment(slug, text)` is the primitive that was missing. A comment is
+`task_comment(slug, body)` is the primitive that was missing. A comment is
 attributed, timestamped, and append-only — and it is **flat**: no threading, no
 editing, no deleting, no resolution state. Those are all decisions to make when
 something actually needs them.

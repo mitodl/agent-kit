@@ -247,7 +247,7 @@ List tasks for the current repo (or filtered).
 | `--assignee` | str \| None | — | Filter by owner |
 | `--ready` | bool | `False` | Show only ready-to-work tasks (open, all blockers closed) |
 | `--all-repos` | bool | `False` | Span every repo in the graph |
-| `--limit` | int | `50` | Max rows |
+| `--limit` | int | `50` | Max rows (not applied to a `QUERY` search yet) |
 
 ```bash
 witan tasks --ready --project wp-migrate-auth-oauth2
@@ -303,7 +303,7 @@ holder's injected session context if they are actively working it.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `SLUG` (positional) | str | required | The `tk-` slug to comment on |
-| `TEXT` (positional) | str | required | The comment body |
+| `BODY` (positional) | str | required | The comment text |
 
 ```bash
 witan task comment tk-fix-flaky-retry-abc123 \
