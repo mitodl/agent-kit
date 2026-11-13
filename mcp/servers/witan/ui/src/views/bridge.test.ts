@@ -194,7 +194,7 @@ describe("route keys", () => {
 		const edge = { consumer: WEB, provider: INFRA };
 		expect(parseEdgeKey(edgeKey(edge))).toEqual(edge);
 
-		const contract = { kind: "service" as const, key: `repo:${WEB}` };
+		const contract = { kind: "service" as const, key: WEB };
 		expect(parseContractKey(contractKey(contract))).toEqual(contract);
 	});
 
