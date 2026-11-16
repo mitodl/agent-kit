@@ -326,6 +326,26 @@ def test_guards_compose_in_order_and_skip_none():
     assert screen.compose_guards(upper, suffix)("q", {"v": "a"}) == {"v": "A!"}
 
 
+def test_a_chain_derives_stored_text_through_every_guard():
+    """A slug is built from ``stored_text`` before the write, so a chain has to
+    answer it as the write will store the field: the scan guard's redaction
+    applied, the Screener's verdict changing nothing."""
+
+    class Redact:
+        def __call__(self, _, params):
+            return params
+
+        def stored_text(self, query_name, field, value, repo):
+            return value.replace("secret", "[x]")
+
+    screener = screen.Screener(FakeClassifier())
+    assert screener.stored_text("insert_memory", "title", "a secret", None) == (
+        "a secret"
+    )
+    chain = screen.compose_guards(Redact(), screener)
+    assert chain.stored_text("insert_memory", "title", "a secret", None) == "a [x]"
+
+
 # ── read-side labels ───────────────────────────────────────────────────────
 
 

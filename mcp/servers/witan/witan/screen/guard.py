@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Callable
+from typing import Protocol
 
 from witan_core.observability import get_logger
 
@@ -32,7 +32,20 @@ from .verdict import OVERSIZE_REASON, Verdict, combine, parse_verdict
 
 logger = get_logger("witan.screen")
 
-Guard = Callable[[str, dict], dict]
+
+class Guard(Protocol):
+    """A write guard: rewrites a write's params, and answers ``stored_text``.
+
+    ``stored_text`` is required, not optional, because the server builds a
+    slug from it on whichever guard is installed, a chain included.
+    """
+
+    def __call__(self, query_name: str, params: dict) -> dict: ...
+
+    def stored_text(
+        self, query_name: str, field: str, value: str, repo: str | None
+    ) -> str: ...
+
 
 #: node type -> (field, source label) for the text a verdict covers.
 SCREENED_TEXT: dict[str, tuple[tuple[str, str], ...]] = {
@@ -214,11 +227,44 @@ class Screener:
             for payload in chunks
         )
 
+    def stored_text(
+        self, query_name: str, field: str, value: str, repo: str | None
+    ) -> str:
+        """``value`` unchanged: a verdict is recorded beside the text, never in it.
+
+        The server builds a slug from ``client.guard.stored_text`` whichever
+        guard is installed, so a Screener on its own has to answer it too.
+        """
+        return value
+
 
 def screener_from_config(config: ScreenConfig) -> Screener | None:
     """The Screener for the configured classifier, or ``None`` without one."""
     classifier = load_classifier(config)
     return Screener(classifier) if classifier is not None else None
+
+
+class _GuardChain:
+    """Write guards applied left to right, ``stored_text`` included.
+
+    A plain function would lose ``stored_text``, which the server calls on the
+    installed guard to build a slug from the text the write will store.
+    """
+
+    def __init__(self, guards: list[Guard]) -> None:
+        self._guards = guards
+
+    def __call__(self, query_name: str, params: dict) -> dict:
+        for guard in self._guards:
+            params = guard(query_name, params)
+        return params
+
+    def stored_text(
+        self, query_name: str, field: str, value: str, repo: str | None
+    ) -> str:
+        for guard in self._guards:
+            value = guard.stored_text(query_name, field, value, repo)
+        return value
 
 
 def compose_guards(*guards: Guard | None) -> Guard | None:
@@ -228,10 +274,4 @@ def compose_guards(*guards: Guard | None) -> Guard | None:
         return None
     if len(active) == 1:
         return active[0]
-
-    def chained(query_name: str, params: dict) -> dict:
-        for guard in active:
-            params = guard(query_name, params)
-        return params
-
-    return chained
+    return _GuardChain(active)
