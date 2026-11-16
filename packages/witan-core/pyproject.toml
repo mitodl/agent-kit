@@ -9,8 +9,9 @@ keywords = ["mcp", "agent", "omnigraph", "shared", "coding-agent"]
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
-# Base modules (_detach, repo_key, timeutil, omnigraph, maintenance) are
-# stdlib-only on purpose so neither server pulls weight it doesn't use. Heavier
+# Base modules (_detach, repo_key, timeutil, omnigraph, maintenance, graph_ids)
+# are stdlib-only on purpose so neither server pulls weight it doesn't use, and
+# so infra code can import graph_ids without the servers' dependencies. Heavier
 # concerns are gated behind the extras below.
 dependencies = []
 
