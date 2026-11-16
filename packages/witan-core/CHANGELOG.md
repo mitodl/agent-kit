@@ -8,6 +8,26 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.57.0] - 2026-11-16
+
+### Added
+
+- `witan_core.graph_ids` holds the cluster code-graph id: `code_graph_id(repo)`, `CODE_GRAPH_PREFIX`, `BRIDGE_GRAPH_ID` and `GRAPH_ID_RE`. It moved from `witan_code.config.graph_id`, whose algorithm ol-infrastructure kept a byte-for-byte copy of to declare the same graphs in `cluster.yaml`. The module is stdlib-only, so that stack can import it instead, and `tests/test_graph_ids.py` pins its output. `witan_core.omnigraph` now validates graph ids against the same `GRAPH_ID_RE`.
+
+- `OmnigraphClient.profile`, a frozen `SubstrateProfile` declaring the store's backend (`local`, `s3`, `az`, `server`, or `mcp` for witan-code's MCP-tier client) and one predicate per capability that used to be read off `is_remote`: `shared`, `maintenance` (`client` or `server`), `asserts_actor`, `http_transport` and `admission_gated`. `http_contract` carries the HTTP contract the transport negotiated on `HEAD /healthz`, and reading it never probes.
+- `OmnigraphClient.require(capability)`, which raises `CapabilityUnsupported` (a `RuntimeError` refusal with `backend` and `capability` fields) and first logs a `witan.capability.gap` record keyed `<backend>:<capability>`.
+
+### Changed
+
+- `optimize()` and `cleanup()` on a deployed-server store raise `CapabilityUnsupported` before running the CLI, instead of failing on omnigraph's own refusal of `--server`.
+- The client's actor assertion, HTTP transport choice, write admission gate, call budget and unavailable-server wait now read the profile instead of `is_remote`. Behaviour is unchanged. `is_remote` stays for witan and witan-code callers until they move to the specific predicate.
+
+### Fixed
+
+- A comment in `omnigraph_install.py` said witan defaults `WITAN_EMBED_ENABLED`
+  off. Nothing reads that variable, so it now says witan has no embeddings and
+  no schema declares a `Vector` column. Comment only; no behavior change.
+
 ## [0.56.0] - 2026-11-13
 
 ### Changed
