@@ -44,12 +44,13 @@ describe("parseRoute", () => {
 
 	it("reads the memory view's search, toggles and facets", () => {
 		const route = parseRoute(
-			"#memory?q=wrap+flag&kind=lesson&plain=1&superseded=1&topic=tp-topic-mcp&tag=mcp&author=fixtures",
+			"#memory?q=wrap+flag&kind=lesson&plain=1&superseded=1&stale=1&topic=tp-topic-mcp&tag=mcp&author=fixtures",
 		);
 		expect(route.q).toBe("wrap flag");
 		expect(route.kind).toBe("lesson");
 		expect(route.plain).toBe(true);
 		expect(route.superseded).toBe(true);
+		expect(route.stale).toBe(true);
 		expect(route.topic).toBe("tp-topic-mcp");
 		expect(route.facets).toEqual({
 			...DEFAULT_ROUTE.facets,
@@ -115,6 +116,7 @@ describe("formatRoute", () => {
 			kind: "pattern",
 			plain: true,
 			superseded: true,
+			stale: true,
 			topic: "tp-topic-mcp",
 			facets: {
 				language: "python",

@@ -13,6 +13,7 @@ import type {
 	ProjectStatus,
 	RecallResult,
 	RepoDependencies,
+	StaleRefsReport,
 	TaskDetail,
 	TaskRow,
 	TaskSearchRow,
@@ -427,6 +428,18 @@ export function memoryContradictions(args: {
 	include_superseded?: boolean;
 }): Promise<MemoryContradiction[]> {
 	return read("memory_contradictions", scoped(args));
+}
+
+/**
+ * The memories in scope whose `symbol_refs` do not all resolve in the code
+ * graph, each ref marked live, missing or unknown. A bare dict, so unwrapped.
+ * It reads witan-code in-process with every repo explicit, so it never
+ * elicits (ADR 0011, 2026-11-13 amendment).
+ */
+export function memoryStaleRefs(args: {
+	repo: string;
+}): Promise<StaleRefsReport> {
+	return read("memory_stale_refs", scoped(args));
 }
 
 /**

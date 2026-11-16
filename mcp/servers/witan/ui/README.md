@@ -16,7 +16,11 @@ and Closed columns (spec §6.4). Waves lays one project's open tasks out by
 depth in the `Blocks` graph, with the longest chain and any cycle marked (spec
 §6.5). Timeline draws each task's lead time and work time, and the sessions,
 over a 7 to 90 day window (spec §6.6). Memory has the contradictions inbox,
-browse and search, topics, and the memory panel (spec §6.7). The panel opens
+browse and search, topics, and the memory panel (spec §6.7). Its list marks a
+memory citing a symbol the code graph no longer has (`memory_stale_refs`, ADR
+0011's 2026-11-13 amendment) and can narrow to those; a ref that could not be
+checked, e.g. in a repo nobody indexed, is counted above the list and never
+marked. The panel opens
 whichever the slug is, on its prefix, so a memory linked from a task opens as
 a memory. Graph is `witan graph`'s project and task graph, drawn with
 vis-network, which is bundled and loaded only when the tab is opened (spec

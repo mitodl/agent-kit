@@ -46,6 +46,7 @@ READ_TOOLS = frozenset(
         "memory_list",
         "memory_search",
         "memory_contradictions",
+        "memory_stale_refs",
         "code_repo_dependencies",
         "code_interface_providers",
         "code_interface_consumers",

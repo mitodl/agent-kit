@@ -1,0 +1,45 @@
+{
+  "checked": 2,
+  "counts": {
+    "live": 1,
+    "missing": 1,
+    "unknown": 1
+  },
+  "memories": [
+    {
+      "kind": "pattern",
+      "refs": [
+        {
+          "status": "live",
+          "symbol_ref": "https://github.com/example/lib#lib/service.py::Service.run"
+        },
+        {
+          "candidates": [
+            "https://github.com/example/lib#lib/service.py::Service.run"
+          ],
+          "status": "missing",
+          "symbol_ref": "https://github.com/example/lib#lib/old_service.py::Service.run"
+        }
+      ],
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "pat-fixture-012",
+      "status": "stale",
+      "title": "Service.run retries twice before it raises"
+    },
+    {
+      "kind": "pattern",
+      "refs": [
+        {
+          "reason": "https://github.com/example/unindexed is not indexed",
+          "status": "unknown",
+          "symbol_ref": "https://github.com/example/unindexed#app/views.py::index"
+        }
+      ],
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "pat-fixture-011",
+      "status": "unknown",
+      "title": "The index view renders without a login"
+    }
+  ],
+  "repo": null
+}

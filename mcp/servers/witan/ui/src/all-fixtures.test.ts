@@ -6,6 +6,7 @@ import {
 	isProjectStatus,
 	isRecallResult,
 	isRepoDependencies,
+	isStaleRefsReport,
 	isTaskDetail,
 	isTaskRow,
 	isTaskSearchRow,
@@ -60,6 +61,7 @@ const VALIDATORS: Record<string, (value: unknown) => boolean> = {
 	memory_search: (v) => Array.isArray(v) && v.every(isMemory),
 	memory_contradictions: (v) =>
 		Array.isArray(v) && v.every(isMemoryContradiction),
+	memory_stale_refs: isStaleRefsReport,
 	code_repo_dependencies: isRepoDependencies,
 	code_interface_providers: (v) =>
 		Array.isArray(v) && v.every(isInterfaceBinding),
@@ -104,6 +106,7 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	memory_list: MEMORY_OPTIONAL,
 	memory_search: MEMORY_OPTIONAL,
 	memory_contradictions: [],
+	memory_stale_refs: [],
 	code_repo_dependencies: [],
 	// `InterfaceBinding.confidence`: a witan-code older than the field omits it.
 	code_interface_providers: ["confidence"],

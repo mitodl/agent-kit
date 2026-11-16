@@ -9,6 +9,9 @@ import memoryGetFixture from "../../fixtures/memory_get.json" with {
 import memoryListFixture from "../../fixtures/memory_list.json" with {
 	type: "json",
 };
+import staleRefsFixture from "../../fixtures/memory_stale_refs.json" with {
+	type: "json",
+};
 import recallFixture from "../../fixtures/recall.json" with { type: "json" };
 import neighborsFixture from "../../fixtures/recall.memory.json" with {
 	type: "json",
@@ -16,12 +19,14 @@ import neighborsFixture from "../../fixtures/recall.memory.json" with {
 import supersededFixture from "../../fixtures/recall.memory.superseded.json" with {
 	type: "json",
 };
+import type { Snapshot } from "../live.js";
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import type {
 	Memory,
 	MemoryContradiction,
 	MemoryNeighbors,
 	RecallResult,
+	StaleRefsReport,
 } from "../types.js";
 import { unwrap } from "../unwrap.js";
 import {
@@ -33,6 +38,7 @@ import {
 	type MemoryPage,
 	memoryDetail,
 	memoryView,
+	staleBySlug,
 	TOPIC_ROW_CAP,
 } from "./memory.js";
 
@@ -47,6 +53,7 @@ const pairs = unwrap<MemoryContradiction[]>(
 	contradictionsFixture,
 );
 const recalled = unwrap<RecallResult>("recall", recallFixture);
+const report = unwrap<StaleRefsReport>("memory_stale_refs", staleRefsFixture);
 
 const route: Route = { ...DEFAULT_ROUTE, view: "memory" };
 
@@ -61,9 +68,18 @@ function text(): string {
 	return root.textContent ?? "";
 }
 
-function draw(page: MemoryPage, at: Route = route, onNavigate = vi.fn()) {
-	render(memoryView(page, at, onNavigate), root);
+function draw(
+	page: MemoryPage,
+	at: Route = route,
+	onNavigate = vi.fn(),
+	stale: Snapshot<StaleRefsReport> | null = null,
+) {
+	render(memoryView(page, at, onNavigate, stale), root);
 	return onNavigate;
+}
+
+function landed(data: StaleRefsReport): Snapshot<StaleRefsReport> {
+	return { data, error: null, loadedAt: 1, loading: false };
 }
 
 describe("the contradictions inbox", () => {
@@ -350,6 +366,350 @@ describe("a topic at its limits", () => {
 	});
 });
 
+describe("stale symbol refs", () => {
+	const browse: MemoryPage = { mode: "browse", memories: listed, inbox: [] };
+	const byTitle = (title: string) => {
+		const found = listed.find((m) => m.title === title);
+		if (!found) {
+			throw new Error(`no memory titled ${title} in the fixture`);
+		}
+		return found;
+	};
+	// The seed: one memory citing a moved symbol, one citing a repo nobody
+	// indexed. Both are in the report; only the first is stale.
+	const moved = byTitle("Service.run retries twice before it raises");
+	const unchecked = byTitle("The index view renders without a login");
+
+	function rowOf(slug: string): Element | null | undefined {
+		return root.querySelector(`tbody a[href$="slug=${slug}"]`)?.closest("tr");
+	}
+
+	it("marks a memory with a missing ref, and not one with only unknown refs", () => {
+		draw(browse, route, vi.fn(), landed(report));
+
+		expect(
+			rowOf(moved.slug)?.querySelector(".badge.stale-refs"),
+		).not.toBeNull();
+		expect(rowOf(unchecked.slug)).not.toBeNull();
+		expect(rowOf(unchecked.slug)?.querySelector(".badge")?.textContent).toBe(
+			"pattern",
+		);
+		expect(
+			rowOf(unchecked.slug)?.querySelector(".badge.stale-refs"),
+		).toBeNull();
+		expect(root.querySelectorAll("tbody .badge.stale-refs")).toHaveLength(1);
+	});
+
+	it("names the missing ref and where the symbol may have gone", () => {
+		draw(browse, route, vi.fn(), landed(report));
+
+		const title =
+			rowOf(moved.slug)
+				?.querySelector(".badge.stale-refs")
+				?.getAttribute("title") ?? "";
+		expect(title).toContain("lib/old_service.py::Service.run");
+		expect(title).toContain("same name at");
+		expect(title).toContain("lib/service.py::Service.run");
+	});
+
+	it("counts the unknown refs apart from the stale memories", () => {
+		draw(browse, route, vi.fn(), landed(report));
+
+		const note = root.querySelector(".stale-summary")?.textContent ?? "";
+		expect(note).toMatch(/1 memory in any repo\s+cites a symbol/);
+		expect(note).toMatch(/1 memory has\s+refs that could not be checked/);
+	});
+
+	it("narrows to stale memories only when asked", () => {
+		draw(browse, { ...route, stale: true }, vi.fn(), landed(report));
+
+		const rows = root.querySelectorAll("tbody tr");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.textContent).toContain(moved.title);
+	});
+
+	it("toggles the filter through the route", () => {
+		const onNavigate = draw(browse, route, vi.fn(), landed(report));
+
+		const box = [...root.querySelectorAll("label")]
+			.find((label) => label.textContent?.includes("Stale refs only"))
+			?.querySelector("input");
+		box?.click();
+
+		expect(onNavigate).toHaveBeenCalledWith({ stale: true });
+	});
+
+	it("says the check is pending rather than showing an empty filter as clean", () => {
+		draw(browse, { ...route, stale: true }, vi.fn(), {
+			data: null,
+			error: null,
+			loadedAt: null,
+			loading: true,
+		});
+
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Checking symbol refs",
+		);
+		expect(root.querySelector("tbody")).toBeNull();
+		// Not the clean result: nothing has been checked yet.
+		expect(text()).toContain("symbol refs have not been checked");
+		expect(text()).not.toContain("No memories here cite");
+	});
+
+	it("says no memory is marked when the check failed", () => {
+		draw(browse, route, vi.fn(), {
+			data: null,
+			error: new Error("code graph unreachable"),
+			loadedAt: null,
+			loading: false,
+		});
+
+		expect(root.querySelector(".stale-summary")?.textContent).toMatch(
+			/no memory is\s+marked stale/,
+		);
+		expect(root.querySelectorAll("tbody tr")).toHaveLength(listed.length);
+	});
+
+	it("counts a stale memory with an unchecked ref as stale only", () => {
+		const [stale] = report.memories.filter((m) => m.status === "stale");
+		if (!stale) {
+			throw new Error("the fixture has no stale memory");
+		}
+		const mixed: StaleRefsReport = {
+			...report,
+			memories: [
+				{
+					...stale,
+					refs: [
+						...stale.refs,
+						{
+							symbol_ref: "x#a.py::f",
+							status: "unknown",
+							reason: "x is not indexed",
+						},
+					],
+				},
+			],
+		};
+		draw(browse, route, vi.fn(), landed(mixed));
+
+		const note = root.querySelector(".stale-summary")?.textContent ?? "";
+		expect(note).toMatch(/1 memory in any repo/);
+		expect(note).not.toContain("could not be checked");
+	});
+
+	it("links stale memories older than the capped browse list", () => {
+		// The list holds only the most recent memories; the filter would
+		// otherwise hide a stale one past the cap.
+		const recent = listed.filter((m) => m.slug !== moved.slug);
+		draw(
+			{ mode: "browse", memories: recent, inbox: [] },
+			{ ...route, stale: true },
+			vi.fn(),
+			landed(report),
+		);
+
+		const outside = root.querySelector(".stale-outside");
+		expect(outside?.textContent).toContain("1 stale memory is");
+		expect(outside?.querySelector("a")?.getAttribute("href")).toBe(
+			`#memory?slug=${moved.slug}&stale=1`,
+		);
+		expect(outside?.textContent).not.toContain(unchecked.title);
+	});
+
+	it("says the facets do not narrow the stale memories past the list", () => {
+		const recent = listed.filter((m) => m.slug !== moved.slug);
+		draw(
+			{ mode: "browse", memories: recent, inbox: [] },
+			{ ...route, facets: { ...DEFAULT_ROUTE.facets, language: "go" } },
+			vi.fn(),
+			landed(report),
+		);
+
+		expect(root.querySelector(".stale-outside")?.textContent).toContain(
+			"not narrowed by the facets above",
+		);
+	});
+
+	it("leaves out a stale memory the Kind select excludes", () => {
+		const recent = listed.filter((m) => m.slug !== moved.slug);
+		draw(
+			{ mode: "browse", memories: recent, inbox: [] },
+			{ ...route, kind: "lesson" },
+			vi.fn(),
+			landed(report),
+		);
+
+		expect(root.querySelector(".stale-outside")).toBeNull();
+	});
+
+	it("names the repo the report checked, not the repo filter", () => {
+		const agentKit = "https://github.com/mitodl/agent-kit";
+		draw(browse, route, vi.fn(), landed({ ...report, repo: agentKit }));
+		expect(root.querySelector(".stale-summary")?.textContent).toMatch(
+			/1 memory in mitodl\/agent-kit\s+cites/,
+		);
+
+		// A recall from inside one repo is checked across every repo, since its
+		// expansion reaches past the filter.
+		draw(
+			{ mode: "recall", memories: listed, pairs: [] },
+			{ ...route, repo: agentKit, q: "retries" },
+			vi.fn(),
+			landed(report),
+		);
+		expect(root.querySelector(".stale-summary")?.textContent).toMatch(
+			/1 memory in any repo\s+cites/,
+		);
+	});
+
+	it("keeps the last marks on a failed re-check, and says they are not current", () => {
+		const now = Date.now();
+		render(
+			memoryView(
+				browse,
+				{ ...route, stale: true },
+				vi.fn(),
+				{
+					data: report,
+					error: new Error("code graph unreachable"),
+					loadedAt: now - 5 * 60_000,
+					loading: false,
+				},
+				now,
+			),
+			root,
+		);
+
+		const warning = root.querySelector(".stale-refresh-failed");
+		expect(warning?.textContent).toMatch(/Could not re-check symbol refs/);
+		expect(warning?.textContent).toContain("5m ago");
+		expect(warning?.getAttribute("title")).toBe("code graph unreachable");
+		const rows = root.querySelectorAll("tbody tr");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.querySelector(".badge.stale-refs")).not.toBeNull();
+	});
+
+	it("says a failed re-check of a clean report is not current either", () => {
+		draw(browse, route, vi.fn(), {
+			data: { ...report, memories: [] },
+			error: new Error("code graph unreachable"),
+			loadedAt: 1,
+			loading: false,
+		});
+
+		expect(root.querySelector(".stale-refresh-failed")).not.toBeNull();
+	});
+
+	it("says superseded memories are unchecked when the list shows them", () => {
+		draw(browse, { ...route, superseded: true }, vi.fn(), landed(report));
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+
+		draw(
+			browse,
+			{ ...route, superseded: true },
+			vi.fn(),
+			landed({ ...report, memories: [] }),
+		);
+		expect(root.querySelector(".stale-summary")?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+
+		draw(browse, route, vi.fn(), landed(report));
+		expect(text()).not.toContain("Superseded memories are not checked");
+	});
+
+	it("qualifies an empty stale filter where superseded memories are shown", () => {
+		const clean = landed({ ...report, memories: [] });
+		// The inbox has its own `.empty`; this is the list's.
+		const emptyText = () =>
+			[...root.querySelectorAll("p.empty")].at(-1)?.textContent?.trim();
+		draw(browse, { ...route, stale: true, superseded: true }, vi.fn(), clean);
+		expect(emptyText()).toBe(
+			"No current memories here cite a symbol the code graph no longer has. Superseded memories are not checked.",
+		);
+
+		// A topic always includes superseded memories.
+		draw(
+			{
+				mode: "topic",
+				topic: {
+					slug: "tp-topic-mcp",
+					name: "mcp",
+					kind: "topic",
+					created_at: memory.created_at,
+				},
+				memories: [memory],
+				readAtLimit: false,
+			},
+			{ ...route, topic: "tp-topic-mcp", stale: true },
+			vi.fn(),
+			clean,
+		);
+		expect(emptyText()).toContain("Superseded memories are not checked");
+
+		draw(browse, { ...route, stale: true }, vi.fn(), clean);
+		expect(emptyText()).toBe(
+			"No memories here cite a symbol the code graph no longer has.",
+		);
+	});
+
+	it("draws no note when every checked ref resolves", () => {
+		draw(
+			browse,
+			route,
+			vi.fn(),
+			landed({
+				repo: null,
+				checked: 1,
+				counts: { live: 1, missing: 0, unknown: 0 },
+				memories: [],
+			}),
+		);
+
+		expect(root.querySelector(".stale-summary")).toBeNull();
+	});
+
+	it("marks each ref in the panel: missing with its candidate, unknown with its reason", () => {
+		const flagged = staleBySlug(report);
+		// `memory_list` rows carry no refs; the panel's `memory_get` does.
+		const withRefs = (m: Memory): Memory => ({
+			...m,
+			symbol_refs: flagged.get(m.slug)?.refs.map((ref) => ref.symbol_ref),
+		});
+		render(
+			memoryDetail(
+				{ memory: withRefs(moved), neighbors },
+				route,
+				flagged.get(moved.slug),
+			),
+			root,
+		);
+		expect(root.querySelector(".crumbs .badge.stale-refs")).not.toBeNull();
+		const missing = root.querySelector("li.ref-missing");
+		expect(missing?.textContent).toContain("lib/old_service.py::Service.run");
+		expect(missing?.textContent).toContain("Same name in the code graph");
+		// The live ref is the bare id.
+		expect(root.querySelectorAll("ul.symbols li")).toHaveLength(2);
+
+		render(
+			memoryDetail(
+				{ memory: withRefs(unchecked), neighbors },
+				route,
+				flagged.get(unchecked.slug),
+			),
+			root,
+		);
+		expect(root.querySelector(".crumbs .badge.stale-refs")).toBeNull();
+		const unknown = root.querySelector("li.ref-unknown");
+		expect(unknown?.querySelector(".badge.unchecked")).not.toBeNull();
+		expect(unknown?.textContent).toContain("is not indexed");
+		expect(root.querySelector("li.ref-missing")).toBeNull();
+	});
+});
+
 describe("memoryDetail", () => {
 	function panel(n: MemoryNeighbors = neighbors, m: Memory = memory) {
 		render(memoryDetail({ memory: m, neighbors: n }, route), root);
@@ -432,6 +792,26 @@ describe("memoryDetail", () => {
 		expect(root.querySelectorAll("section.edges").length).toBe(0);
 		expect(root.querySelectorAll("h3").length).toBe(0);
 		expect(text()).toContain("x-fastmcp-wrap-result");
+	});
+
+	it("marks a superseded memory's refs as unchecked", () => {
+		const refs = ["https://github.com/example/lib#lib/service.py::Service.run"];
+		panel(superseded, {
+			...memory,
+			slug: superseded.slug,
+			topics: [],
+			symbol_refs: refs,
+		});
+		const symbols = [...root.querySelectorAll("section.edges")].find(
+			(section) => section.querySelector("h3")?.textContent === "Symbols",
+		);
+		expect(symbols?.querySelector(".badge.unchecked")).not.toBeNull();
+		expect(symbols?.textContent).toContain(
+			"Superseded memories are not checked",
+		);
+
+		panel(neighbors, { ...memory, symbol_refs: refs });
+		expect(text()).not.toContain("Superseded memories are not checked");
 	});
 
 	it("says what replaced a superseded memory", () => {

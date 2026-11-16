@@ -13,6 +13,7 @@ import {
 	memoryList,
 	memoryNeighbors,
 	memorySearch,
+	memoryStaleRefs,
 	recall,
 	TOPIC_READ_LIMIT,
 	taskGet,
@@ -30,6 +31,7 @@ import { detailPanel, shell } from "./shell.js";
 import type {
 	InterfaceBinding,
 	RepoDependencies,
+	StaleRefsReport,
 	TaskDetail,
 	TaskRow,
 	WorkflowProjectSummary,
@@ -65,6 +67,7 @@ import {
 	memoryDetail,
 	memoryMissing,
 	memoryView,
+	staleBySlug,
 } from "./views/memory.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import {
@@ -126,6 +129,17 @@ export class App {
 	});
 	private readonly waves = new KeyedRead<Waves>(() => this.draw());
 	private readonly memoryPage = new KeyedRead<MemoryPage>(() => this.draw());
+	/**
+	 * `memory_stale_refs` for the memory view's scope, drawn over whichever
+	 * list it shows. Its own read so a failure here never blanks the list, and
+	 * no interval, as the Bridge has none: it reads the code graph once per
+	 * file the refs name, and refs go stale on a reindex, not every 30
+	 * seconds. Focus and the memory view's Refresh still read.
+	 */
+	private readonly staleRefs = new KeyedRead<StaleRefsReport>(
+		() => this.draw(),
+		{ intervalMs: 0 },
+	);
 	private readonly graph = new KeyedRead<GraphData>(() => this.draw());
 	private readonly search = new KeyedRead<SearchResults>(() => this.draw());
 	/**
@@ -248,6 +262,7 @@ export class App {
 		this.timeline.stop();
 		this.waves.stop();
 		this.memoryPage.stop();
+		this.staleRefs.stop();
 		this.graph.stop();
 		this.search.stop();
 		this.canvas.release();
@@ -364,6 +379,15 @@ export class App {
 		this.memoryPage.sync(memoryScope && JSON.stringify(memoryScope), () =>
 			readMemoryPage(memoryScope as MemoryScope),
 		);
+		// A topic spans repos (see `readMemoryPage`), and so does `recall`'s
+		// graph expansion from a repo-scoped query, so their check does too.
+		// Only plain search and the browse list stay inside the repo filter.
+		const spansRepos = route.topic !== null || (route.q !== "" && !route.plain);
+		const staleRepo =
+			route.view === "memory" ? (spansRepos ? "" : route.repo) : null;
+		this.staleRefs.sync(staleRepo, () =>
+			memoryStaleRefs({ repo: staleRepo as string }),
+		);
 
 		// Every argument either read takes, as the board's scope is.
 		const graphScope =
@@ -431,7 +455,14 @@ export class App {
 			this.memoryPage,
 		] as KeyedRead<unknown>[]) {
 			if (read.snapshot) {
-				return { snapshot: read.snapshot, refresh: () => read.refresh() };
+				const refresh =
+					read === this.memoryPage
+						? () => {
+								read.refresh();
+								this.staleRefs.refresh();
+							}
+						: () => read.refresh();
+				return { snapshot: read.snapshot, refresh };
 			}
 		}
 		// The project list's own reads: the list, and the tasks the assignee
@@ -606,8 +637,11 @@ export class App {
 				return waiting;
 			}
 			// `readMemoryPage` always resolves to an object.
-			return memoryView(snapshot.data as MemoryPage, this.route, (patch) =>
-				this.navigate(patch),
+			return memoryView(
+				snapshot.data as MemoryPage,
+				this.route,
+				(patch) => this.navigate(patch),
+				this.staleRefs.snapshot,
 			);
 		}
 
@@ -797,7 +831,11 @@ export class App {
 		return detailPanel(
 			this.route,
 			panel.memory.title,
-			memoryDetail({ ...panel, memory: panel.memory }, this.route),
+			memoryDetail(
+				{ ...panel, memory: panel.memory },
+				this.route,
+				staleBySlug(this.staleRefs.snapshot?.data ?? null).get(slug),
+			),
 			status,
 		);
 	}

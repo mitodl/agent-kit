@@ -8,6 +8,9 @@ import memoryGetFixture from "../fixtures/memory_get.json" with {
 import memoryListFixture from "../fixtures/memory_list.json" with {
 	type: "json",
 };
+import memoryStaleRefsFixture from "../fixtures/memory_stale_refs.json" with {
+	type: "json",
+};
 import recallFixture from "../fixtures/recall.json" with { type: "json" };
 import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 	type: "json",
@@ -36,6 +39,7 @@ import {
 	type MemoryContradiction,
 	type ProjectStatus,
 	type RecallResult,
+	type StaleRefsReport,
 	type TaskDetail,
 	type TaskRow,
 } from "./types.js";
@@ -57,7 +61,11 @@ import {
  */
 
 /** The tools unwrapped on the server: each returns a bare `dict`. */
-const UNWRAPPED = new Set(["recall", "code_repo_dependencies"]);
+const UNWRAPPED = new Set([
+	"recall",
+	"memory_stale_refs",
+	"code_repo_dependencies",
+]);
 
 /** A `tools/list` that agrees with every recorded flag. */
 function agreeing(): {
@@ -120,6 +128,7 @@ describe("the recorded wrap flags", () => {
 			"memory_get",
 			"memory_list",
 			"memory_search",
+			"memory_stale_refs",
 			"recall",
 			"task_get",
 			"task_list",
@@ -279,6 +288,26 @@ describe("the types match what the server actually returns", () => {
 		const [pair] = pairs;
 		expect(pair?.a.slug).not.toBe(pair?.b.slug);
 		expect(pair?.edge.confidence).toBe("asserted");
+	});
+
+	it("memory_stale_refs tells a missing ref from one it could not check", () => {
+		const report = unwrap<StaleRefsReport>(
+			"memory_stale_refs",
+			memoryStaleRefsFixture,
+		);
+
+		// The seed cites one moved symbol and one repo nobody indexed. Both
+		// memories are listed, and only the moved one is `stale`: the memory
+		// view marks on that distinction.
+		expect(report.counts).toEqual({ live: 1, missing: 1, unknown: 1 });
+		const byStatus = Object.fromEntries(
+			report.memories.map((memory) => [memory.status, memory]),
+		);
+		const missing = byStatus.stale?.refs.find((r) => r.status === "missing");
+		expect(missing?.candidates?.length).toBe(1);
+		const [unchecked] = byStatus.unknown?.refs ?? [];
+		expect(unchecked?.status).toBe("unknown");
+		expect(unchecked?.reason).toContain("not indexed");
 	});
 
 	it("recall reports contradictions as unordered pairs", () => {

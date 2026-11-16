@@ -1270,6 +1270,33 @@ li.pair {
 	font-weight: 700;
 }
 
+/* Stale is a warning, not a contradiction: the memory may still be true of a
+   renamed symbol. Unchecked is dashed and muted, like an inferred edge, so it
+   never reads as a weaker form of stale. */
+.stale-summary {
+	color: var(--muted);
+}
+
+.badge.stale-refs {
+	color: var(--warn);
+	background: var(--warn-soft);
+	border-color: transparent;
+}
+
+.badge.unchecked {
+	color: var(--muted);
+	border-style: dashed;
+}
+
+ul.symbols code {
+	overflow-wrap: anywhere;
+}
+
+ul.symbols p.muted {
+	margin: 0.15rem 0 0;
+	font-size: var(--step--1);
+}
+
 .superseded-note {
 	border-left: 3px solid var(--warn);
 	padding-left: 0.75rem;
@@ -1433,4 +1460,8 @@ ul.bridge-contracts li {
    with the other `wv-labels` rules. */
 .wv-bar.dim {
 	opacity: 0.3;
+}
+
+.stale-summary.stale-refresh-failed {
+	color: var(--warn);
 }
