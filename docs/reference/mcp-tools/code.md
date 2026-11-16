@@ -47,13 +47,15 @@ Find symbol definitions whose name or qualified name matches ``name``.
 Returns matching symbols (function, method, class, module, …) with their
 ``symbol_id``, file, line range, signature, docstring, and ``repo`` of
 origin. Feed a returned ``symbol_id`` to code_find_references / code_callers
-/ code_impact.
+/ code_impact. A name lookup returns at most 50 rows per repo; to check
+whether one known id still exists, pass ``symbol_id`` instead.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `name` | str | **required** | Bare name (``run``) or qualified name (``Service.run``). |
+| `name` | str? | `null` | Bare name (``run``) or qualified name (``Service.run``). Pass this or<br>``symbol_id``, not both. |
 | `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all. ``repo=""`` does **not** force a fan-out — it is<br>falsy, so it behaves exactly like omitting the argument. |
 | `branch` | str? | `null` | Git branch whose indexed view to query (e.g. another agent's in-flight<br>branch). Defaults to the checkout's branch when querying the current<br>repo; when ``repo`` names a different repo and ``branch`` is omitted,<br>reads that store's default (main) view. |
+| `symbol_id` | str? | `null` | One exact id (``<repo>#<path>::<QualifiedName>``) to look up instead<br>of a name. Returns that symbol alone, or ``[]`` when the id's repo has<br>no index or the index has no such symbol. Routed by the id's repo, so<br>``repo`` is ignored; ``branch`` still selects the view. |
 
 ## `code_find_references`
 

@@ -3,6 +3,8 @@
 import asyncio
 import inspect
 
+import pytest
+
 from .conftest import requires_stack
 
 
@@ -47,6 +49,8 @@ def test_reindex_then_query_tools(sample_repo, monkeypatch):
     # is exactly what the id-routed tools consume (no `slug` on symbol output).
     helper_id = helper_def[0]["symbol_id"]
     assert "slug" not in helper_def[0]
+    assert _fn(srv.code_find_definition)(symbol_id=helper_id) == [helper_def[0]]
+    assert _fn(srv.code_find_definition)(symbol_id=f"{helper_id}_gone") == []
     callers = _fn(srv.code_callers)(helper_id)
     assert "Service.run" in {c["qualified_name"] for c in callers}
     assert all("symbol_id" in c and "slug" not in c for c in callers)
@@ -83,6 +87,22 @@ def test_tools_return_empty_without_store(monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "cfg", cfg_mod.load())
     srv._clients.clear()
     assert _fn(srv.code_find_definition)("anything") == []
+    assert (
+        _fn(srv.code_find_definition)(
+            symbol_id="https://github.com/test/never-indexed#a.py::f"
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{}, {"name": "run", "symbol_id": "https://github.com/x/y#a.py::run"}]
+)
+def test_find_definition_takes_exactly_one_of_name_or_symbol_id(kwargs):
+    from witan_code import server as srv
+
+    with pytest.raises(ValueError, match="name or symbol_id"):
+        _fn(srv.code_find_definition)(**kwargs)
 
 
 # ── Store/bridge introspection tools ──────────────────────────────────────────

@@ -1,9 +1,9 @@
 """``memory_stale_refs``: memories whose symbol_refs no longer resolve.
 
 witan-code is not installed in this package's test env, so a stand-in code
-server answers ``code_indexed_repos``, ``code_symbols_in_file`` and
-``code_find_definition``. The last two are ``async`` like the real ones, which
-is what caught ``recall(memory=...)``'s symbols storing an un-awaited coroutine
+server answers ``code_indexed_repos`` and ``code_find_definition``, by name or
+by exact ``symbol_id``. The latter is ``async`` like the real one, which is
+what caught ``recall(memory=...)``'s symbols storing an un-awaited coroutine
 as the definition.
 """
 
@@ -32,19 +32,20 @@ def _fake_code(symbols: set[str], indexed: dict[str, int | None], name_cap: int 
         ``limit 50``.
     """
 
-    async def code_find_definition(name, repo=None, branch=None, ctx=None):
+    async def code_find_definition(
+        name=None, repo=None, branch=None, symbol_id=None, ctx=None
+    ):
+        if symbol_id is not None:
+            return [
+                {"symbol_id": s, "repo": s.split("#", 1)[0]}
+                for s in symbols
+                if s == symbol_id
+            ]
         return [
             {"symbol_id": s, "repo": s.split("#", 1)[0]}
             for s in sorted(symbols)
             if s.startswith(f"{repo}#") and s.rsplit("::", 1)[1] == name
         ][:name_cap]
-
-    async def code_symbols_in_file(path, repo=None, ctx=None):
-        return [
-            {"symbol_id": s}
-            for s in sorted(symbols)
-            if s.startswith(f"{repo}#{path}::")
-        ]
 
     def code_indexed_repos():
         return [
@@ -55,7 +56,6 @@ def _fake_code(symbols: set[str], indexed: dict[str, int | None], name_cap: int 
     return types.SimpleNamespace(
         code_find_definition=code_find_definition,
         code_indexed_repos=code_indexed_repos,
-        code_symbols_in_file=code_symbols_in_file,
     )
 
 
@@ -105,7 +105,7 @@ def test_deleted_symbol_is_stale_and_live_one_is_not_reported(server, code):
 @requires_omnigraph
 def test_a_live_symbol_whose_name_repeats_past_the_lookup_cap_is_live(server, code):
     # Every file has a `<module>` symbol, and a name lookup returns only the
-    # first 50 of them, so liveness has to come from the ref's own file.
+    # first 50 of them, so liveness has to come from the exact-id lookup.
     modules = {f"{INDEXED}#pkg/m{i:02}.py::<module>" for i in range(3)}
     target = f"{INDEXED}#pkg/m02.py::<module>"
     code(_fake_code(modules, {INDEXED: 3}, name_cap=1))
@@ -118,21 +118,48 @@ def test_a_live_symbol_whose_name_repeats_past_the_lookup_cap_is_live(server, co
 
 
 @requires_omnigraph
-def test_a_symbol_the_file_read_misses_is_live_when_the_name_lookup_finds_it(
-    server, code
-):
-    # witan-code's file read resolves a relative path against the cwd when it
-    # exists there, so it can read the wrong file; the id lookup is the backstop.
-    fake = _fake_code({LIVE}, {INDEXED: 10})
+def test_liveness_needs_only_the_exact_id_lookup(server, code):
+    # The case #630 could not cover: the name lookup's cap hides the symbol
+    # (name_cap=0) and a file read would have hit a same-named file in the cwd.
+    # Neither is consulted for a live symbol, so neither can hide it.
+    fake = _fake_code({LIVE}, {INDEXED: 10}, name_cap=0)
 
-    async def wrong_file(path, repo=None, ctx=None):
-        return []
+    def no_file_read(*args, **kwargs):
+        raise AssertionError("liveness must not read a file by path")
 
-    fake.code_symbols_in_file = wrong_file
+    fake.code_symbols_in_file = no_file_read
     code(fake)
-    slug = _lesson(server, "cwd collision", [LIVE])
+    slug = _lesson(server, "cwd collision past the cap", [LIVE])
 
-    assert slug not in _by_slug(server.memory_stale_refs(repo=INDEXED))
+    out = server.memory_stale_refs(repo=INDEXED)
+
+    assert slug not in _by_slug(out)
+    assert out["counts"]["live"] == 1
+
+
+@requires_omnigraph
+def test_a_live_symbol_the_exact_lookup_misses_mid_reindex_is_live(server, code):
+    # A reindex deletes a file's rows and loads them back as separate writes, so
+    # an exact lookup between the two misses while the name lookup after it
+    # returns the reloaded id. That id is the ref's own, so the ref is live.
+    fake = _fake_code({LIVE}, {INDEXED: 10})
+    by_name = fake.code_find_definition
+
+    async def code_find_definition(
+        name=None, repo=None, branch=None, symbol_id=None, ctx=None
+    ):
+        if symbol_id is not None:
+            return []
+        return await by_name(name, repo)
+
+    fake.code_find_definition = code_find_definition
+    code(fake)
+    slug = _lesson(server, "mid-reindex", [LIVE])
+
+    out = server.memory_stale_refs(repo=INDEXED)
+
+    assert slug not in _by_slug(out)
+    assert out["counts"]["live"] == 1
 
 
 @requires_omnigraph
@@ -278,6 +305,18 @@ def test_recall_memory_symbols_await_an_async_definition_lookup(server, code):
     (symbol,) = server.recall(memory=slug, hops=0)["memory"]["symbols"]
 
     assert symbol["definition"] == [{"symbol_id": LIVE, "repo": INDEXED}]
+
+
+@requires_omnigraph
+def test_recall_memory_symbols_find_a_name_that_repeats_past_the_cap(server, code):
+    modules = {f"{INDEXED}#pkg/m{i:02}.py::<module>" for i in range(3)}
+    target = f"{INDEXED}#pkg/m02.py::<module>"
+    code(_fake_code(modules, {INDEXED: 3}, name_cap=1))
+    slug = _lesson(server, "module", [target])
+
+    (symbol,) = server.recall(memory=slug, hops=0)["memory"]["symbols"]
+
+    assert symbol["definition"] == [{"symbol_id": target, "repo": INDEXED}]
 
 
 @requires_omnigraph
