@@ -15,6 +15,16 @@ beside the running server and needs neither the unlock Lease nor the pod
 check. It never unlocks and never applies. The entrypoint's `Cluster` picks
 the 0.13 or 0.14 argument shape.
 
+A schema change refused only because graphs in
+OMNIGRAPH_BRANCH_DROP_ALLOWLIST have branch views is cleared here: the views
+are deleted through the serving pod at OMNIGRAPH_VIEW_DROP_SERVER_URL, as
+OMNIGRAPH_VIEW_DROP_ACTOR, and the plan is made again. Those are ordinary
+served writes, so the old pod keeps serving through a drop of any size and
+the boot that follows only finds views written since. A pod that does not
+answer (it is down) leaves every view to the boot. The same refusal on a
+graph that is not allow-listed still fails the gate (see the entrypoint's
+``views_to_drop``).
+
 The entrypoint still runs the same check on every boot. The gate only moves
 the first failure earlier: the `cluster.yaml` ConfigMap is updated before this
 Job runs and a failed Job does not roll it back.
@@ -32,19 +42,65 @@ from pathlib import Path
 from omnigraph_server_entrypoint import (
     DEFAULT_CLUSTER_DIR,
     BootRefused,
+    Cluster,
     NoPeers,
+    ServedGraphs,
+    ServerUnavailable,
+    Termination,
+    blocked_graphs,
+    branch_drop_allowlist,
     checked_plan,
+    cluster_layout,
+    drop_branch_views,
     log,
+    view_drop_token,
+    views_to_drop,
 )
+
+
+def drop_served_views(
+    cluster: Cluster, config_dir: Path, env: dict[str, str], blocked: list[str]
+) -> list[str]:
+    """Delete ``blocked`` graphs' views through the serving pod, then re-plan.
+
+    :returns: the graphs still blocked by views, written since they were
+        listed or left because the pod did not answer. The boot drops those.
+    :raises BootRefused: on a plan refusal the drop uncovered, or a blocked
+        graph that is not allow-listed and has branches.
+    """
+    served = ServedGraphs(env["OMNIGRAPH_VIEW_DROP_SERVER_URL"], view_drop_token(env))
+    droppable = branch_drop_allowlist(env, cluster_layout(config_dir)[1])
+    lease = NoPeers(may_unlock=False)
+    try:
+        views = views_to_drop(served, blocked, droppable)
+        # A Job pod's SIGTERM is not watched: a stopped gate fails the deploy.
+        drop_branch_views(served, views, Termination(0), lease)
+        blocked = blocked_graphs(cluster, config_dir, env)
+        if not blocked:
+            return []
+        views = views_to_drop(served, blocked, droppable)
+    except ServerUnavailable as unavailable:
+        log(f"cannot drop branch views through {served.base_url}: {unavailable}")
+        return blocked
+    for graph, branches in views.items():
+        log(f"{graph} has {len(branches)} branch views written during the drop")
+    return blocked
 
 
 def main(env: dict[str, str]) -> int:
     config_dir = Path(env.get("OMNIGRAPH_CLUSTER_DIR", DEFAULT_CLUSTER_DIR))
     try:
-        checked_plan(config_dir, env, NoPeers(may_unlock=False))
+        cluster, blocked = checked_plan(config_dir, env, NoPeers(may_unlock=False))
+        if blocked:
+            blocked = drop_served_views(cluster, config_dir, env, blocked)
     except BootRefused as refusal:
         print(f"omnigraph-server: plan refused: {refusal}", file=sys.stderr)
         return 1
+    if blocked:
+        log(
+            f"{', '.join(blocked)} still have branch views blocking their "
+            "schema change; the next boot drops them"
+        )
     log(f"the plan for {config_dir} can be applied")
     return 0
 

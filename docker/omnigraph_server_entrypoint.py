@@ -45,8 +45,18 @@ BOOT SEQUENCE
     wait until no other live pod matches the selector  (else exit 1)
     render policy group membership from the token map
     plan    -> exit 1 on an outstanding deployment, on a graph removal that
-               is not allow-listed, or on any other plan error
+               is not allow-listed, or on any other plan error, except a
+               schema change refused only because graphs have non-main
+               branches
     lock    -> serve / deployment lock: force-unlock; anything else: exit 1
+    if that schema change is pending:
+        serve the root on loopback, list the blocked graphs' branches
+            -> exit 1 if a graph not allow-listed has any
+        per non-main branch: delete it through the loopback server
+                             (SIGTERM: stop, exit 1; the next boot carries on)
+        stop the loopback server, force-unlock a serve lock it left
+        plan again -> exit 1 on any plan error
+        SIGTERM by now (after the drop, or during this plan): exit 1
     apply
     lock    -> force-unlock the deployment lock apply left
     exec omnigraph-server
@@ -72,6 +82,32 @@ with code 2 (upstream #1221). Nothing here handles that specially: the server
 is exec'd, so the code is the container's, and the restart boots through the
 Lease and the pod check above like any other.
 
+BRANCH VIEWS AND SCHEMA CHANGES
+
+omnigraph 0.15 refuses a schema change on a graph that has any branch but
+`main`. The code graphs always carry branch views, one per writer and git
+branch (mcp/servers/witan-code/docs/BRANCH_INDEXING.md), so every change to
+their schema would stall the deploy. Those views are caches the next branch
+index rebuilds, so they are deleted before the apply, on the graphs
+OMNIGRAPH_BRANCH_DROP_ALLOWLIST names and only when the plan is refused for
+that reason alone. The council graph is never listed: its branches may hold
+what people wrote.
+
+The 0.15 CLI reads and deletes a graph's branches only on a local root or
+through a server: on an inline `s3://` root `branch list`, `branch delete` and
+`schema plan` all refuse with "inline access supports local storage only"
+(Production, 2026-11-16), and it sends a token only over HTTPS. So the views
+go through the HTTP API as OMNIGRAPH_VIEW_DROP_ACTOR, the actor the code-graph
+policies grant `branch_delete` (witan-ci, the stale-view reaper's). The
+pre-deploy gate deletes them through the serving pod, so a large drop (1006
+views took 25 minutes in Production) happens while the old pod still serves.
+The boot then finds only views written since the gate ran, and deletes them
+through an `omnigraph-server` it runs on loopback against the root, with no
+other server serving. Nothing checks the migration itself before the views
+go, because `schema plan` cannot reach an S3 root either: a refusal the
+branch refusal hid shows up in the plan after the drop, in the gate while the
+old pod still serves.
+
 Outside Kubernetes (a local `docker run`) there is no API to ask, so the Lease
 and the pod check are skipped. Nothing then shows that a lock's owner has
 exited, so the entrypoint unlocks only when OMNIGRAPH_UNLOCK_WITHOUT_PEERS=1
@@ -81,11 +117,14 @@ a `docker run` pointed at a served root would unlock the live server.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import http.client
 import json
 import os
 import secrets
+import signal
+import socket
 import ssl
 import subprocess
 import sys
@@ -94,9 +133,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, NoReturn
@@ -135,6 +175,42 @@ KUBERNETES_TIMEOUT_SECONDS = 5
 EXITED_POD_PHASES = frozenset({"Failed", "Succeeded"})
 
 OUTSTANDING_DEPLOYMENT = "cluster_deployment_outstanding"
+
+# How 0.15's `cluster plan` reports a schema change refused because the graph
+# has branches besides main. The diagnostic names no graph and lists only the
+# first refused graph's branches, while every graph with a schema change is
+# marked blocked with this reason, so the branches are read per graph.
+SCHEMA_PREFLIGHT_FAILED = "schema_preflight_failed"
+# The code is shared by every schema preflight refusal, and the message is the
+# only thing that says which one this is.
+NON_MAIN_BRANCHES_MESSAGE = "schema apply requires a graph with only main"
+MAIN_BRANCH = "main"
+# The prefix of every code-graph id: witan-code's `graph_id` and the
+# ol-infrastructure stack's `code_graph_id` derive them byte for byte the same
+# way (witan_code/config.py CODE_GRAPH_PREFIX), the bridge included.
+CODE_GRAPH_PREFIX = "code-"
+# One branch delete writes one graph's branch manifest; Production's took 1 to
+# 3 seconds each on S3.
+BRANCH_DELETE_TIMEOUT_SECONDS = 120
+# The loopback server opens every graph before it serves; Production's 29
+# took under a second.
+LOOPBACK_START_SECONDS = 60
+# The loopback server's own drain on SIGTERM (OMNIGRAPH_SHUTDOWN_GRACE_SECONDS).
+# Nothing is in flight by the time it is stopped.
+LOOPBACK_SHUTDOWN_GRACE_SECONDS = 5
+
+# The server pod's terminationGracePeriodSeconds, which the kubelet's SIGKILL
+# follows its SIGTERM by during the boot too (ol-infrastructure
+# applications/omnigraph/data_tier.py SERVER_TERMINATION_GRACE_SECONDS).
+DEFAULT_TERMINATION_GRACE_SECONDS = 125
+# The part of that grace the SIGTERM cleanup leaves unspent: the in-flight
+# Lease renewal (up to three Kubernetes calls of KUBERNETES_TIMEOUT_SECONDS)
+# and the exit.
+SIGTERM_CLEANUP_MARGIN_SECONDS = 20
+# How long the loopback server stopped by SIGTERM gets to exit before SIGKILL.
+# It comes out of the cleanup budget, after the in-flight delete. A server
+# killed anyway leaves a `serve` lock, which the next boot takes over.
+SIGTERM_STOP_SECONDS = 10
 
 # `omnigraph version --json` reports this for 0.14's `--target` addressing.
 # Upstream: clients selecting a CLI must require the exact protocol, because
@@ -578,6 +654,36 @@ class CommandTimedOut(Exception):
     """An omnigraph command outlived its timeout and was stopped."""
 
 
+class Termination:
+    """Whether SIGTERM has arrived, and what is left of the cleanup after it.
+
+    The kubelet's SIGKILL follows its SIGTERM by the pod's termination grace,
+    so from SIGTERM on, the in-flight branch delete and stopping the loopback
+    server share one budget that ends inside that grace.
+
+    :param cleanup_seconds: the budget, counted from SIGTERM
+        (``sigterm_cleanup_seconds``).
+    """
+
+    def __init__(self, cleanup_seconds: float) -> None:
+        self.cleanup_seconds = cleanup_seconds
+        self._deadline: float | None = None
+
+    def note(self) -> None:
+        """Record SIGTERM. A second one does not move the deadline."""
+        if self._deadline is None:
+            self._deadline = time.monotonic() + self.cleanup_seconds
+
+    def is_set(self) -> bool:
+        return self._deadline is not None
+
+    def remaining(self) -> float:
+        """Seconds left of the budget, unbounded before SIGTERM."""
+        if self._deadline is None:
+            return float("inf")
+        return max(0.0, self._deadline - time.monotonic())
+
+
 def run_omnigraph(
     args: list[str],
     lease: UnlockLease | NoPeers,
@@ -622,13 +728,18 @@ def run_omnigraph(
                 else:
                     return CommandResult(child.returncode, stdout)
         except BaseException:
-            child.terminate()
-            try:
-                child.wait(timeout=CHILD_STOP_SECONDS)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+            stop_child(child, CHILD_STOP_SECONDS)
             raise
+
+
+def stop_child(child: subprocess.Popen, stop_seconds: float) -> None:
+    """SIGTERM ``child``, then SIGKILL it if it outlives ``stop_seconds``."""
+    child.terminate()
+    try:
+        child.wait(timeout=stop_seconds)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
 
 
 @functools.cache
@@ -808,6 +919,156 @@ class Cluster:
         return [command, *scope, "--graph", graph, *args]
 
 
+# ── Branch views over HTTP ───────────────────────────────────────────────────
+
+
+class ServerUnavailable(BootRefused):
+    """The server answering for the branch views could not be reached."""
+
+
+@functools.cache
+def http_contract() -> str:
+    """The HTTP API contract this image's omnigraph speaks.
+
+    The server refuses a request without exactly this `Omnigraph-Http-Api`
+    header value, and `version --json` reports it from 0.14 on.
+    """
+    result = subprocess.run(
+        ["omnigraph", "version", "--json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)["http_contract"]
+
+
+def view_drop_token(env: dict[str, str]) -> str:
+    """OMNIGRAPH_VIEW_DROP_ACTOR's bearer token, from the server's token map."""
+    tokens_file = Path(env["OMNIGRAPH_SERVER_BEARER_TOKENS_FILE"])
+    return json.loads(tokens_file.read_text())[env["OMNIGRAPH_VIEW_DROP_ACTOR"]]
+
+
+class ServedGraphs:
+    """A server's branch API: list and delete one graph's branches.
+
+    :param base_url: the server's root URL, e.g. ``http://127.0.0.1:8080``.
+    """
+
+    def __init__(self, base_url: str, token: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._headers = {
+            "Authorization": f"Bearer {token}",
+            "Omnigraph-Http-Api": http_contract(),
+        }
+
+    def _call(
+        self, method: str, path: str, timeout: float, *, missing_ok: bool = False
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        request = urllib.request.Request(url, method=method, headers=self._headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            if missing_ok and exc.code == HTTPStatus.NOT_FOUND:
+                return {}
+            msg = f"{method} {url}: HTTP {exc.code}: {exc.read()[:300]!r}"
+            if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+                raise ServerUnavailable(msg) from exc
+            raise BootRefused(msg) from exc
+        except OSError as exc:
+            msg = f"{method} {url}: {exc}"
+            raise ServerUnavailable(msg) from exc
+
+    def serving(self) -> bool:
+        try:
+            with urllib.request.urlopen(f"{self.base_url}/healthz", timeout=1) as resp:
+                return resp.status == HTTPStatus.OK
+        except OSError:
+            return False
+
+    def branches(self, graph: str) -> list[str]:
+        """``graph``'s branches other than main."""
+        path = f"/graphs/{urllib.parse.quote(graph, safe='')}/branches"
+        listed = self._call("GET", path, LOCK_COMMAND_TIMEOUT_SECONDS)["branches"]
+        return sorted(branch for branch in listed if branch != MAIN_BRANCH)
+
+    def delete(self, graph: str, branch: str, timeout: float) -> None:
+        """Delete one branch. One already gone (the reaper's) counts as deleted."""
+        path = (
+            f"/graphs/{urllib.parse.quote(graph, safe='')}"
+            f"/branches/{urllib.parse.quote(branch, safe='')}"
+        )
+        self._call("DELETE", path, timeout, missing_ok=True)
+
+
+@contextlib.contextmanager
+def loopback_server(
+    config_dir: Path,
+    env: dict[str, str],
+    lease: UnlockLease | NoPeers,
+    terminated: Termination,
+) -> Iterator[ServedGraphs]:
+    """Serve the root on loopback for its branch API, and stop it on exit.
+
+    An S3 root is served config-free by its URI, which is how the drop was
+    first run in Production. A local root is served through the config
+    directory, which serves the applied state whatever schema change
+    `cluster.yaml` has pending. The server takes the `serve` lock, and from
+    0.14 on releases it on a clean exit.
+
+    :raises BootRefused: if the server exits or does not serve within
+        LOOPBACK_START_SECONDS, or the Lease is lost or SIGTERM arrives while
+        it starts.
+    """
+    root = cluster_layout(config_dir)[0]
+    source = root if "://" in root else str(config_dir.absolute())
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    served = ServedGraphs(f"http://127.0.0.1:{port}", view_drop_token(env))
+    log(f"serving {source} on {served.base_url} to drop branch views")
+    child = subprocess.Popen(
+        [SERVER_BINARY, "--cluster", source, "--bind", f"127.0.0.1:{port}"],
+        env={
+            **os.environ,
+            **env,
+            "OMNIGRAPH_SHUTDOWN_GRACE_SECONDS": str(LOOPBACK_SHUTDOWN_GRACE_SECONDS),
+        },
+    )
+    try:
+        deadline = time.monotonic() + LOOPBACK_START_SECONDS
+        while not served.serving():
+            if child.poll() is not None:
+                msg = (
+                    f"the loopback omnigraph-server exited ({child.returncode}) "
+                    "before serving"
+                )
+                raise BootRefused(msg)
+            if lease.lost():
+                msg = "lost the unlock Lease while the loopback server started"
+                raise BootRefused(msg)
+            if terminated.is_set():
+                msg = "SIGTERM while the loopback server started"
+                raise BootRefused(msg)
+            if time.monotonic() >= deadline:
+                msg = (
+                    "the loopback omnigraph-server did not serve within "
+                    f"{LOOPBACK_START_SECONDS}s"
+                )
+                raise BootRefused(msg)
+            time.sleep(0.2)
+        yield served
+    finally:
+        stop_seconds = (
+            min(SIGTERM_STOP_SECONDS, terminated.remaining())
+            if terminated.is_set()
+            else CHILD_STOP_SECONDS
+        )
+        stop_child(child, stop_seconds)
+
+
+# ── Boot sequence ────────────────────────────────────────────────────────────
 # ── Boot sequence ────────────────────────────────────────────────────────────
 
 
@@ -842,7 +1103,12 @@ def render_policy_groups(config_dir: Path, tokens_file: str | None) -> bool:
     return True
 
 
-def check_plan(plan: dict[str, Any], removable_graphs: frozenset[str]) -> None:
+def check_plan(
+    plan: dict[str, Any],
+    removable_graphs: frozenset[str],
+    *,
+    views_pending: bool = False,
+) -> None:
     """Refuse a plan the apply must not act on.
 
     :param removable_graphs: graph ids the deployment has explicitly allowed
@@ -850,6 +1116,8 @@ def check_plan(plan: dict[str, Any], removable_graphs: frozenset[str]) -> None:
         declares a graph deletes its storage and history, and the generated
         `cluster.yaml` reaches this pod through a ConfigMap that a failed
         deploy does not roll back.
+    :param views_pending: the plan was refused only because of branch views
+        the boot will drop (``views_to_drop``), so its refusal is not one.
     :raises BootRefused: on an outstanding deployment, a graph removal that
         is not allow-listed, or any other plan error.
     """
@@ -876,9 +1144,207 @@ def check_plan(plan: dict[str, Any], removable_graphs: frozenset[str]) -> None:
         raise BootRefused(msg)
     if removed:
         log(f"this apply deletes allow-listed graphs: {removed}")
-    if not plan.get("ok"):
+    if not plan.get("ok") and not views_pending:
         msg = f"`cluster plan` refused the configuration: {json.dumps(diagnostics)}"
         raise BootRefused(msg)
+
+
+def graph_list(env: dict[str, str], name: str) -> frozenset[str]:
+    """The comma-separated graph ids in the environment variable ``name``."""
+    return frozenset(
+        graph.strip() for graph in env.get(name, "").split(",") if graph.strip()
+    )
+
+
+def branch_drop_allowlist(
+    env: dict[str, str], declared_graphs: list[str]
+) -> frozenset[str]:
+    """The graphs whose non-main branches a boot may delete.
+
+    :raises BootRefused: on an id that is not a code graph's, so that a
+        mistaken list cannot reach the council graph, or one `cluster.yaml`
+        does not declare. A typo would otherwise allow nothing, and the
+        schema change it was meant to let through would stall the deploy
+        again.
+    """
+    allowed = graph_list(env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST")
+    not_code = sorted(
+        graph for graph in allowed if not graph.startswith(CODE_GRAPH_PREFIX)
+    )
+    if not_code:
+        msg = (
+            f"OMNIGRAPH_BRANCH_DROP_ALLOWLIST names {not_code}, which are not "
+            f"code graphs ({CODE_GRAPH_PREFIX}* ids); only a code graph's "
+            "branches are derived views"
+        )
+        raise BootRefused(msg)
+    unknown = sorted(allowed - set(declared_graphs))
+    if unknown:
+        msg = (
+            f"OMNIGRAPH_BRANCH_DROP_ALLOWLIST names {unknown}, which "
+            "cluster.yaml does not declare"
+        )
+        raise BootRefused(msg)
+    return allowed
+
+
+def branch_blocked_graphs(plan: dict[str, Any]) -> list[str]:
+    """The graphs whose schema change the plan refused for non-main branches.
+
+    Empty unless that is the plan's only error. The plan marks every graph
+    with a schema change blocked, including ones with no branches, so the
+    branches themselves are read afterwards (``views_to_drop``).
+    """
+    errors = [d for d in plan.get("diagnostics") or [] if d.get("severity") == "error"]
+    if not errors or not all(
+        d.get("code") == SCHEMA_PREFLIGHT_FAILED
+        and d.get("message", "").startswith(NON_MAIN_BRANCHES_MESSAGE)
+        for d in errors
+    ):
+        return []
+    return sorted(
+        change["resource"].removeprefix("schema.")
+        for change in plan.get("changes") or []
+        if change["resource"].startswith("schema.")
+        and change.get("reason") == SCHEMA_PREFLIGHT_FAILED
+    )
+
+
+def views_to_drop(
+    served: ServedGraphs,
+    blocked: list[str],
+    droppable_graphs: frozenset[str],
+) -> dict[str, list[str]]:
+    """The branches to delete so the plan's schema changes can apply.
+
+    Only allow-listed graphs are listed: the view-drop actor may read nothing
+    else (the reaper's grants), and only their branches are views. The plan
+    marks every graph with a schema change blocked, so when none of these has
+    a branch the refusal is another graph's.
+
+    :param blocked: the graphs whose schema change the plan refused for
+        branches (``blocked_graphs``).
+    :param droppable_graphs: graphs whose non-main branches are derived
+        views (``OMNIGRAPH_BRANCH_DROP_ALLOWLIST``).
+    :returns: each blocked, allow-listed graph's non-main branches.
+    :raises BootRefused: when none of them has a branch. A graph that is not
+        allow-listed has them, and they may hold data nothing re-derives, so
+        they are left for a person to resolve.
+    """
+    branched = {
+        graph: branches
+        for graph in blocked
+        if graph in droppable_graphs and (branches := served.branches(graph))
+    }
+    if not branched:
+        kept = sorted(set(blocked) - droppable_graphs)
+        msg = (
+            "omnigraph applies a schema change only to a graph with no branch "
+            f"but main, and of {kept}, which are not in "
+            "OMNIGRAPH_BRANCH_DROP_ALLOWLIST, one has others. They may hold data "
+            "nothing re-derives; merge or delete them first (runbook)"
+        )
+        raise BootRefused(msg)
+    return branched
+
+
+def sigterm_cleanup_seconds(env: dict[str, str]) -> float:
+    """The cleanup budget after SIGTERM: the pod's grace less a margin.
+
+    :raises BootRefused: if the grace leaves no time to stop the loopback
+        server.
+    """
+    grace = float(
+        env.get(
+            "OMNIGRAPH_TERMINATION_GRACE_SECONDS", DEFAULT_TERMINATION_GRACE_SECONDS
+        )
+    )
+    budget = grace - SIGTERM_CLEANUP_MARGIN_SECONDS
+    if budget <= SIGTERM_STOP_SECONDS:
+        msg = (
+            f"OMNIGRAPH_TERMINATION_GRACE_SECONDS={grace:.0f} leaves no time to "
+            "stop the loopback server after SIGTERM; it has to exceed "
+            f"{SIGTERM_CLEANUP_MARGIN_SECONDS + SIGTERM_STOP_SECONDS}"
+        )
+        raise BootRefused(msg)
+    return budget
+
+
+@contextlib.contextmanager
+def sigterm_noted(
+    cleanup_seconds: float = DEFAULT_TERMINATION_GRACE_SECONDS
+    - SIGTERM_CLEANUP_MARGIN_SECONDS,
+) -> Iterator[Termination]:
+    """Record SIGTERM for as long as the boot runs.
+
+    As PID 1 with no handler the entrypoint ignores SIGTERM, and the kill
+    comes as SIGKILL at the end of the grace period. Only the branch-view
+    drop acts on it (``drop_branch_views``, ``converge``). It is installed
+    before the Lease is taken, so a SIGTERM that arrives while the boot is
+    still planning stops it before its first delete.
+
+    :param cleanup_seconds: the budget SIGTERM starts
+        (``sigterm_cleanup_seconds``).
+    """
+    terminated = Termination(cleanup_seconds)
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: terminated.note())
+    try:
+        yield terminated
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def refuse_on_sigterm(terminated: Termination, when: str) -> None:
+    """End the boot before the apply once SIGTERM has arrived.
+
+    The kubelet's SIGKILL could cut the apply off and leave an outstanding
+    deployment, which every later boot refuses.
+    """
+    if terminated.is_set():
+        msg = f"SIGTERM {when}; not applying, the next boot does"
+        raise BootRefused(msg)
+
+
+def drop_branch_views(
+    served: ServedGraphs,
+    views: dict[str, list[str]],
+    terminated: Termination,
+    lease: UnlockLease | NoPeers,
+) -> None:
+    """Delete every branch in ``views`` through ``served``, logging what went.
+
+    A failure stops with the deletes so far kept. The views are caches, so a
+    graph left with some of them loses nothing, and the next gate or boot
+    plans again and deletes the rest. SIGTERM (the startupProbe giving up on
+    a long drop, a rollout, a drain) or a lost Lease stops it the same way
+    once the in-flight delete returns.
+
+    :param terminated: records SIGTERM (``sigterm_noted``).
+    :raises BootRefused: on the first delete that fails, on SIGTERM, or once
+        the Lease is lost.
+    """
+    for graph, branches in views.items():
+        log(
+            f"dropping {len(branches)} branch views on {graph} so its "
+            f"schema change can apply: {', '.join(branches)}"
+        )
+        for dropped, branch in enumerate(branches):
+            try:
+                if terminated.is_set():
+                    msg = "SIGTERM while dropping branch views"
+                    raise BootRefused(msg)
+                if lease.lost():
+                    msg = "lost the unlock Lease while dropping branch views"
+                    raise BootRefused(msg)
+                timeout = min(BRANCH_DELETE_TIMEOUT_SECONDS, terminated.remaining())
+                served.delete(graph, branch, timeout)
+            except BootRefused:
+                log(
+                    f"dropped {dropped} of {len(branches)} branch views on "
+                    f"{graph}; the rest are dropped on the next attempt"
+                )
+                raise
+        log(f"dropped {len(branches)} branch views on {graph}")
 
 
 def release_previous_lock(cluster: Cluster) -> None:
@@ -930,13 +1396,14 @@ def release_apply_lock(cluster: Cluster) -> None:
 
 def checked_plan(
     config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
-) -> Cluster:
+) -> tuple[Cluster, list[str]]:
     """Plan the baked configuration against the root, refusing a bad plan.
 
     Reads the root and changes nothing in it, so the pre-deploy gate
     (omnigraph_plan_gate.py) runs exactly this beside a serving pod.
 
-    :returns: the cluster the plan was made for, ready to apply.
+    :returns: the cluster the plan was made for, ready to apply, and the
+        graphs whose branch views have to go first (``blocked_graphs``).
     :raises BootRefused: see ``check_plan`` and ``render_policy_groups``.
     """
     has_policy = render_policy_groups(
@@ -951,22 +1418,73 @@ def checked_plan(
             "policy installed, omnigraph refuses schema changes that name no actor"
         )
         raise BootRefused(msg)
-    removable = frozenset(
-        graph.strip()
-        for graph in env.get("OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST", "").split(",")
-        if graph.strip()
-    )
     cluster = Cluster(config_dir, actor, lease)
-    check_plan(cluster.plan(), removable)
-    return cluster
+    return cluster, blocked_graphs(cluster, config_dir, env)
+
+
+def blocked_graphs(
+    cluster: Cluster, config_dir: Path, env: dict[str, str]
+) -> list[str]:
+    """Plan, refuse a bad plan, and return the graphs whose branches block it.
+
+    A plan refused only for branches passes when an allow-listed graph is
+    among those blocked; ``views_to_drop`` then refuses any blocked graph that
+    is not allow-listed and has branches. Without one, the refusal stands.
+    """
+    removable = graph_list(env, "OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST")
+    droppable = branch_drop_allowlist(env, cluster_layout(config_dir)[1])
+    plan = cluster.plan()
+    blocked = branch_blocked_graphs(plan)
+    check_plan(plan, removable, views_pending=not droppable.isdisjoint(blocked))
+    return blocked
+
+
+def drop_views_on_loopback(
+    config_dir: Path,
+    env: dict[str, str],
+    lease: UnlockLease | NoPeers,
+    terminated: Termination,
+    blocked: list[str],
+) -> None:
+    """Delete the views ``blocked`` graphs still have, with nothing serving."""
+    droppable = branch_drop_allowlist(env, cluster_layout(config_dir)[1])
+    with loopback_server(config_dir, env, lease, terminated) as served:
+        views = views_to_drop(served, blocked, droppable)
+        drop_branch_views(served, views, terminated, lease)
 
 
 def converge(
-    config_dir: Path, env: dict[str, str], lease: UnlockLease | NoPeers
+    config_dir: Path,
+    env: dict[str, str],
+    lease: UnlockLease | NoPeers,
+    terminated: Termination | None = None,
 ) -> None:
-    """Bring the cluster root to the baked configuration, unlocked."""
-    cluster = checked_plan(config_dir, env, lease)
+    """Bring the cluster root to the baked configuration, unlocked.
+
+    :param terminated: records SIGTERM (``sigterm_noted``).
+    """
+    if terminated is None:
+        terminated = Termination(sigterm_cleanup_seconds(env))
+    cluster, blocked = checked_plan(config_dir, env, lease)
     release_previous_lock(cluster)
+    if blocked:
+        drop_views_on_loopback(config_dir, env, lease, terminated, blocked)
+        # A last delete that returned before SIGTERM was checked ends the drop
+        # without raising.
+        refuse_on_sigterm(terminated, "after dropping the branch views")
+        # A loopback server that had to be killed leaves its `serve` lock.
+        release_previous_lock(cluster)
+        # The first plan saw only the branch refusal, which can hide another
+        # one behind it, so the apply waits for a plan with no refusal at all.
+        remaining = blocked_graphs(cluster, config_dir, env)
+        if remaining:
+            msg = (
+                f"branches still block the schema change of {remaining} after "
+                "the drop, so a graph not in OMNIGRAPH_BRANCH_DROP_ALLOWLIST has "
+                "them; merge or delete them first (runbook)"
+            )
+            raise BootRefused(msg)
+        refuse_on_sigterm(terminated, "while planning after the drop")
     log(f"converging cluster catalog at {config_dir}")
     cluster.apply()
     release_apply_lock(cluster)
@@ -1017,9 +1535,10 @@ def main(argv: list[str]) -> NoReturn:
         log(f"--cluster is a storage URI ({cluster_arg}); skipping cluster bootstrap")
     else:
         try:
-            lease = take_over(env)
-            converge(Path(cluster_arg), env, lease)
-            lease.hand_over()
+            with sigterm_noted(sigterm_cleanup_seconds(env)) as terminated:
+                lease = take_over(env)
+                converge(Path(cluster_arg), env, lease, terminated)
+                lease.hand_over()
         except BootRefused as refusal:
             print(f"omnigraph-server: refusing to start: {refusal}", file=sys.stderr)
             sys.exit(1)
