@@ -158,7 +158,9 @@ _MUTATE_MANY_TOOL = "code_store_mutate_many"
 #
 # `code_store_open` is deliberately absent: opening can create the store, so it
 # is not a read.
-_READ_ONLY_STORE_TOOLS = frozenset({"code_store_read", "code_store_views"})
+_READ_ONLY_STORE_TOOLS = frozenset(
+    {"code_store_read", "code_store_views", "code_store_graphs"}
+)
 
 
 def _refuse_if_indeterminate(exc: BaseException, tool: str, url: str) -> None:

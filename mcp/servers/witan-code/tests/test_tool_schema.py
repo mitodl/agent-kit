@@ -71,7 +71,12 @@ def test_every_tool_carries_annotations():
         or (not hints.read_only_hint and hints.destructive_hint is None)
     )
     assert not unannotated, f"tools missing MCP annotations: {unannotated}"
-    assert all(annotations[n].read_only_hint for n in _READ_ONLY_STORE_TOOLS)
+    store_reads = {
+        tool.__name__
+        for tool, hints in code_server._STORE_TOOLS
+        if hints.read_only_hint
+    }
+    assert store_reads == _READ_ONLY_STORE_TOOLS
 
 
 def test_reindex_is_destructive_and_store_open_is_not():
