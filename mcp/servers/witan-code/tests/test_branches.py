@@ -913,3 +913,71 @@ def test_cross_repo_impact_reads_the_named_branchs_overlay(
 
     on_main = _fn(srv.code_cross_repo_impact)(retired, branch="main")
     assert {b["repo"] for b in on_main["cross_repo"]} == {PROVIDER}
+
+
+@requires_stack
+def test_callers_reads_the_named_branchs_view(removal_on_an_indexed_branch):
+    srv = removal_on_an_indexed_branch
+    helper = f"{REPO}#svc.py::helper"
+
+    def callers(**kwargs):
+        return {c["qualified_name"] for c in _fn(srv.code_callers)(helper, **kwargs)}
+
+    on_branch, on_main = callers(), callers(branch="main")
+    assert "fresh" in on_branch and "retired" not in on_branch
+    assert "retired" in on_main and "fresh" not in on_main
+
+
+@requires_stack
+def test_callers_reads_a_branch_from_a_server_with_no_checkout(
+    removal_on_an_indexed_branch, tmp_path, monkeypatch
+):
+    """A deployed server has no checkout to follow, so without `branch` it
+    reads main, and `branch` is the only way to reach a branch's edges."""
+    srv = removal_on_an_indexed_branch
+    elsewhere = tmp_path / "not-a-repo"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.delenv("WITAN_REPO")
+    srv._git_context.clear()
+    assert srv._cached_detect() is None
+    helper = f"{REPO}#svc.py::helper"
+
+    def callers(**kwargs):
+        return {c["qualified_name"] for c in _fn(srv.code_callers)(helper, **kwargs)}
+
+    default, on_branch = callers(), callers(branch="feature/x")
+    assert "retired" in default and "fresh" not in default
+    assert "fresh" in on_branch and "retired" not in on_branch
+
+
+@requires_stack
+def test_callers_keeps_the_branch_after_the_reindex_offer(
+    removal_on_an_indexed_branch, monkeypatch
+):
+    """The missing-store fallback indexes the checkout, then must still read
+    the view `branch` names, not the checkout's own (feature/x here)."""
+    from witan_code import indexer
+
+    from .test_elicit import _AcceptCtx
+
+    srv = removal_on_an_indexed_branch
+    indexed = []
+    real_client_for_symbol = srv._client_for_symbol
+    monkeypatch.setattr(
+        srv,
+        "_client_for_symbol",
+        lambda sid, branch=None: (
+            real_client_for_symbol(sid, branch) if indexed else None
+        ),
+    )
+    monkeypatch.setattr(
+        indexer, "index_path", lambda *args, **kwargs: indexed.append(True)
+    )
+    helper = f"{REPO}#svc.py::helper"
+
+    rows = _fn(srv.code_callers)(helper, branch="main", ctx=_AcceptCtx(True))
+
+    assert indexed
+    names = {c["qualified_name"] for c in rows}
+    assert "retired" in names and "fresh" not in names

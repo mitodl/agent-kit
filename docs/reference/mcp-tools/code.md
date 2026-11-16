@@ -20,6 +20,7 @@ call graph. For calls plus other references use code_find_references.
 | --- | --- | --- | --- |
 | `symbol_id` | str | **required** | The symbol to start from, as returned in the ``symbol_id`` field of<br>code_find_definition or code_search_symbol. Form:<br>``<repo>#<path/to/file.py>::<QualifiedName>``. |
 | `direction` | `callers` \| `callees` | `'callers'` | ``callers`` (default) returns the symbols that call ``symbol_id``;<br>``callees`` returns the symbols ``symbol_id`` calls. The indexer<br>resolves a call only to a symbol defined in the same file, so a call<br>into another module (in this repo or a library) is not listed. |
+| `branch` | str? | `null` | Git branch (or a view name from code_indexed_branches) whose view of<br>``symbol_id``'s repo to read, as for code_find_definition. A deployed<br>server has no checkout, so this is how a remote caller reads a<br>branch's edges. Pass the default branch (e.g. ``main``) to read the<br>default view from a checkout whose own branch is indexed. Omitted,<br>follows the checkout's branch when the id's repo is the current<br>detected repo and reads main otherwise. |
 
 ## `code_cross_repo_impact`
 
