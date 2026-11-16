@@ -129,9 +129,7 @@ To find "the next task" in a project there is no query to rank by: use
 every task in it.
 
 The ``limit`` applies after every filter, so a match that ranks below it
-on the unfiltered query is still returned. The one exception is the
-unscoped half of a repo-scoped search: those tasks are picked out of the
-all-repos read, so other repos' matches can still crowd them out.
+on the unfiltered query is still returned.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
