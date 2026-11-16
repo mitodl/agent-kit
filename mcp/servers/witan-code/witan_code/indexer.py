@@ -679,7 +679,7 @@ def index_paths(
     # exactly what the bulk load below exists to avoid on the insert side.
     delete_steps: list[tuple[str, str, dict]] = []
     # Files whose rows the deletes remove for good, so no edge may point into them.
-    dropped: set[str] = set()
+    purged_ids: set[str] = set()
     for file_id in reindexed_file_ids:
         delete_steps += _delete_file_steps(file_id)
 
@@ -697,7 +697,7 @@ def index_paths(
             rel = file_id[len(prefix) :] if file_id.startswith(prefix) else None
             if rel is not None and rel not in indexed_rel:
                 delete_steps += _delete_file_steps(file_id)
-                dropped.add(file_id)
+                purged_ids.add(file_id)
                 stats.purged += 1
 
     # A vanished single file: the one id that file had, and its bindings, which
@@ -720,7 +720,7 @@ def index_paths(
         rel = _relative_path(vanished, base)
         if not can_purge and f"{slug}#{rel}" in existing:
             delete_steps += _delete_file_steps(f"{slug}#{rel}")
-            dropped.add(f"{slug}#{rel}")
+            purged_ids.add(f"{slug}#{rel}")
             stats.purged += 1
         touched_files.append(rel)
 
@@ -730,7 +730,7 @@ def index_paths(
         base=base,
         slug=slug,
         existing=existing,
-        dropped=dropped,
+        dropped=purged_ids,
         relink=None if force and full_repo else repo_root,
         stats=stats,
     )
