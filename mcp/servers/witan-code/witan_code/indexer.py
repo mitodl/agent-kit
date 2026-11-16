@@ -584,18 +584,35 @@ def index_paths(
     # "missing from the collected set" as "no longer part of the repo".
     walk_errors: list[OSError] = []
     gone = [t for t in resolved if not t.exists()]
-    # A file named directly (the edit hook's case) is held to the same ignore
-    # rule a directory's listing applies, in one git call for the whole batch.
-    ignored = (
-        repo_module.ignored(repo_root, [t for t in resolved if t.is_file()])
-        if repo_root is not None
-        else frozenset()
-    )
+    # A file named directly (the edit hook's case) is held to the rules a full
+    # walk of the repo applies: the path rules, then git's ignore rules in one
+    # call for the batch. The rules see the file under its walk name
+    # (`_walk_name`), so `alias.py -> build/real.py` is indexed as the walk
+    # indexes it, and `link/mod.py` below a symlinked `link/` is skipped as
+    # the walk skips it. A skipped file's rows (stored under its resolved
+    # path) are dropped only when that resolved path fails the rules too: the
+    # walk collects `src/mod.py` and `a.py` under their own names, whatever
+    # `link/` or an excluded `build/alias.py -> ../a.py` does. An edit naming
+    # `build/real.py` itself still drops the rows `alias.py` gives it until the
+    # next full index, since finding the links to a file would mean scanning
+    # the repo.
+    skipped: frozenset[Path] = frozenset()
+    dropped: list[Path] = []
+    if repo_root is not None:
+        names: dict[Path, set[Path]] = {}
+        for p in (t.absolute() for t in targets):
+            if p.is_file():
+                names.setdefault(p.resolve(), set()).add(_walk_name(p, repo_root))
+        candidates = set(names).union(*names.values())
+        by_path = [n for n in candidates if _exclusion_below(repo_root, n) is None]
+        passing = set(by_path) - repo_module.ignored(repo_root, by_path)
+        skipped = frozenset(r for r, walk in names.items() if not walk & passing)
+        dropped = sorted(skipped - passing)
     collected = list(
         dict.fromkeys(
             path
             for t in resolved
-            if t.exists() and t not in ignored
+            if t.exists() and t not in skipped
             for path in _collect_files(t, on_error=walk_errors.append)
         )
     )
@@ -681,11 +698,13 @@ def index_paths(
     # Skipped under `can_purge`: a batch holding the repo root as well already
     # purged every stored file missing from disk above.
     #
-    # An ignored file named directly is treated the same way: it is on disk,
-    # but its rows (written before ignored files were left out) are no more
-    # the repo's than a deleted file's, and an edit is the cheapest place to
-    # drop them on a view no full run purges.
-    for vanished in [*gone, *sorted(ignored)]:
+    # A file named directly that the rules exclude under every name the walk
+    # could list it by is treated the same way: it is on disk, but its rows (written before the hook applied the walk's
+    # rules) are no more the repo's than a deleted file's. A full run would
+    # purge them, so dropping them here keeps the hook and the walk agreeing,
+    # and an edit is the cheapest place to drop them on a view no full run
+    # purges.
+    for vanished in [*gone, *dropped]:
         if repo_root is None or not indexable(vanished):
             continue
         rel = _relative_path(vanished, base)
@@ -958,6 +977,33 @@ def _excluded_dir(path: Path) -> Exclusion | None:
     if _is_nested_checkout(path):
         return Exclusion.NESTED_CHECKOUT
     return None
+
+
+def _walk_name(path: Path, repo_root: Path) -> Path:
+    """The name a full walk of ``repo_root`` would list file ``path`` by.
+
+    The walk lists files by their path under the physical ``repo_root`` (what
+    git reports), with every component below it as written, so a symlinked
+    directory between the two stays visible to :func:`_exclusion_below`.
+    ``path`` already under ``repo_root`` is that name. Otherwise it was reached
+    through a link from outside (e.g. a symlinked home directory, or a link to
+    a directory inside the repo): the topmost ancestor that resolves into the
+    repo is replaced by its physical path and the rest is kept. Resolving
+    ``path.parent`` whole instead would also erase a symlinked directory inside
+    the repo. With no such ancestor ``path`` is itself a link from outside,
+    which the walk never lists, so the file's own resolved path is its name.
+
+    :param path: an absolute path to a file whose resolved path is under
+        ``repo_root``.
+    :param repo_root: the physical git root of the checkout.
+    """
+    if path.is_relative_to(repo_root):
+        return path
+    for top in reversed(path.parents):
+        real = top.resolve()
+        if real.is_relative_to(repo_root):
+            return real / path.relative_to(top)
+    return path.resolve()
 
 
 def _exclusion_below(

@@ -278,19 +278,54 @@ def test_a_file_not_indexed_yet_points_at_the_index_command(
 
 
 @requires_stack
-def test_rows_a_rule_now_excludes_are_called_out(checkout, monkeypatch, capsys):
-    """A file indexed by name keeps its rows until a full index purges them,
-    so the graph can hold a file the rules exclude."""
+def test_a_file_indexed_by_name_is_held_to_the_path_rules(
+    checkout, monkeypatch, capsys
+):
+    """The edit hook names files, and naming one under `build/` must not put
+    in the graph what the next full index would purge."""
     _fresh_server(monkeypatch)
     (checkout / "build").mkdir()
     (checkout / "build" / "gen.py").write_text("x = 1\n")
+    indexer.index_path(checkout)
     indexer.index_path(checkout / "build" / "gen.py")
 
     row = _why("build/gen.py", capsys)
 
+    assert row["indexed"] is False
+    assert row["state"] == "not indexed: excluded path"
+
+
+@pytest.mark.parametrize("real_repo", [False, True])
+@requires_stack
+def test_rows_a_rule_now_excludes_are_called_out(
+    checkout, monkeypatch, capsys, real_repo
+):
+    """Rows written before a rule applied stay until a full index of the repo
+    purges them, so the graph can hold a file the rules exclude. Indexing the
+    file does not reach them once `lib/` is a real repository: the file then
+    indexes into that repository's graph."""
+    _fresh_server(monkeypatch)
+    (checkout / "lib").mkdir()
+    (checkout / "lib" / "dep.py").write_text("x = 1\n")
+    indexer.index_path(checkout)
+    if real_repo:
+        _git(checkout / "lib", "init", "-q", "-b", "main")
+        indexer.index_path(checkout / "lib" / "dep.py")
+    else:
+        (checkout / "lib" / ".git").mkdir()
+
+    row = _why("lib/dep.py", capsys)
+
     assert row["indexed"] is True
-    assert row["rule"] == "excluded path"
-    assert row["state"] == "in the graph, but excluded: excluded path"
+    assert row["rule"] == "nested checkout"
+    assert row["state"] == "in the graph, but excluded: nested checkout"
+    assert row["detail"].endswith(
+        "a full index of the repo drops them: `witan code index .`."
+    )
+
+    indexer.index_path(checkout)
+
+    assert _why("lib/dep.py", capsys)["indexed"] is False
 
 
 @requires_stack
