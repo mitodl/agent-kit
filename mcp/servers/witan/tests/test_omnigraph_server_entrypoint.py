@@ -14,6 +14,7 @@ until it has persisted locks (storage format 14).
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -22,8 +23,8 @@ import signal
 import socket
 import subprocess
 import sys
-import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -389,12 +390,48 @@ def dialect(request, monkeypatch, tmp_path) -> Dialect:
     return Dialect(targets, tmp_path)
 
 
-class FakeOmnigraph:
-    """`omnigraph cluster …` and `branch …` with 0.13's to 0.15's lock behaviour.
+class FakeServed:
+    """A server's branch API over ``fake``'s branches.
 
-    apply and a branch delete leave a lock, a second writer is refused while
-    any lock exists, and force-unlock removes exactly the id it is given.
-    Every call is checked against the argument shape of ``dialect``.
+    A branch in ``fake.sigterm_during`` raises SIGTERM while its delete runs,
+    and the delete still finishes, as an HTTP request in flight does. One in
+    ``fake.delete_fails`` is refused.
+    """
+
+    base_url = "http://127.0.0.1:18080"
+
+    def __init__(self, fake: FakeOmnigraph) -> None:
+        self.fake = fake
+
+    def branches(self, graph: str) -> list[str]:
+        if self.fake.unavailable:
+            raise entrypoint.ServerUnavailable("connection refused")
+        if not graph.startswith(entrypoint.CODE_GRAPH_PREFIX):
+            # The view-drop actor holds the reaper's grants, on code graphs only.
+            raise BootRefused(f"GET /graphs/{graph}/branches: HTTP 403")
+        return sorted(self.fake.branches.get(graph, []))
+
+    def delete(self, graph: str, branch: str, timeout: float) -> None:
+        assert timeout > 0
+        if self.fake.unavailable:
+            raise entrypoint.ServerUnavailable("connection refused")
+        if branch in self.fake.delete_fails:
+            raise BootRefused(f"DELETE {branch}: HTTP 409")
+        if branch in self.fake.sigterm_during:
+            signal.raise_signal(signal.SIGTERM)
+        self.fake.branches[graph].remove(branch)
+        self.fake.deleted.append((graph, branch))
+
+
+class FakeOmnigraph:
+    """`omnigraph cluster …` with 0.13's to 0.15's lock behaviour, and the
+    loopback server the boot drops branch views through.
+
+    apply leaves a lock, a second writer is refused while any lock exists, and
+    force-unlock removes exactly the id it is given. The loopback server takes
+    the `serve` lock and releases it on a clean exit, unless
+    ``loopback_leaves_lock`` says it had to be killed. Every call is checked
+    against the argument shape of ``dialect``.
 
     Without an explicit ``plan``, the plan is 0.15's: a schema change to any
     graph in ``schema_changes`` is refused while one of them has a branch
@@ -419,15 +456,15 @@ class FakeOmnigraph:
         self.schema_changes = schema_changes or []
         self.hidden_refusal: dict | None = None
         self.delete_fails: set[str] = set()
-        # graph -> the reasons `schema plan` gives for an unsupported migration.
-        self.unsupported: dict[str, list[str]] = {}
         # Branches whose delete is still running when SIGTERM arrives.
         self.sigterm_during: set[str] = set()
+        self.unavailable = False
+        self.loopback_leaves_lock = False
+        self.deleted: list[tuple[str, str]] = []
         self.apply_fails = False
         self.state_found = True
         self.calls: list[list[str]] = []
         self._ids = iter(f"01APPLY{n}" for n in range(1, 10))
-        self._branch_op_ids = iter(f"01BRANCHOP{n}" for n in range(1, 100))
 
     def current_plan(self) -> dict:
         if self.plan is not None:
@@ -461,40 +498,16 @@ class FakeOmnigraph:
             ],
         }
 
-    def schema_plan(self, args: list[str]) -> object:
-        scope = "--target" if self.dialect.targets else "--cluster"
-        assert args[1:5] == [scope, ROOT, "--graph", args[4]], args
-        assert args[5:7] == ["plan", "--schema"] and args[8:] == ["--json"], args
-        reasons = self.unsupported.get(args[4], [])
-        steps = [
-            {"kind": "unsupported_change", "reason": reason, "code": "OG-MF-106"}
-            for reason in reasons
-        ]
-        return self._result(0, {"supported": not reasons, "steps": steps})
-
-    def branch(self, args: list[str], interrupt=None) -> object:
-        scope = "--target" if self.dialect.targets else "--cluster"
-        assert args[1:5] == [scope, ROOT, "--graph", args[4]], args
-        graph, rest = args[4], args[5:]
-        if rest == ["list", "--json"]:
-            names = ["main", *self.branches.get(graph, [])]
-            return self._result(0, {"branches": sorted(names)})
-        if "--as" in rest:
-            rest = rest[2:]
-        assert rest[0] == "--yes" and rest[1] == "delete" and rest[3] == "--json", args
-        if self.lock:
-            return self._result(1, {"error": "state_lock_held"})
-        self.lock = {"id": next(self._branch_op_ids), "operation": "graph_operation"}
-        name = rest[2]
-        if name in self.sigterm_during:
-            signal.raise_signal(signal.SIGTERM)
-            assert interrupt is not None
-            # The real wrapper polls this while the child runs, then stops it.
-            interrupt()
-        if name in self.delete_fails or name not in self.branches.get(graph, []):
-            return self._result(1, {"error": f"branch '{name}' not found"})
-        self.branches[graph].remove(name)
-        return self._result(0, {"name": name})
+    @contextlib.contextmanager
+    def loopback(self, config_dir, env, lease, terminated) -> Iterator[FakeServed]:
+        assert self.lock is None, f"the loopback server started on {self.lock}"
+        self.calls.append(["loopback"])
+        self.lock = {"id": "01LOOPBACK", "operation": "serve"}
+        try:
+            yield FakeServed(self)
+        finally:
+            if not self.loopback_leaves_lock:
+                self.lock = None
 
     def check_shape(self, args: list[str]) -> None:
         config = ["--config", str(self.dialect.config_dir)]
@@ -521,19 +534,8 @@ class FakeOmnigraph:
         return observed
 
     def __call__(
-        self,
-        args: list[str],
-        lease,
-        timeout_seconds=None,
-        interrupt=None,
-        termination=None,
+        self, args: list[str], lease, timeout_seconds=None, interrupt=None
     ) -> object:
-        if args[0] == "branch":
-            self.calls.append(args)
-            return self.branch(args, interrupt)
-        if args[0] == "schema":
-            self.calls.append(args)
-            return self.schema_plan(args)
         assert args[0] == "cluster"
         self.calls.append(args[1:])
         self.check_shape(args[1:])
@@ -570,20 +572,13 @@ class FakeOmnigraph:
     def unlocked(self) -> list[str]:
         return [call[-1] for call in self.calls if call[0] == "force-unlock"]
 
-    @property
-    def deleted(self) -> list[tuple[str, str]]:
-        return [
-            (call[4], call[-2])
-            for call in self.calls
-            if call[0] == "branch" and "delete" in call
-        ]
-
 
 @pytest.fixture
 def cli(monkeypatch, dialect):
     def install(**kwargs) -> FakeOmnigraph:
         fake = FakeOmnigraph(dialect, **kwargs)
         monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
+        monkeypatch.setattr(entrypoint, "loopback_server", fake.loopback)
         return fake
 
     return install
@@ -741,33 +736,42 @@ def test_code_graph_views_are_dropped_before_the_apply(code_cli, tmp_path):
         (graph, branch) for graph, branches in VIEWS.items() for branch in branches
     )
     assert fake.branches == {CODE_GRAPH: [], "code-bridge": []}
-    # The previous owner's lock goes first, then every delete and its own
-    # lock, then a plan with nothing refused, then the apply.
-    deletes = [i for i, call in enumerate(fake.calls) if "delete" in call]
-    assert fake.unlocked[0] == "01PREVIOUS"
-    assert deletes[0] > fake.commands.index("force-unlock")
-    assert fake.commands.index("apply") > deletes[-1]
-    assert fake.unlocked[1:4] == ["01BRANCHOP1", "01BRANCHOP2", "01BRANCHOP3"]
+    # The previous owner's lock goes first, then the loopback server and its
+    # deletes, then a plan with nothing refused, then the apply.
+    commands = fake.commands
+    assert commands.index("force-unlock") < commands.index("loopback")
+    assert commands.index("loopback") < commands.index("apply")
+    assert fake.unlocked == ["01PREVIOUS", "01APPLY1"]
     assert fake.lock is None
-    for call in fake.calls:
-        if "delete" in call:
-            assert call[5:7] == ["--as", "svc-witan-admin"]
 
 
 def test_a_council_schema_change_with_council_branches_still_refuses(
     code_cli, tmp_path
 ):
+    """The view-drop actor cannot read council, so its branches show up as the
+    refusal that outlasts the drop. The gate finds this while the old pod
+    still serves."""
     fake = code_cli(
         branches={**VIEWS, "council": ["wip"]},
         schema_changes=["council", CODE_GRAPH, "code-bridge"],
         lock={"id": "01PREVIOUS", "operation": "serve"},
     )
-    with pytest.raises(BootRefused, match=r"council: 1 \(wip\)"):
+    with pytest.raises(BootRefused, match=r"still block.*'council'"):
         converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
-    assert fake.deleted == []
-    assert fake.unlocked == []
     assert "apply" not in fake.commands
     assert fake.branches["council"] == ["wip"]
+    assert fake.lock is None
+
+
+def test_council_branches_with_no_views_left_refuse_before_serving(code_cli, tmp_path):
+    fake = code_cli(
+        branches={"council": ["wip"]},
+        schema_changes=["council", CODE_GRAPH, "code-bridge"],
+    )
+    with pytest.raises(BootRefused, match=r"of \['council'\].*one has others"):
+        converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
+    assert fake.deleted == []
+    assert "apply" not in fake.commands
 
 
 def test_council_branches_do_not_matter_without_a_council_schema_change(
@@ -783,15 +787,23 @@ def test_views_on_a_graph_that_is_not_allow_listed_refuse(code_cli, tmp_path):
     fake = code_cli()
     with pytest.raises(BootRefused, match="OMNIGRAPH_BRANCH_DROP_ALLOWLIST"):
         converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=CODE_GRAPH)
-    assert fake.deleted == []
+    assert fake.branches["code-bridge"] == VIEWS["code-bridge"]
     assert "apply" not in fake.commands
+
+
+def test_without_an_allow_list_the_branch_refusal_stands(code_cli, tmp_path):
+    """No graph's views may go, so nothing is served on loopback to list them."""
+    fake = code_cli()
+    with pytest.raises(BootRefused, match="only main"):
+        converge(tmp_path)
+    assert fake.commands == ["plan"]
 
 
 def test_views_are_kept_when_no_schema_change_needs_them_gone(code_cli, tmp_path):
     """Every restart plans; only a schema change may cost the views."""
     fake = code_cli(schema_changes=[])
     converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
-    assert "branch" not in fake.commands
+    assert "loopback" not in fake.commands
     assert fake.branches == VIEWS
     assert "apply" in fake.commands
 
@@ -810,7 +822,7 @@ def test_a_branch_refusal_beside_another_error_drops_nothing(code_cli, tmp_path)
     fake.plan = plan
     with pytest.raises(BootRefused, match="schema_parse_error"):
         converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
-    assert "branch" not in fake.commands
+    assert "loopback" not in fake.commands
 
 
 def test_another_preflight_refusal_drops_nothing(code_cli, tmp_path):
@@ -820,7 +832,7 @@ def test_another_preflight_refusal_drops_nothing(code_cli, tmp_path):
     fake.plan = plan
     with pytest.raises(BootRefused, match="cannot drop a column"):
         converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
-    assert "branch" not in fake.commands
+    assert "loopback" not in fake.commands
 
 
 def test_a_refusal_behind_the_views_stops_the_boot_after_the_drop(code_cli, tmp_path):
@@ -845,7 +857,7 @@ def test_a_failed_delete_stops_the_boot_unlocked_and_the_next_boot_finishes(
     fake.delete_fails = {"act-0ebb3a7b/feat_docstrings"}
     with pytest.raises(BootRefused, match="feat_docstrings"):
         converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
-    # The delete before it stays done, and the failed delete's lock is gone.
+    # The deletes before it stay done, and the loopback server's lock is gone.
     assert fake.branches["code-bridge"] == []
     assert fake.branches[CODE_GRAPH] == ["act-0ebb3a7b/feat_docstrings"]
     assert fake.lock is None
@@ -858,53 +870,36 @@ def test_a_failed_delete_stops_the_boot_unlocked_and_the_next_boot_finishes(
     assert fake.lock is None
 
 
-def test_a_delete_past_its_timeout_is_unlocked_and_refuses(
-    code_cli, tmp_path, monkeypatch
-):
-    fake = code_cli()
-    real = entrypoint.run_omnigraph
-
-    def stall_deletes(args, lease, **kwargs):
-        if "delete" in args:
-            fake.lock = {"id": "01STALLED", "operation": "graph_operation"}
-            raise entrypoint.CommandTimedOut("`omnigraph branch delete` did not finish")
-        return real(args, lease, **kwargs)
-
-    monkeypatch.setattr(entrypoint, "run_omnigraph", stall_deletes)
-    with pytest.raises(BootRefused, match="did not finish"):
-        converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
-    assert fake.lock is None
-    assert "apply" not in fake.commands
-
-
-def test_a_lost_lease_leaves_the_deletes_lock_in_place(code_cli, tmp_path):
-    fake = code_cli()
-    with pytest.raises(BootRefused, match="not unlocking"):
-        converge(
-            tmp_path,
-            lease=LostLease(may_unlock=True),
-            OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE,
-        )
-    assert fake.lock == {"id": "01BRANCHOP1", "operation": "graph_operation"}
-    assert fake.unlocked == []
-    assert "apply" not in fake.commands
-
-
-def test_an_unsupported_migration_behind_the_views_refuses_before_any_delete(
+def test_a_killed_loopback_servers_lock_is_released_before_the_apply(
     code_cli, tmp_path
 ):
-    """The branch refusal hides it, so the gate and boot ask `schema plan`."""
-    fake = code_cli(schema_changes=["council", CODE_GRAPH, "code-bridge"])
-    fake.unsupported = {"council": ["changing property type for 'Node.n'"]}
-    with pytest.raises(BootRefused, match="cannot migrate.*council.*Node.n"):
-        converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
+    fake = code_cli()
+    fake.loopback_leaves_lock = True
+    converge(tmp_path, OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE)
+    assert fake.unlocked == ["01LOOPBACK", "01APPLY1"]
+    assert fake.lock is None
+
+
+class LostDuringDrop(entrypoint.NoPeers):
+    def lost(self) -> bool:
+        return True
+
+
+def test_a_lost_lease_stops_the_drop_before_any_delete(code_cli, tmp_path):
+    fake = code_cli()
+    with pytest.raises(BootRefused, match="lost the unlock Lease"):
+        converge(
+            tmp_path,
+            lease=LostDuringDrop(may_unlock=True),
+            OMNIGRAPH_BRANCH_DROP_ALLOWLIST=DROPPABLE,
+        )
     assert fake.deleted == []
-    assert fake.branches == VIEWS
     assert "apply" not in fake.commands
 
 
 def test_sigterm_mid_delete_stops_the_drop_with_the_root_unlocked(code_cli, tmp_path):
-    """The startupProbe's kill on a long drop must not strand a lock."""
+    """The startupProbe's kill on a long drop must not strand a lock. The
+    delete in flight finishes; the next one does not start."""
     fake = code_cli()
     fake.sigterm_during = {"act-0ebb3a7b/_detached"}
     previous = signal.getsignal(signal.SIGTERM)
@@ -918,7 +913,7 @@ def test_sigterm_mid_delete_stops_the_drop_with_the_root_unlocked(code_cli, tmp_
     assert signal.getsignal(signal.SIGTERM) is previous
     assert fake.lock is None
     assert fake.branches["code-bridge"] == []
-    assert fake.branches[CODE_GRAPH] == VIEWS[CODE_GRAPH]
+    assert fake.branches[CODE_GRAPH] == ["act-0ebb3a7b/feat_docstrings"]
     assert "apply" not in fake.commands
 
     fake.sigterm_during = set()
@@ -943,35 +938,20 @@ def test_sigterm_before_the_drop_stops_the_boot_before_any_delete(code_cli, tmp_
     assert "apply" not in fake.commands
 
 
-def converge_under_sigterm(fake, tmp_path, monkeypatch, sigterm_after) -> None:
-    """Converge, raising SIGTERM once the views are gone and ``sigterm_after``
-    matches a command that just finished."""
-
-    def run(args, lease, **kwargs):
-        result = fake(args, lease, **kwargs)
-        if sigterm_after(args) and not any(fake.branches.values()):
-            signal.raise_signal(signal.SIGTERM)
-        return result
-
-    monkeypatch.setattr(entrypoint, "run_omnigraph", run)
-    env = {"OMNIGRAPH_BRANCH_DROP_ALLOWLIST": DROPPABLE}
-    with entrypoint.sigterm_noted() as terminated:
-        entrypoint.converge(
-            tmp_path, env, entrypoint.NoPeers(may_unlock=True), terminated
-        )
-
-
-@pytest.mark.parametrize("command", ["delete", "force-unlock"])
 def test_sigterm_as_the_last_delete_ends_stops_the_boot_before_the_apply(
-    code_cli, tmp_path, monkeypatch, command
+    code_cli, tmp_path
 ):
-    """A delete that finished before the interrupt poll saw SIGTERM, or a
-    SIGTERM during its lock's removal, leaves nothing for the drop to stop."""
+    """A last delete that returns after SIGTERM leaves nothing for the drop to
+    stop."""
     fake = code_cli()
-    with pytest.raises(BootRefused, match="SIGTERM after dropping the branch views"):
-        converge_under_sigterm(
-            fake, tmp_path, monkeypatch, lambda args: command in args
-        )
+    fake.sigterm_during = {"act-0ebb3a7b/feat_docstrings"}
+    env = {"OMNIGRAPH_BRANCH_DROP_ALLOWLIST": DROPPABLE}
+    lease = entrypoint.NoPeers(may_unlock=True)
+    with (
+        pytest.raises(BootRefused, match="SIGTERM after dropping the branch views"),
+        entrypoint.sigterm_noted() as terminated,
+    ):
+        entrypoint.converge(tmp_path, env, lease, terminated)
     assert fake.branches == {CODE_GRAPH: [], "code-bridge": []}
     assert fake.lock is None
     assert "apply" not in fake.commands
@@ -981,9 +961,21 @@ def test_sigterm_during_the_plan_after_the_drop_stops_the_boot_before_the_apply(
     code_cli, tmp_path, monkeypatch
 ):
     fake = code_cli()
-    with pytest.raises(BootRefused, match="SIGTERM while planning after the drop"):
-        converge_under_sigterm(
-            fake, tmp_path, monkeypatch, lambda args: args[:2] == ["cluster", "plan"]
+
+    def run(args, lease, **kwargs):
+        result = fake(args, lease, **kwargs)
+        if args[:2] == ["cluster", "plan"] and not any(fake.branches.values()):
+            signal.raise_signal(signal.SIGTERM)
+        return result
+
+    monkeypatch.setattr(entrypoint, "run_omnigraph", run)
+    env = {"OMNIGRAPH_BRANCH_DROP_ALLOWLIST": DROPPABLE}
+    with (
+        pytest.raises(BootRefused, match="SIGTERM while planning after the drop"),
+        entrypoint.sigterm_noted() as terminated,
+    ):
+        entrypoint.converge(
+            tmp_path, env, entrypoint.NoPeers(may_unlock=True), terminated
         )
     assert fake.commands[-1] == "plan"
     assert fake.lock is None
@@ -1079,96 +1071,160 @@ def test_a_running_command_is_stopped_when_the_lease_is_lost(tmp_path, monkeypat
     assert time.monotonic() - started < 10
 
 
-SIGTERM_AT_SECONDS = 0.5
+FAKE_SERVER = '''#!/usr/bin/env python3
+"""omnigraph-server's branch API over two in-memory branches."""
+import http.server
+import json
+import os
+import signal
+import sys
+import urllib.parse
+
+if os.environ.get("EXIT_AT_START"):
+    sys.exit(int(os.environ["EXIT_AT_START"]))
+if os.environ.get("SLOW_STOP"):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+port = int(sys.argv[sys.argv.index("--bind") + 1].rsplit(":", 1)[1])
+branches = {"code-x": ["main", "act-a/feat"]}
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def reply(self, status, body):
+        payload = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def refused(self):
+        if self.headers["Omnigraph-Http-Api"] != "0.14":
+            self.reply(400, {"code": "api_contract_mismatch"})
+            return True
+        if self.headers["Authorization"] != "Bearer t3":
+            self.reply(401, {"code": "unauthorized"})
+            return True
+        return False
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            self.reply(200, {"status": "ok"})
+        elif not self.refused():
+            graph = self.path.split("/")[2]
+            self.reply(200, {"branches": branches[graph]})
+
+    def do_DELETE(self):
+        if self.refused():
+            return
+        if os.environ.get("FAIL_DELETE"):
+            self.reply(500, {"code": "storage_error"})
+            return
+        prefix, _, name = self.path.partition("/branches/")
+        listed = branches[prefix.split("/")[2]]
+        name = urllib.parse.unquote(name)
+        if name not in listed:
+            self.reply(404, {"code": "not_found"})
+            return
+        listed.remove(name)
+        self.reply(200, {"name": name})
+
+    def log_message(self, *args):
+        pass
+
+
+http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+'''
 
 
 @pytest.fixture
-def slow_cli(tmp_path, monkeypatch) -> Path:
-    """A real `omnigraph` on PATH whose `branch delete` runs until stopped.
+def fake_server(tmp_path, monkeypatch) -> Path:
+    """A scripted `omnigraph-server` on PATH, and a config dir with a token map.
 
-    ``SLOW_STOP=1`` makes the delete ignore SIGTERM, so only SIGKILL ends
-    it, and ``STALL=status`` or ``STALL=force-unlock`` makes that command
-    hang. Returns the file each call's first two arguments are logged to.
+    ``EXIT_AT_START`` makes it exit with that code, ``SLOW_STOP`` makes it
+    ignore SIGTERM, and ``FAIL_DELETE`` makes every delete a 500.
     """
-    calls = tmp_path / "calls"
-    script = tmp_path / "omnigraph"
-    script.write_text(
-        "#!/bin/sh\n"
-        f'echo "$1 $2" >> {calls}\n'
-        'case "$1 $2" in\n'
-        "  'branch --target')\n"
-        "    [ -n \"$SLOW_STOP\" ] && trap '' TERM\n"
-        "    exec sleep 60 ;;\n"
-        "  'cluster status')\n"
-        '    [ "$STALL" = status ] && exec sleep 60\n'
-        '    echo \'{"lock_id": "01BRANCHOP1"}\' ;;\n'
-        "  'cluster force-unlock')\n"
-        '    [ "$STALL" = force-unlock ] && exec sleep 60\n'
-        "    echo '{}' ;;\n"
-        "esac\n"
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
-    monkeypatch.delenv("SLOW_STOP", raising=False)
-    monkeypatch.delenv("STALL", raising=False)
-    monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: True)
+    binary = tmp_path / "bin" / entrypoint.SERVER_BINARY
+    binary.parent.mkdir()
+    binary.write_text(FAKE_SERVER)
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary.parent}:{os.environ['PATH']}")
+    for name in ("EXIT_AT_START", "SLOW_STOP", "FAIL_DELETE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(entrypoint, "http_contract", lambda: "0.14")
     monkeypatch.setattr(entrypoint, "SIGTERM_STOP_SECONDS", 1)
     (tmp_path / "cluster.yaml").write_text(
-        yaml.safe_dump({"storage": ROOT, "graphs": {CODE_GRAPH: {}}})
+        yaml.safe_dump({"storage": ROOT, "graphs": {"code-x": {}}})
     )
-    return calls
+    (tmp_path / "tokens.json").write_text(json.dumps(RENDER_TOKENS))
+    return tmp_path
 
 
-def delete_under_sigterm(config_dir: Path, budget: float) -> tuple[str, float]:
-    """Delete a branch, with SIGTERM arriving while the delete runs.
-
-    :returns: the refusal, and the seconds from SIGTERM until it was raised.
-    """
-    cluster = entrypoint.Cluster(config_dir, None, entrypoint.NoPeers(may_unlock=True))
-    termination = entrypoint.Termination(budget)
-    timer = threading.Timer(SIGTERM_AT_SECONDS, termination.note)
-    started = time.monotonic()
-    timer.start()
-    try:
-        with pytest.raises(BootRefused) as refused:
-            cluster.delete_branch(CODE_GRAPH, "act-0ebb3a7b/_detached", termination)
-    finally:
-        timer.cancel()
-    return str(refused.value), time.monotonic() - started - SIGTERM_AT_SECONDS
+def loopback(config_dir: Path, terminated=None, actor: str = "svc-witan-ci"):
+    env = {
+        "OMNIGRAPH_SERVER_BEARER_TOKENS_FILE": str(config_dir / "tokens.json"),
+        "OMNIGRAPH_VIEW_DROP_ACTOR": actor,
+    }
+    return entrypoint.loopback_server(
+        config_dir,
+        env,
+        entrypoint.NoPeers(may_unlock=True),
+        terminated or entrypoint.Termination(30),
+    )
 
 
-def test_a_delete_slow_to_stop_on_sigterm_still_has_its_lock_removed(
-    slow_cli, tmp_path, monkeypatch
+def test_views_are_listed_and_deleted_through_the_loopback_server(fake_server):
+    with loopback(fake_server) as served:
+        assert served.branches("code-x") == ["act-a/feat"]
+        served.delete("code-x", "act-a/feat", 5)
+        assert served.branches("code-x") == []
+        # Gone already (the reaper got there first) counts as deleted.
+        served.delete("code-x", "act-a/feat", 5)
+    assert not served.serving()
+
+
+def test_a_server_error_on_a_delete_is_unavailable(fake_server, monkeypatch):
+    monkeypatch.setenv("FAIL_DELETE", "1")
+    with (
+        loopback(fake_server) as served,
+        pytest.raises(entrypoint.ServerUnavailable, match="HTTP 500"),
+    ):
+        served.delete("code-x", "act-a/feat", 5)
+
+
+def test_a_refused_token_refuses_rather_than_waiting_for_the_boot(fake_server):
+    """A 4xx is a configuration error, not a pod that is down."""
+    with loopback(fake_server, actor="svc-witan-admin") as served:
+        with pytest.raises(BootRefused, match="HTTP 401") as refused:
+            served.branches("code-x")
+        assert not isinstance(refused.value, entrypoint.ServerUnavailable)
+
+
+def test_an_unreachable_server_is_unavailable(monkeypatch):
+    monkeypatch.setattr(entrypoint, "http_contract", lambda: "0.14")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    served = entrypoint.ServedGraphs(f"http://127.0.0.1:{port}", "t3")
+    with pytest.raises(entrypoint.ServerUnavailable):
+        served.branches("code-x")
+
+
+def test_a_loopback_server_that_exits_refuses(fake_server, monkeypatch):
+    monkeypatch.setenv("EXIT_AT_START", "3")
+    with pytest.raises(BootRefused, match=r"exited \(3\) before serving"):
+        loopback(fake_server).__enter__()
+
+
+def test_a_loopback_server_slow_to_stop_after_sigterm_is_killed_in_time(
+    fake_server, monkeypatch
 ):
+    """After SIGTERM it gets SIGTERM_STOP_SECONDS, not CHILD_STOP_SECONDS."""
     monkeypatch.setenv("SLOW_STOP", "1")
-    budget = 4
-    refusal, elapsed = delete_under_sigterm(tmp_path, budget)
-    assert "SIGTERM while deleting" in refusal
-    assert slow_cli.read_text().splitlines() == [
-        "branch --target",
-        "cluster status",
-        "cluster force-unlock",
-    ]
-    assert elapsed < budget
-
-
-@pytest.mark.parametrize("stalled", ["status", "force-unlock"])
-def test_a_stalled_unlock_after_sigterm_ends_inside_the_budget(
-    slow_cli, tmp_path, monkeypatch, capsys, stalled
-):
-    """Stopping the delete, `cluster status` and `force-unlock` share one
-    budget from SIGTERM, so the boot exits before the kubelet's SIGKILL and
-    says the lock may be left."""
-    monkeypatch.setenv("STALL", stalled)
-    budget = 3
-    refusal, elapsed = delete_under_sigterm(tmp_path, budget)
-    assert "cleanup budget after SIGTERM" in refusal
-    # One poll interval past the budget, then SIGKILL with no stop wait.
-    assert elapsed < budget + 1.5
-    assert slow_cli.read_text().splitlines()[-1] == f"cluster {stalled}"
-    logged = capsys.readouterr().out
-    assert "may still be on the root" in logged
-    assert "runbook: clear the lock" in logged
+    terminated = entrypoint.Termination(30)
+    with loopback(fake_server, terminated) as served:
+        terminated.note()
+        started = time.monotonic()
+    assert time.monotonic() - started < 3
+    assert not served.serving()
 
 
 # ── The two CLI dialects ─────────────────────────────────────────────────────
@@ -1402,6 +1458,7 @@ def real_env(config: Path, **extra: str) -> dict[str, str]:
     return {
         "OMNIGRAPH_SERVER_BEARER_TOKENS_FILE": str(config / "tokens.json"),
         "OMNIGRAPH_APPLY_ACTOR": "svc-witan-admin",
+        "OMNIGRAPH_VIEW_DROP_ACTOR": "svc-witan-ci",
         **extra,
     }
 
@@ -1543,12 +1600,20 @@ def real_branch(config: Path, graph: str, name: str) -> None:
         check=True,
         capture_output=True,
     )
-    cluster.release_own_lock()
+    # A direct `branch create` keeps its `graph_operation` lock after it exits.
+    cluster.force_unlock(cluster.lock()["lock_id"])
 
 
 def real_branches(config: Path, graph: str) -> list[str]:
+    """``graph``'s branches but main, read directly: the root is local."""
     cluster = entrypoint.Cluster(config, None, entrypoint.NoPeers(may_unlock=True))
-    return cluster.branches(graph)
+    listed = subprocess.run(
+        ["omnigraph", *cluster.graph_command("branch", graph, "list", "--json")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return sorted(set(json.loads(listed.stdout)["branches"]) - {"main"})
 
 
 def change_stub_schema(config: Path) -> None:
@@ -1559,11 +1624,12 @@ def change_stub_schema(config: Path) -> None:
 
 
 @requires_persisted_locks
-def test_real_unsupported_migration_behind_the_views_refuses_with_them_kept(
+@requires_omnigraph_server
+def test_real_unsupported_migration_behind_the_views_refuses_after_the_drop(
     cluster_dir,
 ):
     """`cluster plan` reports only the branch refusal here, so the memory
-    graph's unsupported type change shows up only through `schema plan`."""
+    graph's unsupported type change shows up once the views are gone."""
     manifest = cluster_dir / "cluster.yaml"
     config = yaml.safe_load(manifest.read_text())
     config["graphs"]["memory"]["schema"] = "./schema/memory.pg"
@@ -1576,13 +1642,14 @@ def test_real_unsupported_migration_behind_the_views_refuses_with_them_kept(
     change_stub_schema(cluster_dir)
     memory.write_text("node Node {\n  slug: String @key\n  note: String?\n}\n")
 
-    with pytest.raises(BootRefused, match=r"cannot migrate.*'memory'.*Node\.note"):
+    with pytest.raises(BootRefused, match=r"refused the configuration.*Node\.note"):
         entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
-    assert real_branches(cluster_dir, "code-example") == ["act-alice/feat_x"]
+    assert real_branches(cluster_dir, "code-example") == []
     assert real_lock(cluster_dir)["locked"] is False
 
 
 @requires_persisted_locks
+@requires_omnigraph_server
 def test_real_code_graph_views_are_dropped_so_the_schema_change_applies(
     cluster_dir,
 ):
@@ -1602,6 +1669,7 @@ def test_real_code_graph_views_are_dropped_so_the_schema_change_applies(
 
 
 @requires_persisted_locks
+@requires_omnigraph_server
 def test_real_memory_graph_branch_still_refuses_the_schema_change(cluster_dir):
     env = real_env(cluster_dir, OMNIGRAPH_BRANCH_DROP_ALLOWLIST="code-example")
     entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
@@ -1609,10 +1677,9 @@ def test_real_memory_graph_branch_still_refuses_the_schema_change(cluster_dir):
     real_branch(cluster_dir, "memory", "wip")
     change_stub_schema(cluster_dir)
 
-    with pytest.raises(BootRefused, match=r"memory: 1 \(wip\)"):
+    with pytest.raises(BootRefused, match=r"still block.*'memory'"):
         entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
     assert real_branches(cluster_dir, "memory") == ["wip"]
-    assert real_branches(cluster_dir, "code-example") == ["act-alice/feat_x"]
     assert real_lock(cluster_dir)["locked"] is False
 
 

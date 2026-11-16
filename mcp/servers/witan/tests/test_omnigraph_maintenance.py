@@ -30,13 +30,13 @@ from .test_omnigraph_server_entrypoint import (
     ROOT,
     FakeKubernetes,
     FakeOmnigraph,
+    FakeServed,
     change_stub_schema,
     cluster_dir,  # noqa: F401  (fixture)
     dialect,  # noqa: F401  (fixture)
     entrypoint,
     pod,
     real_branch,
-    real_branches,
     real_env,
     real_lock,
     requires_omnigraph_server,
@@ -141,7 +141,6 @@ class FakeCli(FakeOmnigraph):
         lease,
         timeout_seconds=None,
         interrupt=None,
-        termination=None,
     ) -> object:
         if args[0] not in ("optimize", "cleanup"):
             if self.lock_output is not None and args[1] == self.dialect.lock_command:
@@ -654,7 +653,16 @@ def test_the_gate_fails_on_a_graph_removal_that_is_not_allow_listed(gate_cli, tm
     assert fake.commands == ["plan", "plan"]
 
 
-def test_the_gate_passes_views_the_boot_will_drop(monkeypatch, dialect, tmp_path):  # noqa: F811
+SERVING = {"id": "01SERVE", "operation": "serve"}
+
+
+@pytest.fixture
+def gate_views(monkeypatch, dialect, tmp_path):  # noqa: F811
+    """A served root whose code graph has a view blocking its schema change.
+
+    :returns: the scripted CLI, whose branches the serving pod's API reads and
+        deletes, and the gate's environment with that graph allow-listed.
+    """
     (tmp_path / "cluster.yaml").write_text(
         yaml.safe_dump(
             {
@@ -668,26 +676,60 @@ def test_the_gate_passes_views_the_boot_will_drop(monkeypatch, dialect, tmp_path
     )
     fake = FakeOmnigraph(
         dialect,
-        lock={"id": "01SERVE", "operation": "serve"},
+        lock=dict(SERVING),
         branches={"code-a": ["act-1/feat"]},
         schema_changes=["code-a"],
     )
     monkeypatch.setattr(entrypoint, "run_omnigraph", fake)
-    env = {"OMNIGRAPH_CLUSTER_DIR": str(tmp_path)}
-    assert plan_gate.main(env) == 1
-    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a"}) == 0
-    # A read beside the serving server: nothing deleted, its lock untouched.
+    monkeypatch.setattr(plan_gate, "ServedGraphs", lambda url, token: FakeServed(fake))
+    monkeypatch.setattr(plan_gate, "view_drop_token", lambda env: "t3")
+    env = {
+        "OMNIGRAPH_CLUSTER_DIR": str(tmp_path),
+        "OMNIGRAPH_VIEW_DROP_SERVER_URL": "http://omnigraph-server:8080",
+        "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a",
+    }
+    return fake, env
+
+
+def test_the_gate_drops_views_through_the_serving_pod(gate_views):
+    fake, env = gate_views
+    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": ""}) == 1
     assert fake.branches == {"code-a": ["act-1/feat"]}
-    assert fake.lock == {"id": "01SERVE", "operation": "serve"}
 
-    # A migration omnigraph cannot run, hidden behind the branch refusal.
-    fake.unsupported = {"code-a": ["changing property type"]}
-    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a"}) == 1
-    fake.unsupported = {}
+    assert plan_gate.main(env) == 0
+    assert fake.deleted == [("code-a", "act-1/feat")]
+    # Served writes: the serving pod's lock is untouched.
+    assert fake.lock == SERVING
+    assert fake.commands == ["plan", "plan", "plan"]
 
+
+def test_the_gate_leaves_the_views_to_the_boot_when_the_pod_is_down(gate_views):
+    fake, env = gate_views
+    fake.unavailable = True
+    assert plan_gate.main(env) == 0
+    assert fake.branches == {"code-a": ["act-1/feat"]}
+
+
+def test_the_gate_fails_on_branches_of_a_graph_that_is_not_allow_listed(gate_views):
+    """The view-drop actor cannot read council, so its branch shows up as the
+    refusal that outlasts the drop. The views were caches; council's stays."""
+    fake, env = gate_views
     fake.branches["council"] = ["wip"]
     fake.schema_changes = ["council", "code-a"]
-    assert plan_gate.main({**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-a"}) == 1
+    assert plan_gate.main(env) == 1
+    assert fake.branches == {"council": ["wip"], "code-a": []}
+
+
+def test_the_gate_fails_on_a_refusal_the_drop_uncovers(gate_views):
+    """The old pod still serves when this shows up, rather than a boot."""
+    fake, env = gate_views
+    fake.hidden_refusal = {
+        "ok": False,
+        "diagnostics": [{"code": "schema_migration_unsupported", "severity": "error"}],
+        "changes": [],
+    }
+    assert plan_gate.main(env) == 1
+    assert fake.branches == {"code-a": []}
 
 
 # ── The real binary ──────────────────────────────────────────────────────────
@@ -725,23 +767,45 @@ def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
     serve_until_locked_then_stop(cluster_dir, env)
 
 
+def real_gate(config: Path, *memory_branches: str) -> tuple[int, int, list]:
+    """The gate's verdict without and with code-example allow-listed, run
+    beside a real server it deletes views through, and the views left."""
+    env = {**real_env(config), "OMNIGRAPH_CLUSTER_DIR": str(config)}
+    entrypoint.converge(config, env, entrypoint.NoPeers(may_unlock=True))
+    real_branch(config, "code-example", "act-alice/feat_x")
+    for branch in memory_branches:
+        real_branch(config, "memory", branch)
+    change_stub_schema(config)
+    lease = entrypoint.NoPeers(may_unlock=True)
+    # The serving pod, as the Deployment's would be during a deploy.
+    with entrypoint.loopback_server(
+        config, env, lease, entrypoint.Termination(30)
+    ) as served:
+        env["OMNIGRAPH_VIEW_DROP_SERVER_URL"] = served.base_url
+        without = plan_gate.main(env)
+        with_drop = plan_gate.main(
+            {**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-example"}
+        )
+        left = served.branches("code-example")
+    assert real_lock(config)["locked"] is False
+    return without, with_drop, left
+
+
 @requires_persisted_locks
-def test_real_gate_passes_code_graph_views_and_fails_a_memory_branch(
+@requires_omnigraph_server
+def test_real_gate_drops_code_graph_views_through_the_serving_pod(
     cluster_dir,  # noqa: F811
 ):
-    env = {**real_env(cluster_dir), "OMNIGRAPH_CLUSTER_DIR": str(cluster_dir)}
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
-    real_branch(cluster_dir, "code-example", "act-alice/feat_x")
-    change_stub_schema(cluster_dir)
-    droppable = {**env, "OMNIGRAPH_BRANCH_DROP_ALLOWLIST": "code-example"}
+    assert real_gate(cluster_dir) == (1, 0, [])
 
-    assert plan_gate.main(env) == 1
-    assert plan_gate.main(droppable) == 0
-    assert real_branches(cluster_dir, "code-example") == ["act-alice/feat_x"]
 
-    real_branch(cluster_dir, "memory", "wip")
-    assert plan_gate.main(droppable) == 1
-    assert real_lock(cluster_dir)["locked"] is False
+@requires_persisted_locks
+@requires_omnigraph_server
+def test_real_gate_fails_on_a_memory_branch(
+    cluster_dir,  # noqa: F811
+):
+    """The memory branch outlasts the views' drop, while the old pod serves."""
+    assert real_gate(cluster_dir, "wip") == (1, 1, [])
 
 
 @requires_persisted_locks
