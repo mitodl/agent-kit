@@ -807,6 +807,8 @@ def test_graph_command_html_output(server, monkeypatch, tmp_path):
 class _FakeMCP:
     """Records run()/mount() calls so serve() dispatch can be asserted."""
 
+    instructions = ""
+
     def __init__(self):
         self.run_calls = []
 
@@ -831,6 +833,52 @@ def test_serve_defaults_to_stdio(monkeypatch):
     fake = _patch_mcp(monkeypatch)
     serve()
     assert fake.run_calls == [{}]
+
+
+def test_serve_carries_the_mounted_code_servers_instructions(monkeypatch):
+    """`mount` brings witan-code's tools but not its instructions, and agents
+    only ever connect to witan, so serve appends them."""
+    import sys
+    import types
+
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    fake.instructions = "WITAN"
+    code_mcp = types.SimpleNamespace(instructions="CODE")
+    monkeypatch.setitem(
+        sys.modules, "witan_code.server", types.SimpleNamespace(mcp=code_mcp)
+    )
+    serve()
+    assert fake.instructions == "WITAN\n\nCODE"
+
+
+def test_code_instructions_skip_an_unset_side():
+    """A server with no instructions reports ``None``, which must not reach the
+    agent as the word "None"."""
+    from witan.instructions import with_code_instructions
+
+    assert with_code_instructions(None, "CODE") == "CODE"
+    assert with_code_instructions("WITAN", None) == "WITAN"
+
+
+def test_ui_carries_the_mounted_code_servers_instructions(monkeypatch):
+    """`witan ui` serves the same /mcp an agent can connect to, so it needs the
+    code_* guidance that `witan serve` appends, not only the tools."""
+    import sys
+    import types
+
+    from witan.cli.ui import _serve_local
+
+    fake = _patch_mcp(monkeypatch)
+    fake.instructions = "WITAN"
+    code_mcp = types.SimpleNamespace(instructions="CODE")
+    monkeypatch.setitem(
+        sys.modules, "witan_code.server", types.SimpleNamespace(mcp=code_mcp)
+    )
+    _serve_local(8765, browser=False)
+    assert fake.run_calls[0]["path"] == "/mcp"
+    assert fake.instructions == "WITAN\n\nCODE"
 
 
 def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):

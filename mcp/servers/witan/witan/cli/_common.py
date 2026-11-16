@@ -46,6 +46,26 @@ stderr_console = Console(stderr=True)
 _server = None
 
 
+def mount_witan_code(server) -> None:
+    """Mount witan-code's ``code_*`` tools on ``server``, if it is installed.
+
+    ``mount`` carries tools, not instructions, and an agent only ever connects
+    to witan, so the code tools' shared text is appended to witan's here.
+    ``witan serve`` and ``witan ui`` both mount through this so neither serves
+    the code tools without the guidance their descriptions point at.
+    """
+    from ..instructions import with_code_instructions
+
+    try:
+        from witan_code.server import mcp as code_mcp
+    except ImportError:
+        return
+    server.mount(code_mcp)
+    server.instructions = with_code_instructions(
+        server.instructions, code_mcp.instructions
+    )
+
+
 def _srv():
     """Return the tool provider the CLI dispatches through.
 

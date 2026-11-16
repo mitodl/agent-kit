@@ -20,8 +20,10 @@ import httpx2
 import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.tools import FunctionTool
+from mcp.types import ToolAnnotations
 
 from witan.config import RemoteConfig
+from witan.instructions import INSTRUCTIONS
 from witan.remote.proxy import (
     RemoteCredentialRejected,
     RemoteServerProxy,
@@ -63,6 +65,7 @@ def _backing() -> FastMCP:
                 "type": "object",
                 "properties": {"repo": {"type": "string"}},
             },
+            annotations=ToolAnnotations(read_only_hint=True),
             fn=_echo,
         )
     )
@@ -101,6 +104,14 @@ def test_the_schema_comes_from_the_deployment_not_local_code(proxy):
     tool = served["task_ready"]
     assert tool.description == "from the deployment"
     assert sorted(tool.parameters["properties"]) == ["repo"]
+    assert tool.annotations.read_only_hint is True
+
+
+def test_the_republished_server_carries_the_instructions(proxy):
+    # Tool descriptions say "see instructions"; without these an agent behind
+    # `witan serve` on a deployed target had nothing to see.
+    server = asyncio.run(build_remote_server(REMOTE, proxy=proxy))
+    assert server.instructions == INSTRUCTIONS
 
 
 def test_cli_only_tools_are_not_republished():

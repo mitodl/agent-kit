@@ -46,6 +46,7 @@ from fastmcp.tools import FunctionTool
 from .. import live_pr
 from ..cli_only import CLI_ONLY_TOOLS
 from ..config import RemoteConfig
+from ..instructions import INSTRUCTIONS
 from .oidc import default_token_provider, default_token_refresher
 from .proxy import RemoteServerProxy
 
@@ -124,7 +125,10 @@ async def build_remote_server(
     naming the endpoint and the way out.
     """
     proxy = proxy or make_proxy(remote)
-    mcp: FastMCP = FastMCP("witan")
+    # The instructions come from this install, not the deployment: the proxy
+    # lists tools and does not expose the deployment's `initialize` result.
+    # Version skew can leave them a release apart, which beats sending none.
+    mcp: FastMCP = FastMCP("witan", instructions=INSTRUCTIONS)
     for tool in await proxy.remote_tools():
         # The deployment lists CLI-only tools to this proxy because the CLI
         # needs them; republishing them here would hand them back to the agent.
@@ -139,6 +143,7 @@ async def build_remote_server(
                 title=getattr(tool, "title", None),
                 description=tool.description,
                 parameters=schema,
+                annotations=tool.annotations,
                 fn=_forwarder(proxy, tool.name),
             )
         )

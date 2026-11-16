@@ -22,32 +22,10 @@ provenance siblings; prunes superseded memories (unless
 ``include_superseded``); flags Contradicts pairs; and re-ranks with the
 composite score minus a distance penalty so seeds outrank neighbours.
 
-A Contradicts pair is reported when both memories are in the returned
-result AND at least one of them is in ``repo``, the rule
-``memory_contradictions`` scopes by. Expansion can return memories from
-other repos, but a pair with neither side in ``repo`` is left out, so every
-pair here is also in ``memory_contradictions`` for the same ``repo`` and
-``include_superseded``. Pass ``all_repos=True`` to report every pair among
-the returned memories. The one mode where the two disagree: with no repo
-detected and none passed, the ``query`` seed searches every repo, so
-recall reports every pair among the returned memories, as with
-``all_repos=True``, while ``memory_contradictions`` keeps only pairs
-touching an unscoped memory.
-
-Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
-edge — today that means a Tagged edge promoted from a free-string tag,
-rather than a link someone named — costs ``w_inferred_edge`` extra
-distance, so a shared tag no longer pulls as hard as an asserted
-``related_to``. The surcharge accumulates along the path, so extending an
-inferred edge with an asserted one does not wash the penalty out. A
-neighbour reachable both ways is scored at its best route. Edges written
-before edge properties existed are unstamped and score as asserted, so this
-reweights the graph as it is rewritten rather than all at once;
-``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
-
-With no edges in the graph the result equals ``memory_search`` — expansion is
-additive, never lossy. Embeddings are not implemented: ``recall`` seeds from
-BM25 only and needs no embedding provider.
+A Contradicts pair is reported when both memories are returned and at
+least one is in ``repo`` (with ``all_repos=True``, any pair). A neighbour
+reached over an ``inferred`` edge ranks below one over an asserted edge.
+With no edges in the graph the result equals ``memory_search``.
 
 Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
 Past a total content budget a memory's ``content`` is cut, marked by
@@ -74,27 +52,27 @@ has no room for. Each key is present only when its argument was passed:
   store when ``contract_kind`` is given and witan-code is reachable, and
   empty lists otherwise.
 
-To list exactly what a seed resolves to, with nothing ranked out or pruned,
-pass ``hops=0``, ``include_superseded=True`` and a ``limit`` above the
-expected count: e.g. every memory tagged to a topic, or every memory citing
-a symbol.
+To list exactly what a seed resolves to, pass ``hops=0``,
+``include_superseded=True`` and a ``limit`` above the expected count.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str? | `null` | Free-text BM25 query, matched against ``content`` and ``title``. |
-| `symbol_id` | str? | `null` | A code-graph symbol id (``repo#path::Name``) to seed from — the memories<br>and tasks whose ``symbol_refs`` include it. Use this before editing a<br>symbol: "what do we already know about this function?" |
-| `task` | str? | `null` | A ``tk-`` slug to seed from — the memories it ``Addresses``, those<br>sharing its ``symbol_refs``, and those its title closely matches. A first<br>``task_claim`` already returns the best of these, so this is the one-call<br>way to load context for a task you are resuming or looking at without<br>claiming. |
-| `topic` | str? | `null` | A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,<br>``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join<br>surface, so this seed in particular can pull in other repositories. A<br>spec resolves through the same slugify used on write, so a tag stored<br>as ``UV`` is found by ``uv:topic``. |
-| `repo` | str? | `null` | Repo scoping — see instructions. Applies to the ``query`` seed and to<br>which contradiction pairs are reported (see above); symbol, task, and<br>topic seeds resolve wherever they live, and expansion crosses repos. |
-| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Restrict the ``query`` seed to one memory kind: ``pattern``,<br>``project_fact``, ``lesson``, or ``agent_context``. |
-| `hops` | int | `1` | How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``<br>edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``<br>disables expansion and returns the seeds alone; ``1`` (the default) is<br>almost always right, since each extra hop widens results faster than it<br>deepens them. Counts HOPS, not the fractional distance the inferred-edge<br>surcharge produces — the surcharge only reranks, it never truncates the<br>walk. |
+| `query` | str? | `null` | Free-text query, matched against ``content`` and ``title``. |
+| `symbol_id` | str? | `null` | Seed from memories and tasks whose ``symbol_refs`` include this symbol.<br>Use it before editing a symbol. |
+| `task` | str? | `null` | Seed from a ``tk-`` task: memories it addresses, shares symbols with,<br>or matches by title. Loads context for a task without claiming it. |
+| `topic` | str? | `null` | Seed from a ``tp-`` slug or ``name:kind`` spec (e.g. ``uv:topic``).<br>Crosses repos. |
+| `repo` | str? | `null` | Repo scoping; see instructions. Scopes the ``query`` seed and which<br>contradiction pairs are reported; other seeds and expansion cross<br>repos. |
+| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Restrict the ``query`` seed to one memory kind. |
+| `hops` | int | `1` | Expansion depth, 0 to 2. ``0`` returns the seeds alone; ``1`` is<br>almost always right. |
 | `limit` | int | `20` | Maximum memories to return after re-ranking. |
-| `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` hides them, which is what makes recall return current<br>knowledge rather than its history. |
-| `session_id` | str? | `null` | The calling agent session's id. Only logged, never changes the result;<br>see ``memory_get``. |
-| `memory` | str? | `null` | A memory slug to seed from, which adds the ``memory`` section: its<br>links by kind and the code symbols it names. Use after ``memory_get``<br>to see what a memory connects to. |
-| `contract` | str? | `null` | A normalised contract key (e.g. ``DATABASE_URL`` or<br>``GET /api/v1/courses/``) to seed from: the memories tagged to its<br>``<key>:contract`` Topic, cross-repo by nature. Adds the ``contract``<br>section. Tag a memory to a contract with<br>``memory_link(<memory slug>, "<key_norm>:contract", "tagged")``. |
-| `contract_kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | ``env_var`` \| ``endpoint`` \| ``package`` \| ``service``. With<br>``contract``, also asks witan-code for the code that provides or<br>consumes the key, so you can pivot from what we know to where it lives.<br>Omit to skip that lookup. |
-| `all_repos` | bool | `False` | Seed the ``query`` from every repo and report every contradiction pair,<br>instead of scoping both to the detected repo — see instructions. |
+| `include_superseded` | bool | `False` | Also return superseded memories (history, not current knowledge). |
+| `session_id` | str? | `null` | Your agent session id; only logged. |
+| `memory` | str? | `null` | Seed from a memory slug; adds the ``memory`` section (its links and<br>the code symbols it names). |
+| `contract` | str? | `null` | Seed from a normalised contract key (e.g. ``DATABASE_URL``) through its<br>``<key>:contract`` Topic. Adds the ``contract`` section. Tag a memory<br>to one with ``memory_link(<slug>, "<key_norm>:contract", "tagged")``. |
+| `contract_kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | With ``contract``, also look up the code that provides or consumes the<br>key in witan-code. |
+| `all_repos` | bool | `False` | Seed ``query`` from every repo and report every contradiction pair. |
 
 ## `memory_store`
 
@@ -105,20 +83,22 @@ and team-shareable — patterns, project facts, lessons, decisions — so other
 agents and future sessions can find it. Returns the slug of the created node
 so callers can link to it.
 
+*Writes (non-destructive).*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context` | **required** | ``pattern``      — coding convention or reusable technique<br>``project_fact`` — structural fact about a repo/service<br>``lesson``       — a correction or cautionary finding<br>``agent_context``— information a future agent on this task should know |
-| `title` | str | **required** | Short, human-readable label. Used in listings and search. |
-| `content` | str | **required** | Full text of the memory. Be specific: include the what, why, and any<br>examples. This is the primary search target. |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
-| `language` | str? | `null` | Programming language (for ``pattern`` kind). e.g. ``python``, ``typescript``. |
-| `category` | str? | `null` | Thematic category (for ``project_fact`` kind).<br>e.g. ``architecture``, ``deployment``, ``testing``, ``dependencies``. |
-| `severity` | `info` \| `warning` \| `critical`? | `null` | Importance level (for ``lesson`` kind).<br>``info`` \| ``warning`` \| ``critical``. |
-| `tags` | list[str]? | `null` | Optional list of free-form tags for grouping. |
-| `symbol_refs` | list[str]? | `null` | Optional code-graph symbol ids (``<repo>#<path/to/file.py>::<Name>``,<br>from the witan-code tools' ``symbol_id`` field) this memory concerns,<br>e.g. the function a lesson is about. Stored as a soft reference. |
-| `confidence` | float? | `null` | Optional author/agent trust in this memory, 0.0–1.0. Feeds the search<br>re-rank; omitted memories use the configured default. |
-| `session_slug` | str? | `null` | The ``ws-`` handle returned by ``workflow_session_start``, recording<br>which session produced this memory. Pass it whenever you have one: the<br>protocol carries no session state, so against a deployed service this is<br>the only way the ``SessionProduced`` provenance edge can be created.<br>Omit it under a local stdio server, which finds the handle itself. |
-| `all_repos` | bool | `False` | Store the memory under no repo. Repo-scoped memory reads leave it<br>out; ``all_repos`` reads include it — see instructions. |
+| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context` | **required** | ``pattern`` (a convention or reusable technique), ``project_fact`` (a<br>structural fact about a repo or service), ``lesson`` (a correction or<br>cautionary finding) or ``agent_context`` (what a future agent on this<br>task should know). |
+| `title` | str | **required** | Short label, used in listings and search. |
+| `content` | str | **required** | Full text: the what, the why, and examples. The primary search target. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
+| `language` | str? | `null` | For a ``pattern``, e.g. ``python``. |
+| `category` | str? | `null` | For a ``project_fact``, e.g. ``architecture``, ``deployment``. |
+| `severity` | `info` \| `warning` \| `critical`? | `null` | For a ``lesson``. |
+| `tags` | list[str]? | `null` | Free-form tags for grouping. |
+| `symbol_refs` | list[str]? | `null` | Symbol ids this memory concerns, e.g. the function a lesson is about. |
+| `confidence` | float? | `null` | Your trust in it, 0.0 to 1.0. Feeds ranking. |
+| `session_slug` | str? | `null` | See instructions. Pass it whenever you have one. |
+| `all_repos` | bool | `False` | Store under no repo; see instructions. |
 
 ## `memory_get`
 
@@ -126,75 +106,55 @@ Retrieve a single memory by its slug.
 
 Returns the full node or ``null`` if not found.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `slug` | str | **required** | The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug to retrieve. |
-| `include_topics` | bool | `False` | When ``True``, attach a ``topics`` list of the Topic nodes this memory is<br>tagged with (slug/name/kind), each with an ``edge`` dict describing the<br>link. ``edge.confidence`` is what separates a topic someone named from<br>one promoted out of the memory's free-string ``tags``. |
-| `session_id` | str? | `null` | The calling agent session's id. Only logged, never changes the result:<br>it is what ties this read to the ``task_claim`` that surfaced the<br>memory. The CLI's remote proxy fills it in; under local stdio the<br>server falls back to ``$CLAUDE_SESSION_ID`` (see ``task_claim``). |
+| `slug` | str | **required** | The memory slug. |
+| `include_topics` | bool | `False` | Attach the Topics this memory is tagged with, each with its ``edge``<br>(``edge.confidence`` is ``inferred`` for a topic promoted from a tag). |
+| `session_id` | str? | `null` | Your agent session id; only logged. See instructions. |
 
 ## `memory_update`
 
 Correct a memory's fields in place. Only non-null arguments are applied.
 
-This is the repair tool for a memory whose *content was always meant to be
-what you are about to write* — a wrong ``repo`` (so it never showed up in
-repo-scoped reads), a typo'd title, a missing tag. Returns the updated node,
-or ``null`` if no memory has that slug.
+For a field that was always wrong: a mis-scoped ``repo``, a typo'd title,
+a missing tag. If the knowledge itself changed, store a new memory and
+supersede this one (see instructions). ``kind`` is not updatable; a
+different kind is a different memory. Returns the updated node, or
+``null`` if no memory has that slug.
 
-Which tool to reach for:
-
-- a field is wrong → ``memory_update`` (this one)
-- the knowledge itself changed → ``memory_store`` the new one, then
-  ``memory_link(kind="supersedes")``; the old one stays readable as history
-- it should never have existed (accidental duplicate, test write) →
-  ``memory_delete``
-- it contains secret material → **rotate the credential.** Neither this tool
-  nor ``memory_delete`` erases the old value from the graph's history.
-
-``kind`` is deliberately not updatable: a memory that turns out to be a
-different kind is a different memory — store it and supersede this one.
+*Writes (destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `slug` | str | **required** | The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug of the memory to<br>correct. |
-| `title` | str? | `null` | New short, human-readable label. |
-| `content` | str? | `null` | New full text. Replaces the existing content rather than appending —<br>and note that rewriting content here leaves no record that it changed.<br>If the *knowledge* changed, store a new memory and supersede this one<br>instead. |
-| `repo` | str? | `null` | Canonical repo URI to (re)scope the memory to. Case-folded on write, as<br>every other repo-key path does: correcting a mis-scoped memory is this<br>tool's headline use, and a key that does not match what repo detection<br>returns would just mis-scope it again, differently. |
-| `language` | str? | `null` | Programming language (``pattern`` kind). e.g. ``python``, ``typescript``. |
-| `category` | str? | `null` | Thematic category (``project_fact`` kind). e.g. ``architecture``,<br>``deployment``, ``testing``, ``dependencies``. |
-| `severity` | `info` \| `warning` \| `critical`? | `null` | Importance (``lesson`` kind): ``info`` \| ``warning`` \| ``critical``. |
-| `tags` | list[str]? | `null` | Free-form tags. Replaces the existing list. Each tag is also promoted to<br>a ``Topic`` and linked. **Tags removed here keep their ``Tagged``<br>edge** — edges cannot be individually retracted, and deleting the Topic<br>to drop one would take out every other memory's edge to it. The string<br>list stays authoritative for what the memory claims to be tagged with. |
-| `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this memory concerns.<br>Replaces the existing list. |
-| `confidence` | float? | `null` | Author/agent trust in this memory, 0.0–1.0. Feeds the recall re-rank. |
+| `slug` | str | **required** | The memory slug. |
+| `title` | str? | `null` | New short label. |
+| `content` | str? | `null` | Replacement text. Leaves no record that it changed. |
+| `repo` | str? | `null` | Repo URI to rescope the memory to. |
+| `language` | str? | `null` | For a ``pattern``, e.g. ``python``. |
+| `category` | str? | `null` | For a ``project_fact``, e.g. ``architecture``. |
+| `severity` | `info` \| `warning` \| `critical`? | `null` | For a ``lesson``. |
+| `tags` | list[str]? | `null` | Replaces the list. Each tag becomes a Topic; a removed tag keeps its<br>``Tagged`` edge. |
+| `symbol_refs` | list[str]? | `null` | Symbol ids this memory concerns. Replaces the list. |
+| `confidence` | float? | `null` | Your trust in it, 0.0 to 1.0. Feeds ranking. |
 
 ## `memory_delete`
 
-Hard-delete a memory. Graph hygiene only — NOT a way to erase secrets.
+Hard-delete a memory that should never have existed: an accidental
+duplicate, a test write, a node in the wrong graph. Otherwise update or
+supersede it (see instructions). Author-only.
 
-Use when a memory should never have existed: an accidental duplicate, a test
-write, a node created against the wrong graph. For anything else prefer
-``memory_update`` (a field is wrong) or ``memory_store`` +
-``memory_link(kind="supersedes")`` (the knowledge changed) — superseding is
-the soft delete, and it keeps the history legible.
+Not a way to erase secrets: prior commits keep the content, so rotate the
+credential. The memory's edges go with it, both directions; Topics on the
+far end survive.
 
-**This does not erase content.** The row remains fully readable, content
-included, from any prior commit of the graph. If a memory captured a
-credential, the fix is to **rotate the credential**; scrubbing history is an
-admin ``omnigraph cleanup``, which no MCP tool performs.
-
-Deleting a node also removes its incident edges in both directions, so a
-deleted memory leaves no dangling ``Supersedes``/``RelatedTo``/``Tagged``
-behind. Topic nodes on the far end of a ``Tagged`` edge survive and may be
-left with no memories.
-
-That is not the only way to remove an edge — edges are deletable on their
-own (``task_link(remove=True)``, ``_unlink_edge``). Deleting the node is still the
-only route for a *memory* edge, since no unlink tool covers those yet.
+*Writes (destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The memory to delete permanently. |
-| `confirm` | bool | `False` | Must be ``True``. Without it this is a no-op returning<br>``{"deleted": False, "reason": ...}``. |
+| `confirm` | bool | `False` | Must be ``True``; otherwise a no-op returning ``{"deleted": False}``. |
 
 ## `memory_list`
 
@@ -206,21 +166,20 @@ Browse stored memories without a search query — e.g. all ``lesson`` or
 ``memory_list(kind="project_fact")`` at session start, or
 ``memory_list(kind="pattern", language="python")`` before writing code).
 
-Returns at most the 100 most recent matching memories. Every filter,
-including dropping superseded memories, applies before that cap, so fewer
-than 100 rows is the whole listing and exactly 100 means there may be
-more. The slim unscoped listing has no 100-row cap. A ``language``-filtered
-or slim listing reads the 10,000 most recent memories (current ones only,
-unless ``include_superseded``) and filters those, so it is complete only
-while the store holds fewer than 10,000 of them.
+Returns at most the 100 most recent matches, after every filter, so fewer
+than 100 rows is the whole listing. The slim unscoped listing has no cap.
+A ``language``-filtered or slim listing filters the 10,000 most recent
+memories.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``, or<br>``agent_context``. Omit to list all kinds. |
-| `repo` | str? | `null` | Repo scoping — see instructions. With no repo detected and none passed,<br>returns slim records (slug, kind, title, tags — no content) for unscoped<br>memories; ``memory_get`` a slug for its full content. |
-| `language` | str? | `null` | Optional filter by ``language`` (e.g. ``python``), case-insensitive;<br>applies to the full-content results, not the slim unscoped listing. |
-| `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them, as ``memory_search`` and ``recall`` do. |
-| `all_repos` | bool | `False` | List every repo's memories, with full content, instead of the detected<br>repo's — see instructions. |
+| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Filter to one memory kind. Omit for all kinds. |
+| `repo` | str? | `null` | Repo scoping; see instructions (including the slim unscoped listing). |
+| `language` | str? | `null` | Filter by language (e.g. ``python``), case-insensitive. Not applied to<br>the slim listing. |
+| `include_superseded` | bool | `False` | Also return superseded memories. |
+| `all_repos` | bool | `False` | List every repo's memories, with full content. |
 
 ## `memory_search`
 
@@ -232,13 +191,15 @@ hidden unless ``include_superseded=True``. Past a total content budget a
 memory's ``content`` is cut, marked by ``content_truncated`` and
 ``content_chars``; ``memory_get`` returns the full text.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | **required** | Free-text search query. Searched against ``content`` and ``title``.<br>A title-only match never outranks a content match on relevance: BM25<br>scores the two fields on scales that cannot be compared, so which one<br>wins is a policy rather than a measurement, and this is the policy.<br>Final order is the composite score, which also weighs recency,<br>corroboration and confidence, so a well-corroborated title-only hit<br>can still finish above a marginal content hit. |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
-| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``,<br>or ``agent_context``. |
-| `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them. |
-| `all_repos` | bool | `False` | Search every repo instead of the detected one — see instructions. |
+| `query` | str | **required** | Free-text query, matched against ``content`` and ``title``. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
+| `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Filter to one memory kind. |
+| `include_superseded` | bool | `False` | Also return superseded memories. |
+| `all_repos` | bool | `False` | Search every repo; see instructions. |
 
 ## `memory_link`
 
@@ -261,47 +222,36 @@ For memory↔memory kinds both endpoints must already exist as ``Memory`` nodes;
 the edge is not written otherwise (avoids dead off-type edges). A memory cannot
 link to itself. Returns ``linked: False`` in those cases rather than raising.
 
+*Writes (destructive).*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `from_slug` | str | **required** | The memory the edge points **from**. Direction is load-bearing for the<br>asymmetric kinds — for ``supersedes`` this is the *newer* memory. |
-| `to_slug` | str | **required** | The memory the edge points **to** — for ``supersedes``, the older memory<br>being replaced. For ``kind="tagged"`` this is a Topic instead: either an<br>existing ``tp-`` slug or a ``name:kind`` spec, which auto-creates it. |
-| `kind` | `supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` | **required** | Which edge to write: ``supersedes`` \| ``refines`` \| ``applies_to`` \|<br>``contradicts`` \| ``related_to`` \| ``tagged``. See the descriptions<br>above — ``supersedes`` is the one that changes what default reads<br>return. |
-| `role` | str? | `null` | Free text saying WHY these two are linked, stored on the edge and<br>returned by ``recall(memory=...)``. The edge kind says what KIND of<br>relation it is; this says what the relation is ABOUT ("both configure<br>the Vault sidecar", "same incident"). Worth a sentence on a<br>``related_to``, where the kind alone tells a later reader nothing.<br>Scanned on the way in like any other free text, so it can be redacted<br>before it lands. The returned ``edge`` therefore reports the three<br>machine-set properties and NOT ``role`` — read it back with<br>``recall(memory=...)`` to see what was actually stored. |
-| `confidence` | `asserted` \| `inferred` | `'asserted'` | ``asserted`` (default) when you are naming both endpoints because you<br>know they belong together; ``inferred`` when the link is a guess worth<br>recording but not worth ranking on. ``recall`` expands along asserted<br>edges in preference to inferred ones, so this is the knob that decides<br>whether a speculative link pulls its neighbour into other people's<br>results. |
+| `from_slug` | str | **required** | The edge's source; for ``supersedes``, the newer memory. |
+| `to_slug` | str | **required** | The edge's target; for ``supersedes``, the older memory. For<br>``tagged``, a ``tp-`` slug or a ``name:kind`` spec. |
+| `kind` | `supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` | **required** | The edge kind; see above. |
+| `role` | str? | `null` | Why these two are linked (e.g. "same incident"), stored on the edge.<br>Worth a sentence on ``related_to``. Read it back with<br>``recall(memory=...)``; the returned ``edge`` omits it. |
+| `confidence` | `asserted` \| `inferred` | `'asserted'` | ``asserted`` when you know they belong together, ``inferred`` for a<br>guess. ``recall`` ranks neighbours over inferred edges lower. |
 
 ## `memory_contradictions`
 
 List every pair of memories that contradict each other, newest link first.
 
-An unranked enumeration of the ``contradicts`` edges, for reviewing
-conflicts rather than loading context. ``recall`` reports a contradiction
-only when both memories land in its result, and ``recall(memory=...)`` needs
-a slug to start from; this needs neither. Both apply the same ``repo`` rule
-(below), so every pair ``recall`` reports is one this lists for the same
-``repo`` and ``include_superseded``. The exception is no repo detected and
-none passed: ``recall``'s ``query`` seed then spans every repo, so it
-reports every pair among its result, while this keeps only pairs touching
-an unscoped memory.
+For reviewing conflicts: needs no seed, where ``recall`` reports a pair
+only when both memories land in its result.
 
 Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
 carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
-``a`` is the side the link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
-all ``null`` on links written before edge properties existed.
+``a`` is the side the link was made from. ``edge`` is ``{confidence, role,
+author, created_at}``. One row per unordered pair. Superseding either side
+resolves a contradiction, so those pairs are dropped by default.
 
-One row per unordered pair. ``contradicts`` is symmetric but can be stored
-in both directions; when it is, the newer link is the one reported, the same
-newest-wins rule as ``recall(memory=...)``.
-
-Superseding either side is how a contradiction gets resolved, so a pair
-with a superseded memory in it is dropped by default. That is also what
-keeps this in agreement with ``recall``, which prunes superseded memories
-before it looks for pairs.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Repo scoping — see instructions. A pair is included when EITHER memory<br>is in scope, since a contradiction across two repos concerns both. With<br>no repo detected and none passed, only pairs touching an unscoped memory<br>(``repo`` null) are returned. |
-| `include_superseded` | bool | `False` | When ``True``, keep pairs where either memory has been superseded, i.e.<br>the resolved ones. |
-| `all_repos` | bool | `False` | Report every pair, in any repo — see instructions. |
+| `repo` | str? | `null` | Repo scoping; see instructions. A pair is in scope when either memory<br>is. With no repo, only pairs touching an unscoped memory. |
+| `include_superseded` | bool | `False` | Also return resolved pairs (either side superseded). |
+| `all_repos` | bool | `False` | Every pair, in any repo. |
 
 ## `memory_stale_refs`
 
@@ -316,7 +266,9 @@ or moved, so the memory can still be true: ``candidates`` lists the indexed
 symbols with the same name to check first, then ``memory_update`` the refs
 or supersede the memory.
 
+*Read-only.*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
-| `all_repos` | bool | `False` | Check every repo's memories instead of the detected repo's — see<br>instructions. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
+| `all_repos` | bool | `False` | Check every repo's memories. |

@@ -15,31 +15,22 @@ Create a new workflow project to track an engineering objective.
 Call this at the start of a multi-session project before calling
 ``workflow_session_start``. The returned slug is used to link sessions.
 
-A project may span several repos (a service that touches a Django app, its
-frontend, and the infra repo that deploys it) or none (a cross-cutting
-objective not yet tied to any repo). The repo set also grows automatically
-as sessions run in new repos — see ``workflow_session_start``.
+A project may span several repos or none. Returns ``{"slug", "repos",
+"phase", "similar"}``; ``similar`` is up to 3 active projects in any repo
+whose title matches, a soft duplicate check that never blocks creation.
 
-Returns ``{"slug", "repos", "phase", "similar"}`` — ``similar`` is up to 3
-BM25 matches on ``title`` against other *active* projects (searched across
-all repos, not just this one — the same objective tracked from a
-different repo is still a duplicate), a soft duplicate check. It never
-blocks creation.
-
-Against a deployment that serves the web UI, it also carries ``ui_url``:
-the link that opens the project there. Hand a person that link rather than
-building one.
+*Writes (non-destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `title` | str | **required** | Short name for the project. Used in listings and injected context. |
-| `description` | str | **required** | Full description of the objective — what will be built or changed and why. |
-| `phase` | `discovery` \| `spec` \| `implementation` \| `delivery` | `'discovery'` | Starting phase. One of ``discovery``, ``spec``, ``implementation``,<br>``delivery``. Defaults to ``discovery``. |
-| `repos` | list[str]? | `null` | Canonical repo URIs this project spans. The current repo (detected from<br>``.git/config``) is added automatically. Omit entirely when creating a<br>repo-less "floating" project from outside any git repo. Guessing here is<br>fine — a project's real blast radius is rarely known at creation. The<br>set can be corrected at any time with ``workflow_project_update``<br>(``repos`` to replace it, ``add_repos``/``remove_repos`` to nudge it),<br>and it also grows on its own as sessions run in new repos. |
-| `github_issue` | str? | `null` | URL of the GitHub issue tracking this work.<br>e.g. ``github.com/mitodl/ol-django/issues/847``. |
-| `tags` | list[str]? | `null` | Optional list of tags for grouping and searching. |
-| `preauthorized` | list[str]? | `null` | The autonomy envelope's first half: actions an agent working this<br>project may take without asking, e.g. ``"deploy to the QA stack"`` or<br>``"use the existing ~/.ssh/deploy key"``. Standing approval from the<br>project owner, scoped to this project. Each list records the caller<br>as the one who set it (``preauthorized_set_by``), resolved the same way<br>``author`` is; it can't be passed in. |
-| `reserved_decisions` | list[str]? | `null` | The other half: decisions kept for a human, e.g. ``"merging to<br>main"``. An agent collects these into one list for the user rather<br>than acting on them or asking about each one separately. |
+| `title` | str | **required** | Short name, used in listings and injected context. |
+| `description` | str | **required** | The objective: what will be built or changed, and why. |
+| `phase` | `discovery` \| `spec` \| `implementation` \| `delivery` | `'discovery'` | Starting phase. |
+| `repos` | list[str]? | `null` | Repo URIs this project spans; the current repo is added. Guess freely:<br>correct it later with ``workflow_project_update``, and it grows as<br>sessions run in new repos. |
+| `github_issue` | str? | `null` | URL of the tracking GitHub issue. |
+| `tags` | list[str]? | `null` | Tags for grouping and search. |
+| `preauthorized` | list[str]? | `null` | Actions an agent on this project may take without asking, e.g.<br>``"deploy to the QA stack"``. The caller is recorded as<br>``preauthorized_set_by``. |
+| `reserved_decisions` | list[str]? | `null` | Decisions kept for a human, e.g. ``"merging to main"``. Collect these<br>into one list for the user rather than acting or asking one by one. |
 
 ## `workflow_project_get`
 
@@ -58,24 +49,12 @@ not act on ``reserved_decisions``, whoever set them, but collect them into
 one list for the user. Neither overrides a permission prompt, the user's
 in-session instructions, or a repo's AGENTS.md.
 
-``blocked_by`` lists the ``wp-`` slugs of projects that must complete
-before this one is ready, and ``blockers`` resolves each of them to
-``{slug, title, status, phase}`` in the same order, so a blocker that has
-already completed is visible without a second read. A slug in
-``blocked_by`` whose project no longer exists has no ``blockers`` row.
-``blocks`` lists projects this project is currently blocking (derived by
-scanning all active projects).
+``blocked_by`` lists projects that must complete first, and ``blockers``
+resolves each to ``{slug, title, status, phase}``. ``blocks`` lists the
+active projects this one is blocking. May carry ``live_pr`` and ``ui_url``
+(see instructions).
 
-When ``github_pr`` is set and witan runs on your machine, the project also
-carries ``live_pr``: that PR's state fetched from GitHub just now
-(``state``, ``draft``, ``review_decision``, ``checks``, ``fetched_at``), or
-``{"error": ...}`` when it could not be fetched. The description is a
-snapshot from when it was written; where ``live_pr`` disagrees with it,
-``live_pr`` is current.
-
-Against a deployment that serves the web UI, the project also carries
-``ui_url``: the link that opens it there. Hand a person that link rather
-than building one.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -91,10 +70,10 @@ under it (same readiness rule as ``task_ready``), the **last session's
 handoff summary** (and whether it's still open), and any project-level
 **blockers**. Returns ``None`` if the project doesn't exist.
 
-``ready_tasks`` is capped at 100 while ``counts.ready`` counts every ready
-task, so the two disagree on a busy project; ``ready_truncated`` is true
-exactly when they do. The count has no ceiling of its own: it is bounded
-by the project's task count, which ready work is a subset of.
+``ready_tasks`` is capped at 100; ``ready_truncated`` says when
+``counts.ready`` is higher.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -105,67 +84,35 @@ by the project's task count, which ready work is a subset of.
 List workflow projects, optionally filtered by repo, status, and phase, or
 search them with ``query``.
 
-Defaults to listing only ``active`` projects. Pass ``status=None`` to see
-all statuses. The ``UserPromptSubmit`` hook calls this to inject project
-context into new sessions.
+With ``query``, a BM25 search over title and description: up to 20
+matches, ranked, after the other filters. Run it before
+``workflow_project_create`` to check the objective is not already tracked.
 
-With ``query``, this is a plain BM25 search (no graph expansion) matched
-against ``description`` and ``title``: up to 20 projects, ranked by
-relevance, after the other filters. Run it before
-``workflow_project_create`` to check whether the objective is already
-tracked; ``workflow_project_create`` also runs the search itself and
-returns the top matches as ``similar``.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted. |
-| `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active``. |
-| `phase` | `discovery` \| `spec` \| `implementation` \| `delivery`? | `null` | Optional phase filter applied after fetching. |
-| `ready` | bool | `False` | When ``True``, only return active projects whose blockers are all<br>completed (i.e. projects that are unblocked and actionable). |
-| `query` | str? | `null` | Free-text search query. The repo, phase and ready filters apply to<br>every match the BM25 fetch returns (it is unbounded), and the 20-row<br>cap after them, so a filter never hides a match that scored below a<br>query-level cap. |
-| `all_repos` | bool | `False` | List projects across all repos instead of filtering to one. |
+| `repo` | str? | `null` | Repo scoping; see instructions. Matches projects whose repo set<br>contains it. |
+| `status` | `active` \| `completed` \| `abandoned`? | `'active'` | Defaults to ``active``; ``None`` for every status. |
+| `phase` | `discovery` \| `spec` \| `implementation` \| `delivery`? | `null` | Filter to one phase. |
+| `ready` | bool | `False` | Only active projects whose blockers have all completed. |
+| `query` | str? | `null` | Free-text search query. |
+| `all_repos` | bool | `False` | List every repo's projects. |
 
 ## `workflow_project_update`
 
 Correct a project's metadata after creation, or change what blocks it.
 
-The escape hatch for everything ``workflow_project_advance`` (phase,
-``github_pr``) and ``workflow_project_complete`` (completion) don't
-cover. Every parameter is optional and only what you pass is touched;
-omitting a field leaves it exactly as it was, so this can never blank
-something by accident. Returns the updated project, or ``None`` if the
-slug doesn't exist.
+Only what you pass is touched. Returns the updated project, or ``None``
+if the slug doesn't exist. The phase is set by ``workflow_project_advance``
+and completion by ``workflow_project_complete``, not here.
 
-Project dependencies are coarse ordering between whole projects; for
-ordering between individual tasks use ``task_link(kind="blocks")``.
-``add_blocked_by`` declares projects that must complete before this one
-can begin: each gets a ``ProjectBlocks`` edge (blocker -> this project)
-and is appended to this project's ``blocked_by``, which is what the
-ready-work check in ``workflow_project_list(ready=True)`` reads.
-``remove_blocked_by`` deletes the edge and the ``blocked_by`` entry.
-A slug in both lists ends up removed. A project cannot block itself, so
-naming ``slug`` in ``add_blocked_by`` raises ``ValueError``. A blocker
-slug that does not exist is refused by the store, and none of the call's
-other writes land with it except the edge deletes, which the store makes
-commit on their own, ahead of the rest.
+Most often this fixes the repo set, which repo-scoped reads depend on:
+``repos`` replaces it, ``add_repos``/``remove_repos`` nudge it (removals
+after additions). ``add_blocked_by``/``remove_blocked_by`` order whole
+projects; for tasks use ``task_link(kind="blocks")``.
 
-The common case is repos. A project's real blast radius is rarely known
-during discovery, and until the set is right, repo-scoped recall from the
-repos where the work actually lands won't surface the project at all. Pass
-``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
-nudge it (both may be passed together; removals are applied after
-additions).
-
-Two things this deliberately can't do:
-
-- **Set the phase.** ``workflow_project_advance`` stays the only route, so
-  a transition is always seen by its ordering check. It does allow going
-  backwards (with a confirmation), which is how a phase set in error gets
-  corrected — this tool would just bypass the prompt.
-- **Complete a project.** ``status`` accepts ``abandoned`` (for work that
-  stopped without an outcome) and ``active`` (to revive it), but not
-  ``completed``: that belongs to ``workflow_project_complete``, which seals
-  a corpus trace. Nothing should mint a trace without a narrative.
+*Writes (destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -177,11 +124,11 @@ Two things this deliberately can't do:
 | `remove_repos` | list[str]? | `null` | Canonical repo URIs to drop from the set. |
 | `tags` | list[str]? | `null` | Replacement tag list. Pass ``[]`` to clear. |
 | `github_issue` | str? | `null` | URL of the GitHub issue tracking this work. |
-| `status` | `active` \| `abandoned`? | `null` | ``active`` \| ``abandoned``. |
-| `preauthorized` | list[str]? | `null` | Replacement list of actions an agent may take on this project without<br>asking. Pass ``[]`` to clear. When the user grants something "for this<br>project", record it here rather than only acting on it, so the next<br>session does not have to ask again. Replaces the whole list: read it<br>with ``workflow_project_get`` first to add one item. The caller is<br>recorded as ``preauthorized_set_by`` for every item in the new list,<br>so a list rewritten by anyone but the project author reads as<br>suggestions, not approval, until the author sets it again. |
-| `reserved_decisions` | list[str]? | `null` | Replacement list of decisions kept for a human. Pass ``[]`` to clear.<br>Replaces the whole list, as ``preauthorized`` does. |
-| `add_blocked_by` | list[str]? | `null` | ``wp-`` slugs of projects that must complete before this one can<br>begin. One already in ``blocked_by`` is left as it is. |
-| `remove_blocked_by` | list[str]? | `null` | ``wp-`` slugs to drop from ``blocked_by``, deleting their<br>``ProjectBlocks`` edges. One that is not a blocker is a no-op. |
+| `status` | `active` \| `abandoned`? | `null` | ``abandoned`` for work that stopped without an outcome, ``active`` to<br>revive it. |
+| `preauthorized` | list[str]? | `null` | Replaces the list; ``[]`` clears. Record a grant the user makes "for<br>this project" here. Read it with ``workflow_project_get`` first to add<br>one item. Set by anyone but the author, it reads as suggestions. |
+| `reserved_decisions` | list[str]? | `null` | Replaces the list; ``[]`` clears. |
+| `add_blocked_by` | list[str]? | `null` | ``wp-`` slugs that must complete before this project can begin. |
+| `remove_blocked_by` | list[str]? | `null` | ``wp-`` slugs to drop from ``blocked_by``. |
 
 ## `workflow_project_advance`
 
@@ -189,6 +136,8 @@ Advance a workflow project to the next phase.
 
 Call when transitioning from e.g. spec to implementation. Optionally
 record a PR URL when moving to or through the delivery phase.
+
+*Writes (destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -204,6 +153,8 @@ This creates a ``WorkflowTrace`` node that aggregates all linked sessions
 into an immutable record for later pattern mining. Idempotent: if a trace
 already exists for this project, it is returned without re-inserting.
 
+*Writes (destructive, idempotent).*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``wp-`` slug of the project to complete. |
@@ -217,6 +168,8 @@ Link a memory to a workflow project (the ``Informed`` edge).
 Records that a project consulted or produced a memory — a ``pattern``,
 ``lesson``, ``project_fact``, or ``agent_context``. The linked memories
 surface when the project's corpus trace is mined for reusable patterns.
+
+*Writes (non-destructive).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -233,73 +186,42 @@ Assembles the memories connected to a project from two grains:
 - **project-grain** (``Informed``): memories explicitly linked via
   ``workflow_project_link_memory``.
 
-De-duplicated by slug. The flat ``memories`` list is assembled with two
-queries regardless of session count. Pass ``group_by_session=True`` to also
-get a ``by_session`` breakdown — that costs one extra query per session, so
-it is opt-in.
+De-duplicated by slug.
+
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `project_slug` | str | **required** | The ``wp-`` slug whose memories to assemble. |
-| `group_by_session` | bool | `False` | Also return a ``by_session`` breakdown of which session produced what.<br>Costs one extra query per session, so leave it off unless you need the<br>attribution. |
-| `session` | str? | `null` | A ``ws-`` slug. Return only the memories that one session produced,<br>in one query, instead of the project's. ``group_by_session`` is<br>ignored, and a session from another project returns none. The Stop hook uses this to summarize a session it<br>auto-closes; named ``session`` rather than ``session_slug`` because<br>the remote proxy fills an omitted ``session_slug`` with the caller's<br>active session, which would silently narrow every project-wide call. |
+| `group_by_session` | bool | `False` | Also return ``by_session``. Costs one query per session. |
+| `session` | str? | `null` | A ``ws-`` slug: only the memories that session produced.<br>``group_by_session`` is then ignored. |
 
 ## `workflow_session_start`
 
 Link the current agent session to a workflow project.
 
-Call this at the start of any session that is contributing to a tracked
-project. The context injected by the context-injection hook (Claude Code) or
-extension (Pi) provides the ``project_slug``; ``session_id`` should be the
-session id — ``$CLAUDE_SESSION_ID`` on Claude Code, ``$PI_SESSION_ID`` on
-Pi (read it with ``echo $PI_SESSION_ID`` in the bash tool; it is what the Pi
-workflow extension's shutdown auto-close looks the handle up by),
-``$CODEX_SESSION_ID`` on Codex (read it the same way; Codex hands the Stop
-hook that id), or any stable unique string for the session otherwise.
+Call at the start of a session contributing to a tracked project; the
+injected context names the ``project_slug``. Returns a handle
+(``session_slug``, ``project_slug``, ``phase``, ``session_id``,
+``started_at``): pass ``session_slug`` to ``workflow_session_end``.
 
-Returns an explicit session handle (``session_slug``, ``project_slug``,
-``phase``, ``session_id``, ``started_at``). Hold on to it and pass
-``session_slug`` back to ``workflow_session_end`` — the handle is the only
-thing that ties the two calls together, since the protocol carries no session
-state of its own and consecutive calls may land on different replicas.
+Re-entrant: while the session for this (``project_slug``, ``session_id``)
+is open, a repeat returns the same handle with ``existed: true``, merging
+any new ``repo`` and ``tags``; ``phase`` stays as first set. After it
+ends, the same ``session_id`` starts a fresh session. Also links your
+branch to the project when a repo and branch are known.
 
-**Re-entrant.** Calling again for a (``project_slug``, ``session_id``) whose
-session is still open returns that same handle with ``existed: true``
-instead of minting a second node — so a hook retry, a transport reconnect,
-or the replica failover the paragraph above warns about can't silently
-duplicate a session. Any newly-supplied ``repo`` and ``tags`` are merged
-into the existing session; ``phase`` is left at what the first call set (use
-``workflow_project_advance`` to move a project's phase). Once a session has
-been ended, the same ``session_id`` starts a fresh session — one
-``$CLAUDE_SESSION_ID`` legitimately spans several working stints.
-
-Two *simultaneous* starts (a client retrying while the first request is
-still in flight) can still both insert, since the check and the insert are
-not one atomic operation. That is resolved immediately after the fact rather
-than left for the migration to find — see ``_dedupe_open_sessions``. Both
-racers return the same handle.
-
-Because the repo accretion below runs on the re-entrant path too, calling
-this once per repo remains a valid way to widen a project's repo set — but
-``workflow_project_update(add_repos=[...])`` does it directly, without
-needing a session at all.
-
-When a repo is detected and the caller is on a git branch, also upserts a
-``CodeBranch`` (repo, branch) and links it ``ForProject`` to this project —
-schema.pg § Code Branches. Best-effort: silently skipped with no
-repo/branch context, never fails the session start. Both values come from
-the caller (see ``branch`` below); a deployed server has no checkout to
-read them from.
+*Writes (non-destructive, idempotent).*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `project_slug` | str | **required** | The ``wp-`` slug of the project this session belongs to. |
-| `session_id` | str | **required** | Unique identifier for this agent session. |
+| `session_id` | str | **required** | Your agent session id; see instructions. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery` | **required** | The phase this session is working in. |
-| `repo` | str? | `null` | Repo scoping — see instructions. |
-| `branch` | str? | `null` | The git branch the caller is on, for the ``CodeBranch`` above. Filled<br>in client-side by the remote proxy; omitted, the server falls back to<br>its own working directory, which is right under local stdio and empty<br>under a deployment. |
+| `repo` | str? | `null` | Repo scoping; see instructions. |
+| `branch` | str? | `null` | Your git branch. witan's CLI proxy fills it in; under local stdio it<br>defaults to the server's checkout. |
 | `tags` | list[str]? | `null` | Optional tags. |
-| `all_repos` | bool | `False` | Record the session under no repo — see instructions. |
+| `all_repos` | bool | `False` | Record the session under no repo; see instructions. |
 
 ## `workflow_session_end`
 
@@ -315,6 +237,8 @@ For best corpus quality, write a summary that includes:
 - What remains for the next session
 - Any blockers or decisions made
 
+*Writes (destructive).*
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start`` (its<br>``session_slug`` field). Not the agent's own session id<br>(``$CLAUDE_SESSION_ID`` and the like): this tool takes no<br>``session_id`` parameter. |
@@ -326,19 +250,16 @@ For best corpus quality, write a summary that includes:
 
 List workflow sessions, newest last.
 
-Mainly for finding sessions that leaked open — one whose agent died, or
-whose Stop hook could not reach the graph. An open session is not cosmetic:
-``workflow_project_complete`` folds every linked session into the corpus
-trace, so one with no ``ended_at`` inflates ``session_count``, contributes
-its phase while having recorded nothing, carries no handoff summary, and
-cannot extend ``duration`` (computed from ``max(ended_at)``). It is also
-what drives the context hook's "N sessions in <phase>" staleness nag.
+Mainly for finding sessions that leaked open (the agent died, or its Stop
+hook could not reach the graph). An open session skews its project's
+corpus trace and drives the context hook's staleness nag. ``witan session
+sweep`` closes them in bulk.
 
-Use ``witan session sweep`` to close them in bulk.
+*Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `project_slug` | str? | `null` | Restrict to one project's sessions. Omit for every project. |
-| `open_only` | bool | `False` | Only sessions with no ``ended_at``. Superseded sessions (deduped by<br>``witan migrate dedupe-sessions``) are always excluded — they are<br>already skipped by every aggregate read and are not leaks. |
-| `include_superseded` | bool | `False` | Keep superseded rows instead of dropping them. For ``witan session<br>list``, the one caller that wants to see what<br>``migrate dedupe-sessions`` did rather than the leaked-session view. |
-| `since` | str? | `null` | ISO timestamp. Keep only sessions that ended at or after it, plus<br>every still-open one — an open session has no ``ended_at`` to compare<br>and is current by definition, so a window must not drop it. Without<br>this an unscoped read returns every session ever recorded, and a view<br>showing the last two weeks pays for all of it on every poll.<br>Raises ``ValueError`` if it does not parse, the empty string<br>included. Tolerating either would mean ``since="last week"`` or<br>``since=""`` silently returning every session, which is the same<br>unsignalled no-op this parameter exists to remove.<br>The filter runs in Python: ``read.gq`` has no comparison on a<br>``DateTime``, so this bounds the response, not the store read. |
+| `open_only` | bool | `False` | Only sessions with no ``ended_at``. Superseded sessions are excluded. |
+| `include_superseded` | bool | `False` | Keep rows superseded by ``witan migrate dedupe-sessions``. |
+| `since` | str? | `null` | ISO timestamp: sessions that ended at or after it, plus every open<br>one. An unparseable value, ``""`` included, raises ``ValueError``. |
