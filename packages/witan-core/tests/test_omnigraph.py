@@ -93,6 +93,156 @@ def test_remote_graph_id_parsed_from_uri_path(monkeypatch):
     assert client.graph_id == "code"
 
 
+# ── substrate profile: declared capabilities per backend ───────────
+
+
+@pytest.mark.parametrize(
+    ("uri", "backend"),
+    [
+        ("/var/lib/witan/graph.omni", "local"),
+        ("file:///var/lib/witan/graph.omni", "local"),
+        ("s3://bucket/graph", "s3"),
+        ("az://container/graph", "az"),
+        ("http://omnigraph-server:8080", "server"),
+        ("https://omnigraph.example.org", "server"),
+    ],
+)
+def test_profile_backend_follows_the_uri_scheme(monkeypatch, uri, backend):
+    client = _built_client(monkeypatch, uri, graph_id="council")
+    assert client.profile.backend == backend
+    assert client.is_remote is (backend == "server")
+
+
+@pytest.mark.parametrize("scheme", og._CLOUD_SCHEMES)
+def test_every_cloud_scheme_is_classified_as_its_cloud_backend(scheme):
+    backend = og.SubstrateProfile.for_uri(f"{scheme}bucket/graph").backend
+    assert backend == og._CLOUD_BACKENDS[scheme]
+
+
+def test_a_cloud_scheme_added_later_is_not_classified_local(monkeypatch):
+    monkeypatch.setitem(og._CLOUD_BACKENDS, "gs://", "s3")
+    assert og.SubstrateProfile.for_uri("gs://bucket/graph").backend == "s3"
+
+
+def test_a_direct_store_declares_no_server_capabilities(monkeypatch):
+    profile = _built_client(monkeypatch, "s3://bucket/graph").profile
+    assert profile == og.SubstrateProfile(
+        backend="s3",
+        shared=False,
+        maintenance="client",
+        asserts_actor=False,
+        http_transport=False,
+        admission_gated=False,
+        http_contract=None,
+    )
+
+
+def test_a_server_store_declares_every_server_capability(monkeypatch):
+    profile = _built_client(
+        monkeypatch, "http://omnigraph-server:8080", graph_id="council"
+    ).profile
+    assert profile.shared
+    assert profile.maintenance == "server"
+    assert profile.asserts_actor
+    assert profile.http_transport
+    assert profile.admission_gated
+
+
+def test_the_mcp_backend_is_shared_and_server_maintained():
+    profile = og.SubstrateProfile.for_backend("mcp")
+    assert (profile.shared, profile.maintenance) == (True, "server")
+    assert not profile.supports("http_transport")
+
+
+def test_the_profile_is_frozen(monkeypatch):
+    profile = _built_client(monkeypatch, "/tmp/graph.omni").profile
+    with pytest.raises(AttributeError):
+        profile.shared = True  # type: ignore[misc]
+
+
+def _gap_records(caplog) -> list:
+    return [r for r in caplog.records if r.name == "witan.capability"]
+
+
+def test_a_local_only_capability_is_refused_by_a_server_store(monkeypatch, caplog):
+    local = _built_client(monkeypatch, "/var/lib/witan/graph.omni")
+    remote = _built_client(
+        monkeypatch, "http://omnigraph-server:8080", graph_id="council"
+    )
+
+    local.require("client_maintenance")
+    with pytest.raises(og.CapabilityUnsupported) as exc_info:
+        remote.require("client_maintenance")
+
+    assert (exc_info.value.backend, exc_info.value.capability) == (
+        "server",
+        "client_maintenance",
+    )
+    (record,) = _gap_records(caplog)
+    assert record.key == "server:client_maintenance"
+    assert record.getMessage() == "witan.capability.gap server:client_maintenance"
+
+
+def test_a_remote_only_capability_is_refused_by_a_local_store(monkeypatch, caplog):
+    remote = _built_client(
+        monkeypatch, "http://omnigraph-server:8080", graph_id="council"
+    )
+    local = _built_client(monkeypatch, "/var/lib/witan/graph.omni")
+
+    remote.require("asserts_actor")
+    with pytest.raises(og.CapabilityUnsupported) as exc_info:
+        local.require("asserts_actor")
+
+    assert (exc_info.value.backend, exc_info.value.capability) == (
+        "local",
+        "asserts_actor",
+    )
+    (record,) = _gap_records(caplog)
+    assert (record.key, record.backend, record.capability) == (
+        "local:asserts_actor",
+        "local",
+        "asserts_actor",
+    )
+
+
+def test_a_supported_capability_logs_no_gap(monkeypatch, caplog):
+    _built_client(monkeypatch, "s3://bucket/graph").require("client_maintenance")
+    assert _gap_records(caplog) == []
+
+
+def test_capability_unsupported_is_a_runtime_error_refusal():
+    exc = og.CapabilityUnsupported("local", "asserts_actor")
+    assert isinstance(exc, RuntimeError)
+    assert isinstance(exc, Refusal)
+    assert str(exc) == "local store does not support asserts_actor"
+
+
+@pytest.mark.parametrize(
+    "call", [lambda c: c.optimize(), lambda c: c.cleanup(keep=1)], ids=["opt", "gc"]
+)
+def test_maintenance_on_a_server_store_is_refused_before_the_cli_runs(
+    monkeypatch, call
+):
+    def no_cli(*args, **kwargs):
+        raise AssertionError("the CLI must not run")
+
+    monkeypatch.setattr(OmnigraphClient, "_run", no_cli)
+    client = _built_client(
+        monkeypatch, "http://omnigraph-server:8080", graph_id="council"
+    )
+    with pytest.raises(og.CapabilityUnsupported):
+        call(client)
+
+
+def test_an_actor_is_asserted_only_where_the_profile_says(monkeypatch):
+    local = _built_client(monkeypatch, "/var/lib/witan/graph.omni", actor="act-a")
+    remote = _built_client(
+        monkeypatch, "http://omnigraph-server:8080", graph_id="council", actor="act-a"
+    )
+    assert local._actor_field() == {}
+    assert remote._actor_field() == {"actor": "act-a"}
+
+
 def _speaks_targets(monkeypatch, value: bool) -> None:
     """Pin the CLI dialect, so an argv assertion does not depend on which
     omnigraph happens to be installed."""
