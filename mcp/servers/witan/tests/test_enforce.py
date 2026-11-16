@@ -15,6 +15,7 @@ from witan.scan import (
     masked_preview,
     write_guard_from_config,
 )
+from witan.scan.enforce import UNSCANNED
 from witan_core.refusal import Refusal
 
 
@@ -411,3 +412,124 @@ def test_workflow_project_update_scans_title_and_description():
             "update_workflow_project_fields",
             {"slug": "wp-1", "title": "t", "description": "key AKIASECRET"},
         )
+
+
+# ── stored_text: what a slug is built from ──────────────────────────────────────
+# A slug is the node's permanent @key and is never scanned, so it is built from
+# the field as the write will store it, not from what the caller sent.
+
+
+def test_stored_text_drops_a_redacted_span():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="redact")
+    assert (
+        guard.stored_text("insert_memory", "title", "ping a@b.com", None)
+        == "ping «redacted:email»"
+    )
+
+
+def test_stored_text_drops_a_span_the_write_would_block():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")])
+    assert "AKIA" not in guard.stored_text("insert_task", "title", "key AKIA", None)
+
+
+def test_stored_text_keeps_a_warned_span_as_the_write_does():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="warn")
+    assert guard.stored_text("insert_task", "title", "a@b.com", None) == "a@b.com"
+
+
+def test_stored_text_keeps_an_allowlisted_span():
+    guard = _guard(
+        [MatchScanner("email", "pii", "a@b.com")],
+        pii_action="redact",
+        allowlist=["a@b\\.com"],
+    )
+    assert guard.stored_text("insert_task", "title", "a@b.com", None) == "a@b.com"
+
+
+def test_stored_text_follows_the_repo_overlay():
+    guard = _guard(
+        [MatchScanner("email", "pii", "a@b.com")],
+        pii_action="redact",
+        overlay={"github.com/example/legacy": {"pii_action": "warn"}},
+    )
+    legacy = "github.com/example/legacy"
+    assert guard.stored_text("insert_task", "title", "a@b.com", legacy) == "a@b.com"
+    assert "a@b.com" not in guard.stored_text(
+        "insert_task", "title", "a@b.com", "github.com/other/repo"
+    )
+
+
+def test_stored_text_audits_and_records_nothing(monkeypatch):
+    """The write that follows audits and reports the field itself, so a second
+    record from building the slug would describe one redaction twice."""
+    from witan.scan import audit, no_redactions, take_redactions
+
+    emitted = []
+    monkeypatch.setattr(audit, "emit", lambda **kw: emitted.append(kw))
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="redact")
+    with no_redactions():
+        guard.stored_text("insert_memory", "title", "a@b.com", None)
+        assert take_redactions() == ()
+        assert emitted == []
+        # Sanity: the patch is live, so the empty list above means something.
+        guard("insert_memory", {"title": "a@b.com"})
+        assert emitted
+
+
+class FirstSightFails:
+    """Raises the first time it scans a given text and flags ``needle`` after.
+
+    Stands in for a transient scanner failure: the scan that builds the slug
+    fails, and the write's own scan of the same field succeeds."""
+
+    name = "flaky"
+    category = "pii"
+
+    def __init__(self, needle):
+        self._seen = set()
+        self._inner = MatchScanner("email", "pii", needle)
+
+    def scan(self, text, field, node_type):
+        if text not in self._seen:
+            self._seen.add(text)
+            raise RuntimeError("transient")
+        return self._inner.scan(text, field, node_type)
+
+
+@pytest.mark.parametrize("on_scanner_error", ["warn", "block"])
+def test_stored_text_fails_closed_when_a_scanner_fails(on_scanner_error, monkeypatch):
+    from witan.scan import enforce
+
+    warned = []
+
+    class Recorder:
+        def warning(self, event, **kw):
+            warned.append((event, kw))
+
+    monkeypatch.setattr(enforce, "logger", Recorder())
+    guard = _guard([BoomScanner()], on_scanner_error=on_scanner_error)
+
+    assert guard.stored_text("insert_task", "title", "a@b.com", None) == UNSCANNED
+    [(event, kw)] = warned
+    assert event == "witan.scan.slug_unscanned"
+    assert kw["reason"] == "scanner_failed"
+    assert kw["scanner"] == "boom"
+
+
+def test_stored_text_fails_closed_on_an_unmapped_query():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], pii_action="redact")
+    assert guard.stored_text("insert_nothing", "title", "a@b.com", None) == UNSCANNED
+
+
+def test_a_scan_failing_only_for_the_slug_keeps_the_raw_text_out_of_it():
+    """The slug's scan fails open, the write's scan of the same title detects
+    the email and redacts it. Slugging the raw title here would put the email
+    in the permanent key of a node whose stored title has it redacted."""
+    guard = _guard(
+        [FirstSightFails("a@b.com")], pii_action="redact", on_scanner_error="warn"
+    )
+    title = "ping a@b.com"
+
+    assert guard.stored_text("insert_task", "title", title, None) == UNSCANNED
+    stored = guard("insert_task", {"title": title})
+    assert stored["title"] == "ping «redacted:email»"

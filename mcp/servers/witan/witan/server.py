@@ -1326,6 +1326,20 @@ def _make_slug(kind: str, title: str) -> str:
     return f"{prefix}-{sanitised}-{short_id}"
 
 
+def _slug_text(query_name: str, field: str, text: str, repo: str | None) -> str:
+    """``text`` as the ``query_name`` write will store it in ``field``.
+
+    What a slug is built from, because the slug is the node's permanent
+    ``@key`` and the guard never scans it. Slugging the raw title kept an
+    email the guard had redacted out of the stored title. ``repo`` selects the
+    same ``[scan.overlay]`` policy the write itself will get.
+    """
+    guard = client.guard
+    if guard is None:
+        return text
+    return guard.stored_text(query_name, field, text, repo)
+
+
 _SLIM_KEYS = ("slug", "kind", "title", "tags")
 
 
@@ -4566,8 +4580,8 @@ def _store_memory(
     if isinstance(symbol_refs, str):
         symbol_refs = [symbol_refs]
     now = now_iso()
-    slug = _make_slug(kind, title)
     detected_repo = _scope(repo, all_repos)
+    slug = _make_slug(kind, _slug_text("insert_memory", "title", title, detected_repo))
 
     # The whole memory — node, its topics, its edges — is ONE commit. Every
     # separate `mutate` is a separate Lance version, and a store accumulating a
@@ -5593,8 +5607,16 @@ def workflow_project_create(
     """
     now = now_iso()
     author = _current_author()
-    slug = _make_slug("workflow_project", title)
     repo_set = _merge_repos(repos, repo_module.detect())
+    slug = _make_slug(
+        "workflow_project",
+        _slug_text(
+            "insert_workflow_project",
+            "title",
+            title,
+            repo_set[0] if repo_set else None,
+        ),
+    )
 
     # Soft duplicate check (tk-phase-0-bm25-task-search-project-search): see
     # task_create's identical rationale. Unscoped by repo on purpose — the
@@ -7602,12 +7624,12 @@ async def task_create(
         unscoped tasks, so every repo sees it — see instructions.
     """
     now = now_iso()
-    slug = _make_slug("task", title)
     # Offer to scope the task when nothing is detected; falls back to an
     # unscoped task (today's behavior) under automation / an unsupported client.
     if not all_repos:
         repo = await elicit.repo_or_detect(ctx, repo)
     detected_repo = _scope(repo, all_repos)
+    slug = _make_slug("task", _slug_text("insert_task", "title", title, detected_repo))
     # Soft duplicate check (tk-phase-0-bm25-task-search-project-search).
     # Warn-only — never blocks the create — since a lexical hit is a decent
     # duplicate signal but nowhere near certain; the caller decides whether a
@@ -7869,7 +7891,10 @@ def task_comment(slug: str, body: str) -> dict:
 
     now = now_iso()
     author = _current_author()
-    comment_slug = _make_slug("task_comment", body)
+    comment_slug = _make_slug(
+        "task_comment",
+        _slug_text("insert_task_comment", "body", body, task_rows[0].get("repo")),
+    )
     # The task's own row is deliberately left untouched — not merely to avoid a
     # second commit. ``status_pickable`` falls back to ``updated_at`` as the
     # lease start for an ``in_progress`` task with no ``claimed_at``, so bumping
