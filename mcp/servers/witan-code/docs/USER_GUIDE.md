@@ -236,10 +236,15 @@ Don't re-derive the mechanics here — see:
   `branch` argument of `code_find_definition` / `code_search_symbol` /
   `code_symbols_in_file`) to read it.
 - **Caller/impact results look wrong or incomplete.** `Calls`, `References`,
-  `Imports`, and `Inherits` are **heuristic** — syntactic name resolution
-  that prefers same-file definitions. Dynamic dispatch, re-exports,
-  shadowing, and cross-file resolution beyond name matching aren't modeled
-  precisely. Treat them as a high-recall starting point for investigation,
+  `Imports`, and `Inherits` are **heuristic** — syntactic name resolution.
+  A call resolves to a definition in the same file, or, in Python and TS/JS,
+  to one in another file of the repo when the callee is an imported name or
+  an attribute of one (`mod.func()`, `Cls.method()`). Calls through an
+  instance (`obj.method()`), re-exports, star imports, `require()`, path
+  aliases, and shadowing aren't followed. After upgrading, run
+  `witan-code reindex` once: an incremental run skips unchanged files,
+  so their calls into other files are not resolved until they change.
+  Treat them as a high-recall starting point for investigation,
   not a verified call graph. `Defines`/`Contains` (and Stage-2 precise
   cross-repo edges) are exact by contrast.
 - **No pre-built `omnigraph` binary for your platform.** Only

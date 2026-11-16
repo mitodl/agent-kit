@@ -14,8 +14,8 @@ straight into the id-routed tools.
 What the answer cannot see is reported, never left to read as "no impact":
 an unindexed repo, symbols the index does not have, callers that only exist on
 this branch (id-routed tools read the default view), callers in other files
-(the indexer resolves Calls edges within a file only, see
-``indexer._file_records``), and consumers in repos nobody indexed.
+the indexer cannot resolve (see :mod:`witan_code.xref`), and consumers in
+repos nobody indexed.
 """
 
 from __future__ import annotations
@@ -381,8 +381,8 @@ def _bounded(items: list, limit: int) -> dict[str, Any]:
 def git_test_mentions(cwd: Path, head: str) -> Callable[[str], list[str]]:
     """``name -> test files at head that contain name as a word``, via git grep.
 
-    The stand-in for the test-to-code edges the graph does not have: Calls
-    edges stop at the file boundary, and tests live in other files.
+    The stand-in for the tests the graph cannot reach: see
+    :func:`graph_reaches_callers`.
     """
 
     def mentions(name: str) -> list[str]:
@@ -405,6 +405,32 @@ def git_test_mentions(cwd: Path, head: str) -> Callable[[str], list[str]]:
         return sorted(p for p in paths if is_test_path(p))
 
     return mentions
+
+
+# Per language, the kinds an import-resolved call reaches. A TS/JS class is
+# used through `new` and an interface or type alias in type positions, none of
+# which the parser captures as a call.
+_LINKED_KINDS = {
+    "python": frozenset({"function", "class"}),
+    "typescript": frozenset({"function"}),
+    "javascript": frozenset({"function"}),
+}
+
+
+def graph_reaches_callers(sym: ChangedSymbol) -> bool:
+    """Whether the indexed Calls edges find ``sym``'s callers in other files.
+
+    They do for a module-level function, or a Python class, in a language
+    :mod:`witan_code.xref` resolves imports for, so a test calling it is one
+    of its callers. A qualified name is a method or a nested def (Python
+    records a method as a ``function``), mostly called through an instance
+    that no import names, so a test of one is still searched for by name.
+    """
+    language = indexer._EXT_TO_SPEC[Path(sym.path).suffix].name
+    return (
+        sym.kind in _LINKED_KINDS.get(language, frozenset())
+        and "." not in sym.qualified_name
+    )
 
 
 def build_report(
@@ -477,19 +503,22 @@ def build_report(
         )
     else:
         notes.append(
-            "Callers are same-file only (the indexer resolves calls by name within "
-            f"a file) and come from {view_label}, so callers in other files and "
-            "callers this branch adds are not listed. A symbol that view lacks "
-            "is marked [not in index]."
+            f"Callers come from {view_label}, so callers this branch adds are not "
+            "listed. Calls in other files are resolved through imports for "
+            "Python and TS/JS only, and not through an instance or a re-export. "
+            "A symbol that view lacks is marked [not in index]."
         )
         notes.append(
             f"Cross-repo consumers cover the {len(indexed_repos)} repos indexed "
             "here; a consumer in an unindexed repo is not shown."
         )
     notes.append(
-        "Tests to run (stand-in): test files that call the symbol or name it. "
-        "The graph has no test-to-code edges, so a test that reaches the change "
-        "without naming it is not listed."
+        "Tests to run: test files among the callers, which needs a graph "
+        "indexed with cross-file call resolution (run `witan-code reindex` "
+        "once if it predates that). For a method or nested def, a TS/JS "
+        "class, interface or type, a symbol in a language without import "
+        "resolution, or an unindexed repo, test files naming it are added as a "
+        "stand-in, so a test reaching it without naming it is not listed."
     )
 
     # Every symbol, removed ones included, is checked against the same view its
@@ -512,7 +541,7 @@ def build_report(
         }
         is_module = sym.kind == "module"
         tests: set[str] = set()
-        if not is_module:
+        if not is_module and not (indexed and graph_reaches_callers(sym)):
             # Same language only: `run` in a YAML fixture is not a test of it.
             family = _language_family(sym.path)
             name = sym.qualified_name.rsplit(".", 1)[-1]
@@ -639,7 +668,7 @@ def render_text(report: dict[str, Any], *, header: str) -> str:
         out.append(f"- {path_name} ({row['kind']}, {row['status']}){flag}")
         for key, label, fmt in (
             ("callers", "callers", str),
-            ("tests_to_run", "tests to run (stand-in)", str),
+            ("tests_to_run", "tests to run", str),
             (
                 "cross_repo",
                 "cross-repo",
