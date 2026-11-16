@@ -7360,8 +7360,10 @@ async def task_create(
 
     Parameters
     ----------
-    title, description:
-        Short label and full text of the work.
+    title:
+        Short label for the work.
+    description:
+        Full text of the work.
     type:
         The kind of work; ``epic`` for a parent of sub-issues.
     priority:

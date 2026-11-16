@@ -25,8 +25,8 @@ If one is the same work, close this task as a duplicate.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `title` | str | **required** | Short label and full text of the work. |
-| `description` | str | **required** | Short label and full text of the work. |
+| `title` | str | **required** | Short label for the work. |
+| `description` | str | **required** | Full text of the work. |
 | `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic` | `'task'` | The kind of work; ``epic`` for a parent of sub-issues. |
 | `priority` | `p0` \| `p1` \| `p2` \| `p3` | `'p2'` | ``p0`` is highest. Drives ``task_ready`` ordering. |
 | `repo` | str? | `null` | Repo scoping; see instructions. |
