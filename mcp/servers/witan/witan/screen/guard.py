@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Callable
+from typing import Protocol
 
 from witan_core.observability import get_logger
 
@@ -32,7 +32,20 @@ from .verdict import OVERSIZE_REASON, Verdict, combine, parse_verdict
 
 logger = get_logger("witan.screen")
 
-Guard = Callable[[str, dict], dict]
+
+class Guard(Protocol):
+    """A write guard: rewrites a write's params, and answers ``stored_text``.
+
+    ``stored_text`` is required, not optional, because the server builds a
+    slug from it on whichever guard is installed, a chain included.
+    """
+
+    def __call__(self, query_name: str, params: dict) -> dict: ...
+
+    def stored_text(
+        self, query_name: str, field: str, value: str, repo: str | None
+    ) -> str: ...
+
 
 #: node type -> (field, source label) for the text a verdict covers.
 SCREENED_TEXT: dict[str, tuple[tuple[str, str], ...]] = {
