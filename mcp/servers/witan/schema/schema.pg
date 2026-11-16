@@ -28,6 +28,13 @@ node Memory {
     tags: [String]?
     symbol_refs: [String]?   // soft refs into the code-graph store (repo#path::Name)
     confidence: F32?         // author/agent-set trust 0.0–1.0; null treated as default
+    // Prompt-injection screen (witan/screen/): the verdict on this record's
+    // text, why, which classifier gave it, and a sha256 of the text it covers.
+    // Null when unscreened. A verdict counts only while the digest matches.
+    screen_verdict: enum(clean, flagged)?
+    screen_reason: String?
+    screen_version: String?
+    screen_digest: String?
 }
 
 // ── Memory edge properties ────────────────────────────────────────
@@ -280,6 +287,13 @@ node Task {
     first_claimed_at: DateTime?          // the FIRST claim ever; set once, never cleared — the retrospective timeline's work start
     symbol_refs:  [String]?              // soft refs into the code-graph store
     tags:        [String]?
+    // Prompt-injection screen (witan/screen/): the verdict on this record's
+    // text, why, which classifier gave it, and a sha256 of the text it covers.
+    // Null when unscreened. A verdict counts only while the digest matches.
+    screen_verdict: enum(clean, flagged)?
+    screen_reason:  String?
+    screen_version: String?
+    screen_digest:  String?
 }
 
 // Blocks: a blocker task must close before the blocked task is "ready".
@@ -319,6 +333,13 @@ node TaskComment {
     body:       String
     author:     String @index
     created_at: DateTime @index
+    // Prompt-injection screen (witan/screen/): the verdict on this record's
+    // text, why, which classifier gave it, and a sha256 of the text it covers.
+    // Null when unscreened. A verdict counts only while the digest matches.
+    screen_verdict: enum(clean, flagged)?
+    screen_reason:  String?
+    screen_version: String?
+    screen_digest:  String?
 }
 
 // ── Code Branches ───────────────────────────────────────────────────

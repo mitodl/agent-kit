@@ -45,6 +45,10 @@ ctx-   agent_context    e.g. ctx-ticket-1234-approach
 | `tags` | `[String]?` |  |
 | `symbol_refs` | `[String]?` | soft refs into the code-graph store (repo#path::Name) |
 | `confidence` | `F32?` | author/agent-set trust 0.0–1.0; null treated as default |
+| `screen_verdict` | `enum(clean, flagged)?` |  |
+| `screen_reason` | `String?` |  |
+| `screen_version` | `String?` |  |
+| `screen_digest` | `String?` |  |
 
 ### `Topic`
 
@@ -177,6 +181,10 @@ e.g. tk-wire-vault-sidecar-9c1d04
 | `first_claimed_at` | `DateTime?` | the FIRST claim ever; set once, never cleared — the retrospective timeline's work start |
 | `symbol_refs` | `[String]?` | soft refs into the code-graph store |
 | `tags` | `[String]?` |  |
+| `screen_verdict` | `enum(clean, flagged)?` |  |
+| `screen_reason` | `String?` |  |
+| `screen_version` | `String?` |  |
+| `screen_digest` | `String?` |  |
 
 ### `TaskComment`
 
@@ -201,6 +209,10 @@ Slug convention: tc-&lt;sanitised-body-prefix&gt;-&lt;6hex&gt;
 | `body` | `String` |  |
 | `author` | `String @index` |  |
 | `created_at` | `DateTime @index` |  |
+| `screen_verdict` | `enum(clean, flagged)?` |  |
+| `screen_reason` | `String?` |  |
+| `screen_version` | `String?` |  |
+| `screen_digest` | `String?` |  |
 
 ### `CodeBranch`
 

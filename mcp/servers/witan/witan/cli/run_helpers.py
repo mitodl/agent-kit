@@ -134,6 +134,10 @@ def _memory_lines(memories: list[dict]) -> list[str]:
             " ".join(m[field].split()) for field in ("author", "title", "excerpt")
         )
         lines += [f"  {m['slug']} ({author}): {title}", f"    {excerpt}"]
+        # The recall fallback's memories carry no `screening` (recall is not
+        # labelled yet), and a clean verdict has no notice.
+        if notice := m.get("screening", {}).get("notice"):
+            lines.append(f"    {notice}")
     return lines
 
 

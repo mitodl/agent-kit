@@ -155,6 +155,18 @@ active; naming any detector switches to an explicit allowlist.
 | `WITAN_SCAN_PLUGINS` | — | Dotted import paths of external scanners to load, in addition to those discovered through the `witan.scanners` entry-point group. |
 | `WITAN_SCAN_SECRET_ACTION` | `block` | Enforcement for `secret` findings. Fail-closed by default. |
 
+## Prompt-injection screening
+
+Classifies memory, task and comment text at write time and stores the verdict on
+the record. witan ships no classifier, so screening is off until both of these
+name one; records written without it read back marked unscreened. See the
+screening section of the write-path scanning guide.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `WITAN_SCREEN_MODEL` | — | The model the provider should call. Required when `WITAN_SCREEN_PROVIDER` is set. |
+| `WITAN_SCREEN_PROVIDER` | — | The classifier provider: an entry point name in the `witan.classifiers` group, or a `module.path:Attr` dotted path to a factory. Unset means no screening. |
+
 ## Recall ranking
 
 Tuning knobs for the composite re-rank `recall` applies on top of BM25. Ranking

@@ -16,7 +16,11 @@ query insert_memory(
     $symbol_refs: [String]?,
     $confidence: F32?,
     $created_at: DateTime,
-    $updated_at: DateTime
+    $updated_at: DateTime,
+    $screen_verdict: String?,
+    $screen_reason: String?,
+    $screen_version: String?,
+    $screen_digest: String?
 ) {
     insert Memory {
         slug: $slug,
@@ -32,7 +36,11 @@ query insert_memory(
         symbol_refs: $symbol_refs,
         confidence: $confidence,
         created_at: $created_at,
-        updated_at: $updated_at
+        updated_at: $updated_at,
+        screen_verdict: $screen_verdict,
+        screen_reason: $screen_reason,
+        screen_version: $screen_version,
+        screen_digest: $screen_digest
     }
 }
 
@@ -52,7 +60,11 @@ query update_memory(
     $tags: [String]?,
     $symbol_refs: [String]?,
     $confidence: F32?,
-    $updated_at: DateTime
+    $updated_at: DateTime,
+    $screen_verdict: String?,
+    $screen_reason: String?,
+    $screen_version: String?,
+    $screen_digest: String?
 ) {
     update Memory
         set {
@@ -65,7 +77,11 @@ query update_memory(
             tags: $tags,
             symbol_refs: $symbol_refs,
             confidence: $confidence,
-            updated_at: $updated_at
+            updated_at: $updated_at,
+            screen_verdict: $screen_verdict,
+            screen_reason: $screen_reason,
+            screen_version: $screen_version,
+            screen_digest: $screen_digest
         }
         where slug = $slug
 }
@@ -544,7 +560,11 @@ query insert_task(
     $created_at: DateTime,
     $updated_at: DateTime,
     $claimed_at: DateTime?,
-    $first_claimed_at: DateTime?
+    $first_claimed_at: DateTime?,
+    $screen_verdict: String?,
+    $screen_reason: String?,
+    $screen_version: String?,
+    $screen_digest: String?
 ) {
     insert Task {
         slug: $slug,
@@ -565,7 +585,11 @@ query insert_task(
         created_at: $created_at,
         updated_at: $updated_at,
         claimed_at: $claimed_at,
-        first_claimed_at: $first_claimed_at
+        first_claimed_at: $first_claimed_at,
+        screen_verdict: $screen_verdict,
+        screen_reason: $screen_reason,
+        screen_version: $screen_version,
+        screen_digest: $screen_digest
     }
 }
 
@@ -590,7 +614,11 @@ query update_task(
     $closed_at: DateTime?,
     $updated_at: DateTime,
     $claimed_at: DateTime?,
-    $first_claimed_at: DateTime?
+    $first_claimed_at: DateTime?,
+    $screen_verdict: String?,
+    $screen_reason: String?,
+    $screen_version: String?,
+    $screen_digest: String?
 ) {
     update Task
         set {
@@ -611,7 +639,11 @@ query update_task(
             closed_at: $closed_at,
             updated_at: $updated_at,
             claimed_at: $claimed_at,
-            first_claimed_at: $first_claimed_at
+            first_claimed_at: $first_claimed_at,
+            screen_verdict: $screen_verdict,
+            screen_reason: $screen_reason,
+            screen_version: $screen_version,
+            screen_digest: $screen_digest
         }
         where slug = $slug
 }
@@ -680,14 +712,22 @@ query insert_task_comment(
     $task_slug: String,
     $body: String,
     $author: String,
-    $created_at: DateTime
+    $created_at: DateTime,
+    $screen_verdict: String?,
+    $screen_reason: String?,
+    $screen_version: String?,
+    $screen_digest: String?
 ) {
     insert TaskComment {
         slug: $slug,
         task_slug: $task_slug,
         body: $body,
         author: $author,
-        created_at: $created_at
+        created_at: $created_at,
+        screen_verdict: $screen_verdict,
+        screen_reason: $screen_reason,
+        screen_version: $screen_version,
+        screen_digest: $screen_digest
     }
 }
 

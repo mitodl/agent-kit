@@ -323,6 +323,23 @@ desc = "Salt for `WITAN_SCAN_ALLOWLIST_HASHES`. Empty means the hash allowlist i
 default = "block"
 desc = "What to do when a scanner itself raises: `block` or `warn`. Fail-closed by default so a broken detector cannot silently open the gate."
 
+# ── Prompt-injection screening ───────────────────────────────────────────────
+
+[[section]]
+title = "Prompt-injection screening"
+blurb = """
+Classifies memory, task and comment text at write time and stores the verdict on
+the record. witan ships no classifier, so screening is off until both of these
+name one; records written without it read back marked unscreened. See the
+screening section of the write-path scanning guide.
+"""
+
+[section.vars.WITAN_SCREEN_PROVIDER]
+desc = "The classifier provider: an entry point name in the `witan.classifiers` group, or a `module.path:Attr` dotted path to a factory. Unset means no screening."
+
+[section.vars.WITAN_SCREEN_MODEL]
+desc = "The model the provider should call. Required when `WITAN_SCREEN_PROVIDER` is set."
+
 # ── Recall ranking ───────────────────────────────────────────────────────────
 
 [[section]]

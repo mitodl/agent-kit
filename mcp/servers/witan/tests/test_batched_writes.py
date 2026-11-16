@@ -11,6 +11,8 @@ import subprocess
 
 import pytest
 
+from witan.screen import UNSCREENED
+
 from .conftest import requires_omnigraph
 
 pytestmark = requires_omnigraph
@@ -116,6 +118,7 @@ def test_migrate_topics_batches_the_whole_backfill(server, commits, monkeypatch)
                 "confidence": None,
                 "created_at": now,
                 "updated_at": now,
+                **UNSCREENED,
             },
         )
         for i in range(6)
@@ -156,6 +159,7 @@ def test_migrate_topics_flushes_in_bounded_chunks(server, commits, monkeypatch):
                     "confidence": None,
                     "created_at": now,
                     "updated_at": now,
+                    **UNSCREENED,
                 },
             )
             for i in range(6)
@@ -203,6 +207,7 @@ def _legacy_memory(slug: str, tags: list[str]) -> tuple[str, str, dict]:
             "confidence": None,
             "created_at": now,
             "updated_at": now,
+            **UNSCREENED,
         },
     )
 

@@ -318,3 +318,24 @@ which is exactly what D4 rules out. A future admin API to edit overlay policy
 at runtime (rather than redeploying `config.toml`) is deferred — filed as a
 follow-up once the multi-user project reaches a phase where an admin surface
 exists to hang it off.
+
+## Amendment (2026-11-13): prompt-injection screening at the same choke point
+
+Tracking: `tk-screen-untrusted-content-returned-by-witan-tools-043ff5`.
+
+Records written by one teammate reach other teammates' agents unasked (the
+context hook, the memories a first `task_claim` returns), so their text is a
+prompt-injection path into every session. Screening for that runs server-side
+at write time, as a second guard composed after `WriteGuard` in
+`OmnigraphClient.change()`, so it sees the text that is stored. It does not
+block or rewrite. It stores a `clean`/`flagged` verdict, the classifier
+version and a digest of the screened text on Memory, Task and TaskComment, and
+reads attach the verdict while the digest still matches.
+
+The classifier is pluggable the same way scanners are (a `witan.classifiers`
+entry point or a dotted path, named with its model in a server-side `[screen]`
+table), and witan ships none, so it is off until a deployment picks a provider
+and model. Classifying at write time keeps the model call off the read path,
+which carries far more traffic. The cost is that a verdict is only as current
+as the classifier that wrote it, which is why the version is stored with it.
+Operator notes are in `docs/write-path-scanning.md`.

@@ -539,6 +539,62 @@ def load_scan_config() -> ScanConfig:
         raise _scan_config_error(exc, sources) from exc
 
 
+class ScreenConfig(BaseModel):
+    """Which prompt-injection classifier screens record text at write time.
+
+    ``provider`` names a classifier factory: an entry point in the
+    ``witan.classifiers`` group, or a ``module.path:Attr`` dotted path. witan
+    ships none, so screening is off until a deployment installs a provider
+    package and names it here, with the ``model`` that provider should call.
+    The provider reads its own credentials (an API key from its environment);
+    none of them belong in this table.
+
+    Server-side policy, like :class:`ScanConfig`: loaded once at server import
+    from the process's own environment and ``config.toml``, and no tool
+    accepts a parameter that reaches it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str | None = None
+    model: str | None = None
+
+    @field_validator("provider", "model", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+def load_screen_config() -> ScreenConfig:
+    """Resolve ScreenConfig from ``WITAN_SCREEN_PROVIDER``/``WITAN_SCREEN_MODEL``
+    > the ``[screen]`` table in config.toml > unset.
+
+    A provider without a model is refused at startup: every hosted classifier
+    needs one, and a provider silently picking its own would make the stored
+    classifier version say less than it should.
+    """
+    file_screen = _load_toml().get("screen", {})
+    if not isinstance(file_screen, dict):
+        raise ValueError("The 'screen' section in config must be a table.")  # noqa: TRY004 - config errors are ValueError
+    raw: dict[str, object] = {}
+    for field in ("provider", "model"):
+        env_var = f"WITAN_SCREEN_{field.upper()}"
+        value = os.environ.get(env_var)
+        if value is not None:
+            raw[field] = value
+        elif field in file_screen:
+            raw[field] = file_screen[field]
+    config = ScreenConfig(**raw)
+    if config.provider and not config.model:
+        raise ValueError(
+            f"Screening provider {config.provider!r} is set without a model: set "
+            "WITAN_SCREEN_MODEL or [screen].model in config.toml."
+        )
+    return config
+
+
 def default_config_toml() -> str:
     """Render a starter ``config.toml``: every optional setting present,
     commented out, shown at its actual current default (pulled from
@@ -668,6 +724,16 @@ def default_config_toml() -> str:
 # ADR 0001 amendment 2026-07-09). Any ScanConfig field except `overlay` itself.
 # [scan.overlay."github.com/example/legacy-repo"]
 # secret_action = "warn"        # rolling out scanning on a noisy repo first
+
+# ── [screen] — prompt-injection screening of record text ────────────────────
+# Off unless a provider is named. witan ships no provider: install a package
+# that registers one under the `witan.classifiers` entry point (or give a
+# dotted "module:Attr" path). Records written without one read back marked
+# "[NOT security-screened ...]". See docs/write-path-scanning.md.
+# Env: WITAN_SCREEN_PROVIDER / WITAN_SCREEN_MODEL
+[screen]
+# provider = "example-provider"
+# model = "example-model"
 """
 
 

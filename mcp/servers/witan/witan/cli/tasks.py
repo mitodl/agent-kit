@@ -257,6 +257,7 @@ def _task_show(slug: str) -> None:
         f"priority={_styled(t.get('priority', ''), _PRIORITY_STYLE)}  "
         f"status={_styled(t.get('status', ''), _STATUS_STYLE)}"
     )
+    _print_screening(t)
     for label, key in (
         ("repo", "repo"),
         ("parent", "parent_slug"),
@@ -301,7 +302,17 @@ def _task_show(slug: str) -> None:
                 f"\n  [cyan]{esc(c.get('author'))}[/cyan] "
                 f"[dim]{esc(c.get('created_at'))}[/dim]"
             )
+            _print_screening(c)
             console.print(f"  {esc(c.get('body'))}")
+
+
+def _print_screening(record: dict) -> None:
+    """Print ``record``'s screening notice, if it has one.
+
+    A clean verdict has none, and a deployment older than screening returns no
+    ``screening`` at all."""
+    if notice := record.get("screening", {}).get("notice"):
+        console.print(f"  [yellow]{esc(notice)}[/yellow]")
 
 
 task_app = cyclopts.App(
