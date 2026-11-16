@@ -495,6 +495,18 @@ glob patterns skip it; name it exactly in --select to include it.
     every agent detected on this machine.
 * `--repo STR`: Only consider memories whose project resolves to this repo, given as a
     URI or as org/name.
+* `--map STR..., --empty-map`: Give a project the repo it belongs to, as
+    --map=<project-dir>=<repo-uri>, in place of resolving it from disk:
+    for a checkout that was deleted or moved, or a project that resolves
+    to the wrong repo. <project-dir> is the project as the unresolved
+    report names it (a Claude Code project directory under
+    ~/.claude/projects such as -home-me-code-app, a Codex session's cwd, a
+    Copilot workspace folder), or the absolute path it stood for, which
+    also matches the Claude Code directory that path encodes to. Write it
+    with "=" after --map, because a Claude Code directory starts with "-"
+    and would otherwise read as an option. <repo-uri> is the repo's remote
+    (https or SSH), not org/name. Applies to every agent whose project it
+    names. Repeatable; a --map that names no project is refused.
 * `--select STR..., --empty-select`: Memories to store, by the id shown in the dry run, by the memory's own
     name in its store (a file stem), or by a glob over either. Repeatable
     or comma-separated.
