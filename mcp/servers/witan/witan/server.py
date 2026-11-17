@@ -1343,9 +1343,18 @@ def _topic_slug(kind: str, name: str) -> str | None:
     no Topic. Unlike a memory's slug, a Topic's has no random suffix, so keying
     on the ``unscanned`` placeholder would join every such name into one Topic.
     """
+    stored = _topic_name(name)
+    return None if stored is None else _stored_topic_slug(kind, stored)
+
+
+def _topic_name(name: str) -> str | None:
+    """``name`` as ``insert_topic`` will store it, or ``None`` if its scan failed."""
     stored = _slug_text("insert_topic", "name", name, None)
-    if stored == scan.enforce.UNSCANNED != name:
-        return None
+    return None if stored == scan.enforce.UNSCANNED != name else stored
+
+
+def _stored_topic_slug(kind: str, stored: str) -> str:
+    """The :func:`_topic_slug` of a name already returned by :func:`_topic_name`."""
     sanitised = re.sub(r"[^a-z0-9]+", "-", stored.lower()).strip("-")[:64]
     if not sanitised:
         sanitised = hashlib.sha1(stored.encode("utf-8")).hexdigest()[:12]
@@ -1418,16 +1427,20 @@ def _resolve_topic(topic: str) -> dict | None:
     name, sep, kind = topic.rpartition(":")
     if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
         return None
-    slug = _topic_slug(kind, name)
-    if slug is None:
+    # Scanned once for both reads: a second scan that failed would query the
+    # name fallback with the `unscanned` placeholder and find a Topic named that.
+    stored = _topic_name(name)
+    if stored is None:
         return None
-    rows = client.read("read.gq", "get_topic", {"slug": slug})
+    rows = client.read(
+        "read.gq", "get_topic", {"slug": _stored_topic_slug(kind, stored)}
+    )
     if rows:
         return rows[0]
     named = client.read(
         "read.gq",
         "topic_by_name_kind",
-        {"name": _slug_text("insert_topic", "name", name, None), "kind": kind},
+        {"name": stored, "kind": kind},
     )
     if not named:
         return None

@@ -12,7 +12,7 @@ from witan.scan import annotate, no_redactions, take_redactions, write_guard_fro
 from witan.scan.notice import describe
 
 from .conftest import requires_omnigraph, topic_of
-from .test_enforce import FirstSightFails
+from .test_enforce import FirstSightFails, MatchScanner
 
 
 @pytest.fixture(autouse=True)
@@ -498,3 +498,43 @@ def test_a_tag_whose_scan_failed_gets_no_topic(flaky_server):
     assert _topic_slugs(flaky_server, a["slug"]) == set()
     assert _topic_slugs(flaky_server, b["slug"]) == set()
     assert topic_of(flaky_server, "tp-topic-unscanned") is None
+
+
+class LaterSightFails:
+    """Flags ``needle`` the first time it scans a text and raises after.
+
+    The reverse of ``FirstSightFails``: a lookup's first scan succeeds and a
+    second scan of the same name fails."""
+
+    name = "flaky"
+    category = "pii"
+
+    def __init__(self, needle):
+        self._seen = set()
+        self._inner = MatchScanner("email", "pii", needle)
+
+    def scan(self, text, field, node_type):
+        if text in self._seen:
+            raise RuntimeError("transient")
+        self._seen.add(text)
+        return self._inner.scan(text, field, node_type)
+
+
+@requires_omnigraph
+def test_a_lookup_never_matches_a_topic_named_for_the_placeholder(server, monkeypatch):
+    """A lookup scans the name once. A second scan that failed would send the
+    `unscanned` placeholder to the name fallback, which finds this Topic."""
+    from witan import server as srv
+    from witan.scan import ScannerRegistry, WriteGuard
+
+    server.memory_store(
+        kind="agent_context", title="t", content="c", tags=["unscanned"]
+    )
+    config = ScanConfig(enabled=True, pii_action="redact", on_scanner_error="warn")
+    monkeypatch.setattr(
+        srv.client,
+        "guard",
+        WriteGuard(config, ScannerRegistry([LaterSightFails(EMAIL)])),
+    )
+
+    assert topic_of(server, f"ask {EMAIL}:topic") is None
