@@ -24,6 +24,9 @@ import recallFixture from "../fixtures/recall.json" with { type: "json" };
 import recallMemoryFixture from "../fixtures/recall.memory.json" with {
 	type: "json",
 };
+import recallSupersededFixture from "../fixtures/recall.memory.superseded.json" with {
+	type: "json",
+};
 import recallTopicFixture from "../fixtures/recall.topic.json" with {
 	type: "json",
 };
@@ -1212,6 +1215,48 @@ describe("App", () => {
 			expect(root.querySelector(".stale-refresh-failed")).not.toBeNull(),
 		);
 		expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull();
+	});
+
+	it("keeps a superseded memory unchecked when the report skipped its repo", async () => {
+		const here = "https://github.com/mitodl/agent-kit";
+		const elsewhere = "https://github.com/mitodl/elsewhere";
+		vi.mocked(mcp.memoryNeighbors).mockResolvedValue(
+			unwrap<RecallResult>("recall", recallSupersededFixture)
+				.memory as MemoryNeighbors,
+		);
+		vi.mocked(mcp.memoryStaleRefs).mockResolvedValue({
+			...unwrap<StaleRefsReport>("memory_stale_refs", staleRefsFixture),
+			repo: here,
+		});
+		const panelNote = async (repo: string) => {
+			vi.mocked(mcp.memoryGet).mockResolvedValue({
+				...memory,
+				repo,
+				symbol_refs: [`${repo}#lib/old.py::gone`],
+			});
+			app?.stop();
+			root = document.createElement("div");
+			document.body.replaceChildren(root);
+			await open(
+				`#memory?repo=${encodeURIComponent(here)}&superseded=1&slug=${memory.slug}`,
+			);
+			// The report has landed: the list marks its stale memory.
+			await vi.waitFor(() =>
+				expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
+			);
+			await vi.waitFor(() =>
+				expect(root.querySelector(".memory-detail .symbols")).not.toBeNull(),
+			);
+			return root.querySelector(".memory-detail")?.textContent ?? "";
+		};
+
+		// Opened by a neighbour link from outside the repo filter.
+		expect(await panelNote(elsewhere)).toContain(
+			"Superseded memories are not checked",
+		);
+		expect(await panelNote(here)).not.toContain(
+			"Superseded memories are not checked",
+		);
 	});
 
 	it("checks superseded memories' refs too when the list shows them", async () => {

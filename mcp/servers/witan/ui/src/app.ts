@@ -69,6 +69,7 @@ import {
 	memoryMissing,
 	memoryView,
 	staleBySlug,
+	supersededChecked,
 } from "./views/memory.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import {
@@ -845,8 +846,11 @@ export class App {
 				staleBySlug(this.staleRefs.snapshot?.data ?? null).get(slug),
 				// The report is only read on the memory view, keyed on the same.
 				this.route.view === "memory" &&
-					this.staleRefs.snapshot?.data != null &&
-					listsSuperseded(this.route),
+					supersededChecked(
+						this.staleRefs.snapshot?.data ?? null,
+						this.route,
+						panel.memory,
+					),
 			),
 			status,
 		);

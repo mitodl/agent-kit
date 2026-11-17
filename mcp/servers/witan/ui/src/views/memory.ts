@@ -189,6 +189,23 @@ export function listsSuperseded(route: Route): boolean {
 	return route.topic !== null || route.superseded;
 }
 
+/**
+ * Whether `report` checked `memory` even if it is superseded: it was read with
+ * `include_superseded` and its scope reaches the memory's repo. A neighbour
+ * link can open a memory from outside the repo filter the report was read for.
+ */
+export function supersededChecked(
+	report: StaleRefsReport | null,
+	route: Route,
+	memory: Memory,
+): boolean {
+	return (
+		report !== null &&
+		listsSuperseded(route) &&
+		(report.repo === null || report.repo === memory.repo)
+	);
+}
+
 function hasMissingRef(entry: StaleMemory | undefined): boolean {
 	return entry?.status === "stale";
 }
