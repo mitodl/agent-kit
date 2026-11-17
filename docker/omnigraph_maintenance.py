@@ -98,10 +98,13 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
 # applications/omnigraph/maintenance.py TERMINATION_GRACE_SECONDS).
 DEFAULT_TERMINATION_GRACE_SECONDS = 120
 # The part of that grace the close after SIGTERM leaves unspent. Once the
-# budget is out, a Lease confirm or a restore attempt already under way (up to
-# three Kubernetes calls of KUBERNETES_TIMEOUT_SECONDS) still finishes, then
-# releasing the Lease waits out an in-flight renewal and writes once, and the
-# process exits.
+# budget is out, a restore attempt already under way (two Kubernetes calls of
+# KUBERNETES_TIMEOUT_SECONDS) still finishes, then releasing the Lease waits
+# out an in-flight renewal and writes once, and the process exits. A Lease
+# confirm that also waits on an in-flight renewal can run past the margin;
+# by then the unlock it precedes is out of budget, the close has already
+# decided to leave the server down, and SIGKILL can only cut the release
+# write, after which the Lease expires on its own.
 SIGTERM_CLOSE_MARGIN_SECONDS = 40
 RESTORE_ATTEMPTS = 10
 # The CLI parses `cleanup --keep` as a u32.
