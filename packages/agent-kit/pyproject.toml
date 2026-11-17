@@ -15,7 +15,10 @@ dependencies = [
     # tasks extension, cacheable list results). Still no upper bound, so a fresh
     # install keeps picking up newer releases of either server automatically.
     "witan-council>=0.34.0",
-    "witan-code>=0.19.0",
+    # >=0.32.0: witan-council imports witan-code in process and calls
+    # code_find_definition(symbol_id=...) for stale-refs and recall(memory=...);
+    # an older witan-code raises on that keyword and every lookup degrades.
+    "witan-code>=0.32.0",
 ]
 
 [project.urls]
