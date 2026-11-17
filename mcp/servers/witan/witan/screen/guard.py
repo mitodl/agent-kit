@@ -34,10 +34,13 @@ logger = get_logger("witan.screen")
 
 
 class Guard(Protocol):
-    """A write guard: rewrites a write's params, and answers ``stored_text``.
+    """A write guard: rewrites a write's params, and answers ``stored_text``
+    and ``refuse_blocked``.
 
-    ``stored_text`` is required, not optional, because the server builds a
-    slug from it on whichever guard is installed, a chain included.
+    Both are required, not optional, because the server calls them on
+    whichever guard is installed, a chain included: ``stored_text`` to build a
+    slug, ``refuse_blocked`` when it reuses an existing Topic instead of
+    writing one.
     """
 
     def __call__(self, query_name: str, params: dict) -> dict: ...
@@ -45,6 +48,8 @@ class Guard(Protocol):
     def stored_text(
         self, query_name: str, field: str, value: str, repo: str | None
     ) -> str: ...
+
+    def refuse_blocked(self, query_name: str, params: dict) -> None: ...
 
 
 #: node type -> (field, source label) for the text a verdict covers.
@@ -237,6 +242,9 @@ class Screener:
         """
         return value
 
+    def refuse_blocked(self, query_name: str, params: dict) -> None:
+        """Nothing: a Screener records a verdict and never refuses a write."""
+
 
 def screener_from_config(config: ScreenConfig) -> Screener | None:
     """The Screener for the configured classifier, or ``None`` without one."""
@@ -245,10 +253,11 @@ def screener_from_config(config: ScreenConfig) -> Screener | None:
 
 
 class _GuardChain:
-    """Write guards applied left to right, ``stored_text`` included.
+    """Write guards applied left to right, ``stored_text`` and
+    ``refuse_blocked`` included.
 
-    A plain function would lose ``stored_text``, which the server calls on the
-    installed guard to build a slug from the text the write will store.
+    A plain function would lose both, which the server calls on the installed
+    guard (see :class:`Guard`).
     """
 
     def __init__(self, guards: list[Guard]) -> None:
@@ -265,6 +274,10 @@ class _GuardChain:
         for guard in self._guards:
             value = guard.stored_text(query_name, field, value, repo)
         return value
+
+    def refuse_blocked(self, query_name: str, params: dict) -> None:
+        for guard in self._guards:
+            guard.refuse_blocked(query_name, params)
 
 
 def compose_guards(*guards: Guard | None) -> Guard | None:

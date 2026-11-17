@@ -276,6 +276,22 @@ def test_a_topic_name_gets_the_strictest_policy_across_overlays():
     assert guard("insert_memory", memory) == memory
 
 
+def test_refuse_blocked_raises_only_for_what_the_write_would_refuse():
+    from witan.scan import no_redactions, take_redactions
+
+    guard = _guard(
+        [
+            MatchScanner("email", "pii", "a@b.com"),
+            MatchScanner("aws_key", "secret", "AKIA"),
+        ]
+    )
+    with no_redactions():
+        guard.refuse_blocked("insert_topic", {"slug": "tp-x", "name": "a@b.com"})
+        assert take_redactions() == ()
+    with pytest.raises(WriteBlocked):
+        guard.refuse_blocked("insert_topic", {"slug": "tp-topic-x", "name": "AKIA"})
+
+
 def test_a_secret_in_a_topic_name_blocks_though_an_overlay_warns():
     guard = _guard(
         [MatchScanner("aws_key", "secret", "AKIA")],

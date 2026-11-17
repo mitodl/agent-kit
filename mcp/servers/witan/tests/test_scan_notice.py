@@ -560,6 +560,34 @@ def test_a_topic_is_keyed_on_the_strictest_policy_across_repos(server, monkeypat
     ]
 
 
+@requires_omnigraph
+def test_reusing_a_topic_refuses_a_name_its_policy_now_blocks(
+    guarded_server, monkeypatch
+):
+    """A Topic stored under a redact policy is keyed on the placeholder. Once
+    the policy blocks that detector, naming it must refuse as a fresh
+    `insert_topic` would, not link quietly to the Topic that already exists."""
+    from witan import server as srv
+    from witan.scan import WriteBlocked
+
+    guarded_server.memory_store(
+        kind="agent_context", title="a", content="c", tags=[f"ask {EMAIL}"]
+    )
+    b = guarded_server.memory_store(kind="agent_context", title="b", content="c")
+    monkeypatch.setattr(
+        srv.client,
+        "guard",
+        write_guard_from_config(ScanConfig(enabled=True, pii_action="block")),
+    )
+
+    with pytest.raises(WriteBlocked):
+        guarded_server.memory_link(
+            from_slug=b["slug"], to_slug=f"ask {EMAIL}:topic", kind="tagged"
+        )
+    assert _topic_slugs(guarded_server, b["slug"]) == set()
+    assert take_redactions() == ()
+
+
 class LaterSightFails:
     """Flags ``needle`` the first time it scans a text and raises after.
 

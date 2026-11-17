@@ -9,7 +9,10 @@
   one Topic (two email tags are both `tp-topic-redacted-email`), a tag whose
   scan fails gets no Topic, and a secret in a tag now refuses the write, as it
   does in a title. An update that omits `tags` links the Topics of the tags as
-  stored, so a legacy tag the update redacts is still findable. Existing
+  stored, so a legacy tag the update redacts is still findable. Reusing an
+  existing Topic still runs the Topic name's scan, so a name the policy now
+  blocks refuses instead of linking to a Topic keyed on an older redaction.
+  Existing
   Topics are not re-keyed; an existing memory's tags are scanned the next time
   it is updated.
 

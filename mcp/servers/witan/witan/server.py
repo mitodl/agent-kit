@@ -1382,16 +1382,17 @@ def _create_topic_steps(slug: str, name: str, kind: str) -> list[tuple[str, str,
 
     Takes the slug :func:`_topic_slug` already built, so a caller that keyed on
     it does not scan the name a second time and risk a different answer.
+
+    Reusing an existing Topic stands in for the insert, so the name still has
+    to pass the insert's scan: a slug keyed on a placeholder from when that
+    detector redacted would otherwise accept a name the policy now blocks.
     """
+    params = {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()}
     if client.read("read.gq", "get_topic", {"slug": slug}):
+        if client.guard is not None:
+            client.guard.refuse_blocked("insert_topic", params)
         return []
-    return [
-        (
-            "mutations.gq",
-            "insert_topic",
-            {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()},
-        )
-    ]
+    return [("mutations.gq", "insert_topic", params)]
 
 
 def _resolve_topic_steps(ref: str) -> tuple[str | None, list[tuple[str, str, dict]]]:
