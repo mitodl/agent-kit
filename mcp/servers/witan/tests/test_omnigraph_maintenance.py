@@ -141,8 +141,14 @@ class FakeCli(FakeOmnigraph):
         lease,
         timeout_seconds=None,
         interrupt=None,
+        terminated=None,
     ) -> object:
         if args[0] not in ("optimize", "cleanup"):
+            if terminated is not None and terminated.remaining() <= 0:
+                # run_omnigraph stops a command at the end of the budget.
+                self.calls.append(args[1:])
+                msg = "outlasted the cleanup budget after SIGTERM"
+                raise entrypoint.CommandTimedOut(msg)
             if self.lock_output is not None and args[1] == self.dialect.lock_command:
                 self.calls.append(args[1:])
                 return entrypoint.CommandResult(0, self.lock_output)
@@ -517,6 +523,69 @@ def test_an_unreadable_lock_state_at_close_leaves_the_server_down(kube, cli, env
     assert kube.spec["holderIdentity"] == ""
 
 
+def sigterm_with_budget(env, monkeypatch, budget: float) -> dict[str, str]:
+    """``env`` with a pod grace that leaves the close ``budget`` seconds."""
+    monkeypatch.setattr(entrypoint, "SIGTERM_STOP_SECONDS", 0)
+    grace = maintenance.SIGTERM_CLOSE_MARGIN_SECONDS + budget
+    return {**env, "OMNIGRAPH_TERMINATION_GRACE_SECONDS": str(grace)}
+
+
+def test_the_close_budget_is_the_pods_grace_less_the_margin(kube, cli, env):
+    margin = maintenance.SIGTERM_CLOSE_MARGIN_SECONDS
+    assert maintenance.Settings.from_env(env).close_seconds == (
+        maintenance.DEFAULT_TERMINATION_GRACE_SECONDS - margin
+    )
+    settings = maintenance.Settings.from_env(
+        {**env, "OMNIGRAPH_TERMINATION_GRACE_SECONDS": "300"}
+    )
+    assert settings.close_seconds == 300 - margin
+
+
+def test_a_grace_too_short_to_close_fails_before_the_server_stops(kube, cli, env):
+    short = {**env, "OMNIGRAPH_TERMINATION_GRACE_SECONDS": "45"}
+    with pytest.raises(ValueError, match="OMNIGRAPH_TERMINATION_GRACE_SECONDS=45"):
+        maintenance.main(short)
+    assert kube.scaled == []
+    assert cli.calls == []
+
+
+def test_a_close_past_its_budget_leaves_the_lock_and_the_server_down(
+    kube, cli, env, monkeypatch
+):
+    """The lock read after SIGTERM is bounded by the grace, not its own 60s."""
+
+    def sigterm_then_use_up_the_budget() -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(0.05)
+
+    cli.during["council"] = sigterm_then_use_up_the_budget
+    assert maintenance.main(sigterm_with_budget(env, monkeypatch, 0.01)) == 1
+    assert cli.unlocked == ["01SERVE"]
+    assert cli.lock == {"id": "01GRAPHOP1", "operation": "graph_operation"}
+    assert kube.scaled == [0]
+    assert kube.spec["holderIdentity"] == ""
+
+
+def test_the_restore_after_sigterm_stops_retrying_at_the_budget(
+    kube, cli, env, monkeypatch
+):
+    attempts = []
+
+    def unreachable(name: str, replicas: int, resource_version: str) -> dict:
+        attempts.append(replicas)
+        time.sleep(0.2)
+        raise KubernetesError(None, "connection refused")
+
+    def sigterm_then_lose_the_api() -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        kube.replace_scale = unreachable
+
+    cli.during["council"] = sigterm_then_lose_the_api
+    assert maintenance.main(sigterm_with_budget(env, monkeypatch, 0.5)) == 1
+    assert cli.lock is None
+    assert 0 < len(attempts) < maintenance.RESTORE_ATTEMPTS
+
+
 # ── The restore ──────────────────────────────────────────────────────────────
 
 
@@ -613,6 +682,26 @@ def test_a_command_past_its_timeout_is_stopped(tmp_path, monkeypatch):
         )
     assert stopped.exists()
     assert time.monotonic() - started < 10
+
+
+def test_a_command_after_sigterm_ends_with_the_budget(tmp_path, monkeypatch):
+    """Its own timeout and the 30s stop give way to what the grace has left."""
+    fake = tmp_path / "omnigraph"
+    # Ignores SIGTERM, so only SIGKILL at the end of the budget ends it.
+    fake.write_text("#!/bin/sh\ntrap '' TERM\nsleep 60 &\nwait\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    terminated = entrypoint.Termination(1)
+    terminated.note()
+    started = time.monotonic()
+    with pytest.raises(entrypoint.CommandTimedOut, match="cleanup budget"):
+        entrypoint.run_omnigraph(
+            ["cluster", "status"],
+            entrypoint.NoPeers(may_unlock=True),
+            timeout_seconds=60,
+            terminated=terminated,
+        )
+    assert time.monotonic() - started < 5
 
 
 def test_the_storage_root_defaults_to_the_config_directory(tmp_path):

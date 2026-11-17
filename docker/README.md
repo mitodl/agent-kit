@@ -229,7 +229,7 @@ The entrypoint reads these from the environment:
 | `OMNIGRAPH_UNLOCK_LEASE` | in Kubernetes | Name of the pre-created `coordination.k8s.io` Lease every force-unlocker takes. The ServiceAccount needs `get` and `update` on it. |
 | `OMNIGRAPH_POD_SELECTOR` | in Kubernetes | Label selector of the server Deployment's pods. The ServiceAccount needs `list` on pods. |
 | `POD_NAME` | no | This pod's name. Defaults to `HOSTNAME`. |
-| `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default 50). |
+| `OMNIGRAPH_PEER_WAIT_SECONDS` | no | How long to wait for another server pod to exit before giving up (default `OMNIGRAPH_TERMINATION_GRACE_SECONDS` plus 15, since that pod gets the same grace). |
 | `OMNIGRAPH_TERMINATION_GRACE_SECONDS` | no | The pod's `terminationGracePeriodSeconds` (default 125, the `omnigraph` stack's). Stopping the loopback server after a SIGTERM during the branch-view drop ends 20s inside it. At 30 or below the boot refuses. |
 | `OMNIGRAPH_GRAPH_REMOVAL_ALLOWLIST` | no | Comma-separated graph ids that `cluster.yaml` is allowed to drop, which deletes them. |
 | `OMNIGRAPH_BRANCH_DROP_ALLOWLIST` | no | Comma-separated graph ids whose non-main branches are derived views the boot may delete so a schema change can apply: the code graphs and the bridge, never the council graph. An id that does not start with `code-`, or that `cluster.yaml` does not declare, fails the plan. Unset, a schema change on a graph with branches refuses the boot as before. |
@@ -248,11 +248,14 @@ ServiceAccount needs `list` on pods too.
 | `OMNIGRAPH_CLEANUP_KEEP` | one of these two | Commits per live branch passed to `cleanup --keep`, e.g. `1`. Since 0.15 (upstream #1188) it reads no manifest for an older commit it drops; `--older-than` reads one per older commit. Setting both fails the run before the server is stopped, because with both, cleanup reads the commit time of every version below the newest `N`. After a `--keep 1` run, a wider policy that still retains an older commit finds the table versions it pins deleted and refuses the table's sweep, which stops data-file reclamation for the whole graph on that run: until those commits age out of an `--older-than` window, or until `N` newer commits exist for a larger `--keep` (upstream #644, `docs/dev/versioning.md`). |
 | `OMNIGRAPH_CLEANUP_ISO_WEEKDAY` | no | Comma-separated UTC days `cleanup` also runs on (1 is Monday, 7 is Sunday), e.g. `7` for Sundays or `1,2,3,4,5,6,7` for every night. Unset or empty, it never runs. A day outside 1-7 or listed twice fails the run before the server is stopped. |
 | `OMNIGRAPH_COMMAND_TIMEOUT_SECONDS` | no | Longest one `optimize` or `cleanup` may run before it is stopped (default 600). |
-| `OMNIGRAPH_SERVER_STOP_SECONDS` | no | How long to wait for the server pods to exit after the scale-down (default 90). |
+| `OMNIGRAPH_SERVER_STOP_SECONDS` | no | How long to wait for the server pods to exit after the scale-down (default 180: the server's default 125s grace plus 55s for the kubelet and the Deployment controller). |
+| `OMNIGRAPH_TERMINATION_GRACE_SECONDS` | no | This pod's own `terminationGracePeriodSeconds` (default 120, the `omnigraph` stack's). The close after SIGTERM ends 40s inside it. At 50 or below the run fails before the server is stopped. |
 
 Its pod needs `terminationGracePeriodSeconds: 120`. After SIGTERM it stops the
-running command (up to 30s), removes that command's lock and scales the server
-back up, and on the default 30s it is killed before the scale-up. It exits 0
+running command (up to 10s), removes that command's lock and scales the server
+back up, all inside `OMNIGRAPH_TERMINATION_GRACE_SECONDS` less 40s, so that has
+to be the pod's real grace. A step that does not fit is skipped and leaves the
+server down for the runbook. It exits 0
 only when every graph was maintained and the server is back (or left down for
 a migration).
 

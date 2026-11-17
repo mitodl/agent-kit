@@ -534,7 +534,12 @@ class FakeOmnigraph:
         return observed
 
     def __call__(
-        self, args: list[str], lease, timeout_seconds=None, interrupt=None
+        self,
+        args: list[str],
+        lease,
+        timeout_seconds=None,
+        interrupt=None,
+        terminated=None,
     ) -> object:
         assert args[0] == "cluster"
         self.calls.append(args[1:])
@@ -992,6 +997,18 @@ def test_the_cleanup_budget_is_the_grace_less_the_margin():
     env = {"OMNIGRAPH_TERMINATION_GRACE_SECONDS": "30"}
     with pytest.raises(BootRefused, match="leaves no time"):
         entrypoint.sigterm_cleanup_seconds(env)
+
+
+def test_the_peer_wait_outlasts_the_termination_grace():
+    """Another server pod gets the whole grace to exit before the boot gives up."""
+    margin = entrypoint.PEER_EXIT_MARGIN_SECONDS
+    assert entrypoint.peer_wait_seconds({}) == (
+        entrypoint.DEFAULT_TERMINATION_GRACE_SECONDS + margin
+    )
+    env = {"OMNIGRAPH_TERMINATION_GRACE_SECONDS": "200"}
+    assert entrypoint.peer_wait_seconds(env) == 200 + margin
+    env["OMNIGRAPH_PEER_WAIT_SECONDS"] = "40"
+    assert entrypoint.peer_wait_seconds(env) == 40
 
 
 @pytest.mark.parametrize("graph", ["council", "bridge"])

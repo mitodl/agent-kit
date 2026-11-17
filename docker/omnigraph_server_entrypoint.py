@@ -164,9 +164,11 @@ UNLOCK_BUDGET_SECONDS = 15
 LOCK_COMMAND_TIMEOUT_SECONDS = 60
 # Other holders write renewTime from their own clock.
 LEASE_CLOCK_SKEW_SECONDS = 5
-# terminationGracePeriodSeconds (35) plus a margin for the kubelet to remove
-# the pod object.
-DEFAULT_PEER_WAIT_SECONDS = 50
+# How much longer than the termination grace a booting pod waits for another
+# server pod to exit (OMNIGRAPH_PEER_WAIT_SECONDS unset): the time the kubelet
+# takes to remove the pod object. A ReplicaSet starts the replacement for a
+# deleted or evicted pod while that pod is still terminating.
+PEER_EXIT_MARGIN_SECONDS = 15
 PEER_POLL_SECONDS = 2
 KUBERNETES_TIMEOUT_SECONDS = 5
 
@@ -207,9 +209,11 @@ DEFAULT_TERMINATION_GRACE_SECONDS = 125
 # Lease renewal (up to three Kubernetes calls of KUBERNETES_TIMEOUT_SECONDS)
 # and the exit.
 SIGTERM_CLEANUP_MARGIN_SECONDS = 20
-# How long the loopback server stopped by SIGTERM gets to exit before SIGKILL.
-# It comes out of the cleanup budget, after the in-flight delete. A server
-# killed anyway leaves a `serve` lock, which the next boot takes over.
+# How long a child stopped after SIGTERM (the loopback server, a maintenance
+# command) gets to exit before SIGKILL. It comes out of the cleanup budget. A
+# loopback server killed anyway leaves a `serve` lock, which the next boot
+# takes over; a maintenance command leaves its `graph_operation` lock, which
+# the window removes next.
 SIGTERM_STOP_SECONDS = 10
 
 # `omnigraph version --json` reports this for 0.14's `--target` addressing.
@@ -658,8 +662,10 @@ class Termination:
     """Whether SIGTERM has arrived, and what is left of the cleanup after it.
 
     The kubelet's SIGKILL follows its SIGTERM by the pod's termination grace,
-    so from SIGTERM on, the in-flight branch delete and stopping the loopback
-    server share one budget that ends inside that grace.
+    so from SIGTERM on, everything left to do before the exit shares one
+    budget that ends inside that grace: in the boot, the in-flight branch
+    delete and stopping the loopback server; in the maintenance window,
+    stopping its command, removing that command's lock and the restore.
 
     :param cleanup_seconds: the budget, counted from SIGTERM
         (``sigterm_cleanup_seconds``).
@@ -683,12 +689,19 @@ class Termination:
             return float("inf")
         return max(0.0, self._deadline - time.monotonic())
 
+    def stop_seconds(self) -> float:
+        """How long a child being stopped now gets before SIGKILL."""
+        if self._deadline is None:
+            return CHILD_STOP_SECONDS
+        return min(SIGTERM_STOP_SECONDS, self.remaining())
+
 
 def run_omnigraph(
     args: list[str],
     lease: UnlockLease | NoPeers,
     timeout_seconds: float | None = None,
     interrupt: Callable[[], None] | None = None,
+    terminated: Termination | None = None,
 ) -> CommandResult:
     """Run one omnigraph CLI command, stopping it if the Lease is lost.
 
@@ -701,9 +714,12 @@ def run_omnigraph(
 
     :param interrupt: called about once a second while the command runs. It
         raises to stop the command, and that exception propagates.
+    :param terminated: once SIGTERM is recorded there, the command runs only
+        while its cleanup budget lasts, and a stop gets what is left of it.
     :raises BootRefused: if the Lease was lost while the command ran. Nothing
         is unlocked.
-    :raises CommandTimedOut: if the command ran longer than ``timeout_seconds``.
+    :raises CommandTimedOut: if the command ran longer than ``timeout_seconds``
+        or past the end of the cleanup budget.
     """
     command = f"`omnigraph {' '.join(args)}`"
     deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
@@ -723,12 +739,18 @@ def run_omnigraph(
                     if deadline is not None and time.monotonic() >= deadline:
                         msg = f"{command} did not finish in {timeout_seconds:.0f}s"
                         raise CommandTimedOut(msg) from None
+                    if terminated is not None and terminated.remaining() <= 0:
+                        msg = f"{command} outlasted the cleanup budget after SIGTERM"
+                        raise CommandTimedOut(msg) from None
                     if interrupt is not None:
                         interrupt()
                 else:
                     return CommandResult(child.returncode, stdout)
         except BaseException:
-            stop_child(child, CHILD_STOP_SECONDS)
+            stop_child(
+                child,
+                CHILD_STOP_SECONDS if terminated is None else terminated.stop_seconds(),
+            )
             raise
 
 
@@ -804,15 +826,22 @@ class Cluster:
 
     The CLI's own version picks the argument shapes (``cli_speaks_targets``).
 
+    :param terminated: bounds the lock commands by the cleanup budget once
+        SIGTERM is recorded there (``run_omnigraph``).
     :raises BootRefused: on a CLI whose dialect this does not know.
     """
 
     def __init__(
-        self, config_dir: Path, actor: str | None, lease: UnlockLease | NoPeers
+        self,
+        config_dir: Path,
+        actor: str | None,
+        lease: UnlockLease | NoPeers,
+        terminated: Termination | None = None,
     ) -> None:
         self._config_dir = str(config_dir)
         self._as = ["--as", actor] if actor else []
         self._lease = lease
+        self._terminated = terminated
         self._targets = cli_speaks_targets()
         if self._targets:
             root, _ = cluster_layout(config_dir)
@@ -830,6 +859,7 @@ class Cluster:
                 ["cluster", *args],
                 self._lease,
                 timeout_seconds=LOCK_COMMAND_TIMEOUT_SECONDS,
+                terminated=self._terminated,
             )
         except CommandTimedOut as exc:
             raise BootRefused(str(exc)) from exc
@@ -1060,12 +1090,7 @@ def loopback_server(
             time.sleep(0.2)
         yield served
     finally:
-        stop_seconds = (
-            min(SIGTERM_STOP_SECONDS, terminated.remaining())
-            if terminated.is_set()
-            else CHILD_STOP_SECONDS
-        )
-        stop_child(child, stop_seconds)
+        stop_child(child, terminated.stop_seconds())
 
 
 # ── Boot sequence ────────────────────────────────────────────────────────────
@@ -1248,17 +1273,32 @@ def views_to_drop(
     return branched
 
 
+def termination_grace_seconds(env: dict[str, str]) -> float:
+    """The server pod's terminationGracePeriodSeconds, as its stack passes it."""
+    return float(
+        env.get(
+            "OMNIGRAPH_TERMINATION_GRACE_SECONDS", DEFAULT_TERMINATION_GRACE_SECONDS
+        )
+    )
+
+
+def peer_wait_seconds(env: dict[str, str]) -> float:
+    """How long a booting pod waits for another server pod to exit.
+
+    Another server pod gets the same grace as this one to exit.
+    """
+    if "OMNIGRAPH_PEER_WAIT_SECONDS" in env:
+        return float(env["OMNIGRAPH_PEER_WAIT_SECONDS"])
+    return termination_grace_seconds(env) + PEER_EXIT_MARGIN_SECONDS
+
+
 def sigterm_cleanup_seconds(env: dict[str, str]) -> float:
     """The cleanup budget after SIGTERM: the pod's grace less a margin.
 
     :raises BootRefused: if the grace leaves no time to stop the loopback
         server.
     """
-    grace = float(
-        env.get(
-            "OMNIGRAPH_TERMINATION_GRACE_SECONDS", DEFAULT_TERMINATION_GRACE_SECONDS
-        )
-    )
+    grace = termination_grace_seconds(env)
     budget = grace - SIGTERM_CLEANUP_MARGIN_SECONDS
     if budget <= SIGTERM_STOP_SECONDS:
         msg = (
@@ -1504,7 +1544,7 @@ def take_over(env: dict[str, str]) -> UnlockLease | NoPeers:
         env["OMNIGRAPH_POD_SELECTOR"],
         pod_name,
         lease,
-        float(env.get("OMNIGRAPH_PEER_WAIT_SECONDS", DEFAULT_PEER_WAIT_SECONDS)),
+        peer_wait_seconds(env),
     )
     return lease
 

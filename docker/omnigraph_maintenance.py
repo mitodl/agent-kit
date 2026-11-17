@@ -19,9 +19,12 @@ that window:
 The last line also runs when the window is cut short: by SIGTERM (the Job's
 `activeDeadlineSeconds`, a drain), by a failed step, or by the window's own
 deadline. A running command is stopped first, and the lock it left is removed
-only while the Lease is still confirmed. After SIGTERM that takes up to 30s
-to stop the command, then a status, an unlock and the scale-up, so the pod
-needs a `terminationGracePeriodSeconds` of 120, not the default 30.
+only while the Lease is still confirmed. After SIGTERM, stopping the command
+(at most 10s), the status, the unlock and the scale-up share one budget: the
+pod's `terminationGracePeriodSeconds` (OMNIGRAPH_TERMINATION_GRACE_SECONDS,
+120 by default) less a 40s margin, so the close ends before the kubelet's
+SIGKILL. A step the budget does not reach is skipped as if it had failed: a
+lock left in place keeps the server down, as below.
 
 The exit status is 0 only if every graph was maintained and the window was
 closed: the root unlocked, and the server either scaled back up or left down
@@ -59,7 +62,6 @@ from __future__ import annotations
 import os
 import signal
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -73,6 +75,7 @@ from omnigraph_server_entrypoint import (
     CommandTimedOut,
     KubernetesApi,
     KubernetesError,
+    Termination,
     UnlockLease,
     log,
 )
@@ -83,10 +86,23 @@ MIGRATION_ARMED_ANNOTATION = "ol.mit.edu/migration-armed"
 # LEASE_DURATION_SECONDS plus the clock-skew margin after its last renewal.
 LEASE_WAIT_SECONDS = 90
 LEASE_RETRY_SECONDS = 5
-# terminationGracePeriodSeconds (35) plus the time the kubelet and the
-# Deployment controller take to act on the scale-down.
-DEFAULT_SERVER_STOP_SECONDS = 90
+# The server pod's terminationGracePeriodSeconds plus the time the kubelet and
+# the Deployment controller take to act on the scale-down. ol-infrastructure
+# passes OMNIGRAPH_SERVER_STOP_SECONDS from the same two numbers.
+SERVER_STOP_MARGIN_SECONDS = 55
+DEFAULT_SERVER_STOP_SECONDS = (
+    handoff.DEFAULT_TERMINATION_GRACE_SECONDS + SERVER_STOP_MARGIN_SECONDS
+)
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
+# This pod's own terminationGracePeriodSeconds (ol-infrastructure
+# applications/omnigraph/maintenance.py TERMINATION_GRACE_SECONDS).
+DEFAULT_TERMINATION_GRACE_SECONDS = 120
+# The part of that grace the close after SIGTERM leaves unspent. Once the
+# budget is out, a Lease confirm or a restore attempt already under way (up to
+# three Kubernetes calls of KUBERNETES_TIMEOUT_SECONDS) still finishes, then
+# releasing the Lease waits out an in-flight renewal and writes once, and the
+# process exits.
+SIGTERM_CLOSE_MARGIN_SECONDS = 40
 RESTORE_ATTEMPTS = 10
 # The CLI parses `cleanup --keep` as a u32.
 MAX_CLEANUP_KEEP = 2**32 - 1
@@ -107,6 +123,8 @@ class Settings:
     :param window_seconds: how long after the start a new command may still
         begin. The Job's ``activeDeadlineSeconds`` has to be longer, by one
         command's timeout and the restore.
+    :param close_seconds: how long the close may take after SIGTERM: this
+        pod's termination grace less ``SIGTERM_CLOSE_MARGIN_SECONDS``.
     """
 
     config_dir: Path
@@ -118,6 +136,7 @@ class Settings:
     window_seconds: float
     command_timeout_seconds: float
     server_stop_seconds: float
+    close_seconds: float
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> Settings:
@@ -145,7 +164,33 @@ class Settings:
             server_stop_seconds=float(
                 env.get("OMNIGRAPH_SERVER_STOP_SECONDS", DEFAULT_SERVER_STOP_SECONDS)
             ),
+            close_seconds=sigterm_close_seconds(
+                float(
+                    env.get(
+                        "OMNIGRAPH_TERMINATION_GRACE_SECONDS",
+                        DEFAULT_TERMINATION_GRACE_SECONDS,
+                    )
+                )
+            ),
         )
+
+
+def sigterm_close_seconds(grace: float) -> float:
+    """The close's budget after SIGTERM, out of this pod's ``grace``.
+
+    :raises ValueError: if the grace leaves no time to stop the running
+        command. Settings are read before the server is stopped, so this fails
+        the run without opening a window.
+    """
+    budget = grace - SIGTERM_CLOSE_MARGIN_SECONDS
+    if budget <= handoff.SIGTERM_STOP_SECONDS:
+        msg = (
+            f"OMNIGRAPH_TERMINATION_GRACE_SECONDS={grace:.0f} leaves no time to "
+            "close the window after SIGTERM; it has to exceed "
+            f"{SIGTERM_CLOSE_MARGIN_SECONDS + handoff.SIGTERM_STOP_SECONDS}"
+        )
+        raise ValueError(msg)
+    return budget
 
 
 def parse_cleanup_retention(keep: str, older_than: str) -> tuple[str, str]:
@@ -268,17 +313,21 @@ class Window:
         self._replicas = deployment["spec"]["replicas"]
         self._resource_version = deployment["metadata"]["resourceVersion"]
         self._selector = pod_selector(deployment)
-        self._cluster = Cluster(settings.config_dir, None, lease)
+        self._terminated = Termination(settings.close_seconds)
+        self._cluster = Cluster(settings.config_dir, None, lease, self._terminated)
         _, self._graphs = handoff.cluster_layout(settings.config_dir)
         self._deadline = time.monotonic() + settings.window_seconds
-        self._terminated = threading.Event()
         self._may_have_stopped_server = False
         self._ran_command = False
         self.failed: list[str] = []
 
     def terminate(self) -> None:
-        """Ask the window to close. Safe to call from a signal handler."""
-        self._terminated.set()
+        """Ask the window to close. Safe to call from a signal handler.
+
+        The close then has ``Settings.close_seconds`` from now: stopping the
+        running command, the lock commands and the restore all fit in it.
+        """
+        self._terminated.note()
 
     def _check_terminated(self) -> None:
         if self._terminated.is_set():
@@ -415,6 +464,7 @@ class Window:
                 self._lease,
                 timeout_seconds=self._settings.command_timeout_seconds,
                 interrupt=self._check_terminated,
+                terminated=self._terminated,
             )
         except CommandTimedOut as exc:
             log(f"!!! {exc}")
@@ -466,6 +516,9 @@ class Window:
     def _restore(self) -> bool:
         name = self._settings.deployment
         for _ in range(RESTORE_ATTEMPTS):
+            if self._terminated.remaining() <= 0:
+                log(f"!!! the close after SIGTERM ran out of time restoring {name}")
+                break
             try:
                 deployment = self._api.get_deployment(name)
                 if migration_armed(deployment):

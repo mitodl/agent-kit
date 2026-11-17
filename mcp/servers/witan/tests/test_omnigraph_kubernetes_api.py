@@ -351,7 +351,7 @@ class ApplyHook(FakeOmnigraph):
     after_apply = None
 
     def __call__(
-        self, args: list[str], lease, timeout_seconds=None, termination=None
+        self, args: list[str], lease, timeout_seconds=None, terminated=None
     ) -> object:
         result = super().__call__(args, lease)
         if args[1] == "apply" and self.after_apply:
