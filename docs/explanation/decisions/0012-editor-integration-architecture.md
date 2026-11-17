@@ -161,9 +161,21 @@ changes, which the skeleton task owns.
   `witan_code/cli.py:57`) caches one process-wide dispatcher, and `match_*`
   routing reads the process cwd or `CLAUDE_PROJECT_DIR`
   (`witan_core/target_config.py:42`). The host resolves the target for each
-  workspace folder with that folder as the path, and keeps one dispatcher per
-  resolved target. `--target` and `WITAN_TARGET` still win over matching, as on
-  the CLI.
+  workspace folder with that folder as the path. `--target` and `WITAN_TARGET`
+  still win over matching, as on the CLI. A deployment target gets its own
+  `RemoteServerProxy`, one per target. The local store cannot be split the
+  same way: both servers build their configuration and graph client at import
+  (`witan/server.py:190-210`, `witan_code/server.py:28`), so a process holds
+  one local store. The host serves the first local store a folder resolves to,
+  and a folder that resolves to a different local store gets no features and
+  one Information diagnostic saying why, rather than reads and claims against
+  the wrong store. The local path still goes through `local_server`'s
+  pre-import guard (`witan/cli/local_dispatch.py`).
+- Branch per folder. witan-code follows the process's own checkout when a read
+  names no branch (`_resolve_branch`, `witan_code/server.py:182`), which is
+  wrong for a second folder or a worktree. The code plugin passes `branch=`
+  with each folder's checkout branch on every read, symbol resolution
+  included. `code_find_references` takes no `branch` today and gains one.
 - Dispatch off the event loop. The sync dispatch (`_fn`, and the proxy's
   `__getattr__`) runs its own `asyncio.run` per call, which cannot nest inside
   pygls's loop. The host runs plugin calls on one worker thread, where that is
@@ -174,14 +186,15 @@ changes, which the skeleton task owns.
   refactored into a function that returns the spec (section 3).
 
 A launch claim is always bare. The shared launch function (section 3) removes
-`CLAUDE_SESSION_ID`, `PI_SESSION_ID` and `CODEX_SESSION_ID` from its process's
-environment before it claims, so every launcher gets the same behavior: the
-language server, `witan task run` with or without `--emit-spec`, `witan acp`,
-and a Zed `tasks.json` task running `witan task run`. A launcher is not an agent
-session, and an inherited id is the trap described in the context. The agent a
-launcher starts sets its own id, so nothing it needs is lost. This also
-changes `witan task run` started from inside an agent session, which today
-claims under the outer session's id.
+every name in `SESSION_ID_ENV_VARS` (`witan/session_state.py:51`) from its
+process's environment before it claims, so every launcher gets the same
+behavior: the language server, `witan task run` with or without `--emit-spec`,
+`witan acp`, and a Zed `tasks.json` task running `witan task run`. A launcher
+is not an agent session, and an inherited id is the trap described in the
+context. The same ids must not reach the launched agent either, which the
+spec's `unset_env` handles (section 3). This also changes `witan task run`
+started from inside an agent session, which today claims under the outer
+session's id.
 
 `has_terminal()` is false under piped stdio, so a tool that can elicit takes its
 `default_when_unsupported` branch. The plugins pass every argument a tool would
@@ -189,7 +202,7 @@ otherwise ask about (the repo resolved from the workspace folder, above all), so
 no feature depends on that default.
 
 The host holds the tool binding as an enumerated list, as ADR-0011 does for the
-UI: the tools named in the feature map below, plus `task_get`,
+UI: the tools named in the feature map below, plus `task_list`, `task_get`,
 `workflow_project_get`, `task_ready`, `recall`, `task_claim` and `task_release`,
 which the launch contract uses. A plugin that needs a tool outside the list
 amends this ADR.
@@ -205,6 +218,7 @@ amends this ADR.
 | memories whose `symbol_refs` no longer resolve | council | `textDocument/publishDiagnostics`, Information severity, on the first line of the file the ref names, listing the memory and its `candidates` (`memory_stale_refs`) | a ref whose file no longer exists has no document to attach to, so `witan.listStaleRefs` returns every ref for the workspace repo |
 | tasks and memories that reference a symbol | council, needs symbol resolution | hover, and CodeLens on the symbol (`recall` with `symbol_id`, whose `symbol` section lists the tasks) | hover only |
 | ready work and active projects | council | `workspace/executeCommand` `witan.listReadyTasks`, `witan.listProjects` (`task_ready`, `task_for_branch`, `workflow_project_list`) | see section 5 |
+| the person's own work in flight | council | `workspace/executeCommand` `witan.listMyWork` (`task_list` with `status="in_progress"`, `assignee="@me"` and the workspace repo; `task_ready` leaves out tasks with a live claim) | see section 5 |
 | launch, and release after a failed launch | council | `workspace/executeCommand` `witan.runTask`, `witan.runProject`, `witan.releaseTask` | see section 5 |
 
 No tool today maps a position to an interface binding: `code_interface_providers`
@@ -246,6 +260,8 @@ object; neither parses CLI output.
   "argv": ["claude", "--model", "opus", "<prompt>"],
   "cwd": "/home/me/code/repo",
   "env": {"WITAN_TARGET": "prod"},
+  "unset_env": ["CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO"],
+  "handoff": false,
   "prompt": "<prompt>",
   "agent": "claude",
   "model": "opus",
@@ -260,14 +276,24 @@ object; neither parses CLI output.
   `launchable: false` and `reason: "no_workspace"`, naming the repo, when no
   open folder does. This check runs before the claim, so a refusal never
   leaves a lease behind.
-- `env` holds additions only. The client merges it over the environment it
-  would give any terminal and never uses a strict-env mode. It never contains a
-  credential; the launched agent's own witan resolves the token from the
-  `witan login` store, as any agent does today. `WITAN_TARGET` is set only when
-  the launcher's target came from `--target` or `WITAN_TARGET` rather than from
-  the folder's `match_*` rules, since an agent started in `cwd` resolves the
-  same matched target on its own. Either way the agent talks to the graph the
-  claim was taken in.
+- The client starts from the environment it would give any terminal, removes
+  every name in `unset_env`, then sets `env` over it. It never uses a
+  strict-env mode. An editor started inside an agent session hands that
+  session's variables to every terminal it opens, and they would reach the
+  launched agent: an inherited `CLAUDE_SESSION_ID` outranks Pi's or Codex's own
+  id in `current_session_id`, and an inherited `CLAUDE_PROJECT_DIR` or
+  `WITAN_REPO` overrides the target matching and repo detection that `cwd`
+  would otherwise drive (`witan_core/target_config.py:42`, `witan/repo.py`).
+  So `unset_env` always lists every name in `SESSION_ID_ENV_VARS` plus
+  `CLAUDE_PROJECT_DIR` and `WITAN_REPO`.
+- `env` pins the target. It sets `WITAN_TARGET` to the target the folder
+  resolved to, whether that came from `--target`, `WITAN_TARGET` or the
+  folder's `match_*` rules. When the folder resolved to the local store, which
+  has no target name, `unset_env` also lists `WITAN_TARGET`, and the agent's
+  matching from `cwd` reaches the same local store. Either way the agent talks
+  to the graph the claim was taken in. `env` never contains a credential; the
+  launched agent's own witan resolves the token from the `witan login` store,
+  as any agent does today.
 - A task launch claims first, as `_run_task_slug` does, and the claim is bare
   (section 2). The launcher drops `task_claim`'s `warning` key from the claim
   it returns, because the warning advises passing a `session_id`, and a bare
@@ -317,7 +343,7 @@ needs no id at all.
 
 The cost is that a client cannot tell which tasks a launched project session
 picked up. Until something needs that, a client shows the person's own
-`in_progress` tasks instead. `WITAN_SESSION_ID` as the runners project uses it
+`in_progress` tasks instead, from `witan.listMyWork`. `WITAN_SESSION_ID` as the runners project uses it
 (one id per worker slot, set by the runner) is a separate decision, and nothing
 here depends on it.
 
@@ -361,9 +387,13 @@ Launch modes, in order of delivery:
    tells the agent to claim first) or a project spec, because a prefilled
    prompt the person never submits would otherwise hold a lease for an hour
    with no agent behind it and no failure the client could release on.
-   Neither command carries env, so the client offers a handoff only for a spec
-   whose `env` is empty, where the panel agent resolves the same target on its
-   own. Both commands are internal to their owners, so the VS Code client
+   Neither command carries env or `unset_env`, so the panel agent resolves its
+   target and repo from VS Code's own environment. The server sets the spec's
+   `handoff` to true only when that resolution matches the launch's: its own
+   environment (which it shares with the VS Code process that started it) has
+   none of `WITAN_TARGET`, `CLAUDE_PROJECT_DIR` or `WITAN_REPO`, it was not
+   started with `--target`, and the window has one workspace folder. The client
+   offers a handoff only for a spec with `handoff: true`. Both commands are internal to their owners, so the VS Code client
    checks for them at runtime and hides the action when either is absent.
 
 What an editor without a feature does instead:
@@ -412,10 +442,15 @@ editor's language-server process, which every editor restarts at will.
   change that adds a host symbol and a plugin that calls it raises that
   server's `witan-core>=X` floor in the same change, and `just
   check-core-floor` catches a missed one.
-- Three pieces of new work outside the language server itself: target
-  resolution parameterised by a path instead of the process cwd (witan-core),
-  `task_release`'s `if_claimed_at` fence (witan-council), and
-  `code_interface_bindings_in_file` (witan-code).
+- New work outside the language server itself: target resolution
+  parameterised by a path instead of the process cwd (witan-core),
+  `task_release`'s `if_claimed_at` fence (witan-council),
+  `code_interface_bindings_in_file` and a `branch` parameter on
+  `code_find_references` (witan-code).
+- One language server process serves one local store. A person whose open
+  folders route to two different local stores gets features in the first and a
+  diagnostic in the second. Lifting that needs the servers' import-time
+  configuration made per-store, which is out of scope here.
 - A bare launch claim can be renewed by any of the person's sessions until the
   launched agent renews it. `_own_claim` already accepts that for
   `witan task run`, and the agent's first renewal closes it.
