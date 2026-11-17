@@ -457,24 +457,51 @@ def test_memory_link_keys_a_named_topic_on_the_stored_name(guarded_server):
     assert result["to"] == EMAIL_TOPIC
 
 
-@requires_omnigraph
-def test_the_topic_backfill_keys_a_raw_stored_tag_on_its_redaction(guarded_server):
-    """A memory written before tags were scanned still holds the raw tag; the
-    backfill promotes it to the redacted Topic, not a Topic keyed on it."""
+def _store_legacy(server, monkeypatch):
+    """A memory written before tags were scanned: its tag and Topic are raw.
+
+    Swaps the guard out with ``monkeypatch`` so it comes back however the
+    test ends."""
     from witan import server as srv
 
     guard = srv.client.guard
-    srv.client.guard = None
-    legacy = guarded_server.memory_store(
+    monkeypatch.setattr(srv.client, "guard", None)
+    legacy = server.memory_store(
         kind="agent_context", title="legacy", content="c", tags=[f"ask {EMAIL}"]
     )
-    srv.client.guard = guard
-    assert "tp-topic-ask-jane-doe-example-com" in _topic_slugs(
-        guarded_server, legacy["slug"]
-    )
+    monkeypatch.setattr(srv.client, "guard", guard)
+    assert _topic_slugs(server, legacy["slug"]) == {"tp-topic-ask-jane-doe-example-com"}
+    return legacy
+
+
+@requires_omnigraph
+def test_the_topic_backfill_keys_a_raw_stored_tag_on_its_redaction(
+    guarded_server, monkeypatch
+):
+    """The backfill promotes a legacy raw tag to the redacted Topic, not a
+    Topic keyed on it."""
+    legacy = _store_legacy(guarded_server, monkeypatch)
 
     guarded_server.migrate_topics()
     assert EMAIL_TOPIC in _topic_slugs(guarded_server, legacy["slug"])
+
+
+@requires_omnigraph
+def test_an_update_that_redacts_a_legacy_tag_links_its_topic(
+    guarded_server, monkeypatch
+):
+    """`update_memory` rewrites every merged field, so an edit that never named
+    the tags still redacts a legacy one, and the memory has to be findable by
+    the Topic the stored tag now keys on."""
+    legacy = _store_legacy(guarded_server, monkeypatch)
+
+    updated = guarded_server.memory_update(slug=legacy["slug"], content="edited")
+
+    assert "ask «redacted:email»" in updated["tags"]
+    assert EMAIL_TOPIC in _topic_slugs(guarded_server, legacy["slug"])
+    assert "tp-topic-scan-redacted" not in _topic_slugs(guarded_server, legacy["slug"])
+    got = topic_of(guarded_server, f"ask {EMAIL}:topic")
+    assert legacy["slug"] in {m["slug"] for m in got["memories"]}
 
 
 @requires_omnigraph

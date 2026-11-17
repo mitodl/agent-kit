@@ -4903,6 +4903,13 @@ def memory_update(
     # overwrite an `asserted` link a caller made through `memory_link`. Same
     # existing-edge check `migrate_topics` does, for the same reason.
     # `_store_memory` needs no equivalent — its memory is new, so it has none.
+    #
+    # With `tags` omitted, sync from the tags as stored. `update_memory` rewrites
+    # every merged field, so it scans the memory's existing tags too, and a
+    # legacy tag redacted by an unrelated edit is stored under a Topic it was
+    # never linked to. A tag already linked costs only its scan.
+    if tags is None:
+        tags = [t for t in updated["tags"] or [] if t != scan.REDACTED_TAG]
     linked = {
         t["slug"] for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
     }
