@@ -11,7 +11,7 @@ from witan.config import ScanConfig
 from witan.scan import annotate, no_redactions, take_redactions, write_guard_from_config
 from witan.scan.notice import describe
 
-from .conftest import requires_omnigraph
+from .conftest import requires_omnigraph, topic_of
 from .test_enforce import FirstSightFails
 
 
@@ -229,7 +229,12 @@ def test_a_redacted_tag_surfaces_though_topics_are_written_after_the_memory(
     updated = guarded_server.memory_update(slug=stored["slug"], tags=[CARD])
 
     assert "redaction_note" in updated
-    assert {n["query_name"] for n in updated["redactions"]} == {"insert_topic"}
+    # The tag is redacted twice over: in the memory's own list, and in the
+    # Topic promoted from it. The second is the one written late.
+    assert {n["query_name"] for n in updated["redactions"]} == {
+        "update_memory",
+        "insert_topic",
+    }
 
 
 @requires_omnigraph
@@ -371,3 +376,125 @@ def test_the_write_still_redacts_the_title_the_slug_could_not_scan(flaky_server)
         flaky_server.task_get(created["slug"])["title"]
         == "ask «redacted:email» about it"
     )
+
+
+# ── a tag is scanned, and its Topic is keyed on the tag as stored ────────────
+#
+# A tag lands in two permanent places: the memory's `tags` list, and the slug
+# of the Topic it is promoted to, which is that Topic's @key. Neither was
+# scanned, so an email in a tag survived in both while the Topic's stored name
+# was redacted.
+
+EMAIL_TOPIC = "tp-topic-ask-redacted-email"
+
+
+def _topic_slugs(server, memory_slug):
+    return {
+        t["slug"] for t in server.memory_get(memory_slug, include_topics=True)["topics"]
+    }
+
+
+@requires_omnigraph
+def test_a_tag_carrying_pii_is_stored_and_slugged_without_it(guarded_server):
+    stored = guarded_server.memory_store(
+        kind="agent_context", title="t", content="c", tags=[f"ask {EMAIL}", "uv"]
+    )
+
+    node = guarded_server.memory_get(stored["slug"], include_topics=True)
+    assert "ask «redacted:email»" in node["tags"]
+    assert not any("jane" in t for t in node["tags"])
+    assert {t["slug"] for t in node["topics"]} == {EMAIL_TOPIC, "tp-topic-uv"}
+    assert "tags[0]" in {n["field"] for n in stored["redactions"]}
+
+
+@requires_omnigraph
+def test_memory_update_scans_the_tags_it_writes(guarded_server):
+    stored = guarded_server.memory_store(kind="agent_context", title="t", content="c")
+    updated = guarded_server.memory_update(slug=stored["slug"], tags=[f"ask {EMAIL}"])
+
+    assert updated["tags"][0] == "ask «redacted:email»"
+    assert _topic_slugs(guarded_server, stored["slug"]) == {EMAIL_TOPIC}
+
+
+@requires_omnigraph
+def test_tags_that_redact_alike_share_one_topic(guarded_server):
+    """The accepted cost: distinct addresses become one Topic, because the
+    alternative is keying the Topic on the address."""
+    a = guarded_server.memory_store(
+        kind="agent_context", title="a", content="c", tags=[f"ask {EMAIL}"]
+    )
+    b = guarded_server.memory_store(
+        kind="agent_context",
+        title="b",
+        content="c",
+        tags=["ask john.roe@example.org", "ask max.poe@example.net"],
+    )
+
+    assert _topic_slugs(guarded_server, a["slug"]) == {EMAIL_TOPIC}
+    assert _topic_slugs(guarded_server, b["slug"]) == {EMAIL_TOPIC}
+    got = topic_of(guarded_server, EMAIL_TOPIC)
+    assert {m["slug"] for m in got["memories"]} == {a["slug"], b["slug"]}
+
+
+@requires_omnigraph
+def test_a_lookup_by_the_raw_tag_finds_the_topic_the_write_keyed(guarded_server):
+    stored = guarded_server.memory_store(
+        kind="agent_context", title="t", content="c", tags=[f"ask {EMAIL}"]
+    )
+
+    got = topic_of(guarded_server, f"ask {EMAIL}:topic")
+    assert got["topic"]["slug"] == EMAIL_TOPIC
+    assert got["topic"]["name"] == "ask «redacted:email»"
+    assert [m["slug"] for m in got["memories"]] == [stored["slug"]]
+
+
+@requires_omnigraph
+def test_memory_link_keys_a_named_topic_on_the_stored_name(guarded_server):
+    a = guarded_server.memory_store(kind="agent_context", title="a", content="c")
+    result = guarded_server.memory_link(
+        from_slug=a["slug"], to_slug=f"ask {EMAIL}:topic", kind="tagged"
+    )
+    assert result["to"] == EMAIL_TOPIC
+
+
+@requires_omnigraph
+def test_the_topic_backfill_keys_a_raw_stored_tag_on_its_redaction(guarded_server):
+    """A memory written before tags were scanned still holds the raw tag; the
+    backfill promotes it to the redacted Topic, not a Topic keyed on it."""
+    from witan import server as srv
+
+    guard = srv.client.guard
+    srv.client.guard = None
+    legacy = guarded_server.memory_store(
+        kind="agent_context", title="legacy", content="c", tags=[f"ask {EMAIL}"]
+    )
+    srv.client.guard = guard
+    assert "tp-topic-ask-jane-doe-example-com" in _topic_slugs(
+        guarded_server, legacy["slug"]
+    )
+
+    guarded_server.migrate_topics()
+    assert EMAIL_TOPIC in _topic_slugs(guarded_server, legacy["slug"])
+
+
+@requires_omnigraph
+def test_an_unguarded_store_still_slugs_topics_from_the_tag(server):
+    stored = server.memory_store(
+        kind="agent_context", title="t", content="c", tags=[f"ask {EMAIL}"]
+    )
+    assert _topic_slugs(server, stored["slug"]) == {"tp-topic-ask-jane-doe-example-com"}
+
+
+@requires_omnigraph
+def test_a_tag_whose_scan_failed_gets_no_topic(flaky_server):
+    """A Topic slug has no random suffix, so keying a failed scan on the
+    `unscanned` placeholder would join unrelated tags into one Topic."""
+    a = flaky_server.memory_store(
+        kind="agent_context", title="a", content="c", tags=[f"ask {EMAIL}"]
+    )
+    b = flaky_server.memory_store(
+        kind="agent_context", title="b", content="c", tags=["uv"]
+    )
+    assert _topic_slugs(flaky_server, a["slug"]) == set()
+    assert _topic_slugs(flaky_server, b["slug"]) == set()
+    assert topic_of(flaky_server, "tp-topic-unscanned") is None

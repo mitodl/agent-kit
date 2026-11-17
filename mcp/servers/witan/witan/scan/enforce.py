@@ -27,8 +27,11 @@ logger = get_logger("witan.scan")
 # query_name → (node_type, free-text params to scan). A string param is scanned
 # as one value; a list param named here is scanned element by element, for the
 # prose lists (the autonomy envelope) that are injected into agent context.
-# Identifier lists (tags, symbol_refs, files_changed, …) and structured/enum
-# params are intentionally out of scope for now. Branch names
+# A memory's ``tags`` are scanned the same way, because each tag also becomes a
+# Topic whose slug is built from it (``server._topic_slug``), so a tag left raw
+# here survived in the memory beside a redacted Topic name. Other identifier
+# lists (a task's or project's tags, symbol_refs, files_changed, …) and
+# structured/enum params are intentionally out of scope for now. Branch names
 # (insert_code_branch) are deliberately excluded — witan never sanitises them.
 # Keep this aligned with queries/mutations.gq when free-text fields are added.
 #
@@ -40,8 +43,8 @@ logger = get_logger("witan.scan")
 # are machine-set (an enum, the resolved author, a timestamp) and are out of
 # scope for the same reason every other structured param is.
 FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
-    "insert_memory": ("Memory", ("title", "content")),
-    "update_memory": ("Memory", ("title", "content")),
+    "insert_memory": ("Memory", ("title", "content", "tags")),
+    "update_memory": ("Memory", ("title", "content", "tags")),
     "insert_topic": ("Topic", ("name",)),
     "link_supersedes": ("Supersedes", ("role",)),
     "link_applies_to": ("AppliesTo", ("role",)),

@@ -41,6 +41,12 @@ a memory's `content` does. The other three edge properties are machine-set (an
 enum, the resolved author, a timestamp) and are out of scope like every other
 structured param.
 
+A memory's `tags` are scanned element by element, because each tag is also
+promoted to a Topic whose slug (its permanent `@key`) is built from the tag.
+The slug is built from the tag as `insert_topic` will store it, on every write
+and every lookup, so `ask jane@example.com` and `ask john@example.org` are one
+Topic, `tp-topic-ask-redacted-email`. Task and project tags are not scanned.
+
 A node with no `repo` field of its own can still be governed by a per-repo
 `[scan.overlay]` table: the overlay resolves from the mutation's `repo`
 parameter, so `task_comment` passes its task's repo alongside the comment body

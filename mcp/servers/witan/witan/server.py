@@ -1323,7 +1323,7 @@ def _slim_memory(m: dict) -> dict:
     return {k: m[k] for k in _SLIM_KEYS if k in m}
 
 
-def _topic_slug(kind: str, name: str) -> str:
+def _topic_slug(kind: str, name: str) -> str | None:
     """Deterministic, idempotent slug for a Topic: ``tp-<kind>-<slug(name)>``.
 
     No random suffix — two stores of the same (kind, name) collide on the ``@key``
@@ -1331,27 +1331,52 @@ def _topic_slug(kind: str, name: str) -> str:
     has no ``[a-z0-9]`` characters to slugify (e.g. punctuation-only, or a
     non-Latin script like ``日本語``), fall back to a short content hash so
     distinct names don't all collapse to ``tp-<kind>-``.
+
+    Built from the name as ``insert_topic`` will store it, because the slug is
+    the topic's ``@key`` and is never scanned: slugging the raw name kept an
+    email the guard had redacted out of the stored name. Every write and every
+    lookup derives the slug here, so a read keys on what the write keyed on.
+    Names that redact to the same text share one topic (two email tags are
+    both ``tp-topic-redacted-email``).
+
+    ``None`` when the name's scan failed, and the caller then writes or finds
+    no Topic. Unlike a memory's slug, a Topic's has no random suffix, so keying
+    on the ``unscanned`` placeholder would join every such name into one Topic.
     """
-    sanitised = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:64]
+    stored = _slug_text("insert_topic", "name", name, None)
+    if stored == scan.enforce.UNSCANNED != name:
+        return None
+    sanitised = re.sub(r"[^a-z0-9]+", "-", stored.lower()).strip("-")[:64]
     if not sanitised:
-        sanitised = hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
+        sanitised = hashlib.sha1(stored.encode("utf-8")).hexdigest()[:12]
     return f"tp-{kind}-{sanitised}"
 
 
 def _upsert_topic_steps(
     name: str, kind: str
-) -> tuple[str, list[tuple[str, str, dict]]]:
+) -> tuple[str | None, list[tuple[str, str, dict]]]:
     """Return the Topic slug for (name, kind) and the steps that create it.
 
-    The steps are empty when the Topic already exists, which is also how callers
-    (e.g. ``migrate_topics``) count creations without a second ``get_topic``
-    read. The existence read happens here; only the write is deferred, so the
-    caller can commit it alongside whatever else it is writing.
+    The steps are empty when the Topic already exists. The existence read
+    happens here; only the write is deferred, so the caller can commit it
+    alongside whatever else it is writing. The slug is ``None``, with no steps,
+    when :func:`_topic_slug` could not scan the name.
     """
     slug = _topic_slug(kind, name)
+    if slug is None:
+        return None, []
+    return slug, _create_topic_steps(slug, name, kind)
+
+
+def _create_topic_steps(slug: str, name: str, kind: str) -> list[tuple[str, str, dict]]:
+    """The step creating Topic ``slug``, or none when it already exists.
+
+    Takes the slug :func:`_topic_slug` already built, so a caller that keyed on
+    it does not scan the name a second time and risk a different answer.
+    """
     if client.read("read.gq", "get_topic", {"slug": slug}):
-        return slug, []
-    return slug, [
+        return []
+    return [
         (
             "mutations.gq",
             "insert_topic",
@@ -1365,7 +1390,8 @@ def _resolve_topic_steps(ref: str) -> tuple[str | None, list[tuple[str, str, dic
 
     ``ref`` is either an existing Topic slug (``tp-...``) or a ``name:kind`` spec
     (e.g. ``cryptography:topic`` or ``GET /api/v1/courses/:contract``). The slug is
-    ``None`` when ``ref`` is a slug that does not resolve to a Topic.
+    ``None`` when ``ref`` is a slug that does not resolve to a Topic, or a spec
+    whose name could not be scanned.
     """
     # Only a tp- slug can resolve directly; skip the read for a name:kind spec.
     if ref.startswith("tp-") and client.read("read.gq", "get_topic", {"slug": ref}):
@@ -1381,7 +1407,7 @@ def _resolve_topic(topic: str) -> dict | None:
 
     A spec resolves through the same deterministic ``_topic_slug`` used on
     write, so a tag stored as ``UV`` is found by ``uv:topic``, and falls back to
-    an exact name and kind match.
+    an exact match on the name as stored and the kind.
     """
     # A spec's name can start with tp- too (``tp-client:contract``), so a miss
     # here falls through to parsing, as the write path does.
@@ -1392,10 +1418,17 @@ def _resolve_topic(topic: str) -> dict | None:
     name, sep, kind = topic.rpartition(":")
     if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
         return None
-    rows = client.read("read.gq", "get_topic", {"slug": _topic_slug(kind, name)})
+    slug = _topic_slug(kind, name)
+    if slug is None:
+        return None
+    rows = client.read("read.gq", "get_topic", {"slug": slug})
     if rows:
         return rows[0]
-    named = client.read("read.gq", "topic_by_name_kind", {"name": name, "kind": kind})
+    named = client.read(
+        "read.gq",
+        "topic_by_name_kind",
+        {"name": _slug_text("insert_topic", "name", name, None), "kind": kind},
+    )
     if not named:
         return None
     rows = client.read("read.gq", "get_topic", {"slug": named[0]["slug"]})
@@ -1403,9 +1436,14 @@ def _resolve_topic(topic: str) -> dict | None:
 
 
 def _tag_memory_steps(
-    memory_slug: str, name: str, kind: str
+    memory_slug: str, tags: Iterable[str] | None, linked: Iterable[str] = ()
 ) -> list[tuple[str, str, dict]]:
-    """Upsert a Topic and link ``memory_slug`` to it, as batchable steps.
+    """Upsert a Topic per tag and link ``memory_slug`` to it, as batchable steps.
+
+    Topics already in ``linked`` are skipped, as are blank tags and tags whose
+    scan failed (the tag stays on the memory, and ``migrate_topics`` promotes
+    it later). Tags are deduplicated by topic slug rather than by text: ``UV``
+    and ``uv``, or two email addresses that redact alike, are one Topic.
 
     The edge is stamped ``inferred``: nobody named this Topic, it was promoted
     from a free string in the memory's ``tags``. That is the whole asserted-vs-
@@ -1413,19 +1451,28 @@ def _tag_memory_steps(
     memories belong together, and ``recall``'s topic-sibling hop is its widest,
     so this is where the weighting has something to bite on.
     """
-    slug, steps = _upsert_topic_steps(name, kind)
-    return [
-        *steps,
-        (
-            "mutations.gq",
-            "link_tagged",
-            {
-                "from": memory_slug,
-                "to": slug,
-                **_edge_props("inferred", role="tag"),
-            },
-        ),
-    ]
+    seen = set(linked)
+    steps: list[tuple[str, str, dict]] = []
+    for tag in tags or ():
+        if not tag.strip():
+            continue
+        topic_slug = _topic_slug("topic", tag)
+        if topic_slug is None or topic_slug in seen:
+            continue
+        seen.add(topic_slug)
+        steps += _create_topic_steps(topic_slug, tag, "topic")
+        steps.append(
+            (
+                "mutations.gq",
+                "link_tagged",
+                {
+                    "from": memory_slug,
+                    "to": topic_slug,
+                    **_edge_props("inferred", role="tag"),
+                },
+            )
+        )
+    return steps
 
 
 # Statements per commit in the topic backfill. Bounds the composed GQ body,
@@ -1523,8 +1570,10 @@ def migrate_topics() -> dict:
         handled: set[str] = set()
         for tag in dict.fromkeys(t for t in (row.get("tags") or []) if t.strip()):
             topic_slug = _topic_slug("topic", tag)
+            if topic_slug is None:
+                continue
             if topic_slug not in seen_topics:
-                _, create_steps = _upsert_topic_steps(tag, "topic")
+                create_steps = _create_topic_steps(topic_slug, tag, "topic")
                 if create_steps:
                     topics_created += 1
                     steps += create_steps
@@ -4583,10 +4632,8 @@ def _store_memory(
 
     # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
     # the source of truth for old readers; the Topic graph is the new traversal
-    # surface. Idempotent on the topic slug, so shared tags reuse one node. Skip
-    # blank tags and dedup so neither drives redundant upsert/link calls.
-    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
-        steps += _tag_memory_steps(slug, tag, "topic")
+    # surface. Idempotent on the topic slug, so shared tags reuse one node.
+    steps += _tag_memory_steps(slug, tags)
 
     # Provenance: record which session produced this memory (best-effort). An
     # explicitly-threaded handle wins — it is the only source a deployed replica
@@ -4846,11 +4893,7 @@ def memory_update(
     linked = {
         t["slug"] for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
     }
-    steps: list[tuple[str, str, dict]] = []
-    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
-        if _topic_slug("topic", tag) not in linked:
-            steps += _tag_memory_steps(slug, tag, "topic")
-    client.change_many(steps)
+    client.change_many(_tag_memory_steps(slug, tags, linked))
     return updated
 
 

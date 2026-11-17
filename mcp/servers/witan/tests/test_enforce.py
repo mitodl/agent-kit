@@ -396,10 +396,27 @@ def test_an_envelope_item_warning_passes_through():
 
 
 def test_identifier_lists_are_still_not_scanned():
-    """Only the prose lists named in FIELD_MAP are scanned; tags are not."""
+    """Only the lists named in FIELD_MAP are scanned; a project's tags are not."""
     guard = _guard([MatchScanner("s", "secret", "SECRET")])
     params = {"title": "t", "description": "d", "tags": ["SECRET"]}
     assert guard("insert_workflow_project", params) == params
+
+
+@pytest.mark.parametrize("query_name", ["insert_memory", "update_memory"])
+def test_a_memory_tag_is_redacted_alone(query_name):
+    """A memory's tag becomes a Topic slug, so it is scanned like the title."""
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")])
+    out = guard(
+        query_name,
+        {"slug": "mem-1", "title": "t", "content": "c", "tags": ["uv", "ask a@b.com"]},
+    )
+    assert out["tags"] == ["uv", "ask «redacted:email»", "scan:redacted"]
+
+
+def test_a_secret_in_a_memory_tag_blocks_the_write():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked):
+        guard("insert_memory", {"title": "t", "content": "c", "tags": ["AKIASECRET"]})
 
 
 def test_workflow_project_update_scans_title_and_description():
