@@ -722,6 +722,11 @@ def run_omnigraph(
         or past the end of the cleanup budget.
     """
     command = f"`omnigraph {' '.join(args)}`"
+    if terminated is not None and terminated.remaining() <= 0:
+        # A command that would finish inside the first poll still runs in the
+        # margin left for the exit.
+        msg = f"{command} not started: the cleanup budget after SIGTERM is spent"
+        raise CommandTimedOut(msg)
     deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     with subprocess.Popen(
         ["omnigraph", *args],

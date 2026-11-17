@@ -704,6 +704,25 @@ def test_a_command_after_sigterm_ends_with_the_budget(tmp_path, monkeypatch):
     assert time.monotonic() - started < 5
 
 
+def test_a_command_is_not_started_once_the_budget_is_spent(tmp_path, monkeypatch):
+    """A fast force-unlock must not run in the margin left for the exit."""
+    ran = tmp_path / "ran"
+    fake = tmp_path / "omnigraph"
+    fake.write_text(f"#!/bin/sh\ntouch {ran}\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    terminated = entrypoint.Termination(0)
+    terminated.note()
+    with pytest.raises(entrypoint.CommandTimedOut, match="cleanup budget"):
+        entrypoint.run_omnigraph(
+            ["cluster", "force-unlock", "01LOCK"],
+            entrypoint.NoPeers(may_unlock=True),
+            timeout_seconds=60,
+            terminated=terminated,
+        )
+    assert not ran.exists()
+
+
 def test_the_storage_root_defaults_to_the_config_directory(tmp_path):
     (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"graphs": {"memory": {}}}))
     assert entrypoint.cluster_layout(tmp_path) == (str(tmp_path), ["memory"])
