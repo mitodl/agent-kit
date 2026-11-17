@@ -272,3 +272,4 @@ or supersede the memory.
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Repo scoping; see instructions. |
 | `all_repos` | bool | `False` | Check every repo's memories. |
+| `include_superseded` | bool | `False` | Also check superseded memories. |

@@ -287,6 +287,21 @@ def test_memories_without_refs_and_superseded_ones_are_not_checked(server, code)
 
 
 @requires_omnigraph
+def test_include_superseded_checks_superseded_memories_too(server, code):
+    code(_fake_code({LIVE}, {INDEXED: 10}))
+    old = _lesson(server, "old", [DELETED])
+    new = _lesson(server, "new", [LIVE])
+    server.memory_link(new, old, "supersedes")
+
+    out = server.memory_stale_refs(repo=INDEXED, include_superseded=True)
+
+    assert out["checked"] == 2
+    assert _by_slug(out)[old]["status"] == "stale"
+    assert new not in _by_slug(out)
+    assert out["counts"] == {"live": 1, "missing": 1, "unknown": 0}
+
+
+@requires_omnigraph
 def test_all_repos_checks_every_repo(server, code):
     code(_fake_code({LIVE}, {INDEXED: 10}))
     here = _lesson(server, "here", [DELETED])

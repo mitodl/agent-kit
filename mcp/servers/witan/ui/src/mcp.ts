@@ -434,10 +434,12 @@ export function memoryContradictions(args: {
  * The memories in scope whose `symbol_refs` do not all resolve in the code
  * graph, each ref marked live, missing or unknown. A bare dict, so unwrapped.
  * It reads witan-code in-process with every repo explicit, so it never
- * elicits (ADR 0011, 2026-11-13 amendment).
+ * elicits (ADR 0011, 2026-11-13 amendment). Superseded memories are
+ * checked only with `include_superseded`.
  */
 export function memoryStaleRefs(args: {
 	repo: string;
+	include_superseded?: boolean;
 }): Promise<StaleRefsReport> {
 	return read("memory_stale_refs", scoped(args));
 }

@@ -1122,7 +1122,10 @@ describe("App", () => {
 			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
 		);
 
-		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo });
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({
+			repo,
+			include_superseded: false,
+		});
 		const marked = [...root.querySelectorAll("tbody tr")]
 			.filter((row) => row.querySelector(".badge.stale-refs"))
 			.map((row) => row.querySelector("a")?.textContent?.trim());
@@ -1144,7 +1147,11 @@ describe("App", () => {
 		);
 		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
 
-		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo: "" });
+		// A topic page lists superseded memories, so its check covers them.
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({
+			repo: "",
+			include_superseded: true,
+		});
 	});
 
 	it("checks every repo's refs on a recall query, whose expansion spans repos", async () => {
@@ -1155,7 +1162,10 @@ describe("App", () => {
 		expect(mcp.recall).toHaveBeenCalledWith(
 			expect.objectContaining({ repo: "https://github.com/mitodl/agent-kit" }),
 		);
-		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo: "" });
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({
+			repo: "",
+			include_superseded: false,
+		});
 	});
 
 	it("keeps a plain search's check in the repo filter, as the search is", async () => {
@@ -1163,7 +1173,10 @@ describe("App", () => {
 		await open(`#memory?repo=${encodeURIComponent(repo)}&q=retries&plain=1`);
 		await vi.waitFor(() => expect(mcp.memoryStaleRefs).toHaveBeenCalled());
 
-		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({ repo });
+		expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({
+			repo,
+			include_superseded: false,
+		});
 	});
 
 	it("keeps the list when the stale check fails, and says nothing is marked", async () => {
@@ -1201,18 +1214,29 @@ describe("App", () => {
 		expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull();
 	});
 
-	it("says superseded memories go unchecked when the list shows them", async () => {
-		await open("#memory?superseded=1");
+	it("checks superseded memories' refs too when the list shows them", async () => {
+		await open("#memory");
+		await vi.waitFor(() =>
+			expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({
+				repo: "",
+				include_superseded: false,
+			}),
+		);
+
+		window.location.hash = "#memory?superseded=1";
+		await vi.waitFor(() =>
+			expect(mcp.memoryStaleRefs).toHaveBeenCalledWith({
+				repo: "",
+				include_superseded: true,
+			}),
+		);
 		await vi.waitFor(() =>
 			expect(root.querySelector("tbody .badge.stale-refs")).not.toBeNull(),
 		);
-
 		expect(mcp.memoryList).toHaveBeenCalledWith(
 			expect.objectContaining({ include_superseded: true }),
 		);
-		expect(root.querySelector(".stale-summary")?.textContent).toContain(
-			"Superseded memories are not checked",
-		);
+		expect(text()).not.toContain("not checked");
 	});
 
 	it("re-checks symbol refs on the memory view's Refresh", async () => {
