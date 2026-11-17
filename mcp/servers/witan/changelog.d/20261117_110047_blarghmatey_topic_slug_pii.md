@@ -8,6 +8,14 @@
   reads find what writes keyed. Names that redact to the same text now share
   one Topic (two email tags are both `tp-topic-redacted-email`), a tag whose
   scan fails gets no Topic, and a secret in a tag now refuses the write, as it
-  does in a title. Existing Topics are
-  not re-keyed; an existing memory's tags are scanned the next time it is
-  updated.
+  does in a title. An update that omits `tags` links the Topics of the tags as
+  stored, so a legacy tag the update redacts is still findable. Existing
+  Topics are not re-keyed; an existing memory's tags are scanned the next time
+  it is updated.
+
+### Changed
+
+- A Topic name (and so its slug) is scanned under the strictest policy across
+  the base `[scan]` config and every `[scan.overlay]` table
+  (`ScanConfig.strictest()`), since a Topic is shared across repos. One repo's
+  overlay can now redact, and so merge, Topic names other repos share.

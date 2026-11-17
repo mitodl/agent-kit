@@ -527,6 +527,39 @@ def test_a_tag_whose_scan_failed_gets_no_topic(flaky_server):
     assert topic_of(flaky_server, "tp-topic-unscanned") is None
 
 
+@requires_omnigraph
+def test_a_topic_is_keyed_on_the_strictest_policy_across_repos(server, monkeypatch):
+    """Topics are cross-repo, so one repo's overlay redacting an email keeps it
+    out of every Topic, including one promoted from another repo's tag. That
+    repo's memory keeps the tag under its own (base, warn) policy."""
+    from witan import server as srv
+
+    monkeypatch.setattr(
+        srv.client,
+        "guard",
+        write_guard_from_config(
+            ScanConfig(
+                enabled=True,
+                pii_action="warn",
+                overlay={"https://github.com/test/strict": {"pii_action": "redact"}},
+            )
+        ),
+    )
+    stored = server.memory_store(
+        kind="agent_context",
+        title="t",
+        content="c",
+        repo="https://github.com/test/other",
+        tags=[f"ask {EMAIL}"],
+    )
+
+    node = server.memory_get(stored["slug"], include_topics=True)
+    assert node["tags"] == [f"ask {EMAIL}"]
+    assert [(t["slug"], t["name"]) for t in node["topics"]] == [
+        (EMAIL_TOPIC, "ask «redacted:email»")
+    ]
+
+
 class LaterSightFails:
     """Flags ``needle`` the first time it scans a text and raises after.
 

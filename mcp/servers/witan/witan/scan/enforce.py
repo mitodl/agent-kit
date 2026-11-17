@@ -72,6 +72,13 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+#: Writes of a node no single repo owns. A Topic is shared by every repo's
+#: memories and its name is its slug, so its scan takes the strictest policy
+#: across the base config and every ``[scan.overlay]`` (``ScanConfig.strictest``)
+#: rather than the base one a write with no ``repo`` would otherwise get.
+CROSS_REPO_QUERIES = frozenset({"insert_topic"})
+
+
 #: What :meth:`WriteGuard.stored_text` returns for a value it could not scan.
 #: A slug built from it reads ``tk-unscanned-<id>``; ``_make_slug``'s random
 #: suffix keeps it unique.
@@ -157,13 +164,16 @@ class WriteGuard:
     Enforcement policy (actions, allowlists, ``on_scanner_error``) is *not*
     fixed: it's resolved fresh per write via ``config.for_repo(repo)`` (ADR
     0001 amendment, 2026-07-09), so an ``[scan.overlay]`` table takes effect
-    without rebuilding anything expensive.
+    without rebuilding anything expensive. A :data:`CROSS_REPO_QUERIES` write
+    gets ``config.strictest()`` instead, whatever its params say.
     """
 
     def __init__(self, config: ScanConfig, registry: ScannerRegistry) -> None:
         self._config = config
         self._registry = registry
         self._allowlist = compile_allowlist(config.allowlist)
+        strictest = config.strictest()
+        self._cross_repo = (strictest, compile_allowlist(strictest.allowlist))
 
     def __call__(self, query_name: str, params: dict) -> dict:
         entry = FIELD_MAP.get(query_name)
@@ -171,7 +181,7 @@ class WriteGuard:
             return params
         node_type, fields = entry
         slug = params.get("slug")
-        config, allowlist = self._policy(_repo_of(params))
+        config, allowlist = self._policy(query_name, _repo_of(params))
 
         # Resolve every field's findings to an action first, without emitting
         # audit events or mutating anything, so the write's fate (blocked or
@@ -271,7 +281,7 @@ class WriteGuard:
             )
             return UNSCANNED
         node_type, _ = entry
-        config, allowlist = self._policy(repo)
+        config, allowlist = self._policy(query_name, repo)
         try:
             findings = self._registry.scan(value, field, node_type)
         except ScannerError as exc:
@@ -291,7 +301,11 @@ class WriteGuard:
         ]
         return redact_spans(value, dropped) if dropped else value
 
-    def _policy(self, repo: str | None) -> tuple[ScanConfig, list[re.Pattern[str]]]:
+    def _policy(
+        self, query_name: str, repo: str | None
+    ) -> tuple[ScanConfig, list[re.Pattern[str]]]:
+        if query_name in CROSS_REPO_QUERIES:
+            return self._cross_repo
         config = self._config.for_repo(repo)
         # Compare values, not identity: an overlay that matched but didn't
         # touch `allowlist` (e.g. it only overrides secret_action) still

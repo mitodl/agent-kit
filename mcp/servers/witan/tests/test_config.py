@@ -759,6 +759,63 @@ def test_overlay_empty_repo_key_rejected():
         ScanConfig(overlay={"": {"secret_action": "warn"}})
 
 
+# ── strictest: the policy for a node no single repo owns (a Topic) ─────────────
+
+
+def test_strictest_with_no_overlay_returns_self():
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig()
+    assert cfg.strictest() is cfg
+
+
+def test_strictest_takes_each_action_at_its_strictest_across_overlays():
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig(
+        pii_action="warn",
+        on_scanner_error="warn",
+        overlay={
+            "github.com/example/a": {"pii_action": "redact", "secret_action": "warn"},
+            "github.com/example/b": {"on_scanner_error": "block"},
+        },
+    )
+    strictest = cfg.strictest()
+    assert strictest.pii_action == "redact"
+    assert strictest.secret_action == "block"
+    assert strictest.on_scanner_error == "block"
+
+
+def test_strictest_keeps_only_the_allowlist_every_policy_shares():
+    """An allowlist entry suppresses a finding, so one that a single overlay
+    drops is not part of the strictest policy."""
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig(
+        allowlist=["a@b\\.com", "c@d\\.com"],
+        allowlist_hashes=["aa", "bb"],
+        allowlist_salt="s",
+        overlay={
+            "github.com/example/a": {"allowlist": ["a@b\\.com"]},
+            "github.com/example/b": {"allowlist_hashes": ["bb"]},
+        },
+    )
+    strictest = cfg.strictest()
+    assert strictest.allowlist == ["a@b\\.com"]
+    assert strictest.allowlist_hashes == ["bb"]
+
+
+def test_strictest_drops_hashes_salted_differently_by_an_overlay():
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig(
+        allowlist_hashes=["aa"],
+        allowlist_salt="s",
+        overlay={"github.com/example/a": {"allowlist_salt": "other"}},
+    )
+    assert cfg.strictest().allowlist_hashes == []
+
+
 def test_allowlist_hashes_normalized_to_lowercase():
     from witan.config import ScanConfig
 

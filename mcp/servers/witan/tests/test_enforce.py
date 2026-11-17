@@ -251,6 +251,40 @@ def test_overlay_keys_on_first_repos_entry():
     assert guard("insert_workflow_project", params) == params
 
 
+def test_a_topic_name_gets_the_strictest_policy_across_overlays():
+    """A Topic is cross-repo, so a PII action one repo's overlay redacts is
+    redacted out of every Topic name, while that repo's own rule still governs
+    only its memories."""
+    guard = _guard(
+        [MatchScanner("email", "pii", "a@b.com")],
+        pii_action="warn",
+        overlay={"github.com/example/strict": {"pii_action": "redact"}},
+    )
+
+    topic = guard("insert_topic", {"slug": "tp-topic-x", "name": "ask a@b.com"})
+    assert topic["name"] == "ask «redacted:email»"
+    assert (
+        guard.stored_text("insert_topic", "name", "ask a@b.com", None)
+        == "ask «redacted:email»"
+    )
+    memory = {
+        "title": "t",
+        "content": "c",
+        "tags": ["ask a@b.com"],
+        "repo": "github.com/example/other",
+    }
+    assert guard("insert_memory", memory) == memory
+
+
+def test_a_secret_in_a_topic_name_blocks_though_an_overlay_warns():
+    guard = _guard(
+        [MatchScanner("aws_key", "secret", "AKIA")],
+        overlay={"github.com/example/legacy": {"secret_action": "warn"}},
+    )
+    with pytest.raises(WriteBlocked):
+        guard("insert_topic", {"slug": "tp-topic-x", "name": "AKIA"})
+
+
 def test_suppression_does_not_leak_across_unrelated_findings():
     """Allowlisting one finding must not suppress a different, unrelated one
     in the same write."""
