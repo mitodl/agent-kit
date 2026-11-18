@@ -7,7 +7,7 @@ only reports: it never repairs anything, never prompts, never reads stdin and
 never runs ``op`` (a noninteractive ``op`` failure says nothing about the
 user's 1Password session).
 
-Stdlib-only and Python 3.9-compatible, so plain ``python3`` runs it with no
+Stdlib-only, for Python 3.11 or later, so plain ``python3`` runs it with no
 uv resolve on every session start. Every check runs concurrently with its own
 timeout, and the whole run is cut off at ``TOTAL_BUDGET_SECONDS``: a check
 still running then is reported as unfinished and its process group killed.
@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -255,10 +256,6 @@ def _witan_remote_url(repo_root: Path | None) -> str | None:
     ``WITAN_TARGET``; here that skips the check."""
     if url := os.environ.get("WITAN_REMOTE_URL"):
         return url
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        return None
     path = Path(
         os.environ.get("WITAN_CONFIG", "").strip() or WITAN_CONFIG_PATH
     ).expanduser()

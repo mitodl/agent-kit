@@ -36,8 +36,9 @@ The witan check resolves the remote the way witan does: `WITAN_REMOTE_URL`,
 then the `remote_url` of the `[targets.*]` block in `~/.config/witan/config.toml`
 (or `WITAN_CONFIG`) that `WITAN_TARGET` names or that matches this checkout,
 then the global `remote_url`. A
-checkout with no remote uses a local store, so the check is skipped. It needs
-Python 3.11 or later (for `tomllib`); on an older `python3` it is skipped.
+checkout with no remote uses a local store, so the check is skipped. The
+script needs `python3` to be 3.11 or later, the oldest Python still supported
+upstream.
 
 ## Reading the output
 

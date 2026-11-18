@@ -190,23 +190,15 @@ priority = 10
 # The script ships inside the skill and runs under plain `python3` at session
 # start, so its tests are stdlib unittest too: no env to build, and they run
 # here because no package's pytest suite covers files under skills/.
+#
+# They run on 3.11, the oldest Python still supported upstream and the floor
+# the script declares, so a construct newer than the floor fails here rather
+# than at session start. uv fetches 3.11 if it isn't installed.
 
 [[repos.hooks]]
 id = "session-preflight-tests"
-name = "session-preflight script tests"
-entry = "python3 -m unittest discover -s tests/skills"
-language = "system"
-pass_filenames = false
-files = "^(skills/workflow/session-preflight/|tests/skills/)"
-priority = 10
-
-# The same tests on the oldest python3 the script supports. macOS ships 3.9
-# as its system python3, so a 3.10+ construct that passes above would break
-# every session start there. uv fetches 3.9 if it isn't installed.
-[[repos.hooks]]
-id = "session-preflight-tests-py39"
-name = "session-preflight script tests (python 3.9)"
-entry = "uv run --no-project --python 3.9 python -m unittest discover -s tests/skills"
+name = "session-preflight script tests (python 3.11)"
+entry = "uv run --no-project --python 3.11 python -m unittest discover -s tests/skills"
 language = "system"
 pass_filenames = false
 files = "^(skills/workflow/session-preflight/|tests/skills/)"
