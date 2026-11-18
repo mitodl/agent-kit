@@ -272,6 +272,13 @@ Ask these together (see **Asking the user**):
 
 Wait for the answers before calling `task_create`.
 
+A title appears in ready-work lists, session context, and the UI next to
+tasks from every repo, so it has to make sense on its own. Don't prefix it
+with a label from a spec or plan (`A3:`, `C2:`, `P4`, `Phase 1:`,
+`Cohort 4:`) or name work by a spec's numbering ("Decide D1-D7", "the C1
+API"). Say what the work is. If the task comes from a spec, link the section
+by name in the description.
+
 Then gather, if relevant: a one-line description, a parent epic slug
 (`parent`), blocker slugs (`blocked_by`), a GitHub issue/PR URL
 (`external_uri`), and a project slug (`project_slug`). Call:

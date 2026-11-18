@@ -7361,7 +7361,9 @@ async def task_create(
     Parameters
     ----------
     title:
-        Short label for the work.
+        What the work is, readable on its own beside other repos' tasks. No
+        prefix from a spec or plan (``A3:``, ``Phase 1:``); cite the spec
+        section by name in the description.
     description:
         Full text of the work.
     type:

@@ -316,6 +316,24 @@ Valid phases in order: `discovery` → `spec` → `implementation` → `delivery
 You can skip phases for smaller tasks (e.g. discovery → implementation directly).
 Phases do not need to be sequential; a project can return to a phase.
 
+### Writing the spec so it can be cited
+
+PRs, issues, task titles, and code comments will cite the spec written in the
+`spec` phase, often in repos where the reader has never seen it. Write it so
+those citations stay readable:
+
+- Give each section and each decision a heading that says what it decides,
+  e.g. `### Writes go through the MCP tier`, not `### D3`. A number in front
+  is fine; a number alone is not a name.
+- When you cite the spec anywhere else, use that name and link the heading:
+  "the row-count guard in the
+  [scoped-pull contract](https://github.com/mitodl/ol-data-platform/blob/main/docs/design/contentfile_scoped_pull_contract.md#4-the-scoping-problem--the-part-that-needs-new-code)",
+  not "the §4 guard". Labels like §4, D3, A5, Phase 0, or Cohort 4 mean
+  nothing outside the spec that defines them.
+- Tasks created from the spec get titles that read on their own (see the
+  witan-task skill's "Create a task"). The spec section goes in the
+  description, as a named link.
+
 ## Ending a Session
 
 Before closing a session, record what was accomplished:

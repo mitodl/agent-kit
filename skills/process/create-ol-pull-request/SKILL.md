@@ -412,7 +412,15 @@ The PR body exists to get a reviewer oriented in under a minute:
 - When the why isn't obvious from the title, open the description with one
   sentence of context (what was broken or what needed to change), then what the
   PR does.
-- Link to the issue, the doc, or the line of code instead of paraphrasing it.
+- Link to the issue, the doc, or the line of code instead of re-explaining
+  it, and say in a clause what the reader will find there.
+- Name what you point at. A label a document gives its own parts (§4, D3,
+  A5, Phase 0, Cohort 4, open question 2) means nothing outside that document.
+  Say what the part is and link its heading: "the row-count guard in the
+  [scoped-pull contract](https://github.com/mitodl/ol-data-platform/blob/main/docs/design/contentfile_scoped_pull_contract.md#4-the-scoping-problem--the-part-that-needs-new-code)",
+  not "the §4 guard". After that first mention, keep using the name ("the
+  row-count guard"), not the number. The title follows the same rule: no
+  spec-local prefixes like `A3:` or `Phase 1:`.
 - Drop an optional section rather than filling it with "N/A"-grade prose.
 - Testing notes say how the change is observed in practice, using whichever of
   these apply: the environment it was applied to (CI/QA/RC), a command a

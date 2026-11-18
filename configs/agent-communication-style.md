@@ -54,6 +54,14 @@ like a report generated about the work.
 - **Write for someone who has to act on it.** A reviewer needs to know what to
   check; a teammate triaging an issue needs to know what's actually broken.
   Optimize for that, not for looking exhaustive.
+- **Name what you point at.** A label a document gives its own parts (§4, D3,
+  A5, Phase 0, Cohort 4, open question 2, Option B) means nothing outside that
+  document. When you cite one elsewhere, say what it is in a few words and
+  link the heading: "the row-count guard in the scoped-pull contract", not
+  "the §4 guard". Keep using the name after the first mention. Titles of PRs,
+  issues, and tasks follow the same rule, so no `A3:` or `Phase 1:` prefixes.
+  Linking instead of re-explaining is still right; the link carries the
+  detail, and the clause beside it tells the reader why to open it.
 - **Don't hard-wrap the body.** Write each paragraph as one long line and let
   GitHub wrap it. GitHub's comment renderer turns a single newline inside a
   paragraph into a line break, so an 80-column wrap that looks tidy in your

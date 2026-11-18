@@ -200,7 +200,14 @@ short and factual:
 - Say it once. Don't restate the title in the body or repeat a section's
   content in another section.
 - No filler adjectives ("comprehensive", "robust", "critical") and no emoji.
-- Link rather than explain — a URL beats a paragraph describing what's behind it.
+- Link rather than re-explain, and say in a clause what is behind the link. A
+  URL beats a paragraph describing the page, but a bare link makes the reader
+  open it to learn why it's there.
+- Name what you point at. A label a document gives its own parts (§4, D3, A5,
+  Phase 0, Cohort 4, open question 2) means nothing outside that document. Say
+  what the part is and link its heading: "the row-count guard in the
+  scoped-pull contract", not "the §4 guard". The title follows the same rule:
+  no spec-local prefixes like `A3:` or `Phase 1:`.
 - Paste the actual error, log line, or snippet instead of narrating it.
 
 A three-bullet issue that says exactly what is wrong beats a page of context.
