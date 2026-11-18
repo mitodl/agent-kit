@@ -117,6 +117,19 @@ def test_ts_calls_resolve_through_relative_imports(source, call, expected):
     assert got == expected
 
 
+@pytest.mark.parametrize(
+    ("importer", "spec"),
+    [("a.ts", "."), ("a.ts", "./"), ("web/a.ts", ".."), ("web/a.ts", "../")],
+)
+@pytest.mark.parametrize("index", ["index.ts", "index.js"])
+def test_a_ts_import_of_the_repo_root_reaches_its_index(importer, spec, index):
+    files = {"a.ts", "web/a.ts", index}
+    source = f"import {{ f }} from '{spec}';\nimport * as root from '{spec}';\n"
+    for call, member in (("f", "f"), ("root.g", "g")):
+        got = _resolve(files, importer, source, call, language="typescript")
+        assert got == (index, member)
+
+
 # ── Through the indexer and code_callers ──────────────────────────
 
 B_PY = """\
@@ -359,3 +372,27 @@ def test_a_ts_call_into_another_module_is_a_caller(tmp_path, monkeypatch):
     monkeypatch.chdir(base)
     _index(base)
     assert _callers("b.ts::foo") == {"a.ts::one", "a.ts::two"}
+
+
+@requires_stack
+def test_a_ts_import_of_the_repo_root_is_a_caller(tmp_path, monkeypatch):
+    """`'.'` and `'./'` in a root-level file reach the root `index.ts`."""
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    base = tmp_path / "r"
+    base.mkdir()
+    _git(base, "init", "-q", "-b", "main")
+    (base / "index.ts").write_text("export function f() {\n  return 1;\n}\n")
+    (base / "a.ts").write_text(
+        "import { f } from '.';\n\nexport function viaDot() {\n  return f();\n}\n"
+    )
+    (base / "b.ts").write_text(
+        "import { f } from './';\n\nexport function viaSlash() {\n  return f();\n}\n"
+    )
+    monkeypatch.chdir(base)
+    _index(base)
+    assert _callers("index.ts::f") == {"a.ts::viaDot", "b.ts::viaSlash"}

@@ -8,6 +8,104 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.50.0] - 2026-11-17
+
+### Added
+
+- `witan memory import --map=<project-dir>=<repo-uri>` gives a project its
+  repo in place of resolving it from disk, so memories of a deleted or moved
+  checkout can be imported. `<project-dir>` is the project as the unresolved
+  report names it (a Claude Code project directory, a Codex cwd, a Copilot
+  workspace folder) or the absolute path it stood for. The repo is
+  canonicalised like any explicit `repo` and must be a remote URI; a `--map`
+  that names no project, or gives one project two repos, is refused.
+
+- The web UI's Memory view marks a memory whose `symbol_refs` cite a symbol
+  the code graph no longer has (`memory_stale_refs`), with a "Stale refs only"
+  filter, and the memory panel shows each ref as missing (with same-named
+  candidates) or unchecked (with the reason). A ref that could not be checked,
+  e.g. in a repo nobody indexed, is counted above the list and never marked
+  stale. `memory_stale_refs` checks current memories only, so where the view
+  shows superseded ones (a topic, or "Show superseded") it says they are
+  unchecked. `memory_stale_refs` joins the UI's bound read set, so the deployed
+  page's read-only token may call it (ADR 0011, 2026-11-13 amendment).
+
+- A pluggable prompt-injection classifier slot. Name a provider (a
+  `witan.classifiers` entry point or a `module:Attr` path) and its model in
+  `[screen]` or `WITAN_SCREEN_PROVIDER`/`WITAN_SCREEN_MODEL`, and memory, task
+  and task-comment writes are classified at the `change()` choke point, with
+  the verdict, classifier version and a digest of the screened text stored on
+  the record. witan ships no provider, so this is off by default. Classifier
+  output is parsed fail-closed: anything but `{"decision":"clean"}` or
+  `{"decision":"flagged"}` resolves to `flagged`. Long text is classified in
+  chunks and stops at the first flag; text needing more than 16 classifier
+  calls is stored flagged ("too long to screen") without one.
+- `memory_get`, `task_get` (and each of its comments) and the memories a first
+  `task_claim` surfaces carry a `screening` value. A record with no verdict for
+  its current text reads as `unscreened` with a "[NOT security-screened ...]"
+  notice. A flagged label names only reasons witan wrote itself; the
+  classifier's own reason stays in `screen_reason` for operators. `witan task
+  show` and the `witan run` launch prompt print the notices too.
+
+- Every tool carries MCP annotations: `readOnlyHint` on reads, and on writes
+  `destructiveHint` (true for deletes, closes, merges, field overwrites,
+  rewritten memory links and session summaries, phase advances, and link
+  removal) plus
+  `idempotentHint` where a repeat changes nothing more.
+  Clients can auto-approve the reads. `witan serve` against a deployed target
+  republishes the deployment's annotations.
+
+### Changed
+
+- Tool and parameter descriptions are cut to what an agent needs to choose a
+  value. Text several tools repeated (the agent session id, `session_slug`,
+  `assignee`, slug prefixes, `ui_url`, `live_pr`, `lease_expired`, write
+  contention) now lives once in the server instructions. The agent-facing
+  manifest drops from 94,561 to 62,355 characters.
+
+### Fixed
+
+- `memory_stale_refs` (`witan memory stale-refs`) decides liveness with witan-code's exact-id lookup, `code_find_definition(symbol_id=...)`, instead of reading the ref's file and falling back to a name lookup capped at 50 rows. The file read resolves a relative path against the cwd when a same-named file exists there, so a live symbol whose name also repeated past the cap read as missing. The name lookup now supplies `candidates` for a missing ref, and still counts the ref live when it returns the ref's own id, since a reindex deletes and reloads a file's rows as separate writes and the exact lookup can land between them. This needs a witan-code with that parameter; against an older one every indexed ref reports `unknown` ("definition lookup failed") rather than a wrong verdict.
+- `recall(memory=...)` fills each symbol's `definition` from the same exact-id lookup instead of a name lookup. A ref whose name repeated past the 50-row cap got no definition, or another file's symbol of that name; a ref that no longer exists now gets no `definition` rather than its same-named symbols elsewhere. Against an older witan-code, no symbol gets a `definition`.
+
+- A slug is now built from the title as the write-path scanner stores it, so
+  PII redacted out of a title no longer survives in the slug (the node's
+  permanent key). This covers `memory_store`, `task_create`,
+  `workflow_project_create` and `task_comment`, whose slug comes from the
+  comment body. Building the slug fails closed: when its scan cannot complete
+  (a scanner raises under either `on_scanner_error` setting, or the write has
+  no scan mapping), the slug is built from the placeholder `unscanned`
+  instead of the raw text, and `witan.scan.slug_unscanned` is logged.
+  Existing slugs are unchanged.
+
+- A repo-scoped `task_search` returns its unscoped (`repo=None`) matches
+  however many matches in other repos outrank them. The unscoped half was
+  picked out of the all-repos read after that read's cap, so 20 better
+  matches elsewhere (10,000 with a `limit` above 20) left it empty. It now
+  reads through its own query pair with a repo-null predicate. The `assignee`
+  filter also moved into the query, ahead of the same cap, and selects only
+  that holder and its `#<session>` qualifiers, so tasks held by identities
+  that merely contain it (`xagentA` for `agentA`) cannot fill the cap.
+
+- `witan serve` against a deployed target sent no server instructions, so
+  every "see instructions" in a tool description pointed at nothing. It now
+  sends them, and appends witan-code's instructions when it mounts the
+  `code_*` tools, which `mount` alone dropped.
+
+- `memory_store`, `task_create`, `workflow_project_create` and `task_comment`
+  no longer fail with `AttributeError` when a screening classifier is
+  configured. Building a slug asks the installed write guard for the text it
+  will store, and neither the Screener nor the chain of a scan guard plus a
+  Screener could answer.
+
+### Notes
+
+- Schema change: four nullable `screen_*` properties on `Memory`, `Task` and
+  `TaskComment`, and the memory, task and comment insert/update mutations write
+  them. A deployed graph needs `schema.pg` applied (the pulumi-omnigraph
+  deploy) before this image rolls out, or every memory and task write fails
+  on the unknown property. Local stores re-apply it on startup.
+
 ## [0.49.0] - 2026-11-13
 
 ### Added
