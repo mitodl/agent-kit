@@ -8,7 +8,9 @@ Stdlib-only (``python3 -m unittest``) because the script itself is.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -16,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -362,6 +365,18 @@ class RunChecksTest(unittest.TestCase):
         lines = self.preflight.run_checks({"slow": check}, time.monotonic() + 0.5)
         self.assertEqual(len(lines), 1)
         self.assertTrue(lines[0].startswith("slow: check did not finish"), lines)
+
+    def test_a_python_below_the_floor_prints_one_line_and_runs_nothing(
+        self,
+    ) -> None:
+        self.preflight.MIN_PYTHON = (sys.version_info[0] + 1, 0)
+        self.preflight.run_checks = unittest.mock.Mock()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.preflight.main(), 0)
+        self.preflight.run_checks.assert_not_called()
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("python3: session-preflight needs"))
 
 
 if __name__ == "__main__":

@@ -23,7 +23,6 @@ import subprocess
 import sys
 import threading
 import time
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+MIN_PYTHON = (3, 11)
 CHECK_TIMEOUT_SECONDS = 3.0
 HTTP_TIMEOUT_SECONDS = 2.0
 TOTAL_BUDGET_SECONDS = 5.0
@@ -256,6 +256,10 @@ def _witan_remote_url(repo_root: Path | None) -> str | None:
     ``WITAN_TARGET``; here that skips the check."""
     if url := os.environ.get("WITAN_REMOTE_URL"):
         return url
+    # Imported here, not at the top, so main()'s version check can report an
+    # older python3 in one line instead of an ImportError traceback.
+    import tomllib
+
     path = Path(
         os.environ.get("WITAN_CONFIG", "").strip() or WITAN_CONFIG_PATH
     ).expanduser()
@@ -367,6 +371,13 @@ def run_checks(
 
 
 def main() -> int:
+    if sys.version_info < MIN_PYTHON:
+        found = ".".join(map(str, sys.version_info[:3]))
+        wanted = ".".join(map(str, MIN_PYTHON))
+        print(
+            f"python3: session-preflight needs Python {wanted} or later and python3 is {found}, so no checks ran. Run: python3 --version"
+        )
+        return 0
     deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     repo_root = _repo_root()
     checks: dict[str, Callable[[], str | None]] = {
