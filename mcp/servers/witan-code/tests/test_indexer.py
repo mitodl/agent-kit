@@ -53,6 +53,52 @@ def test_incremental_reindex_skips_unchanged(sample_repo):
     assert second.skipped >= 1
 
 
+# ── Which stored row lets a file skip its parse ──────────────────────────────
+
+SHA = "a" * 64
+
+
+def test_a_row_under_the_current_index_version_skips_either_way():
+    from witan_code.indexer import INDEX_VERSION, _StoredFile, _unchanged
+
+    stored = _StoredFile(SHA, INDEX_VERSION)
+    assert _unchanged(stored, SHA, check_version=True)
+    assert _unchanged(stored, SHA, check_version=False)
+
+
+def test_an_older_index_version_reparses_only_when_the_version_is_checked():
+    from witan_code.indexer import INDEX_VERSION, _StoredFile, _unchanged
+
+    stored = _StoredFile(SHA, INDEX_VERSION - 1)
+    assert not _unchanged(stored, SHA, check_version=True)
+    assert _unchanged(stored, SHA, check_version=False)
+
+
+def test_a_row_from_before_the_version_was_recorded_is_version_1():
+    from witan_code.indexer import _StoredFile, _unchanged
+
+    assert not _unchanged(_StoredFile(SHA, None), SHA, check_version=True)
+    assert _unchanged(_StoredFile(SHA, None), SHA, check_version=False)
+
+
+def test_changed_content_pending_and_missing_rows_always_reparse():
+    from witan_code.indexer import (
+        _PENDING_CONTENT_HASH,
+        INDEX_VERSION,
+        _StoredFile,
+        _unchanged,
+    )
+
+    for check_version in (True, False):
+        for stored in (
+            _StoredFile("b" * 64, INDEX_VERSION),
+            _StoredFile(_PENDING_CONTENT_HASH, INDEX_VERSION),
+            _StoredFile(None, None),
+            None,
+        ):
+            assert not _unchanged(stored, SHA, check_version=check_version)
+
+
 # ── A failing bridge write must be reported, not swallowed ──────────────────
 #
 # It was swallowed, and that cost 15 hours of silently-frozen cross-repo

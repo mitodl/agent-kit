@@ -169,6 +169,13 @@ def _git(base, *args):
 @pytest.fixture
 def two_modules(tmp_path, monkeypatch):
     """A git repo whose `pkg/a.py` calls into `pkg/b.py`, indexed on main."""
+    base = _two_modules_repo(tmp_path, monkeypatch)
+    _index(base)
+    return base
+
+
+def _two_modules_repo(tmp_path, monkeypatch):
+    """The `two_modules` checkout, not yet indexed."""
     from witan_code import config as cfg_mod
     from witan_code import server as srv
 
@@ -185,7 +192,6 @@ def two_modules(tmp_path, monkeypatch):
     (base / "pkg" / "b.py").write_text(B_PY)
     (base / "pkg" / "a.py").write_text(A_PY)
     monkeypatch.chdir(base)
-    _index(base)
     return base
 
 
@@ -206,6 +212,65 @@ def _callers(symbol, direction="callers"):
     srv._git_context.clear()
     rows = tool_fn(srv.code_callers)(f"{REPO}#{symbol}", direction=direction)
     return {f"{r['symbol_id'].split('#', 1)[1]}" for r in rows}
+
+
+CROSS_FILE_CALLERS = {"pkg/a.py::direct", "pkg/a.py::through_module"}
+
+
+def _index_as_an_indexer_before_cross_file_calls(base, monkeypatch):
+    """Index ``base`` the way witan-code before #654 left a store: CodeFile rows
+    with no ``index_version`` and no cross-file Calls edges."""
+    from witan_code import indexer
+
+    file_records = indexer._file_records
+
+    def without_index_version(*args, **kwargs):
+        records = file_records(*args, **kwargs)
+        for record in records:
+            if record.get("type") == "CodeFile":
+                del record["data"]["index_version"]
+        return records
+
+    with monkeypatch.context() as old:
+        old.setattr(indexer, "_file_records", without_index_version)
+        old.setattr(indexer, "_cross_file_records", lambda *a, **k: [])
+        _index(base)
+    assert not _callers("pkg/b.py::target") & CROSS_FILE_CALLERS
+
+
+@requires_stack
+def test_an_unchanged_file_gains_new_edges_when_the_index_version_moves(
+    tmp_path, monkeypatch
+):
+    """The production gap after #654: `bridge.py` calls `graph.check_writable`,
+    but nobody had edited it since, so the content-hash skip kept it on rows
+    with no cross-file edges. On the default view a file stored under another
+    INDEX_VERSION is parsed again, once."""
+    base = _two_modules_repo(tmp_path, monkeypatch)
+    _index_as_an_indexer_before_cross_file_calls(base, monkeypatch)
+
+    stats = _index(base)
+    assert stats.skipped == 0
+    assert stats.indexed == 3
+    assert CROSS_FILE_CALLERS <= _callers("pkg/b.py::target")
+
+    assert _index(base).indexed == 0
+
+
+@requires_stack
+def test_a_branch_view_does_not_reparse_a_file_only_for_the_index_version(
+    tmp_path, monkeypatch
+):
+    """Parsing the whole repo onto a branch view for a version change would
+    push every file through the MCP tier, so a branch writer compares content
+    only. A view forked after CI's re-parse gets the new rows from main."""
+    base = _two_modules_repo(tmp_path, monkeypatch)
+    _index_as_an_indexer_before_cross_file_calls(base, monkeypatch)
+
+    _git(base, "checkout", "-q", "-b", "feature/x")
+    stats = _index(base)
+    assert stats.indexed == 0
+    assert stats.skipped == 3
 
 
 @requires_stack
