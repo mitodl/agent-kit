@@ -191,9 +191,9 @@ priority = 10
 # start, so its tests are stdlib unittest too: no env to build, and they run
 # here because no package's pytest suite covers files under skills/.
 #
-# They run on 3.11, the oldest Python still supported upstream and the floor
-# the script declares, so a construct newer than the floor fails here rather
-# than at session start. uv fetches 3.11 if it isn't installed.
+# They run on 3.11, the floor the script declares, so a construct newer than
+# the floor fails here rather than at session start. uv fetches 3.11 if it
+# isn't installed.
 
 [[repos.hooks]]
 id = "session-preflight-tests"
