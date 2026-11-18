@@ -18,6 +18,17 @@ changed is in that member's own changelog.
 
 <!-- scriv-insert-here -->
 
+## [0.1.5] - 2026-11-17
+
+### Changed
+
+- Floor raised to `witan-code>=0.32.0`. witan-council imports witan-code in
+  process, and its `memory_stale_refs` and `recall(memory=...)` look a symbol up
+  with `code_find_definition(symbol_id=...)`, which witan-code takes from
+  0.32.0. Against an older witan-code that call raises, so every ref reports
+  `unknown` ("definition lookup failed") and `recall` returns refs with no
+  definition.
+
 ## [0.1.4] - 2026-09-16
 
 - Floors raised to `witan-council>=0.34.0` and `witan-code>=0.19.0`. Both

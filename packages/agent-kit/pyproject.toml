@@ -1,6 +1,6 @@
 [project]
 name = "ol-agent-kit"
-version = "0.1.4"
+version = "0.1.5"
 description = "Meta-package: installs the full mitodl agent-kit toolkit (agent-config-kit's agent-kit CLI + witan + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -15,7 +15,10 @@ dependencies = [
     # tasks extension, cacheable list results). Still no upper bound, so a fresh
     # install keeps picking up newer releases of either server automatically.
     "witan-council>=0.34.0",
-    "witan-code>=0.19.0",
+    # >=0.32.0: witan-council imports witan-code in process and calls
+    # code_find_definition(symbol_id=...) for stale-refs and recall(memory=...);
+    # an older witan-code raises on that keyword and every lookup degrades.
+    "witan-code>=0.32.0",
 ]
 
 [project.urls]
@@ -51,7 +54,7 @@ witan-code = { workspace = true }
 packages = ["agent_kit"]
 
 [tool.bumpversion]
-current_version = "0.1.4"
+current_version = "0.1.5"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

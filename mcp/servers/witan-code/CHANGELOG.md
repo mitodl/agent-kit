@@ -8,6 +8,43 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.32.0] - 2026-11-17
+
+### Added
+
+- `code_callers` accepts an optional `branch`, with the semantics `code_impact` and `code_find_definition` already have. A deployed server has no checkout to follow, so a remote caller could only read the default view; `branch="feature/x"` reads that branch's callers or callees. Omitted, the tool follows the checkout's branch view for the current repo as before.
+
+- `code_find_definition` takes `symbol_id` in place of `name` to look up one exact id: it returns that symbol alone, or `[]` when the id's repo has no index or the index has no such symbol. A name lookup is capped at 50 rows, so it could not answer "is this id still defined" for a name that repeats across files (every `<module>`, Django's `Command.handle`). The lookup is routed by the id's repo like the other id-routed tools, and `branch` selects the view as it does for a name lookup. Passing both `name` and `symbol_id`, or neither, is refused.
+
+- The indexer resolves calls into other files of the repo through each file's imports, for Python (absolute and relative imports, `from pkg import mod`, `import pkg.mod as m`) and TS/JS (relative `import { f }` and `import * as ns`). A call whose callee is an imported name or an attribute chain rooted at one (`f()`, `mod.f()`, `Cls.method()`) gets a `Calls`/`References` edge to the symbol in the other file, so `code_callers`, `code_impact` and `witan code diff-impact` now list callers in other modules, on main and branch views alike. Calls through an instance (`obj.method()`), re-exports, star imports, `require()` and path aliases are not followed. Existing stores need one `witan-code reindex` (or a forced CI index) to get these edges for files that have not changed since.
+- Indexing a file re-links the stored files that mention its module name (and, for a package `__init__.py` or an `index.ts`, the names it defines, since `from . import f` or `from './index'` reaches it without its directory's name), found with one `git grep` over the work tree. Re-indexing a file deletes its symbols and every edge into them, so without this the edit hook's one-file run dropped a module's cross-file callers. It also links a caller written before the module or function it calls. The re-linked files' own rows are not rewritten.
+
+- Every tool carries MCP annotations. The `code_*` queries and the read-only
+  `code_store_*` tools are `readOnlyHint`; `code_store_open` is
+  non-destructive and idempotent; `code_reindex` is destructive and
+  idempotent, because it deletes a changed file's rows before loading their
+  replacements; the `code_store_mutate*` and `code_store_load` tools are
+  destructive.
+
+### Changed
+
+- `code_search_symbol` returns `{"symbols": [...]}` instead of a bare list, so the result has room for the `note` below. A caller that read the list now reads `result["symbols"]`.
+
+- `witan code diff-impact` takes "tests to run" from a symbol's callers when the graph can reach them (a module-level Python function or class, or a module-level TS/JS function). The `git grep` name search now runs only for methods and nested defs, TS/JS classes, interfaces and type aliases, languages without import resolution, and a repo with no code graph, and the label drops "(stand-in)".
+
+- The cluster graph-id function moved to witan-core as `witan_core.graph_ids.code_graph_id`, along with `CODE_GRAPH_PREFIX`, `BRIDGE_GRAPH_ID` and `GRAPH_ID_RE`. `witan_code.config` no longer defines them. The ids it returns are unchanged. Requires witan-core 0.57.0.
+
+- Parameter descriptions are cut to what an agent needs to choose a value.
+  `repo`, `branch`, `symbol_id` and `min_precision` point at the server
+  instructions instead of repeating them. The manifest drops from 25,598 to
+  21,157 characters.
+
+### Fixed
+
+- A file named directly to the indexer (the edit hook's case) is held to the full walk's path rules as well as git's ignore rules, under the name the walk would list it by. An edit under an excluded directory (e.g. `build/`, `node_modules/`), below a nested checkout, or below a symlinked directory was indexed, and the next full index purged it again. Such a file now writes nothing, and rows it already has are dropped on that edit unless the walk still collects the file under its own resolved path (e.g. an excluded `build/alias.py -> ../a.py` leaves `a.py` alone). `witan code why` reports it as `not indexed: <rule>`, and points rows a rule now excludes at a full index of the repo.
+
+- `code_search_symbol` says when it skipped the docstring search. A store whose schema has no `Symbol.docstring` index, or a deployed witan-code tier older than the docstring query, answers with name matches only, and the only sign was a warning in the server's log, which a client of a deployed store never sees. The result now carries a `note` starting `docstring search unavailable` that gives the reason and, in a cross-repo fan-out, how many of the stores searched skipped it. The tool docs also say that only the first 500 characters of a docstring are indexed.
+
 ## [0.31.0] - 2026-11-13
 
 ### Added
