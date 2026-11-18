@@ -1386,6 +1386,16 @@ query current_memory_refs($repo: String?) {
     return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
 }
 
+// `current_memory_refs` with superseded memories kept, for a caller that
+// lists them (the web UI's topic pages and "Show superseded").
+query memory_refs($repo: String?) {
+    match {
+        $m: Memory
+        $repo is null or $m.repo = $repo
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
+}
+
 query tasks_with_refs() {
     match {
         $t: Task

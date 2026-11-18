@@ -9065,12 +9065,15 @@ def _resolve_symbol_refs(refs: Iterable[str]) -> dict[str, dict]:
 
 
 @_tool(READ)
-def memory_stale_refs(repo: str | None = None, all_repos: bool = False) -> dict:
+def memory_stale_refs(
+    repo: str | None = None, all_repos: bool = False, include_superseded: bool = False
+) -> dict:
     """
     Memories whose ``symbol_refs`` no longer resolve in the code graph.
 
-    A review list, never an edit. Resolves every current memory's
-    ``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+    A review list, never an edit. Resolves every current memory's (or, with
+    ``include_superseded``, every memory's) ``symbol_refs`` against witan-code
+    and reports each ref as ``live`` (the
     symbol is still defined), ``missing`` (its repo is indexed and the symbol is
     not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
     index, or witan-code is unreachable). A missing symbol may have been renamed
@@ -9084,6 +9087,8 @@ def memory_stale_refs(repo: str | None = None, all_repos: bool = False) -> dict:
         Repo scoping; see instructions.
     all_repos:
         Check every repo's memories.
+    include_superseded:
+        Also check superseded memories.
 
     Returns ``{"repo", "checked", "counts", "memories"}``. ``checked`` is how
     many memories carry refs; ``counts`` tallies refs by status. ``memories``
@@ -9091,9 +9096,10 @@ def memory_stale_refs(repo: str | None = None, all_repos: bool = False) -> dict:
     (``stale`` when any ref is missing, else ``unknown``) and its ``refs``.
     """
     detected = _scope(repo, all_repos)
+    name = "memory_refs" if include_superseded else "current_memory_refs"
     rows = [
         r
-        for r in client.read("read.gq", "current_memory_refs", {"repo": detected})
+        for r in client.read("read.gq", name, {"repo": detected})
         if r.get("symbol_refs")
     ]
     resolved = _resolve_symbol_refs({ref for r in rows for ref in r["symbol_refs"]})

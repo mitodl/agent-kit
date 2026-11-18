@@ -257,8 +257,9 @@ resolves a contradiction, so those pairs are dropped by default.
 
 Memories whose ``symbol_refs`` no longer resolve in the code graph.
 
-A review list, never an edit. Resolves every current memory's
-``symbol_refs`` against witan-code and reports each ref as ``live`` (the
+A review list, never an edit. Resolves every current memory's (or, with
+``include_superseded``, every memory's) ``symbol_refs`` against witan-code
+and reports each ref as ``live`` (the
 symbol is still defined), ``missing`` (its repo is indexed and the symbol is
 not), or ``unknown`` (not a ``repo#path::Name`` id, the repo has no readable
 index, or witan-code is unreachable). A missing symbol may have been renamed
@@ -272,3 +273,4 @@ or supersede the memory.
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Repo scoping; see instructions. |
 | `all_repos` | bool | `False` | Check every repo's memories. |
+| `include_superseded` | bool | `False` | Also check superseded memories. |

@@ -62,12 +62,14 @@ import {
 } from "./views/graph.js";
 import {
 	isMemorySlug,
+	listsSuperseded,
 	type MemoryPage,
 	type MemoryPanel,
 	memoryDetail,
 	memoryMissing,
 	memoryView,
 	staleBySlug,
+	supersededChecked,
 } from "./views/memory.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import {
@@ -383,10 +385,17 @@ export class App {
 		// graph expansion from a repo-scoped query, so their check does too.
 		// Only plain search and the browse list stay inside the repo filter.
 		const spansRepos = route.topic !== null || (route.q !== "" && !route.plain);
-		const staleRepo =
-			route.view === "memory" ? (spansRepos ? "" : route.repo) : null;
-		this.staleRefs.sync(staleRepo, () =>
-			memoryStaleRefs({ repo: staleRepo as string }),
+		const staleScope =
+			route.view === "memory"
+				? {
+						repo: spansRepos ? "" : route.repo,
+						include_superseded: listsSuperseded(route),
+					}
+				: null;
+		this.staleRefs.sync(staleScope && JSON.stringify(staleScope), () =>
+			memoryStaleRefs(
+				staleScope as { repo: string; include_superseded: boolean },
+			),
 		);
 
 		// Every argument either read takes, as the board's scope is.
@@ -835,6 +844,13 @@ export class App {
 				{ ...panel, memory: panel.memory },
 				this.route,
 				staleBySlug(this.staleRefs.snapshot?.data ?? null).get(slug),
+				// The report is only read on the memory view, keyed on the same.
+				this.route.view === "memory" &&
+					supersededChecked(
+						this.staleRefs.snapshot?.data ?? null,
+						this.route,
+						panel.memory,
+					),
 			),
 			status,
 		);
