@@ -52,10 +52,12 @@ python3 "$SKILL_DIR/scripts/reviewer.py" show --caller <family>
 - stdout starts with `reviewer: <backend:model>` and
   `reviewer-session: <token>`, then the reply, then `reviewer-reply: <file>`.
   Copy the `reviewer:` line into the debate log. Resume with the latest token.
-- The reviewer can only read. A claude reviewer has only a Read tool, so it
-  cannot search or run commands: name in the prompt every file it should read,
-  by absolute path. A codex or pi reviewer can search and read any file the user
-  can, not only the ones you name; all of it goes to that provider.
+- The reviewer can only read. A claude reviewer has Read, Grep and Glob but
+  cannot run commands, and it can reach only your working directory and
+  `<dir>`: name in the prompt the files it should start from, by absolute path,
+  and copy anything it needs from elsewhere into `<dir>`. A codex or pi reviewer
+  can search and read any file the user can, not only the ones you name; all of
+  it goes to that provider.
 - Exit codes: `2` config or usage error, `3` the reviewer session is gone,
   `4` an earlier call on that session is still running, `1` anything else. On
   `3`, start a fresh reviewer with the plan and the debate log so far, and note
@@ -171,7 +173,10 @@ the changes are material.
    parallel, is large and mechanical, or is easy to describe completely): give it
    a complete brief, since it doesn't see this conversation, keep one writer per
    worktree at a time, and check its diff yourself before building on it.
-   Otherwise do that subtask yourself too.
+   Otherwise do that subtask yourself too. If your platform lets you pick the
+   subagent's model or effort, use a cheaper, lower-effort one for mechanical
+   edits and a stronger one for subtle logic. For parallel writers, give each its
+   own git worktree and merge their branches into yours before Phase 5.
 3. Run only the tests and checks that cover the changed files, and fix what
    fails.
 

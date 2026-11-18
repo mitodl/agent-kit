@@ -65,7 +65,7 @@ GONE_MESSAGES = {
     "codex": "no rollout found for thread id",
     "pi": "No session found matching",
 }
-CLAUDE_TOOLS = ["Read"]
+CLAUDE_TOOLS = ["Read", "Grep", "Glob"]
 
 _child: list[subprocess.Popen] = []
 
@@ -168,7 +168,7 @@ def restriction_flags(backend: str, model: str, topic_dir: Path) -> list[str]:
             model,
             "--restricted",
             "--tools",
-            *CLAUDE_TOOLS,
+            ",".join(CLAUDE_TOOLS),
             "--strict-mcp-config",
             "--permission-prompts",
             "none",
@@ -399,7 +399,12 @@ class Collector:
             if kind == "system" and ev.get("subtype") == "init":
                 tools, mcp = ev.get("tools"), ev.get("mcp_servers")
                 # A missing field fails too: the check must not pass by absence.
-                if tools != CLAUDE_TOOLS or mcp != []:
+                # claude lists the tools sorted, not in --tools order.
+                if (
+                    not isinstance(tools, list)
+                    or set(tools) != set(CLAUDE_TOOLS)
+                    or mcp != []
+                ):
                     raise Fail(
                         EXIT_FAIL,
                         f"claude started with tools {tools} and MCP servers {mcp}, "

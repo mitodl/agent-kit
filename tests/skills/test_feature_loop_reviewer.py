@@ -67,9 +67,9 @@ if mode == "closeout":
     time.sleep(60)
 if name == "claude":
     sid = flag("--session-id") or flag("--resume")
-    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": ["Read"], "mcp_servers": []}
+    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": ["Glob", "Grep", "Read"], "mcp_servers": []}
     if mode == "badtools":
-        init["tools"] = ["Read", "Bash"]
+        init["tools"] = ["Bash", "Glob", "Grep", "Read"]
     if mode == "nomcp":
         del init["mcp_servers"]
     if mode != "noinit":
@@ -281,7 +281,7 @@ class ReviewerTest(unittest.TestCase):
                     f"{backend}: {argv} lacks {flags}",
                 )
         claude = reviewer.restriction_flags("claude", "m", topic)
-        self.assertEqual(claude[claude.index("--tools") + 1], "Read")
+        self.assertEqual(claude[claude.index("--tools") + 1], "Read,Grep,Glob")
 
     def test_token_round_trip_and_garbage(self) -> None:
         token = reviewer.encode_token("pi", "openrouter/x:high", "abc-123")
