@@ -294,6 +294,30 @@ def test_an_interrupt_before_any_batch_landed_still_names_the_one_in_flight(
     assert "NOT verified" not in report
 
 
+def test_the_in_flight_notice_after_an_interrupt_goes_to_stderr(
+    monkeypatch, capsys, stub_source
+):
+    """The notice qualifies the "Interrupted." error, so it goes where that
+    goes. `_capture` merges both streams and cannot tell them apart."""
+    from witan import merge_report
+    from witan.cli import migrate
+
+    interrupt = KeyboardInterrupt()
+    merge_report.attach_partial(
+        interrupt, {"batches_applied": 0, "interrupted": True, "source_rows": 100}
+    )
+    monkeypatch.setattr(migrate, "_srv", lambda: _StubProvider(error=interrupt))
+
+    with pytest.raises(SystemExit):
+        migrate._merge(stub_source, target=None, dry_run=False)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err = " ".join(captured.err.split())
+    assert "may or may not have been applied" in err
+    assert "idempotent" in err
+
+
 def test_the_cannot_tell_message_does_not_send_the_user_to_a_check_they_cannot_run(
     monkeypatch, stub_source
 ):
