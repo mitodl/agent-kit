@@ -306,6 +306,11 @@ results never carry it, so for a task you found there, call `task_get`. If
 `task_get` has no `ui_url`, there is no UI to link to: say so and give the
 slug.
 
+**Name a task by its title when you mention it.** In a reply, a comment, or a
+summary, lead with the title (shortened if long) and its PR, and add the full
+slug in backticks only when the reader needs it to act. A slug alone, and
+above all its hex suffix ("blocked on b5c4a8"), tells a person nothing.
+
 ## List tasks
 
 Call `task_list()` (optionally `task_list(status="open")`,

@@ -386,7 +386,8 @@ def project_create(
     Parameters
     ----------
     title:
-        Short name for the project.
+        What the project delivers, readable on its own. No plan label as the
+        name (``Cohort 4``, ``Phase 2``).
     description:
         Full objective description — what will be built and why.
     phase:

@@ -157,7 +157,7 @@ for a future agent session:
 ```python
 memory_store(
     kind="agent_context",
-    title="Ticket 1234 — approach taken",
+    title="Retry queue for webhook delivery (mitodl/mit-learn#1234): approach taken",
     content="Chose to use the existing TaskQueue infrastructure rather than ...",
     tags=["ticket-1234"],
 )

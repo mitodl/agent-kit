@@ -23,7 +23,7 @@ whose title matches, a soft duplicate check that never blocks creation.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `title` | str | **required** | Short name, used in listings and injected context. |
+| `title` | str | **required** | What the project delivers, used in listings and injected context, so<br>it has to read on its own. No plan label as the name (``Cohort 4``,<br>``Phase 2``). |
 | `description` | str | **required** | The objective: what will be built or changed, and why. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery` | `'discovery'` | Starting phase. |
 | `repos` | list[str]? | `null` | Repo URIs this project spans; the current repo is added. Guess freely:<br>correct it later with ``workflow_project_update``, and it grows as<br>sessions run in new repos. |
@@ -117,7 +117,7 @@ projects; for tasks use ``task_link(kind="blocks")``.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``wp-`` slug of the project to update. |
-| `title` | str? | `null` | Replacement short name. |
+| `title` | str? | `null` | Replacement name, readable on its own (see ``workflow_project_create``). |
 | `description` | str? | `null` | Replacement description. |
 | `repos` | list[str]? | `null` | Replace the repo set wholesale with these canonical URIs. |
 | `add_repos` | list[str]? | `null` | Canonical repo URIs to add to the set. |
@@ -242,7 +242,7 @@ For best corpus quality, write a summary that includes:
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start`` (its<br>``session_slug`` field). Not the agent's own session id<br>(``$CLAUDE_SESSION_ID`` and the like): this tool takes no<br>``session_id`` parameter. |
-| `summary` | str | **required** | Description of what was accomplished and what remains. |
+| `summary` | str | **required** | Description of what was accomplished and what remains. It is injected<br>into later sessions' context and read by people, so name tasks by<br>title and PR, not by slug or its hex suffix. |
 | `tools_used` | list[str]? | `null` | List of tool names used. e.g. ``["Edit", "Bash", "Read"]``. |
 | `files_changed` | list[str]? | `null` | List of file paths modified in this session. |
 

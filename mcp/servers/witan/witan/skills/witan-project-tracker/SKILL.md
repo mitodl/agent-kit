@@ -300,6 +300,25 @@ step, and the phase proposal. A status report with no recommendations leaves
 every decision with the user. Then end the session with `workflow_session_end`,
 saying what closed (with PR URLs) and what remains.
 
+### Name tasks and decisions by what they are
+
+The stop list, progress updates, and session summaries are read by a person
+who has not memorized the slugs or the spec. Each item has to make sense
+without either open:
+
+- Refer to a task by its title (shortened if long) and its PR, not by its
+  slug or the slug's hex suffix: "blocked on pre-warming the uv cache
+  (mitodl/ol-data-platform#2914)", not "blocked on b5c4a8". Add the full slug
+  in backticks after the title only where the reader needs it to act, e.g.
+  to claim or close it.
+- State a decision as the choice itself: what is being decided, the options,
+  and your recommendation. "Should the write path refuse private repos until
+  Keycloak can link GitHub logins? I recommend yes, because…", not "decide
+  D3" or "approve A–C".
+- Numbering the stop list so the user can answer by number is fine. The
+  number identifies the item in this one message; it is not a name to carry
+  into the next session or summary.
+
 ## Phase Transitions
 
 When the project moves between phases (e.g. spec is approved, implementation

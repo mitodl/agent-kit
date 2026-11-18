@@ -135,7 +135,7 @@ Re-prioritise, re-parent, reassign, fix the repo, or attach an
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug of the task to update. |
-| `title` | str? | `null` | New short label for the work. |
+| `title` | str? | `null` | New title, readable on its own (see ``task_create``). |
 | `description` | str? | `null` | Replacement description (not appended). |
 | `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | The kind of work. |
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``in_progress`` stamps a fresh lease, filling a missing assignee with<br>you, without ``task_claim``'s checks. ``closed`` unblocks dependents<br>and is refused while another person holds a live claim (see<br>``force``). Prefer ``task_claim``/``task_close`` for those two. |
