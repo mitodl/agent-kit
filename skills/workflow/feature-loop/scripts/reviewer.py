@@ -5,14 +5,16 @@ The feature-loop skill calls this for its plan and code reviews. The reviewer
 is picked from ``$XDG_CONFIG_HOME/feature-loop/reviewers`` (one
 ``<caller family> <backend:model>`` per line, ``*`` as the catch-all) or from
 ``FEATURE_LOOP_REVIEWER``. Nothing is shipped as a default, so code only goes
-to a provider the user chose.
+to a provider the user chose. A reviewer on the caller's own provider is
+refused unless ``FEATURE_LOOP_ALLOW_SAME_PROVIDER=1``.
 
 Each backend runs with flags that make it read-only and MCP-free, built by one
 function for both start and resume so a resume cannot drop a restriction:
 
 - codex: OS sandbox (``sandbox_mode="read-only"``), user config ignored.
-- claude: ``--restricted`` with ``Read`` as the only tool, no MCP servers. The
-  init event is checked on every call and the run is killed if it shows more.
+- claude: ``--restricted`` with only ``Read``, ``Grep`` and ``Glob``, no MCP
+  servers. The init event is checked on every call and the run is killed if it
+  shows anything else.
 - pi: read/grep/find/ls only, extensions, MCP and project files off.
 
 Each call holds ``<dir>/locks/<session>.lock`` and passes the fd to the child,
@@ -66,6 +68,14 @@ GONE_MESSAGES = {
     "pi": "No session found matching",
 }
 CLAUDE_TOOLS = ["Read", "Grep", "Glob"]
+BACKEND_PROVIDERS = {"codex": "openai", "claude": "anthropic"}
+# Names a main session may give for its own family, by provider. Any other
+# caller is compared as written, so only a pi provider of that name matches.
+CALLER_PROVIDERS = {
+    "anthropic": ("claude", "opus", "sonnet", "haiku", "anthropic"),
+    "openai": ("gpt", "openai", "codex", "chatgpt"),
+}
+ALLOW_SAME_PROVIDER = "FEATURE_LOOP_ALLOW_SAME_PROVIDER"
 
 _child: list[subprocess.Popen] = []
 
@@ -102,7 +112,35 @@ def parse_value(value: str, where: str) -> tuple[str, str]:
     return backend, model
 
 
+def provider_of(backend: str, model: str) -> str:
+    return BACKEND_PROVIDERS.get(backend) or model.split("/", 1)[0].lower()
+
+
+def caller_provider(caller: str) -> str:
+    family = caller.strip().lower()
+    for provider, names in CALLER_PROVIDERS.items():
+        if family in names:
+            return provider
+    return family
+
+
 def resolve(caller: str) -> tuple[str, str]:
+    backend, model = _configured(caller)
+    provider = provider_of(backend, model)
+    if (
+        provider == caller_provider(caller)
+        and os.environ.get(ALLOW_SAME_PROVIDER) != "1"
+    ):
+        raise Fail(
+            EXIT_CONFIG,
+            f"the reviewer {backend}:{model} is on the caller's own provider "
+            f"({provider}; caller {caller.strip()!r}). Pick a reviewer on another "
+            f"provider, or set {ALLOW_SAME_PROVIDER}=1 to allow it.",
+        )
+    return backend, model
+
+
+def _configured(caller: str) -> tuple[str, str]:
     env = os.environ.get("FEATURE_LOOP_REVIEWER", "").strip()
     if env:
         return parse_value(env, "FEATURE_LOOP_REVIEWER")
@@ -427,6 +465,10 @@ class Collector:
                 item = ev.get("item") or {}
                 if item.get("type") == "agent_message":
                     self.reply = item.get("text") or ""
+            elif kind == "turn.completed":
+                # An `error` before this was a retry codex recovered from
+                # (it reports stream reconnects that way).
+                self.error = ""
             elif kind in ("turn.failed", "error"):
                 err = ev.get("error")
                 self.error = (
@@ -553,6 +595,10 @@ def show(caller: str) -> int:
     return 0
 
 
+def _user_path(value: str) -> Path:
+    return Path(value).expanduser()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -565,10 +611,12 @@ def main(argv: list[str] | None = None) -> int:
         "--session", required=True, help="token from reviewer-session:"
     )
     for p in (p_start, p_resume):
+        # A quoted `~` reaches us unexpanded and would make a `~` directory
+        # in the caller's working directory.
         p.add_argument(
-            "--dir", required=True, type=Path, help="the loop's topic directory"
+            "--dir", required=True, type=_user_path, help="the loop's topic directory"
         )
-        p.add_argument("--prompt-file", required=True, type=Path)
+        p.add_argument("--prompt-file", required=True, type=_user_path)
         p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     p_show = sub.add_parser(
         "show", help="print the reviewer and its argv; runs nothing"

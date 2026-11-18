@@ -32,7 +32,7 @@ _spec.loader.exec_module(reviewer)
 
 # One stub serves all three CLIs; it branches on its own file name and
 # STUB_MODE (ok, badtools, readonly, badentry, noinit, nomcp, gone, fail, hang,
-# closeout).
+# closeout, reconnect, turnfailed, errorlast).
 STUB = r"""
 import json, os, sys, time, uuid
 name = os.path.basename(sys.argv[0])
@@ -87,8 +87,15 @@ elif name == "codex":
     out({"type": "thread.started", "thread_id": tid})
     if mode == "hang":
         time.sleep(60)
+    if mode == "reconnect":
+        out({"type": "error", "message": "Reconnecting... 1/5"})
     out({"type": "item.completed", "item": {"type": "agent_message", "text": reply}})
-    out({"type": "turn.completed"})
+    if mode == "turnfailed":
+        out({"type": "turn.failed", "error": {"message": "stream ended"}})
+    elif mode == "errorlast":
+        out({"type": "error", "message": "stream ended"})
+    else:
+        out({"type": "turn.completed"})
 else:
     if flag("--session-id"):
         sid = flag("--session-id")
@@ -175,10 +182,11 @@ class ReviewerTest(unittest.TestCase):
         )
 
     def start(self, **env: str) -> subprocess.CompletedProcess:
+        # A caller on no backend's provider, so any reviewer may be picked.
         return self.run_script(
             "start",
             "--caller",
-            "claude",
+            "glm",
             "--dir",
             str(self.topic),
             "--prompt-file",
@@ -239,9 +247,52 @@ class ReviewerTest(unittest.TestCase):
     def test_env_overrides_file(self) -> None:
         self.write_config()
         out = self.run_script(
-            "show", "--caller", "claude", FEATURE_LOOP_REVIEWER="claude:other"
+            "show", "--caller", "claude", FEATURE_LOOP_REVIEWER="codex:other"
         )
-        self.assertEqual(out.stdout.splitlines()[0], "reviewer: claude:other")
+        self.assertEqual(out.stdout.splitlines()[0], "reviewer: codex:other")
+
+    def test_reviewer_on_the_callers_provider_exits_2(self) -> None:
+        self.write_config("gpt codex:g\n* claude:opus-test\n")
+        for caller, env in [
+            ("claude", {}),
+            ("Opus", {}),
+            ("anthropic", {}),
+            ("gpt", {}),
+            ("claude", {"FEATURE_LOOP_REVIEWER": "claude:other"}),
+            ("sonnet", {"FEATURE_LOOP_REVIEWER": "pi:Anthropic/x"}),
+            ("codex", {"FEATURE_LOOP_REVIEWER": "pi:openai/x"}),
+            ("glm", {"FEATURE_LOOP_REVIEWER": "pi:glm/x"}),
+        ]:
+            out = self.run_script("show", "--caller", caller, **env)
+            self.assertEqual(out.returncode, 2, (caller, env, out.stdout))
+            self.assertIn("own provider", out.stderr)
+            self.assertIn("FEATURE_LOOP_ALLOW_SAME_PROVIDER", out.stderr)
+        out = self.run_script(
+            "start",
+            "--caller",
+            "opus",
+            "--dir",
+            str(self.topic),
+            "--prompt-file",
+            str(self.prompt),
+        )
+        self.assertEqual(out.returncode, 2)
+        self.assertEqual(list(self.log.iterdir()), [])
+
+    def test_same_provider_allowed_only_by_the_override(self) -> None:
+        self.write_config("* claude:opus-test\n")
+        out = self.run_script(
+            "show", "--caller", "opus", FEATURE_LOOP_ALLOW_SAME_PROVIDER="1"
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines()[0], "reviewer: claude:opus-test")
+        out = self.run_script(
+            "show", "--caller", "opus", FEATURE_LOOP_ALLOW_SAME_PROVIDER="yes"
+        )
+        self.assertEqual(out.returncode, 2)
+        # Another provider's caller needs no override.
+        out = self.run_script("show", "--caller", "gemini")
+        self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_bad_config_lines_exit_2(self) -> None:
         for text in [
@@ -431,6 +482,35 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("did not finish", out.stderr)
         self.assertTrue(_wait_dead(int(pidfile.read_text())))
+
+    def test_codex_reconnect_before_a_completed_turn_is_not_a_failure(self) -> None:
+        out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE="reconnect")
+        self.assert_reply(out, "codex")
+
+    def test_codex_error_without_a_completed_turn_fails(self) -> None:
+        for mode in ("turnfailed", "errorlast"):
+            out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE=mode)
+            self.assertEqual(out.returncode, 1, mode)
+            self.assertIn("stream ended", out.stderr)
+            self.assertNotIn("LGTM", out.stdout)
+
+    def test_tilde_paths_expand_to_home(self) -> None:
+        home = self.root / "home"
+        home.mkdir()
+        (home / "prompt.md").write_text("hi\n")
+        out = self.run_script(
+            "start",
+            "--caller",
+            "glm",
+            "--dir",
+            "~/topic",
+            "--prompt-file",
+            "~/prompt.md",
+            FEATURE_LOOP_REVIEWER="codex:m",
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue((home / "topic" / "reviewer-sessions").exists())
+        self.assertFalse((self.root / "~").exists())
 
     def test_failed_start_is_not_session_gone(self) -> None:
         out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE="fail")
