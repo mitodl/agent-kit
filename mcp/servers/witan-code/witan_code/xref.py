@@ -190,6 +190,8 @@ def _py_candidates(path: str) -> list[str]:
 
 
 def _js_candidates(path: str) -> list[str]:
+    if path == ".":  # the repo root, which only its index file can stand for
+        return [f"index{s}" for s in _JS_SUFFIXES]
     stem, suffix = posixpath.splitext(path)
     if suffix in _JS_SUFFIXES:
         return [path, *(stem + s for s in _JS_TO_TS.get(suffix, ()))]
