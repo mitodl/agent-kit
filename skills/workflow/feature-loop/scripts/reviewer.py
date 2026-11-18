@@ -400,8 +400,10 @@ class Collector:
                 tools, mcp = ev.get("tools"), ev.get("mcp_servers")
                 # A missing field fails too: the check must not pass by absence.
                 # claude lists the tools sorted, not in --tools order.
+                # Non-string entries fail here rather than raise from set().
                 if (
                     not isinstance(tools, list)
+                    or not all(isinstance(t, str) for t in tools)
                     or set(tools) != set(CLAUDE_TOOLS)
                     or mcp != []
                 ):

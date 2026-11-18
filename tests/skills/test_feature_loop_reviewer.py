@@ -31,7 +31,8 @@ reviewer = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(reviewer)
 
 # One stub serves all three CLIs; it branches on its own file name and
-# STUB_MODE (ok, badtools, readonly, noinit, nomcp, gone, fail, hang, closeout).
+# STUB_MODE (ok, badtools, readonly, badentry, noinit, nomcp, gone, fail, hang,
+# closeout).
 STUB = r"""
 import json, os, sys, time, uuid
 name = os.path.basename(sys.argv[0])
@@ -72,11 +73,13 @@ if name == "claude":
         init["tools"] = ["Bash", "Glob", "Grep", "Read"]
     if mode == "readonly":
         init["tools"] = ["Read"]
+    if mode == "badentry":
+        init["tools"] = [["Read"], "Glob", "Grep"]
     if mode == "nomcp":
         del init["mcp_servers"]
     if mode != "noinit":
         out(init)
-    if mode == "hang":
+    if mode in ("hang", "badentry"):
         time.sleep(60)
     out({"type": "result", "subtype": "success", "is_error": False, "result": reply})
 elif name == "codex":
@@ -381,6 +384,27 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1, out.stdout)
         self.assertIn("started with tools ['Read']", out.stderr)
         self.assertEqual(list(self.topic.glob("reply-*")), [])
+
+    def test_claude_malformed_tool_entry_kills_the_reviewer_at_once(self) -> None:
+        pidfile = self.root / "pid"
+        out = self.run_script(
+            "start",
+            "--caller",
+            "x",
+            "--dir",
+            str(self.topic),
+            "--prompt-file",
+            str(self.prompt),
+            "--timeout",
+            "20",
+            FEATURE_LOOP_REVIEWER="claude:m",
+            STUB_MODE="badentry",
+            STUB_PIDFILE=str(pidfile),
+        )
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("started with tools", out.stderr)
+        self.assertNotIn("did not finish", out.stderr)
+        self.assertTrue(_wait_dead(int(pidfile.read_text())))
 
     def test_claude_restriction_check_fails_closed(self) -> None:
         for mode in ("noinit", "nomcp"):
