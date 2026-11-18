@@ -55,7 +55,8 @@ DEFAULT_TIMEOUT_SECONDS = 30 * 60
 BACKENDS = ("codex", "claude", "pi")
 EXIT_FAIL, EXIT_CONFIG, EXIT_GONE, EXIT_BUSY = 1, 2, 3, 4
 TOKEN_PREFIX = "fl1."
-SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+# No leading `-`: the id is passed to the CLI as an argument.
+SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 EXAMPLE_CONFIG = """\
 # main session's model family   reviewer as <backend:model>
 claude    codex:gpt-6.1-sol
@@ -68,12 +69,14 @@ GONE_MESSAGES = {
     "pi": "No session found matching",
 }
 CLAUDE_TOOLS = ["Read", "Grep", "Glob"]
-BACKEND_PROVIDERS = {"codex": "openai", "claude": "anthropic"}
-# Names a main session may give for its own family, by provider. Any other
-# caller is compared as written, so only a pi provider of that name matches.
-CALLER_PROVIDERS = {
-    "anthropic": ("claude", "opus", "sonnet", "haiku", "anthropic"),
-    "openai": ("gpt", "openai", "codex", "chatgpt"),
+BACKEND_VENDORS = {"codex": "openai", "claude": "anthropic"}
+# Words that give a model's vendor away, wherever they sit in a caller name
+# (`claude-opus-5`, `fable`) or a pi `<provider>/<model>`
+# (`openrouter/anthropic/...`, `openai-codex/...`, `github-copilot/gpt-...`).
+VENDOR_WORDS = {
+    "anthropic": ("claude", "opus", "sonnet", "haiku", "fable", "mythos", "anthropic"),
+    "openai": ("gpt", "openai", "codex"),
+    "google": ("gemini", "google"),
 }
 ALLOW_SAME_PROVIDER = "FEATURE_LOOP_ALLOW_SAME_PROVIDER"
 
@@ -112,30 +115,37 @@ def parse_value(value: str, where: str) -> tuple[str, str]:
     return backend, model
 
 
-def provider_of(backend: str, model: str) -> str:
-    return BACKEND_PROVIDERS.get(backend) or model.split("/", 1)[0].lower()
+def vendors(text: str) -> set[str]:
+    text = text.lower()
+    return {v for v, words in VENDOR_WORDS.items() if any(w in text for w in words)}
 
 
-def caller_provider(caller: str) -> str:
+def same_provider(caller: str, backend: str, model: str) -> bool:
+    """Whether the reviewer runs a model from the caller's own vendor.
+
+    A guess from names, erring towards refusing: a caller of an unlisted
+    vendor is caught only when its name appears in a pi reviewer's string.
+    """
     family = caller.strip().lower()
-    for provider, names in CALLER_PROVIDERS.items():
-        if family in names:
-            return provider
-    return family
+    mine = vendors(family)
+    if re.match(r"o\d", family):  # OpenAI's o1, o3, ...
+        mine.add("openai")
+    if backend in BACKEND_VENDORS:
+        return BACKEND_VENDORS[backend] in mine
+    return bool(mine & vendors(model)) or (len(family) > 2 and family in model.lower())
 
 
 def resolve(caller: str) -> tuple[str, str]:
     backend, model = _configured(caller)
-    provider = provider_of(backend, model)
     if (
-        provider == caller_provider(caller)
+        same_provider(caller, backend, model)
         and os.environ.get(ALLOW_SAME_PROVIDER) != "1"
     ):
         raise Fail(
             EXIT_CONFIG,
-            f"the reviewer {backend}:{model} is on the caller's own provider "
-            f"({provider}; caller {caller.strip()!r}). Pick a reviewer on another "
-            f"provider, or set {ALLOW_SAME_PROVIDER}=1 to allow it.",
+            f"the reviewer {backend}:{model} looks like the caller's own provider "
+            f"(caller {caller.strip()!r}). Pick a reviewer on another provider, "
+            f"or set {ALLOW_SAME_PROVIDER}=1 to allow it.",
         )
     return backend, model
 

@@ -36,8 +36,9 @@ reviewer's replies. Never commit them.
 ## Setup (once per user)
 
 - **Needs:** `python3` 3.9 or later on Linux or macOS, and the reviewer's CLI
-  installed and logged in. Tested with codex 0.167.0, claude 2.1.327 and
-  pi 1.5.2; an older claude may be refused by the tool check.
+  installed and logged in. The flags the script passes were checked against
+  codex 0.167.0, claude 2.1.327 and pi 1.5.2; an older claude may be refused
+  by the tool check.
 - **Pick the reviewer** in `~/.config/feature-loop/reviewers`
   (`$XDG_CONFIG_HOME/feature-loop/reviewers` if that is set): one
   `<main session's model family> <backend:model>` per line, `*` as the
@@ -50,9 +51,12 @@ reviewer's replies. Never commit them.
   *         claude:<anthropic model>
   ```
 
-- `FEATURE_LOOP_REVIEWER=<backend:model>` overrides the file. A reviewer on
-  the main session's own provider is refused (exit 2) unless
-  `FEATURE_LOOP_ALLOW_SAME_PROVIDER=1`.
+- `FEATURE_LOOP_REVIEWER=<backend:model>` overrides the file. A reviewer that
+  looks like the main session's own provider is refused (exit 2) unless
+  `FEATURE_LOOP_ALLOW_SAME_PROVIDER=1`. That check goes by names (`claude`,
+  `gpt`, `gemini` and the like in the caller and in a pi `<provider>/<model>`),
+  so it can miss a vendor it has no word for: choosing a different provider is
+  still yours to get right.
 - **What the reviewer can read:** a codex or pi reviewer can read any file you
   can, not only this repo, and whatever it reads goes to that provider. The
   loop asks it not to open env files or credentials, but nothing enforces

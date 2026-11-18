@@ -262,11 +262,31 @@ class ReviewerTest(unittest.TestCase):
             ("sonnet", {"FEATURE_LOOP_REVIEWER": "pi:Anthropic/x"}),
             ("codex", {"FEATURE_LOOP_REVIEWER": "pi:openai/x"}),
             ("glm", {"FEATURE_LOOP_REVIEWER": "pi:glm/x"}),
+            # Names beyond the bare family, and a vendor behind another pi provider.
+            ("fable", {}),
+            ("claude-opus-5", {}),
+            ("gpt-5", {"FEATURE_LOOP_REVIEWER": "codex:m"}),
+            ("o3", {"FEATURE_LOOP_REVIEWER": "codex:m"}),
+            ("gpt", {"FEATURE_LOOP_REVIEWER": "pi:openai-codex/m"}),
+            ("gpt", {"FEATURE_LOOP_REVIEWER": "pi:github-copilot/gpt-5"}),
+            ("claude", {"FEATURE_LOOP_REVIEWER": "pi:openrouter/anthropic/m"}),
+            ("claude", {"FEATURE_LOOP_REVIEWER": "pi:amazon-bedrock/us.claude-m"}),
+            ("gemini", {"FEATURE_LOOP_REVIEWER": "pi:google/gemini-pro"}),
         ]:
             out = self.run_script("show", "--caller", caller, **env)
             self.assertEqual(out.returncode, 2, (caller, env, out.stdout))
             self.assertIn("own provider", out.stderr)
             self.assertIn("FEATURE_LOOP_ALLOW_SAME_PROVIDER", out.stderr)
+        for caller, value in [
+            ("claude", "pi:github-copilot/gpt-5"),
+            ("gpt", "pi:openrouter/anthropic/m"),
+            ("gemini", "claude:m"),
+            ("glm", "pi:google/gemini-pro"),
+        ]:
+            out = self.run_script(
+                "show", "--caller", caller, FEATURE_LOOP_REVIEWER=value
+            )
+            self.assertEqual(out.returncode, 0, (caller, value, out.stderr))
         out = self.run_script(
             "start",
             "--caller",
@@ -349,6 +369,8 @@ class ReviewerTest(unittest.TestCase):
             "nope",
             "fl1.!!!",
             reviewer.encode_token("codex", "m", "../../etc"),
+            reviewer.encode_token("codex", "m", "--last"),
+            reviewer.encode_token("codex", "m", "abc\n"),
         ]:
             self.assertEqual(self.resume(bad).returncode, 2, bad)
 
