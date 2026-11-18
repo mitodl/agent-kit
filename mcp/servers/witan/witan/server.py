@@ -4784,7 +4784,7 @@ def memory_update(
     slug:
         The memory slug.
     title:
-        New short label.
+        New title, readable on its own (see ``memory_store``).
     content:
         Replacement text. Leaves no record that it changed.
     repo:

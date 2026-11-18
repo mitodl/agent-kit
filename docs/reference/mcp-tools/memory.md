@@ -129,7 +129,7 @@ different kind is a different memory. Returns the updated node, or
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The memory slug. |
-| `title` | str? | `null` | New short label. |
+| `title` | str? | `null` | New title, readable on its own (see ``memory_store``). |
 | `content` | str? | `null` | Replacement text. Leaves no record that it changed. |
 | `repo` | str? | `null` | Repo URI to rescope the memory to. |
 | `language` | str? | `null` | For a ``pattern``, e.g. ``python``. |

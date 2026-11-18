@@ -18,3 +18,6 @@
   and PR rather than its slug or the slug's hex suffix ("blocked on b5c4a8"),
   and to put a decision to the user as the choice itself with a
   recommendation rather than as "decide D3".
+- A session summary the Stop hook writes lists each task and memory as its
+  title followed by its slug in parentheses, rather than slug first.
+  `memory_update`'s `title` parameter gets the same guidance as `memory_store`.
