@@ -32,7 +32,7 @@ _spec.loader.exec_module(reviewer)
 
 # One stub serves all three CLIs; it branches on its own file name and
 # STUB_MODE (ok, badtools, readonly, badentry, noinit, nomcp, gone, fail, hang,
-# closeout, reconnect, turnfailed, errorlast).
+# closeout, reconnect, turnfailed, errorlast, baditem).
 STUB = r"""
 import json, os, sys, time, uuid
 name = os.path.basename(sys.argv[0])
@@ -86,6 +86,9 @@ elif name == "codex":
     tid = args[-2] if "resume" in args else str(uuid.uuid4())
     out({"type": "thread.started", "thread_id": tid})
     if mode == "hang":
+        time.sleep(60)
+    if mode == "baditem":
+        out({"type": "item.completed", "item": "not an object"})
         time.sleep(60)
     if mode == "reconnect":
         out({"type": "error", "message": "Reconnecting... 1/5"})
@@ -492,6 +495,28 @@ class ReviewerTest(unittest.TestCase):
         )
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("started with tools", out.stderr)
+        self.assertNotIn("did not finish", out.stderr)
+        self.assertTrue(_wait_dead(int(pidfile.read_text())))
+
+    def test_malformed_event_kills_the_reviewer_at_once(self) -> None:
+        pidfile = self.root / "pid"
+        out = self.run_script(
+            "start",
+            "--caller",
+            "x",
+            "--dir",
+            str(self.topic),
+            "--prompt-file",
+            str(self.prompt),
+            "--timeout",
+            "20",
+            FEATURE_LOOP_REVIEWER="codex:m",
+            STUB_MODE="baditem",
+            STUB_PIDFILE=str(pidfile),
+        )
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("could not read the reviewer's output", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
         self.assertNotIn("did not finish", out.stderr)
         self.assertTrue(_wait_dead(int(pidfile.read_text())))
 

@@ -412,6 +412,15 @@ def run_child(
     except Fail:
         _kill(proc)
         raise
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        # An event of a shape the collector does not expect. Without the kill
+        # the reviewer would run on, holding the session lock.
+        _kill(proc)
+        raise Fail(
+            EXIT_FAIL,
+            f"could not read the reviewer's output ({exc!r}); killed it. The CLI "
+            "may have changed its JSON events.",
+        ) from None
     finally:
         # The timer stays armed until the child is reaped: a CLI can close
         # stdout and still hang.
