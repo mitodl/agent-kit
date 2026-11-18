@@ -7,7 +7,7 @@ Workflow skills for interacting with external services and developer processes
 |-------|-------------|
 | [`create-ol-github-issue`](./create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |
 | [`create-ol-pull-request`](./create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template, after an independent goal/security review and a claim audit |
-| [`create-ol-rfc-discussion`](./create-ol-rfc-discussion/SKILL.md) | Write and post a structured RFC as a GitHub Discussion in mitodl/hq under the RFC category |
+| [`create-ol-rfc-discussion`](./create-ol-rfc-discussion/SKILL.md) | Write and post an RFC to mitodl/hq: an executive summary of a proposal plus real questions on what is still undecided |
 | [`generate-standup`](./generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
 | [`screenshot-pr`](./screenshot-pr/SKILL.md) | Capture UI changes for a PR with a re-runnable Playwright script, each shot asserting on page content so a 5xx, an expired login or a stale build fails the run |
 | [`dependency-updates`](./dependency-updates/SKILL.md) | Triage and apply dependency updates safely across Python, JS/TS, Helm, Apt, and database ecosystems, including emergency bumps blocked by a release-age cooldown |
