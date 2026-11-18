@@ -8,6 +8,65 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.51.0] - 2026-11-18
+
+### Added
+
+- `memory_stale_refs` takes `include_superseded` (default `False`) to check
+  superseded memories' `symbol_refs` as well. The default call still checks
+  current memories only.
+- The web UI's Memory view passes `include_superseded` where its list can hold
+  superseded memories (a topic page, or "Show superseded"), so a superseded
+  memory citing a missing symbol is marked stale there instead of being
+  labelled unchecked. The memory panel shows its missing refs the same way.
+
+### Changed
+
+- A Topic name (and so its slug) is scanned under the strictest policy across
+  the base `[scan]` config and every `[scan.overlay]` table
+  (`ScanConfig.strictest()`), since a Topic is shared across repos. One repo's
+  overlay can now redact, and so merge, Topic names other repos share.
+
+- Task titles read on their own. The witan-task skill and the `task_create`
+  `title` parameter say not to prefix a title with a spec or plan label
+  (`A3:`, `Phase 1:`, `Cohort 4:`) and to cite the spec section by name in the
+  description instead. Those prefixes reached ready-work lists and session
+  context, where a reader from another repo has no way to resolve them.
+- The witan-project-tracker skill says how to write a `spec`-phase document so
+  it can be cited from elsewhere: headings that say what each section decides,
+  and citations that name the section and link it rather than giving "§4" or
+  "D3" alone.
+- The same guidance reaches every other title surface: `task_update`,
+  `workflow_project_create`, `workflow_project_update`, `memory_store`, and
+  `witan task create`/`update` and `witan project create` on the CLI. Each
+  used to describe a title as a "short label" or "short name".
+- The witan-project-tracker and witan-task skills, and the
+  `workflow_session_end` `summary` parameter, say to name a task by its title
+  and PR rather than its slug or the slug's hex suffix ("blocked on b5c4a8"),
+  and to put a decision to the user as the choice itself with a
+  recommendation rather than as "decide D3".
+- A session summary the Stop hook writes lists each task and memory as its
+  title followed by its slug in parentheses, rather than slug first.
+  `memory_update`'s `title` parameter gets the same guidance as `memory_store`.
+
+### Fixed
+
+- A memory's `tags` are now scanned on `memory_store` and `memory_update`, and
+  a Topic's slug is built from its name as the scanner stores it, so PII in a
+  tag survives in neither the memory nor the `tp-` slug. Every topic lookup
+  (`recall(topic=...)`, `memory_link` to a `name:kind` spec, the tag sync in
+  `memory_update`, `witan migrate topics`) builds the slug the same way, so
+  reads find what writes keyed. Names that redact to the same text now share
+  one Topic (two email tags are both `tp-topic-redacted-email`), a tag whose
+  scan fails gets no Topic, and a secret in a tag now refuses the write, as it
+  does in a title. An update that omits `tags` links the Topics of the tags as
+  stored, so a legacy tag the update redacts is still findable. Reusing an
+  existing Topic still runs the Topic name's scan, so a name the policy now
+  blocks refuses instead of linking to a Topic keyed on an older redaction.
+  Existing
+  Topics are not re-keyed; an existing memory's tags are scanned the next time
+  it is updated.
+
 ## [0.50.0] - 2026-11-17
 
 ### Added
