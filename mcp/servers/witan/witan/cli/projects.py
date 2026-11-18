@@ -463,7 +463,7 @@ def project_update(
     slug:
         Project ``wp-`` slug.
     title:
-        Replacement short name.
+        Replacement name, readable on its own (see ``project create``).
     description:
         Replacement description.
     repos:

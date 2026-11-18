@@ -682,7 +682,7 @@ trace without a narrative.
 **Parameters**:
 
 * `SLUG, --slug`: Project ``wp-`` slug. **[required]**
-* `--title STR`: Replacement short name.
+* `--title STR`: Replacement name, readable on its own (see ``project create``).
 * `--description STR`: Replacement description.
 * `--repos STR..., --empty-repos`: Replace the repo set wholesale.
 * `--add-repo STR..., --empty-add-repo`: Repo URIs to add (repeatable, or comma-separated).
