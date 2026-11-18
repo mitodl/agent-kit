@@ -8,7 +8,9 @@ Stdlib-only (``python3 -m unittest``) because the script itself is.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -16,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -25,8 +28,6 @@ SCRIPT = (
 )
 # The script's own budget is 5s; this is that plus interpreter startup.
 WALL_LIMIT_SECONDS = 6.5
-# Before 3.11 there is no tomllib, so the script skips the witan check.
-HAS_TOMLLIB = sys.version_info >= (3, 11)
 
 GIT_OK = """\
 case "$*" in
@@ -154,9 +155,7 @@ class PreflightTest(unittest.TestCase):
         lines = stdout.splitlines()
         self.assertEqual(
             [line.split(":")[0] for line in lines],
-            ["gh", "vault", "kubectl", "docker", "git", "witan"][
-                : 6 if HAS_TOMLLIB else 5
-            ],
+            ["gh", "vault", "kubectl", "docker", "git", "witan"],
         )
         for line in lines:
             self.assertIn("Run: ", line)
@@ -195,7 +194,6 @@ class PreflightTest(unittest.TestCase):
         stdout, _ = self.run_preflight(BEHIND="50")
         self.assertEqual(stdout, "")
 
-    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_uses_the_target_matched_by_org(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text(
@@ -210,7 +208,6 @@ class PreflightTest(unittest.TestCase):
         stdout, _ = self.run_preflight()
         self.assertEqual(stdout, "")
 
-    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_normalises_the_remote_like_witan(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text(
@@ -228,7 +225,6 @@ class PreflightTest(unittest.TestCase):
                 stdout, _ = self.run_preflight(ORIGIN_URL=origin)
                 self.assertEqual(stdout, "")
 
-    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_a_check_that_raises_is_reported(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text("remote_url = [\n")
@@ -238,7 +234,6 @@ class PreflightTest(unittest.TestCase):
         )
         self.assertEqual(len(stdout.splitlines()), 1)
 
-    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_reads_remotes_through_git(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text(
@@ -255,7 +250,6 @@ class PreflightTest(unittest.TestCase):
         stdout, _ = self.run_preflight(NO_ORIGIN="1")
         self.assertEqual(stdout, "")
 
-    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_target_env_selects_the_target(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text(
@@ -285,7 +279,6 @@ class PreflightTest(unittest.TestCase):
         stdout, _ = self.run_preflight()
         self.assertEqual(stdout, "")
 
-    @unittest.skipUnless(HAS_TOMLLIB, "needs tomllib")
     def test_witan_match_paths_wins_over_org(self) -> None:
         self.stub_all_passing()
         self.witan_config.write_text(
@@ -372,6 +365,18 @@ class RunChecksTest(unittest.TestCase):
         lines = self.preflight.run_checks({"slow": check}, time.monotonic() + 0.5)
         self.assertEqual(len(lines), 1)
         self.assertTrue(lines[0].startswith("slow: check did not finish"), lines)
+
+    def test_a_python_below_the_floor_prints_one_line_and_runs_nothing(
+        self,
+    ) -> None:
+        self.preflight.MIN_PYTHON = (sys.version_info[0] + 1, 0)
+        self.preflight.run_checks = unittest.mock.Mock()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.preflight.main(), 0)
+        self.preflight.run_checks.assert_not_called()
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("python3: session-preflight needs"))
 
 
 if __name__ == "__main__":
