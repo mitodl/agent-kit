@@ -363,6 +363,18 @@ class ReviewerTest(unittest.TestCase):
         claude = reviewer.restriction_flags("claude", "m", topic)
         self.assertEqual(claude[claude.index("--tools") + 1], "Read,Grep,Glob")
 
+    def test_claude_reads_anywhere_unless_confined(self) -> None:
+        env = {"FEATURE_LOOP_REVIEWER": "claude:m"}
+        self.assert_reply(self.start(**env), "claude")
+        self.assert_reply(self.start(FEATURE_LOOP_CLAUDE_CONFINED="1", **env), "claude")
+        for call, expected in zip(
+            self.calls("claude"), ["/", str(self.topic.resolve())]
+        ):
+            argv = call["argv"]
+            self.assertIn("--restricted", argv)
+            self.assertEqual(argv.count("--add-dir"), 1)
+            self.assertEqual(argv[argv.index("--add-dir") + 1], expected)
+
     def test_token_round_trip_and_garbage(self) -> None:
         token = reviewer.encode_token("pi", "openrouter/x:high", "abc-123")
         self.assertEqual(

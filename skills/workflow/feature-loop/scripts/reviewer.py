@@ -14,7 +14,9 @@ function for both start and resume so a resume cannot drop a restriction:
 - codex: OS sandbox (``sandbox_mode="read-only"``), user config ignored.
 - claude: ``--restricted`` with only ``Read``, ``Grep`` and ``Glob``, no MCP
   servers. The init event is checked on every call and the run is killed if it
-  shows anything else.
+  shows anything else. It can read any file the user can, like the other two,
+  unless ``FEATURE_LOOP_CLAUDE_CONFINED=1`` keeps it to the working directory
+  and ``<dir>``.
 - pi: read/grep/find/ls only, extensions, MCP and project files off.
 
 Each call holds ``<dir>/locks/<session>.lock`` and passes the fd to the child,
@@ -79,6 +81,7 @@ VENDOR_WORDS = {
     "google": ("gemini", "google"),
 }
 ALLOW_SAME_PROVIDER = "FEATURE_LOOP_ALLOW_SAME_PROVIDER"
+CLAUDE_CONFINED = "FEATURE_LOOP_CLAUDE_CONFINED"
 
 _child: list[subprocess.Popen] = []
 
@@ -216,14 +219,17 @@ def restriction_flags(backend: str, model: str, topic_dir: Path) -> list[str]:
             "-p",
             "--model",
             model,
+            # Without --restricted claude 2.1.327 has no Grep or Glob.
             "--restricted",
             "--tools",
             ",".join(CLAUDE_TOOLS),
             "--strict-mcp-config",
             "--permission-prompts",
             "none",
+            # --restricted keeps the file tools to the working directory and
+            # --add-dir. `/` lets claude read what a codex or pi reviewer can.
             "--add-dir",
-            str(topic_dir),
+            str(topic_dir) if os.environ.get(CLAUDE_CONFINED) == "1" else "/",
             "--output-format",
             "stream-json",
             "--verbose",
