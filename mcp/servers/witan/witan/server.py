@@ -4731,7 +4731,9 @@ async def memory_store(
         cautionary finding) or ``agent_context`` (what a future agent on this
         task should know).
     title:
-        Short label, used in listings and search.
+        What the memory is about, readable on its own in listings and search
+        from any repo. Name a ticket or spec section by what it is, not only
+        its number.
     content:
         Full text: the what, the why, and examples. The primary search target.
     repo:
@@ -4843,7 +4845,7 @@ def memory_update(
     slug:
         The memory slug.
     title:
-        New short label.
+        New title, readable on its own (see ``memory_store``).
     content:
         Replacement text. Leaves no record that it changed.
     repo:
@@ -5518,7 +5520,9 @@ def workflow_project_create(
     Parameters
     ----------
     title:
-        Short name, used in listings and injected context.
+        What the project delivers, used in listings and injected context, so
+        it has to read on its own. No plan label as the name (``Cohort 4``,
+        ``Phase 2``).
     description:
         The objective: what will be built or changed, and why.
     phase:
@@ -5882,7 +5886,7 @@ def workflow_project_update(
     slug:
         The ``wp-`` slug of the project to update.
     title:
-        Replacement short name.
+        Replacement name, readable on its own (see ``workflow_project_create``).
     description:
         Replacement description.
     repos:
@@ -6931,7 +6935,9 @@ def workflow_session_end(
         (``$CLAUDE_SESSION_ID`` and the like): this tool takes no
         ``session_id`` parameter.
     summary:
-        Description of what was accomplished and what remains.
+        Description of what was accomplished and what remains. It is injected
+        into later sessions' context and read by people, so name tasks by
+        title and PR, not by slug or its hex suffix.
     tools_used:
         List of tool names used. e.g. ``["Edit", "Bash", "Read"]``.
     files_changed:
@@ -7425,7 +7431,9 @@ async def task_create(
     Parameters
     ----------
     title:
-        Short label for the work.
+        What the work is, readable on its own beside other repos' tasks. No
+        prefix from a spec or plan (``A3:``, ``Phase 1:``); cite the spec
+        section by name in the description.
     description:
         Full text of the work.
     type:
@@ -8058,7 +8066,7 @@ def task_update(
     slug:
         The ``tk-`` slug of the task to update.
     title:
-        New short label for the work.
+        New title, readable on its own (see ``task_create``).
     description:
         Replacement description (not appended).
     type:

@@ -244,8 +244,9 @@ def _capped(items: list[str]) -> str:
     return f"{shown}; and {extra} more" if extra > 0 else shown
 
 
-def _task_label(row: dict) -> str:
-    return f"{row['slug']} ({row.get('title') or 'untitled'})"
+def _label(row: dict) -> str:
+    # Title first: people read this summary, and agents copy its shape.
+    return f"{row.get('title') or 'untitled'} ({row['slug']})"
 
 
 def render(activity: Activity) -> str:
@@ -265,24 +266,18 @@ def render(activity: Activity) -> str:
     ]
     if activity.closed_tasks:
         lines.append(
-            "Closed tasks: " + _capped([_task_label(r) for r in activity.closed_tasks])
+            "Closed tasks: " + _capped([_label(r) for r in activity.closed_tasks])
         )
     if activity.claimed_tasks:
         lines.append(
             "Claimed tasks: "
             + _capped(
-                [
-                    f"{_task_label(r)} [{r.get('status')}]"
-                    for r in activity.claimed_tasks
-                ]
+                [f"{_label(r)} [{r.get('status')}]" for r in activity.claimed_tasks]
             )
         )
     if activity.memories:
         lines.append(
-            "Memories stored: "
-            + _capped(
-                [f"{m['slug']} ({m.get('title') or ''})" for m in activity.memories]
-            )
+            "Memories stored: " + _capped([_label(m) for m in activity.memories])
         )
     if activity.branch:
         lines.append(f"Branch: {activity.branch}")

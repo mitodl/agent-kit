@@ -300,6 +300,25 @@ step, and the phase proposal. A status report with no recommendations leaves
 every decision with the user. Then end the session with `workflow_session_end`,
 saying what closed (with PR URLs) and what remains.
 
+### Name tasks and decisions by what they are
+
+The stop list, progress updates, and session summaries are read by a person
+who has not memorized the slugs or the spec. Each item has to make sense
+without either open:
+
+- Refer to a task by its title (shortened if long) and its PR, not by its
+  slug or the slug's hex suffix: "blocked on pre-warming the uv cache
+  (mitodl/ol-data-platform#2914)", not "blocked on b5c4a8". Add the full slug
+  in backticks after the title only where the reader needs it to act, e.g.
+  to claim or close it.
+- State a decision as the choice itself: what is being decided, the options,
+  and your recommendation. "Should the write path refuse private repos until
+  Keycloak can link GitHub logins? I recommend yes, because…", not "decide
+  D3" or "approve A–C".
+- Numbering the stop list so the user can answer by number is fine. The
+  number identifies the item in this one message; it is not a name to carry
+  into the next session or summary.
+
 ## Phase Transitions
 
 When the project moves between phases (e.g. spec is approved, implementation
@@ -315,6 +334,24 @@ workflow_project_advance(
 Valid phases in order: `discovery` → `spec` → `implementation` → `delivery`.
 You can skip phases for smaller tasks (e.g. discovery → implementation directly).
 Phases do not need to be sequential; a project can return to a phase.
+
+### Writing the spec so it can be cited
+
+PRs, issues, task titles, and code comments will cite the spec written in the
+`spec` phase, often in repos where the reader has never seen it. Write it so
+those citations stay readable:
+
+- Give each section and each decision a heading that says what it decides,
+  e.g. `### Writes go through the MCP tier`, not `### D3`. A number in front
+  is fine; a number alone is not a name.
+- When you cite the spec anywhere else, use that name and link the heading:
+  "the row-count guard in the
+  [scoped-pull contract](https://github.com/mitodl/ol-data-platform/blob/main/docs/design/contentfile_scoped_pull_contract.md#4-the-scoping-problem--the-part-that-needs-new-code)",
+  not "the §4 guard". Labels like §4, D3, A5, Phase 0, or Cohort 4 mean
+  nothing outside the spec that defines them.
+- Tasks created from the spec get titles that read on their own (see the
+  witan-task skill's "Create a task"). The spec section goes in the
+  description, as a named link.
 
 ## Ending a Session
 

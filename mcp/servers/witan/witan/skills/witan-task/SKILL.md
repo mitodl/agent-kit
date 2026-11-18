@@ -272,6 +272,13 @@ Ask these together (see **Asking the user**):
 
 Wait for the answers before calling `task_create`.
 
+A title appears in ready-work lists, session context, and the UI next to
+tasks from every repo, so it has to make sense on its own. Don't prefix it
+with a label from a spec or plan (`A3:`, `C2:`, `P4`, `Phase 1:`,
+`Cohort 4:`) or name work by a spec's numbering ("Decide D1-D7", "the C1
+API"). Say what the work is. If the task comes from a spec, link the section
+by name in the description.
+
 Then gather, if relevant: a one-line description, a parent epic slug
 (`parent`), blocker slugs (`blocked_by`), a GitHub issue/PR URL
 (`external_uri`), and a project slug (`project_slug`). Call:
@@ -298,6 +305,11 @@ deployed witan serves the web UI. Hand that over as-is. List, search and claim
 results never carry it, so for a task you found there, call `task_get`. If
 `task_get` has no `ui_url`, there is no UI to link to: say so and give the
 slug.
+
+**Name a task by its title when you mention it.** In a reply, a comment, or a
+summary, lead with the title (shortened if long) and its PR, and add the full
+slug in backticks only when the reader needs it to act. A slug alone, and
+above all its hex suffix ("blocked on b5c4a8"), tells a person nothing.
 
 ## List tasks
 

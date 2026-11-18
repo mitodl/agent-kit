@@ -92,9 +92,9 @@ def test_activity_is_listed_and_failed_sources_are_named():
         unread=["memories"],
     )
     text = session_summary.render(activity)
-    assert "Closed tasks: tk-a (Fix A)" in text
-    assert "Claimed tasks: tk-b (Build B) [in_progress]" in text
-    assert "Memories stored: les-c (Watch C)" in text
+    assert "Closed tasks: Fix A (tk-a)" in text
+    assert "Claimed tasks: Build B (tk-b) [in_progress]" in text
+    assert "Memories stored: Watch C (les-c)" in text
     assert "Branch: feat/thing" in text
     assert "Commits: abc1234 fix: A" in text
     assert "Uncommitted changes in 2 files: a.py; b.py" in text
@@ -271,10 +271,10 @@ def test_auto_close_shows_the_sessions_activity_in_the_handoff(
     assert last["slug"] == handle["session_slug"]
     assert not last["open"]
     summary = last["summary"]
-    assert f"Closed tasks: {closed['slug']} (Finish up)" in summary
-    assert f"Claimed tasks: {claimed['slug']} (Keep going) [in_progress]" in summary
+    assert f"Closed tasks: Finish up ({closed['slug']})" in summary
+    assert f"Claimed tasks: Keep going ({claimed['slug']}) [in_progress]" in summary
     assert theirs["slug"] not in summary
-    assert f"{mem['slug']} (Mind the gap)" in summary
+    assert f"Mind the gap ({mem['slug']})" in summary
     assert "Branch: feat/thing" in summary
     assert "feat: the work" in summary
     assert session_state.read_handle(SID) is None

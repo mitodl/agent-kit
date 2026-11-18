@@ -88,7 +88,7 @@ so callers can link to it.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context` | **required** | ``pattern`` (a convention or reusable technique), ``project_fact`` (a<br>structural fact about a repo or service), ``lesson`` (a correction or<br>cautionary finding) or ``agent_context`` (what a future agent on this<br>task should know). |
-| `title` | str | **required** | Short label, used in listings and search. |
+| `title` | str | **required** | What the memory is about, readable on its own in listings and search<br>from any repo. Name a ticket or spec section by what it is, not only<br>its number. |
 | `content` | str | **required** | Full text: the what, the why, and examples. The primary search target. |
 | `repo` | str? | `null` | Repo scoping; see instructions. |
 | `language` | str? | `null` | For a ``pattern``, e.g. ``python``. |
@@ -129,7 +129,7 @@ different kind is a different memory. Returns the updated node, or
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The memory slug. |
-| `title` | str? | `null` | New short label. |
+| `title` | str? | `null` | New title, readable on its own (see ``memory_store``). |
 | `content` | str? | `null` | Replacement text. Leaves no record that it changed. |
 | `repo` | str? | `null` | Repo URI to rescope the memory to. |
 | `language` | str? | `null` | For a ``pattern``, e.g. ``python``. |

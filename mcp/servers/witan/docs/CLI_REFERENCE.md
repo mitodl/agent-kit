@@ -276,7 +276,7 @@ Create a task in the work-coordination graph.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `TITLE` (positional) | str | required | Short label for the work |
+| `TITLE` (positional) | str | required | What the work is, readable on its own; no spec or plan prefix (`A3:`, `Phase 1:`) |
 | `--description` | str | `""` | Full description |
 | `--type` | `bug\|feature\|task\|chore\|epic` | `task` | Task type |
 | `--priority` | `p0\|p1\|p2\|p3` | `p2` | Priority (p0 highest) |
@@ -365,7 +365,7 @@ Create a new workflow project.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `TITLE` (positional) | str | required | Short project name |
+| `TITLE` (positional) | str | required | What the project delivers, readable on its own; no plan label as the name (`Cohort 4`, `Phase 2`) |
 | `--description` | str | `""` | Full objective description |
 | `--phase` | `discovery\|spec\|implementation\|delivery` | `discovery` | Starting phase |
 | `--repo` | str \| None | detected repo | Repo URI to associate |

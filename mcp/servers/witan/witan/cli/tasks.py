@@ -362,7 +362,8 @@ def task_create_cmd(
     Parameters
     ----------
     title:
-        Short label for the work.
+        What the work is, readable on its own beside other repos' tasks. No
+        prefix from a spec or plan (``A3:``, ``Phase 1:``).
     description:
         Full description of the task.
     type:
@@ -622,7 +623,7 @@ def task_update_cmd(
     slug:
         The ``tk-`` slug to update.
     title:
-        New short label.
+        New title, readable on its own. No prefix from a spec or plan.
     description:
         New full description.
     type:

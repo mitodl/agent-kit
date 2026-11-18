@@ -646,7 +646,8 @@ Create a new workflow project.
 
 **Parameters**:
 
-* `TITLE, --title`: Short name for the project. **[required]**
+* `TITLE, --title`: What the project delivers, readable on its own. No plan label as the
+    name (``Cohort 4``, ``Phase 2``). **[required]**
 * `--description STR`: Full objective description — what will be built and why. *[default: ""]*
 * `--phase CHOICE`: Starting phase: discovery | spec | implementation | delivery. *[choices: discovery, spec, implementation, delivery]* *[default: discovery]*
 * `--repo STR`: Repo URI to associate (default: auto-detected from git remote).
@@ -681,7 +682,7 @@ trace without a narrative.
 **Parameters**:
 
 * `SLUG, --slug`: Project ``wp-`` slug. **[required]**
-* `--title STR`: Replacement short name.
+* `--title STR`: Replacement name, readable on its own (see ``project create``).
 * `--description STR`: Replacement description.
 * `--repos STR..., --empty-repos`: Replace the repo set wholesale.
 * `--add-repo STR..., --empty-add-repo`: Repo URIs to add (repeatable, or comma-separated).
@@ -1203,7 +1204,8 @@ Create a task in the work-coordination graph.
 
 **Parameters**:
 
-* `TITLE, --title`: Short label for the work. **[required]**
+* `TITLE, --title`: What the work is, readable on its own beside other repos' tasks. No
+    prefix from a spec or plan (``A3:``, ``Phase 1:``). **[required]**
 * `--description STR`: Full description of the task. *[default: ""]*
 * `--type CHOICE`: bug | feature | task | chore | epic. *[choices: bug, feature, task, chore, epic]* *[default: task]*
 * `--priority CHOICE`: p0 (highest) … p3. *[choices: p0, p1, p2, p3]* *[default: p2]*
@@ -1301,7 +1303,7 @@ to add dependencies use ``task link``.
 **Parameters**:
 
 * `SLUG, --slug`: The ``tk-`` slug to update. **[required]**
-* `--title STR`: New short label.
+* `--title STR`: New title, readable on its own. No prefix from a spec or plan.
 * `--description STR`: New full description.
 * `--type CHOICE`: bug | feature | task | chore | epic. *[choices: bug, feature, task, chore, epic]*
 * `--priority CHOICE`: p0 (highest) … p3. *[choices: p0, p1, p2, p3]*
