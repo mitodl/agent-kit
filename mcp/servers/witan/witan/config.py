@@ -293,6 +293,9 @@ def load_remote_config(target: str | None = None) -> RemoteConfig | None:
 
 
 ScanAction = Literal["block", "redact", "warn"]
+
+# Least to most strict. `on_scanner_error` ("block" | "warn") ranks on it too.
+_SCAN_ACTION_STRICTNESS = ("warn", "redact", "block")
 """What to do when a scanner flags content on the write path (ADR 0001 §D3).
 
 - ``block``  — reject the write; the mutation never reaches the store.
@@ -380,6 +383,46 @@ class ScanConfig(BaseModel):
         if not overrides:
             return self
         return self.model_copy(update=overrides)
+
+    def strictest(self) -> "ScanConfig":
+        """The policy for a node no single repo owns, e.g. a Topic.
+
+        Every field that decides whether a finding is kept is taken at its
+        strictest across the base config and every overlay, each resolved
+        through :meth:`for_repo`: the strictest action per category and for
+        ``on_scanner_error``, and only the allowlist entries every policy
+        shares (a hash entry only when every policy uses the same salt). One
+        repo's overlay can therefore redact a name other repos share. No
+        overlay returns ``self``. The detector set is not part of it, because
+        the registry fixes that at construction for every write.
+        """
+        if not self.overlay:
+            return self
+        policies = [self, *(self.for_repo(repo) for repo in self.overlay)]
+        hashes_shared = len({p.allowlist_salt for p in policies}) == 1
+
+        def strictest_action(field: str) -> str:
+            return max(
+                (getattr(p, field) for p in policies),
+                key=_SCAN_ACTION_STRICTNESS.index,
+            )
+
+        def shared(field: str) -> list[str]:
+            return [
+                item
+                for item in getattr(self, field)
+                if all(item in getattr(p, field) for p in policies)
+            ]
+
+        return self.model_copy(
+            update={
+                "secret_action": strictest_action("secret_action"),
+                "pii_action": strictest_action("pii_action"),
+                "on_scanner_error": strictest_action("on_scanner_error"),
+                "allowlist": shared("allowlist"),
+                "allowlist_hashes": shared("allowlist_hashes") if hashes_shared else [],
+            }
+        )
 
     @field_validator(
         "enabled_detectors",

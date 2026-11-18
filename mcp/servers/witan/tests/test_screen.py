@@ -346,6 +346,24 @@ def test_a_chain_derives_stored_text_through_every_guard():
     assert chain.stored_text("insert_memory", "title", "a secret", None) == "a [x]"
 
 
+def test_a_chain_asks_every_guard_whether_to_refuse():
+    """The server asks the installed guard before reusing an existing Topic,
+    so a chain has to pass the question to the scan guard inside it."""
+
+    class Refuse:
+        def __call__(self, _, params):
+            return params
+
+        def refuse_blocked(self, query_name, params):
+            raise RuntimeError(f"refused {query_name}")
+
+    screener = screen.Screener(FakeClassifier())
+    screener.refuse_blocked("insert_topic", {"name": "x"})
+    chain = screen.compose_guards(screener, Refuse())
+    with pytest.raises(RuntimeError, match="refused insert_topic"):
+        chain.refuse_blocked("insert_topic", {"name": "x"})
+
+
 # ── read-side labels ───────────────────────────────────────────────────────
 
 

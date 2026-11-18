@@ -27,8 +27,11 @@ logger = get_logger("witan.scan")
 # query_name → (node_type, free-text params to scan). A string param is scanned
 # as one value; a list param named here is scanned element by element, for the
 # prose lists (the autonomy envelope) that are injected into agent context.
-# Identifier lists (tags, symbol_refs, files_changed, …) and structured/enum
-# params are intentionally out of scope for now. Branch names
+# A memory's ``tags`` are scanned the same way, because each tag also becomes a
+# Topic whose slug is built from it (``server._topic_slug``), so a tag left raw
+# here survived in the memory beside a redacted Topic name. Other identifier
+# lists (a task's or project's tags, symbol_refs, files_changed, …) and
+# structured/enum params are intentionally out of scope for now. Branch names
 # (insert_code_branch) are deliberately excluded — witan never sanitises them.
 # Keep this aligned with queries/mutations.gq when free-text fields are added.
 #
@@ -40,8 +43,8 @@ logger = get_logger("witan.scan")
 # are machine-set (an enum, the resolved author, a timestamp) and are out of
 # scope for the same reason every other structured param is.
 FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
-    "insert_memory": ("Memory", ("title", "content")),
-    "update_memory": ("Memory", ("title", "content")),
+    "insert_memory": ("Memory", ("title", "content", "tags")),
+    "update_memory": ("Memory", ("title", "content", "tags")),
     "insert_topic": ("Topic", ("name",)),
     "link_supersedes": ("Supersedes", ("role",)),
     "link_applies_to": ("AppliesTo", ("role",)),
@@ -67,6 +70,22 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
     "update_task": ("Task", ("title", "description", "resolution", "external_uri")),
     "insert_task_comment": ("TaskComment", ("body",)),
 }
+
+
+#: ``(field, index, label, value, resolved)`` for one scanned value: ``index`` is
+#: its position when ``field`` is a list, ``label`` is what the audit trail, a
+#: redaction notice and a block message name, and each resolved entry is
+#: ``(finding, action, suppressed_by)``.
+_FieldFindings = tuple[
+    str, int | None, str, str, list[tuple[Finding, ScanAction, str | None]]
+]
+
+
+#: Writes of a node no single repo owns. A Topic is shared by every repo's
+#: memories and its name is its slug, so its scan takes the strictest policy
+#: across the base config and every ``[scan.overlay]`` (``ScanConfig.strictest``)
+#: rather than the base one a write with no ``repo`` would otherwise get.
+CROSS_REPO_QUERIES = frozenset({"insert_topic"})
 
 
 #: What :meth:`WriteGuard.stored_text` returns for a value it could not scan.
@@ -154,21 +173,67 @@ class WriteGuard:
     Enforcement policy (actions, allowlists, ``on_scanner_error``) is *not*
     fixed: it's resolved fresh per write via ``config.for_repo(repo)`` (ADR
     0001 amendment, 2026-07-09), so an ``[scan.overlay]`` table takes effect
-    without rebuilding anything expensive.
+    without rebuilding anything expensive. A :data:`CROSS_REPO_QUERIES` write
+    gets ``config.strictest()`` instead, whatever its params say.
     """
 
     def __init__(self, config: ScanConfig, registry: ScannerRegistry) -> None:
         self._config = config
         self._registry = registry
         self._allowlist = compile_allowlist(config.allowlist)
+        strictest = config.strictest()
+        self._cross_repo = (strictest, compile_allowlist(strictest.allowlist))
 
     def __call__(self, query_name: str, params: dict) -> dict:
-        entry = FIELD_MAP.get(query_name)
-        if entry is None:
+        if query_name not in FIELD_MAP:
             return params
-        node_type, fields = entry
         slug = params.get("slug")
-        config, allowlist = self._policy(_repo_of(params))
+        node_type, per_field, blocked = self._resolve_write(query_name, params)
+
+        write_blocked = bool(blocked)
+        self._audit(query_name, node_type, slug, per_field, write_blocked)
+        if write_blocked:
+            raise WriteBlocked(query_name, blocked)
+
+        redactions: dict[str, str | list[str]] = {}
+        for field, index, label, value, resolved in per_field:
+            to_redact = [f for f, a, _ in resolved if a == "redact"]
+            if to_redact:
+                rewritten = redact_spans(value, to_redact)
+                if index is None:
+                    redactions[field] = rewritten
+                else:
+                    items = redactions.setdefault(field, list(params[field]))
+                    items[index] = rewritten
+                # Recorded HERE, next to the rewrite, rather than left to
+                # the audit log: the audit trail tells an operator what the
+                # detectors did, and tells the caller nothing. A redaction
+                # the caller never hears about is an unrecoverable edit to
+                # their data reported as a clean success — see notice.py.
+                notice.record(query_name, slug, label, to_redact)
+
+        if redactions:
+            return flag_redacted({**params, **redactions})
+        return params
+
+    def refuse_blocked(self, query_name: str, params: dict) -> None:
+        """Raise :class:`WriteBlocked` if the ``query_name`` write of ``params`` would.
+
+        For a caller that reuses an existing node instead of writing it, e.g. a
+        Topic whose slug already exists: the reuse stands in for the write, so
+        it has to be refused the same way. A refusal is audited as the write's
+        would be. Otherwise nothing is recorded, because nothing is stored.
+        """
+        node_type, per_field, blocked = self._resolve_write(query_name, params)
+        if blocked:
+            self._audit(query_name, node_type, params.get("slug"), per_field, True)
+            raise WriteBlocked(query_name, blocked)
+
+    def _resolve_write(
+        self, query_name: str, params: dict
+    ) -> tuple[str, list[_FieldFindings], list[tuple[str, Finding]]]:
+        node_type, fields = FIELD_MAP[query_name]
+        config, allowlist = self._policy(query_name, _repo_of(params))
 
         # Resolve every field's findings to an action first, without emitting
         # audit events or mutating anything, so the write's fate (blocked or
@@ -178,19 +243,7 @@ class WriteGuard:
         # A suppressed finding's action is downgraded to "warn" up front, so
         # it can never contribute to `blocked` or `redactions` below —
         # allowlisting always wins over the category/per-finding policy.
-        # Each resolved tuple is (finding, action, suppressed_by).
-        # Each entry is (field, index, label, value, resolved): `index` is the
-        # element's position when `field` is a list, and `label` is what the
-        # audit trail, the redaction notice and a block message name.
-        per_field: list[
-            tuple[
-                str,
-                int | None,
-                str,
-                str,
-                list[tuple[Finding, ScanAction, str | None]],
-            ]
-        ] = []
+        per_field: list[_FieldFindings] = []
         blocked: list[tuple[str, Finding]] = []
         for field, index, value in _scannable(params, fields):
             label = field if index is None else f"{field}[{index}]"
@@ -199,10 +252,17 @@ class WriteGuard:
                 continue
             per_field.append((field, index, label, value, resolved))
             blocked.extend((label, f) for f, a, _ in resolved if a == "block")
+        return node_type, per_field, blocked
 
-        write_blocked = bool(blocked)
-        redactions: dict[str, str | list[str]] = {}
-        for field, index, label, value, resolved in per_field:
+    @staticmethod
+    def _audit(
+        query_name: str,
+        node_type: str,
+        slug: str | None,
+        per_field: list[_FieldFindings],
+        write_blocked: bool,
+    ) -> None:
+        for _, _, label, _, resolved in per_field:
             for finding, action, reason in resolved:
                 audit.emit(
                     query_name=query_name,
@@ -214,27 +274,6 @@ class WriteGuard:
                     write_blocked=write_blocked,
                     suppressed_by=reason,
                 )
-            if not write_blocked:
-                to_redact = [f for f, a, _ in resolved if a == "redact"]
-                if to_redact:
-                    rewritten = redact_spans(value, to_redact)
-                    if index is None:
-                        redactions[field] = rewritten
-                    else:
-                        items = redactions.setdefault(field, list(params[field]))
-                        items[index] = rewritten
-                    # Recorded HERE, next to the rewrite, rather than left to
-                    # the audit log: the audit trail tells an operator what the
-                    # detectors did, and tells the caller nothing. A redaction
-                    # the caller never hears about is an unrecoverable edit to
-                    # their data reported as a clean success — see notice.py.
-                    notice.record(query_name, slug, label, to_redact)
-
-        if write_blocked:
-            raise WriteBlocked(query_name, blocked)
-        if redactions:
-            return flag_redacted({**params, **redactions})
-        return params
 
     def stored_text(
         self, query_name: str, field: str, value: str, repo: str | None
@@ -268,7 +307,7 @@ class WriteGuard:
             )
             return UNSCANNED
         node_type, _ = entry
-        config, allowlist = self._policy(repo)
+        config, allowlist = self._policy(query_name, repo)
         try:
             findings = self._registry.scan(value, field, node_type)
         except ScannerError as exc:
@@ -288,7 +327,11 @@ class WriteGuard:
         ]
         return redact_spans(value, dropped) if dropped else value
 
-    def _policy(self, repo: str | None) -> tuple[ScanConfig, list[re.Pattern[str]]]:
+    def _policy(
+        self, query_name: str, repo: str | None
+    ) -> tuple[ScanConfig, list[re.Pattern[str]]]:
+        if query_name in CROSS_REPO_QUERIES:
+            return self._cross_repo
         config = self._config.for_repo(repo)
         # Compare values, not identity: an overlay that matched but didn't
         # touch `allowlist` (e.g. it only overrides secret_action) still

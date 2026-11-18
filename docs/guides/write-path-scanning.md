@@ -41,6 +41,14 @@ a memory's `content` does. The other three edge properties are machine-set (an
 enum, the resolved author, a timestamp) and are out of scope like every other
 structured param.
 
+A memory's `tags` are scanned element by element, because each tag is also
+promoted to a Topic whose slug (its permanent `@key`) is built from the tag.
+The slug is built from the tag as `insert_topic` will store it, on every write
+and every lookup, so `ask jane@example.com` and `ask john@example.org` are one
+Topic, `tp-topic-ask-redacted-email`. The Topic name is scanned under the
+strictest policy across every overlay (see the overlay section below). Task and
+project tags are not scanned.
+
 A node with no `repo` field of its own can still be governed by a per-repo
 `[scan.overlay]` table: the overlay resolves from the mutation's `repo`
 parameter, so `task_comment` passes its task's repo alongside the comment body
@@ -335,6 +343,14 @@ of `repos`) param — see `ScanConfig.for_repo` in `witan/config.py` and the
 for the full design rationale, including why the detector set itself (as
 opposed to enforcement policy) is not overlay-able in this version. Everything
 else in this doc applies as-is to local, single-user witan today.
+
+A Topic belongs to no single repo, and its name is its slug, so a Topic name
+is scanned under `ScanConfig.strictest()` instead: each action at its strictest
+across the base config and every overlay, `on_scanner_error` likewise, and only
+the allowlist entries every policy shares. That keeps a value any one repo
+redacts out of every Topic, including one promoted from another repo's tag,
+whose memory still keeps the tag under its own policy. The cost is that one
+repo's overlay can redact, and so merge, Topic names other repos share.
 
 ## Prompt-injection screening
 

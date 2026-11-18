@@ -251,6 +251,56 @@ def test_overlay_keys_on_first_repos_entry():
     assert guard("insert_workflow_project", params) == params
 
 
+def test_a_topic_name_gets_the_strictest_policy_across_overlays():
+    """A Topic is cross-repo, so a PII action one repo's overlay redacts is
+    redacted out of every Topic name, while that repo's own rule still governs
+    only its memories."""
+    guard = _guard(
+        [MatchScanner("email", "pii", "a@b.com")],
+        pii_action="warn",
+        overlay={"github.com/example/strict": {"pii_action": "redact"}},
+    )
+
+    topic = guard("insert_topic", {"slug": "tp-topic-x", "name": "ask a@b.com"})
+    assert topic["name"] == "ask «redacted:email»"
+    assert (
+        guard.stored_text("insert_topic", "name", "ask a@b.com", None)
+        == "ask «redacted:email»"
+    )
+    memory = {
+        "title": "t",
+        "content": "c",
+        "tags": ["ask a@b.com"],
+        "repo": "github.com/example/other",
+    }
+    assert guard("insert_memory", memory) == memory
+
+
+def test_refuse_blocked_raises_only_for_what_the_write_would_refuse():
+    from witan.scan import no_redactions, take_redactions
+
+    guard = _guard(
+        [
+            MatchScanner("email", "pii", "a@b.com"),
+            MatchScanner("aws_key", "secret", "AKIA"),
+        ]
+    )
+    with no_redactions():
+        guard.refuse_blocked("insert_topic", {"slug": "tp-x", "name": "a@b.com"})
+        assert take_redactions() == ()
+    with pytest.raises(WriteBlocked):
+        guard.refuse_blocked("insert_topic", {"slug": "tp-topic-x", "name": "AKIA"})
+
+
+def test_a_secret_in_a_topic_name_blocks_though_an_overlay_warns():
+    guard = _guard(
+        [MatchScanner("aws_key", "secret", "AKIA")],
+        overlay={"github.com/example/legacy": {"secret_action": "warn"}},
+    )
+    with pytest.raises(WriteBlocked):
+        guard("insert_topic", {"slug": "tp-topic-x", "name": "AKIA"})
+
+
 def test_suppression_does_not_leak_across_unrelated_findings():
     """Allowlisting one finding must not suppress a different, unrelated one
     in the same write."""
@@ -396,10 +446,27 @@ def test_an_envelope_item_warning_passes_through():
 
 
 def test_identifier_lists_are_still_not_scanned():
-    """Only the prose lists named in FIELD_MAP are scanned; tags are not."""
+    """Only the lists named in FIELD_MAP are scanned; a project's tags are not."""
     guard = _guard([MatchScanner("s", "secret", "SECRET")])
     params = {"title": "t", "description": "d", "tags": ["SECRET"]}
     assert guard("insert_workflow_project", params) == params
+
+
+@pytest.mark.parametrize("query_name", ["insert_memory", "update_memory"])
+def test_a_memory_tag_is_redacted_alone(query_name):
+    """A memory's tag becomes a Topic slug, so it is scanned like the title."""
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")])
+    out = guard(
+        query_name,
+        {"slug": "mem-1", "title": "t", "content": "c", "tags": ["uv", "ask a@b.com"]},
+    )
+    assert out["tags"] == ["uv", "ask «redacted:email»", "scan:redacted"]
+
+
+def test_a_secret_in_a_memory_tag_blocks_the_write():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked):
+        guard("insert_memory", {"title": "t", "content": "c", "tags": ["AKIASECRET"]})
 
 
 def test_workflow_project_update_scans_title_and_description():
