@@ -31,7 +31,7 @@ reviewer = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(reviewer)
 
 # One stub serves all three CLIs; it branches on its own file name and
-# STUB_MODE (ok, badtools, noinit, nomcp, gone, fail, hang, closeout).
+# STUB_MODE (ok, badtools, readonly, noinit, nomcp, gone, fail, hang, closeout).
 STUB = r"""
 import json, os, sys, time, uuid
 name = os.path.basename(sys.argv[0])
@@ -70,6 +70,8 @@ if name == "claude":
     init = {"type": "system", "subtype": "init", "session_id": sid, "tools": ["Glob", "Grep", "Read"], "mcp_servers": []}
     if mode == "badtools":
         init["tools"] = ["Bash", "Glob", "Grep", "Read"]
+    if mode == "readonly":
+        init["tools"] = ["Read"]
     if mode == "nomcp":
         del init["mcp_servers"]
     if mode != "noinit":
@@ -371,6 +373,13 @@ class ReviewerTest(unittest.TestCase):
         out = self.start(FEATURE_LOOP_REVIEWER="claude:m", STUB_MODE="badtools")
         self.assertEqual(out.returncode, 1)
         self.assertIn("'Bash'", out.stderr)
+        self.assertEqual(list(self.topic.glob("reply-*")), [])
+
+    def test_claude_missing_a_requested_tool_is_rejected(self) -> None:
+        # claude 2.1.322 had no Grep/Glob and reported only Read.
+        out = self.start(FEATURE_LOOP_REVIEWER="claude:m", STUB_MODE="readonly")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("started with tools ['Read']", out.stderr)
         self.assertEqual(list(self.topic.glob("reply-*")), [])
 
     def test_claude_restriction_check_fails_closed(self) -> None:
