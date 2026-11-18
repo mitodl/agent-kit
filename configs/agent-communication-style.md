@@ -61,7 +61,10 @@ like a report generated about the work.
   "the §4 guard". Keep using the name after the first mention. Titles of PRs,
   issues, and tasks follow the same rule, so no `A3:` or `Phase 1:` prefixes.
   Linking instead of re-explaining is still right; the link carries the
-  detail, and the clause beside it tells the reader why to open it.
+  detail, and the clause beside it tells the reader why to open it. When you
+  write a spec, ADR, or plan, give each section and decision a heading that
+  says what it decides (`### Writes go through the MCP tier`, not `### D3`),
+  so there is a name to cite.
 - **Don't hard-wrap the body.** Write each paragraph as one long line and let
   GitHub wrap it. GitHub's comment renderer turns a single newline inside a
   paragraph into a line break, so an 80-column wrap that looks tidy in your

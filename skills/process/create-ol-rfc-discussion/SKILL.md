@@ -33,7 +33,9 @@ is there so a reader can answer those questions.
 
 The implementation detail follows later, as a spec opened against the target
 repositories. Anything a reader does not need in order to understand the
-proposal and weigh in on it belongs in the spec, not here.
+proposal and weigh in on it belongs in the spec, not here. PRs and tickets
+will cite that spec, so give its sections headings that say what they decide,
+not bare numbers or letters.
 
 | Belongs in the RFC | Belongs in the spec |
 |--------------------|---------------------|
@@ -53,11 +55,12 @@ repo it affects. Don't invent questions to fill the section.
 
 ---
 
-## Length budget — this is a hard requirement
+## Length budget — the ceiling is a hard requirement
 
-**Target: 800–1,500 words. Ceiling: 2,000.** That is a 5–10 minute read.
-RFCs that run 20–30 minutes do not get read, and unread RFCs do not produce
-decisions.
+**Target: 500–1,500 words. Ceiling: 2,000.** That is at most a 5–10 minute
+read. RFCs that run 20–30 minutes do not get read, and unread RFCs get no
+answers. The floor is a guide, not a quota: a small proposal with one open
+question can be shorter, and padding it to reach a number defeats the point.
 
 Rough per-section budget:
 
@@ -337,5 +340,5 @@ paths that are inaccessible to readers. Instead:
 Self-containment means every reference must resolve for a reader who does not
 have your checkout — it is not licence to paste the detail back in. If a
 snippet feels necessary to carry the argument, that is the tripwire above
-firing: the decision is resting on something that belongs in the spec.
+firing: the proposal is resting on something that belongs in the spec.
 Describe the shape in a sentence and link to the code or the draft spec.
