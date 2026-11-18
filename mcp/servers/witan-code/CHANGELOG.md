@@ -8,6 +8,12 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.32.1] - 2026-11-18
+
+### Fixed
+
+- A TS/JS import that names the repo root (`import { f } from '.'` or `'./'` in a root-level file, `'..'` from one directory down) resolves to the root `index.ts`/`index.js`. It used to resolve to the path `.`, which matched no file, so those calls had no `Calls` edge and `code_callers` missed them. Existing stores get the edges when the importing file is next indexed, or with one `witan-code reindex`.
+
 ## [0.32.0] - 2026-11-17
 
 ### Added
