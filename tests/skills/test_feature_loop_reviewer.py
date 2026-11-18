@@ -272,6 +272,8 @@ class ReviewerTest(unittest.TestCase):
             ("claude", {"FEATURE_LOOP_REVIEWER": "pi:openrouter/anthropic/m"}),
             ("claude", {"FEATURE_LOOP_REVIEWER": "pi:amazon-bedrock/us.claude-m"}),
             ("gemini", {"FEATURE_LOOP_REVIEWER": "pi:google/gemini-pro"}),
+            ("gpt", {"FEATURE_LOOP_REVIEWER": "pi:github-copilot/o3"}),
+            ("o3", {"FEATURE_LOOP_REVIEWER": "pi:openrouter/o4-mini"}),
         ]:
             out = self.run_script("show", "--caller", caller, **env)
             self.assertEqual(out.returncode, 2, (caller, env, out.stdout))
@@ -282,6 +284,8 @@ class ReviewerTest(unittest.TestCase):
             ("gpt", "pi:openrouter/anthropic/m"),
             ("gemini", "claude:m"),
             ("glm", "pi:google/gemini-pro"),
+            ("claude", "pi:github-copilot/o3"),
+            ("gpt", "pi:ollama/llama3"),
         ]:
             out = self.run_script(
                 "show", "--caller", caller, FEATURE_LOOP_REVIEWER=value

@@ -117,7 +117,11 @@ def parse_value(value: str, where: str) -> tuple[str, str]:
 
 def vendors(text: str) -> set[str]:
     text = text.lower()
-    return {v for v, words in VENDOR_WORDS.items() if any(w in text for w in words)}
+    found = {v for v, words in VENDOR_WORDS.items() if any(w in text for w in words)}
+    # OpenAI's o1, o3, ...: as a caller name or a part of a pi `<provider>/<model>`.
+    if any(re.match(r"o\d", part) for part in text.split("/")):
+        found.add("openai")
+    return found
 
 
 def same_provider(caller: str, backend: str, model: str) -> bool:
@@ -128,8 +132,6 @@ def same_provider(caller: str, backend: str, model: str) -> bool:
     """
     family = caller.strip().lower()
     mine = vendors(family)
-    if re.match(r"o\d", family):  # OpenAI's o1, o3, ...
-        mine.add("openai")
     if backend in BACKEND_VENDORS:
         return BACKEND_VENDORS[backend] in mine
     return bool(mine & vendors(model)) or (len(family) > 2 and family in model.lower())
