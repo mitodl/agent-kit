@@ -101,6 +101,12 @@ class ClassifyTests(unittest.TestCase):
         )
         self.assertEqual(aai.classify(item)[0], "human")
 
+    def test_a_pasted_link_to_claude_code_is_not_a_footer(self):
+        self.assertEqual(
+            aai.classify(pr(body="See https://claude.com/claude-code for setup"))[0],
+            "human",
+        )
+
     def test_a_person_whose_login_matches_an_agent_is_a_person(self):
         self.assertEqual(aai.classify(pr("claude", "User"))[0], "human")
 
@@ -339,6 +345,19 @@ class BuildSiteTests(unittest.TestCase):
             )
             self.assertIn('"month": "2026-10"', html)
             self.assertNotIn("</script><b>", html)
+
+    def test_data_kept_elsewhere_is_published_with_the_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data, out = Path(tmp) / "history", Path(tmp) / "site"
+            data.mkdir()
+            out.mkdir()
+            (data / "2026-10.json").write_text(json.dumps({"month": "2026-10"}))
+            aai.build_site(data, out)
+            self.assertEqual(
+                json.loads((out / "data/index.json").read_text()),
+                {"months": ["2026-10"]},
+            )
+            self.assertTrue((out / "data/2026-10.json").exists())
 
 
 if __name__ == "__main__":

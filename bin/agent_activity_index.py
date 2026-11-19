@@ -36,6 +36,7 @@ be recomputed from the GitHub API.
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -84,7 +85,7 @@ AGENT_LOGINS = {
 # footer or a Co-authored-by trailer an agent writes, never a bare mention of the
 # name, or a human PR that documents "the Claude Code skill" would count as agent work.
 TEXT_PATTERNS = {
-    "Claude Code": r"Generated with \[?Claude Code|claude\.com/claude-code|Co-Authored-By: Claude",
+    "Claude Code": r"Generated with \[?Claude Code|Co-Authored-By: Claude",
     "Codex": r"Co-authored-by: .*codex|chatgpt-codex|Generated with Codex",
     "Copilot": r"Co-authored-by: .*copilot",
     "Gemini": r"Co-authored-by: .*gemini|Generated with Gemini",
@@ -538,6 +539,10 @@ def build_site(data_dir: Path, out: Path) -> None:
     (data_dir / "index.json").write_text(
         json.dumps({"months": [s["month"] for s in snapshots]})
     )
+    # The deployed site is `out`, and the next run downloads its history from
+    # `out/data`, so the data must be published with the page.
+    if (out / "data").resolve() != data_dir.resolve():
+        shutil.copytree(data_dir, out / "data", dirs_exist_ok=True)
     payload = json.dumps(snapshots).replace("</", "<\\/")
     (out / "index.html").write_text(TEMPLATE.read_text().replace("__DATA__", payload))
 
