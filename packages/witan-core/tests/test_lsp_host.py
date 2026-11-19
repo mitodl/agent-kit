@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 from pathlib import Path
 
@@ -30,9 +31,11 @@ def config(tmp_path, monkeypatch):
     work = _checkout(tmp_path / "work" / "app", "git@github.com:Work/App.git")
     home = _checkout(tmp_path / "home" / "dots", "https://github.com/me/dots")
     cfg = tmp_path / "config.toml"
+    # json.dumps writes a valid TOML basic string. An f-string would not on
+    # Windows, where a path's `\U` reads as a unicode escape.
     cfg.write_text(
-        f'[targets.work]\nmatch_paths = ["{work.parent}"]\n'
-        f'[targets.personal]\nmatch_paths = ["{home.parent}"]\n'
+        f"[targets.work]\nmatch_paths = [{json.dumps(str(work.parent))}]\n"
+        f"[targets.personal]\nmatch_paths = [{json.dumps(str(home.parent))}]\n"
     )
     monkeypatch.setenv("WITAN_CONFIG", str(cfg))
     return work, home
