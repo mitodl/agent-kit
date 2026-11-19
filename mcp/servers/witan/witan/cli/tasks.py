@@ -37,6 +37,7 @@ from .run_helpers import (
     _prompt_memories,
     _run_prompt,
     _run_task_slug,
+    strip_session_env,
 )
 from .selected_target import selected_target
 
@@ -741,6 +742,7 @@ def task_run(
     claim: bool = True,
     force: bool = False,
     dry_run: bool = False,
+    emit_spec: bool = False,
     repo: str | None = None,
     all_repos: bool = False,
     project: str | None = None,
@@ -750,6 +752,11 @@ def task_run(
     Without a slug, shows an interactive picker of ready tasks. Multiple
     selections offer a choice between a consolidated single-session prompt or
     running each task sequentially in separate agent invocations.
+
+    The claim is always bare: any agent-session id in the environment is
+    dropped first, so the launched agent's own renewal qualifies it. The task
+    must belong to the repo checked out in the current directory, or have
+    none.
 
     Parameters
     ----------
@@ -768,6 +775,10 @@ def task_run(
         server-side and unreachable through ``_fn``, which passes no ``ctx``.
     dry_run:
         Print the prompt(s) without launching or claiming.
+    emit_spec:
+        Claim, then print the launch spec as JSON instead of launching, for an
+        editor or other launcher to run. Needs a slug. Exits non-zero, after
+        printing the refusal spec, when there is nothing to launch.
     repo:
         Scope the picker to a specific repo URI.
     all_repos:
@@ -775,6 +786,9 @@ def task_run(
     project:
         Scope the picker to a specific wp- project slug.
     """
+    if emit_spec and (dry_run or not slug):
+        print_error("--emit-spec needs a slug and cannot be combined with --dry-run.")
+        raise SystemExit(1)
     try:
         cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
@@ -790,6 +804,7 @@ def task_run(
             claim=claim,
             force=force,
             dry_run=dry_run,
+            emit_spec=emit_spec,
         )
         return
 
@@ -841,11 +856,12 @@ def task_run(
         claimable = list(selected)
         claims: dict[str, dict] = {}
         if claim and not dry_run:
+            strip_session_env()
             claimable = []
             for t in selected:
-                # No explicit assignee: let task_claim qualify the author with
-                # this session, so a task another of these sessions is already
-                # on reads as held instead of being silently re-claimed here.
+                # No explicit assignee, and bare (the session env is gone): a
+                # task one of this person's sessions holds reads as held, and
+                # the launched agent may renew the bare claim as its own.
                 res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")

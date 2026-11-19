@@ -8514,6 +8514,7 @@ def task_release(
     session_id: str | None = None,
     status: TaskStatus = "open",
     force: bool = False,
+    if_claimed_at: str | None = None,
 ) -> dict | None:
     """
     Release a claim: clear the assignee/lease and return the task to ``open``.
@@ -8521,6 +8522,8 @@ def task_release(
     Call when stepping away from an unfinished task so others can pick it up
     (closing a finished task — use ``task_close`` — also ends the claim). Refuses
     if the task is held by a different ``assignee`` unless ``force`` is set.
+    With ``if_claimed_at``, also refuses (``reason: "claim_changed"``) unless
+    the task is still ``in_progress`` under the claim taken at that instant.
 
     Parameters
     ----------
@@ -8535,10 +8538,37 @@ def task_release(
         Status to return the task to.
     force:
         Release even if held by a different assignee.
+    if_claimed_at:
+        The ``claimed_at`` a ``task_claim`` returned. Release only that claim:
+        not one renewed since, and not a task that has left ``in_progress``.
+        ``force`` does not lift this check.
     """
     holder = _claim_holder(assignee, session_id)
+    # Parsed rather than compared as strings: task_claim returns now_iso(),
+    # with a +00:00 offset, and the graph returns DateTime columns without one
+    # (docs/adr/0012, "Release after a failed launch").
+    fence = parse_timestamp(if_claimed_at) if if_claimed_at is not None else None
 
     def require_held_by_caller(current: dict) -> None:
+        if fence is not None and (
+            current["status"] != "in_progress"
+            or not current.get("claimed_at")
+            or parse_timestamp(current["claimed_at"]) != fence
+        ):
+            raise _TaskWriteRefused(
+                {
+                    "slug": slug,
+                    "released": False,
+                    "reason": "claim_changed",
+                    "status": current["status"],
+                    "claimed_at": current.get("claimed_at"),
+                    "remedy": (
+                        f"{slug} is no longer the claim taken at {if_claimed_at}: "
+                        "it was renewed, released or closed since, so it is "
+                        "left as it is."
+                    ),
+                }
+            )
         # Checked on the row the release is fenced on, so a claim someone else
         # took after an earlier read is refused rather than released.
         # Identity-level match, so you can release a claim your *other* session
