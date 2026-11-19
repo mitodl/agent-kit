@@ -73,7 +73,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Literal, NamedTuple, TypeVar
 from urllib.request import url2pathname
@@ -1332,6 +1332,19 @@ def schema_stamp_path(store: Path) -> Path:
     return store.parent / f"{store.name}.schema_mtime"
 
 
+def stamp_schema_applied(schema_file: Path, store: Path) -> None:
+    """Record ``schema_file`` as applied to ``store``, for :func:`schema_apply_if_changed`.
+
+    For a caller that knows the store is current without running the apply
+    itself (e.g. a ``schema plan`` with no steps), so both paths agree on what
+    the stamp holds. A read-only or full parent directory just means the next
+    call re-applies. ``schema apply`` is idempotent, so that is the correct
+    failure direction, and stamping never fails the caller.
+    """
+    with suppress(OSError):
+        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
+
+
 def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
     """``omnigraph schema apply`` against a local store. Returns whether it worked.
 
@@ -1364,13 +1377,7 @@ def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
         return False
     if res.returncode != 0:
         return False
-    try:
-        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
-    except OSError:
-        # A read-only or full parent directory just means the next call
-        # re-applies. `schema apply` is idempotent, so that is the correct
-        # failure direction — never let stamping fail the apply itself.
-        pass
+    stamp_schema_applied(schema_file, store)
     return True
 
 
