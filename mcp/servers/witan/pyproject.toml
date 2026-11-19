@@ -300,7 +300,8 @@ dependencies = [
   #
   # ★ >=0.59 IS AN IMPORT FLOOR: lsp_plugin.py imports `witan_core.lsp` (the
   # language-server plugin interface, added in witan-core 0.59.0) at module
-  # scope, and config.py imports `match_target_at` from the same release.
+  # scope, config.py imports `match_target_at`, and repo.py imports
+  # `git_remote_url`, all from the same release.
   "witan-core[cli,remote,observability,sentry]>=0.59.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",

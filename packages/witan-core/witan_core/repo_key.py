@@ -10,7 +10,8 @@ source of truth here, guarded by ``tests/test_repo_key.py``'s golden table.
 the two servers (witan keeps the raw branch; witan-code sanitizes it for
 omnigraph-safe branch storage), so each keeps its own in ``repo.py``.
 :func:`remote_uri` and :func:`checkout_branch` are the path-explicit pair the
-language server uses per workspace folder. The branch is raw; a witan-code
+language server uses per workspace folder, and :func:`git_remote_url` is the
+origin-first remote lookup under it and under witan's ``repo.detect``. The branch is raw; a witan-code
 read has to sanitize it the way witan-code's own ``repo.py`` does.
 """
 
@@ -90,10 +91,28 @@ def remote_uri(start: Path) -> str | None:
     says which repo a document belongs to. ``None`` outside a checkout, for a
     checkout with no remote, or when git is not installed.
     """
-    url = _git(start, "remote", "get-url", "origin")
-    if url is None and (names := _git(start, "remote")):
-        url = _git(start, "remote", "get-url", names.splitlines()[0])
+    url = git_remote_url(start)
     return normalise(url) if url else None
+
+
+def git_remote_url(start: Path) -> str | None:
+    """Resolve a remote URL via git itself: ``origin`` if present, else the
+    first remote of any name that has a URL.
+
+    Falling back past ``origin`` means a checkout whose canonical remote is
+    named ``upstream``/``fork``/etc. (or a single differently-named remote)
+    still yields repo context instead of silently getting none. Returns the
+    raw URL; callers normalise it. Fault-tolerant: no git binary or no remote
+    → ``None``.
+    """
+    if url := _git(start, "remote", "get-url", "origin"):
+        return url
+    for name in (_git(start, "remote") or "").splitlines():
+        if name.strip() in ("", "origin"):
+            continue  # already tried above; don't spawn a redundant git call
+        if url := _git(start, "remote", "get-url", name.strip()):
+            return url
+    return None
 
 
 def checkout_branch(start: Path) -> str | None:
