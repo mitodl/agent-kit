@@ -142,7 +142,8 @@ class Context(Protocol):
     folder: Folder
     tools: Any
     """The plugin's tool provider for this folder, narrowed to
-    :attr:`Plugin.tools`. Tools are plain synchronous callables."""
+    :attr:`Plugin.tools`. Tools are plain synchronous callables that take
+    keyword arguments only, as a deployment's ``RemoteServerProxy`` does."""
 
     def symbol_at(self, uri: str, line: int, character: int) -> str | None: ...
 

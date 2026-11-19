@@ -53,6 +53,9 @@ class BoundTools:
     Unwraps a FastMCP tool to its function and runs a coroutine tool to
     completion, so plugins call every tool the same way against the in-process
     server module, the CLI's local-store guard, or a ``RemoteServerProxy``.
+    Keyword arguments only, for every provider: the proxy refuses positional
+    ones, so a positional call that worked against a local store would fail
+    against a deployment.
     """
 
     def __init__(self, provider: Any, names: frozenset[str]) -> None:
@@ -67,9 +70,17 @@ class BoundTools:
             )
         tool = getattr(self._provider, name)
         fn = getattr(tool, "fn", tool)
-        if inspect.iscoroutinefunction(fn):
-            return lambda *args, **kwargs: asyncio.run(fn(*args, **kwargs))
-        return fn
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            if args:
+                raise TypeError(
+                    f"{name}() takes keyword arguments only; a deployment's "
+                    "RemoteServerProxy refuses positional ones."
+                )
+            result = fn(**kwargs)
+            return asyncio.run(result) if inspect.iscoroutine(result) else result
+
+        return call
 
 
 @dataclass(frozen=True)

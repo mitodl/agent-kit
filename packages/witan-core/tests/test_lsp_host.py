@@ -292,7 +292,11 @@ def test_bound_tools_expose_only_declared_tools(config, monkeypatch):
     folder = resolve_folder(work.as_uri(), work, None)
     host.set_folders([folder])
     ctx = host.context("u", folder)
-    assert ctx.tools.task_get("tk-1") == {"slug": "tk-1"}
+    assert ctx.tools.task_get(slug="tk-1") == {"slug": "tk-1"}
+    # RemoteServerProxy refuses positional arguments, so a plugin that passed
+    # them would work against a local store and fail against a deployment.
+    with pytest.raises(TypeError, match="keyword"):
+        ctx.tools.task_get("tk-1")
     with pytest.raises(AttributeError, match="task_list"):
         ctx.tools.task_list  # noqa: B018
     host.close()
