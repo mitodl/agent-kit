@@ -341,3 +341,59 @@ def test_the_plugin_interface_imports_without_the_lsp_extra():
         "assert not {'pygls', 'lsprotocol'} & set(sys.modules), sorted(sys.modules)"
     )
     subprocess.run([sys.executable, "-c", probe], check=True)
+
+
+def test_the_first_listed_folder_anchors_the_local_store(config, monkeypatch):
+    work, home = config
+    monkeypatch.chdir(work)
+    plugin = Recorder(
+        "p",
+        routes={
+            "work": Route(key="/stores/work", local=True),
+            "personal": Route(key="/stores/personal", local=True),
+        },
+    )
+
+    async def go():
+        async with lsp_session(Host({"p": plugin}), [work, home]) as session:
+            # Opened first but listed second, so it is the refused one.
+            refused = await session.open(home / "a.py")
+            assert len(refused) == 1
+            assert "/stores/personal, not /stores/work" in refused[0].message
+            assert [n.message for n in await session.open(work / "b.py")] == ["p note"]
+
+    run(go())
+
+
+def test_a_folder_refused_by_two_plugins_gets_one_note(config, monkeypatch):
+    work, home = config
+    monkeypatch.chdir(work)
+    routes = {
+        "work": Route(key="/stores/work", local=True),
+        "personal": Route(key="/stores/personal", local=True),
+    }
+    host = Host({"a": Recorder("a", routes), "b": Recorder("b", routes)})
+    host.set_folders([resolve_folder(p.as_uri(), p, None) for p in (work, home)])
+    notes = host.diagnostics(home / "x.py", (home / "x.py").as_uri())
+    assert len(notes) == 1
+    assert "no a, b features" in notes[0].message
+    host.close()
+
+
+def test_a_non_file_folder_gets_nothing_and_breaks_nothing(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    virtual = types.WorkspaceFolder(uri="vscode-vfs://example/org/repo", name="vfs")
+
+    async def go():
+        async with lsp_session(Host({"a": Recorder("a")}), [work]) as session:
+            session.client.workspace_did_change_workspace_folders(
+                types.DidChangeWorkspaceFoldersParams(
+                    event=types.WorkspaceFoldersChangeEvent(added=[virtual], removed=[])
+                )
+            )
+            assert [n.message for n in await session.open(work / "m.py")] == ["a note"]
+            folders = (await session.status())["folders"]
+            assert [f["uri"] for f in folders] == [work.as_uri()]
+
+    run(go())

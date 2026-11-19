@@ -10,8 +10,8 @@ source of truth here, guarded by ``tests/test_repo_key.py``'s golden table.
 the two servers (witan keeps the raw branch; witan-code sanitizes it for
 omnigraph-safe branch storage), so each keeps its own in ``repo.py``.
 :func:`remote_uri` and :func:`checkout_branch` are the path-explicit pair the
-language server uses per workspace folder; the branch is raw, and witan-code's
-plugin sanitizes it the way its own ``repo.py`` does.
+language server uses per workspace folder. The branch is raw; a witan-code
+read has to sanitize it the way witan-code's own ``repo.py`` does.
 """
 
 from __future__ import annotations

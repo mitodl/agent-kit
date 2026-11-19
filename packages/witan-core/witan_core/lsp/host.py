@@ -163,6 +163,12 @@ class Host:
                 del self._routes[key]
         for folder in added:
             self.folders[folder.uri] = folder
+        # Routed now, in workspace order, so the first folder listed anchors
+        # the local store rather than whichever document is opened first.
+        for folder in added:
+            for name, plugin in self.plugins.items():
+                if plugin.capabilities:
+                    self._route(name, folder)
 
     def folder_for(self, path: Path | None) -> Folder | None:
         """The innermost folder containing ``path``."""
@@ -227,25 +233,33 @@ class Host:
         ]
 
     def refusals(self, folder: Folder) -> list[Note]:
-        notes = []
-        for name, plugin in self.plugins.items():
-            if not plugin.capabilities:
-                continue
-            route = self._route(name, folder)
-            if isinstance(route, _Refused):
-                notes.append(
-                    Note(
-                        line=0,
-                        message=(
-                            f"witan: no {name} features in this folder. It routes to "
-                            f"the local store {route.route.key}, and this language "
-                            f"server already serves {route.anchor_route.key} for "
-                            f"{route.anchor.path}. One process serves one local "
-                            "store; open this folder in its own editor window."
-                        ),
-                    )
-                )
-        return notes
+        """One Information note naming every plugin this folder gets nothing
+        from because it routes to a second local store, or none."""
+        refused = {
+            name: route
+            for name, plugin in self.plugins.items()
+            if plugin.capabilities
+            and isinstance(route := self._route(name, folder), _Refused)
+        }
+        if not refused:
+            return []
+        anchor = next(iter(refused.values())).anchor
+        stores = "; ".join(
+            f"{name}: {r.route.key}, not {r.anchor_route.key}"
+            for name, r in refused.items()
+        )
+        return [
+            Note(
+                line=0,
+                message=(
+                    f"witan: no {', '.join(refused)} features in this folder. It "
+                    f"routes to a different local store than the one this language "
+                    f"server serves for {anchor.path} ({stores}). One process "
+                    "serves one local store; open this folder in its own editor "
+                    "window."
+                ),
+            )
+        ]
 
     # ── merged features ───────────────────────────────────────────────────
 

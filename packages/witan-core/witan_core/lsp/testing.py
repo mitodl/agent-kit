@@ -34,7 +34,8 @@ __all__ = ["Session", "lsp_session", "spawned_status"]
 TIMEOUT_SECONDS = 10.0
 STARTUP_TIMEOUT_SECONDS = 120.0
 """A spawned CLI imports its whole package before it answers ``initialize``,
-which takes tens of seconds when the five suites run in parallel."""
+which took longer than ``TIMEOUT_SECONDS`` with the five suites running in
+parallel (``just test-all``)."""
 
 
 @dataclass

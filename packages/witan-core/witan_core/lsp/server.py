@@ -91,7 +91,13 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
     pending: list[types.WorkspaceFolder] = []
 
     def resolve(folders: list[types.WorkspaceFolder]):
-        return [resolve_folder(f.uri, _path(f.uri), target) for f in folders]
+        # A folder on a virtual filesystem (`vscode-vfs:`, a remote scheme) has
+        # no checkout to route by, so it gets no folder and no features.
+        return [
+            resolve_folder(f.uri, path, target)
+            for f in folders
+            if (path := _path(f.uri)) is not None
+        ]
 
     @server.feature(types.INITIALIZE)
     def initialize(ls: LanguageServer, params: types.InitializeParams) -> None:
