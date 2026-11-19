@@ -455,6 +455,19 @@ def _launch_folder(
     )
 
 
+def _folder_checkout(folder: Path) -> dict[str, str | None]:
+    """``task_claim``'s ``repo`` and ``branch`` for the folder a launch runs in.
+
+    Left out, the claim links the launcher's own checkout, which is a different
+    one whenever the launch picked another open folder. ``branch=""`` turns
+    the link off when the folder has no repo or no branch (a detached HEAD),
+    rather than letting the server fall back to the launcher's.
+    """
+    repo = repo_module.detect_at(folder)
+    branch = repo_module.current_branch(folder) if repo else None
+    return {"repo": repo, "branch": branch or ""}
+
+
 def _handoff_allowed(
     workspace_folders: Sequence[Path], started_with_target: bool
 ) -> bool:
@@ -557,7 +570,9 @@ def build_launch_spec(
         # launched agent may renew as its own (`_own_claim`). No steal offer:
         # it would print to stdout, and `force` is how a launcher steals.
         with bare_session_env(), prompts_off():
-            res = _fn(server.task_claim)(slug=slug, force=force)
+            res = _fn(server.task_claim)(
+                slug=slug, force=force, **_folder_checkout(folder)
+            )
         if res is None:
             return _refusal(kind, slug, "not_found", f"No {kind} {slug!r}.")
         # The warning advises passing a session_id, and a bare launch claim is

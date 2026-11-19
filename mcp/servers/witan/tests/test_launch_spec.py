@@ -33,6 +33,7 @@ class _Fake:
         self.project = project
         self.claim = claim
         self.claims = []
+        self.checkouts = []
 
     def task_get(self, slug):
         return self.task
@@ -40,10 +41,11 @@ class _Fake:
     def workflow_project_get(self, slug):
         return self.project
 
-    def task_claim(self, slug, force=False):
+    def task_claim(self, slug, force=False, repo=None, branch=None):
         import os
 
         self.claims.append({name: os.environ.get(name) for name in SESSION_ID_ENV_VARS})
+        self.checkouts.append((repo, branch))
         return self.claim
 
     def task_ready(self, project_slug, limit):
@@ -83,7 +85,11 @@ def folders(tmp_path, monkeypatch):
     here.mkdir()
     there.mkdir()
     mapping = {here: REPO, there: OTHER_REPO}
+    branches = {here: "here-branch", there: "there-branch"}
     monkeypatch.setattr(repo_module, "detect_at", lambda path: mapping.get(path))
+    monkeypatch.setattr(
+        repo_module, "current_branch", lambda start=None: branches.get(start)
+    )
     for name in ("WITAN_TARGET", "CLAUDE_PROJECT_DIR", "WITAN_REPO"):
         monkeypatch.delenv(name, raising=False)
     return here, there
@@ -196,9 +202,29 @@ def test_no_workspace_is_refused_before_the_claim(folders):
 def test_another_open_folder_that_maps_to_the_repo_is_used(folders):
     here, there = folders
 
-    spec = _spec(_Fake(task=_task(), claim=_CLAIMED), folders=[there, here])
+    fake = _Fake(task=_task(), claim=_CLAIMED)
+    spec = _spec(fake, folders=[there, here])
 
     assert spec["cwd"] == str(here)
+    # The claim links the folder the launch runs in, not the invoking one.
+    assert fake.checkouts == [(REPO, "here-branch")]
+
+
+def test_a_folder_with_no_branch_or_repo_links_no_branch(folders, monkeypatch):
+    """Left to the server, an omitted branch falls back to the launcher's own."""
+    from witan import repo as repo_module
+
+    here, _ = folders
+    fake = _Fake(task=_task(), claim=_CLAIMED)
+
+    monkeypatch.setattr(repo_module, "current_branch", lambda start=None: None)
+    _spec(fake, folders=[here])
+    nowhere = here.parent / "nowhere"
+    nowhere.mkdir()
+    fake.task = _task(repo=None)
+    _spec(fake, folders=[nowhere])
+
+    assert fake.checkouts == [(REPO, ""), (None, "")]
 
 
 def test_a_task_with_no_repo_runs_in_the_invoking_folder(folders):
@@ -259,7 +285,7 @@ def test_the_claim_never_prompts_at_a_terminal(folders, monkeypatch):
     seen = {}
 
     class Async(_Fake):
-        async def task_claim(self, slug, force=False, ctx=None):
+        async def task_claim(self, slug, force=False, repo=None, branch=None, ctx=None):
             seen["ctx"] = ctx
             return _CLAIMED
 

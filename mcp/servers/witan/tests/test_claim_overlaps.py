@@ -179,7 +179,7 @@ class _FakeServer:
     def task_get(self, slug):
         return {"slug": slug, "title": "T", "type": "bug"}
 
-    def task_claim(self, slug, force=False):
+    def task_claim(self, slug, force=False, repo=None, branch=None):
         return self.claim
 
     def recall(self, **_kwargs):
