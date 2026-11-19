@@ -173,6 +173,10 @@ class Host:
     def _with(self, capability: Capability) -> list[tuple[str, Plugin]]:
         return [(n, p) for n, p in self.plugins.items() if capability in p.capabilities]
 
+    def _serving(self) -> list[str]:
+        """Plugins that give a folder anything: a capability or a command."""
+        return [n for n, p in self.plugins.items() if p.capabilities or p.commands]
+
     # ── folders and routes ────────────────────────────────────────────────
 
     def set_folders(self, folders: Sequence[Folder]) -> None:
@@ -190,9 +194,8 @@ class Host:
         # Routed now, in workspace order, so the first folder listed anchors
         # the local store rather than whichever document is opened first.
         for folder in added:
-            for name, plugin in self.plugins.items():
-                if plugin.capabilities:
-                    self._route(name, folder)
+            for name in self._serving():
+                self._route(name, folder)
 
     def folder_for(self, path: Path | None) -> Folder | None:
         """The innermost folder containing ``path``."""
@@ -265,11 +268,7 @@ class Host:
     def refusals(self, folder: Folder) -> list[Note]:
         """Why plugins give this folder nothing: one note for every plugin
         refused a second local store, and one per config error."""
-        routes = {
-            name: self._route(name, folder)
-            for name, plugin in self.plugins.items()
-            if plugin.capabilities
-        }
+        routes = {name: self._route(name, folder) for name in self._serving()}
         notes = [
             Note(
                 line=0, message=f"witan: no {name} features in this folder: {r.reason}"

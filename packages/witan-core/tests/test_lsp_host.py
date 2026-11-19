@@ -483,3 +483,31 @@ def test_each_plugin_anchors_its_own_first_routable_folder(config, monkeypatch):
     # Each folder routed once per plugin: the anchor is not routed again.
     assert routed == ["work", "personal"]
     host.close()
+
+
+def test_a_commands_only_plugin_anchors_in_folder_order_and_explains(
+    config, monkeypatch
+):
+    work, home = config
+    monkeypatch.chdir(work)
+
+    class CommandsOnly(Recorder):
+        capabilities = frozenset()
+
+    plugin = CommandsOnly(
+        "c",
+        {
+            "work": Route(key="/stores/work", local=True),
+            "personal": Route(key="/stores/personal", local=True),
+        },
+        commands=("witan.echo",),
+    )
+    host = Host({"c": plugin})
+    host.set_folders([resolve_folder(p.as_uri(), p, None) for p in (work, home)])
+    # Asked about the second folder first, it is still the one refused.
+    assert host.context("c", host.folders[home.as_uri()]) is None
+    assert host.context("c", host.folders[work.as_uri()]) is not None
+    notes = host.diagnostics(home / "x.py", (home / "x.py").as_uri())
+    assert len(notes) == 1
+    assert "no c features" in notes[0].message
+    host.close()
