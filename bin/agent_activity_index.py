@@ -63,7 +63,14 @@ SEARCH_CAP = 1000
 # shortcut: these lists are maintained by hand. Any other GitHub App account is
 # still counted as a bot via its account type, but only listed names are
 # recognised as an agent.
-BOT_AUTHORS = {"renovate", "dependabot", "pre-commit-ci", "autofix-ci", "github-actions", "odlbot"}
+BOT_AUTHORS = {
+    "renovate",
+    "dependabot",
+    "pre-commit-ci",
+    "autofix-ci",
+    "github-actions",
+    "odlbot",
+}
 AGENT_LOGINS = {
     "copilot-swe-agent": "Copilot",
     "copilot": "Copilot",
@@ -73,13 +80,15 @@ AGENT_LOGINS = {
     "google-labs-jules": "Jules",
     "codex": "Codex",
 }
-# agent -> regex searched in the PR body and in commit messages
+# agent -> regex searched in the PR body and in commit messages. Each one matches a
+# footer or a Co-authored-by trailer an agent writes, never a bare mention of the
+# name, or a human PR that documents "the Claude Code skill" would count as agent work.
 TEXT_PATTERNS = {
-    "Claude Code": r"Claude Code|Co-Authored-By: Claude|claude\.com/claude-code",
+    "Claude Code": r"Generated with \[?Claude Code|claude\.com/claude-code|Co-Authored-By: Claude",
     "Codex": r"Co-authored-by: .*codex|chatgpt-codex|Generated with Codex",
     "Copilot": r"Co-authored-by: .*copilot",
     "Gemini": r"Co-authored-by: .*gemini|Generated with Gemini",
-    "Cursor": r"Co-authored-by: .*cursor|Cursor Agent",
+    "Cursor": r"Co-authored-by: .*cursor|Generated with Cursor",
 }
 BRANCH_PREFIXES = {
     "claude/": "Claude Code",
@@ -147,7 +156,7 @@ def gh_graphql(query: str, **variables: str | None) -> dict[str, Any]:
         if value is not None:
             cmd += ["-f", f"{key}={value}"]
     for attempt in range(4):
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if proc.returncode == 0:
             result = json.loads(proc.stdout)
             if "errors" not in result:
@@ -166,19 +175,32 @@ def gh_graphql(query: str, **variables: str | None) -> dict[str, Any]:
 def wait_for_rate_limit(rate: dict[str, Any] | None) -> None:
     if not rate or rate["remaining"] > RATE_LIMIT_FLOOR:
         return
-    reset = datetime.fromisoformat(rate["resetAt"].replace("Z", "+00:00"))
+    reset = datetime.fromisoformat(rate["resetAt"])
     pause = max(0.0, (reset - datetime.now(UTC)).total_seconds()) + 5
-    log(f"rate limit low ({rate['remaining']} left); waiting {pause:.0f}s for the reset")
+    log(
+        f"rate limit low ({rate['remaining']} left); waiting {pause:.0f}s for the reset"
+    )
     time.sleep(pause)
 
 
 def public_repos() -> list[str]:
-    out = subprocess.run(  # noqa: S603
-        [  # noqa: S607
-            "gh", "repo", "list", ORG, "--visibility", "public", "--no-archived",
-            "--limit", "1000", "--json", "name",
-        ],  # fmt: skip
-        capture_output=True, text=True, check=True,
+    out = subprocess.run(
+        [
+            "gh",
+            "repo",
+            "list",
+            ORG,
+            "--visibility",
+            "public",
+            "--no-archived",
+            "--limit",
+            "1000",
+            "--json",
+            "name",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     return sorted(r["name"] for r in json.loads(out))
 
@@ -193,8 +215,12 @@ def pr_counts(repos: list[str], start: date, end: date) -> dict[str, int]:
             f"type: ISSUE, first: 1) {{ issueCount }}"
             for j, name in enumerate(batch)
         )
-        data = gh_graphql(f"query {{ rateLimit {{ remaining resetAt }} {aliases} }}")["data"]
-        counts.update({name: data[f"r{j}"]["issueCount"] for j, name in enumerate(batch)})
+        data = gh_graphql(f"query {{ rateLimit {{ remaining resetAt }} {aliases} }}")[
+            "data"
+        ]
+        counts.update(
+            {name: data[f"r{j}"]["issueCount"] for j, name in enumerate(batch)}
+        )
     return counts
 
 
@@ -204,14 +230,20 @@ def fetch_prs(repo: str, start: date, end: date) -> list[dict[str, Any]]:
     after = None
     first_page = True
     while True:
-        res = gh_graphql(PR_QUERY, q=f"repo:{ORG}/{repo} type:pr created:{start}..{end}", after=after)
+        res = gh_graphql(
+            PR_QUERY, q=f"repo:{ORG}/{repo} type:pr created:{start}..{end}", after=after
+        )
         search = res["data"]["search"]
         if first_page and search["issueCount"] > SEARCH_CAP:
             if start == end:
-                log(f"{repo}: more than {SEARCH_CAP} PRs on {start}; counting the first {SEARCH_CAP}")
+                log(
+                    f"{repo}: more than {SEARCH_CAP} PRs on {start}; counting the first {SEARCH_CAP}"
+                )
             else:
                 mid = start + (end - start) // 2
-                return fetch_prs(repo, start, mid) + fetch_prs(repo, mid + timedelta(days=1), end)
+                return fetch_prs(repo, start, mid) + fetch_prs(
+                    repo, mid + timedelta(days=1), end
+                )
         first_page = False
         prs += [n for n in search["nodes"] if n]
         if not search["pageInfo"]["hasNextPage"]:
@@ -224,9 +256,17 @@ def instruction_files(repos: list[str]) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for i in range(0, len(repos), 10):
         batch = repos[i : i + 10]
-        files = " ".join(f'f{k}: object(expression: "HEAD:{p}") {{ id }}' for k, p in enumerate(INSTRUCTION_FILES))
-        aliases = "\n".join(f'r{j}: repository(owner: "{ORG}", name: "{n}") {{ {files} }}' for j, n in enumerate(batch))
-        data = gh_graphql(f"query {{ rateLimit {{ remaining resetAt }} {aliases} }}")["data"]
+        files = " ".join(
+            f'f{k}: object(expression: "HEAD:{p}") {{ id }}'
+            for k, p in enumerate(INSTRUCTION_FILES)
+        )
+        aliases = "\n".join(
+            f'r{j}: repository(owner: "{ORG}", name: "{n}") {{ {files} }}'
+            for j, n in enumerate(batch)
+        )
+        data = gh_graphql(f"query {{ rateLimit {{ remaining resetAt }} {aliases} }}")[
+            "data"
+        ]
         for j, name in enumerate(batch):
             for k, path in enumerate(INSTRUCTION_FILES):
                 if (data[f"r{j}"] or {}).get(f"f{k}"):
@@ -245,13 +285,24 @@ def classify(pr: dict[str, Any]) -> tuple[str, str, set[str]]:
     """Return (author_class, author_login, agents)."""
     author = pr.get("author") or {}
     login = norm(author.get("login"))
-    if login in AGENT_LOGINS:
+    if login in AGENT_LOGINS and author.get("__typename") == "Bot":
         return "agent", login, {AGENT_LOGINS[login]}
     if login in BOT_AUTHORS or author.get("__typename") == "Bot":
         return "bot", login, set()
-    agents = {agent for prefix, agent in BRANCH_PREFIXES.items() if pr["headRefName"].startswith(prefix)}
-    text = (pr.get("body") or "") + "\n".join(c["commit"]["message"] for c in pr["commits"]["nodes"])
-    agents |= {a for a, rx in TEXT_PATTERNS.items() if re.search(rx, text, re.IGNORECASE)}
+    agents = {
+        agent
+        for prefix, agent in BRANCH_PREFIXES.items()
+        if pr["headRefName"].startswith(prefix)
+    }
+    text = "\n".join(
+        [
+            pr.get("body") or "",
+            *(c["commit"]["message"] for c in pr["commits"]["nodes"]),
+        ]
+    )
+    agents |= {
+        a for a, rx in TEXT_PATTERNS.items() if re.search(rx, text, re.IGNORECASE)
+    }
     return ("human+agent" if agents else "human"), login, agents
 
 
@@ -263,7 +314,9 @@ def bot_reviews(pr: dict[str, Any]) -> list[dict[str, str]]:
         if not author:
             continue
         login = norm(author["login"])
-        name = BOT_REVIEWERS.get(login) or (login if author.get("__typename") == "Bot" else None)
+        name = BOT_REVIEWERS.get(login) or (
+            login if author.get("__typename") == "Bot" else None
+        )
         if name:
             reviews.append({"bot": name, "state": review["state"]})
     return reviews
@@ -303,7 +356,8 @@ def aggregate(
                         a
                         for c in pr["commits"]["nodes"]
                         for a, rx in TEXT_PATTERNS.items()
-                        if re.search(rx, c["commit"]["message"], re.IGNORECASE)
+                        if cls != "bot"
+                        and re.search(rx, c["commit"]["message"], re.IGNORECASE)
                     ),
                 }
             )
@@ -317,15 +371,30 @@ def aggregate(
         "total_prs": len(rows),
         "repos_with_prs": len(prs_by_repo),
         "repo_count": repo_count,
-        "classes": {c: tally([r["outcome"] for r in rows if r["class"] == c]) for c in CLASSES},
-        "agent_prs": {a: tally([r["outcome"] for r in rows if a in r["agents"]]) for a in agents},
-        "commit_trailers": dict(sum((r["trailers"] for r in rows), Counter()).most_common()),
-        "bot_authors": {b: tally([r["outcome"] for r in rows if r["author"] == b and r["class"] == "bot"]) for b in bots},
+        "classes": {
+            c: tally([r["outcome"] for r in rows if r["class"] == c]) for c in CLASSES
+        },
+        "agent_prs": {
+            a: tally([r["outcome"] for r in rows if a in r["agents"]]) for a in agents
+        },
+        "commit_trailers": dict(
+            sum((r["trailers"] for r in rows), Counter()).most_common()
+        ),
+        "bot_authors": {
+            b: tally(
+                [r["outcome"] for r in rows if r["author"] == b and r["class"] == "bot"]
+            )
+            for b in bots
+        },
         "bot_reviews": {
             b: {
                 "reviews": sum(x["bot"] == b for r in rows for x in r["reviews"]),
                 "prs": sum(any(x["bot"] == b for x in r["reviews"]) for r in rows),
-                "approvals": sum(x["bot"] == b and x["state"] == "APPROVED" for r in rows for x in r["reviews"]),
+                "approvals": sum(
+                    x["bot"] == b and x["state"] == "APPROVED"
+                    for r in rows
+                    for x in r["reviews"]
+                ),
             }
             for b in reviewers
         },
@@ -337,7 +406,10 @@ def aggregate(
             for c in CLASSES
         },
         "by_repo": {
-            repo: {c: sum(r["repo"] == repo and r["class"] == c for r in rows) for c in CLASSES}
+            repo: {
+                c: sum(r["repo"] == repo and r["class"] == c for r in rows)
+                for c in CLASSES
+            }
             for repo in sorted({r["repo"] for r in rows})
         },
         "instruction_files": files,
@@ -347,9 +419,45 @@ def aggregate(
 # ── Months ───────────────────────────────────────────────────────────────────
 
 
+MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def check_month(month: str) -> str:
+    if not MONTH_RE.match(month):
+        msg = f"not a YYYY-MM month: {month!r}"
+        raise SystemExit(msg)
+    return month
+
+
+def next_month(month: str) -> str:
+    return months_between(month, "9999-12")[1]
+
+
+def months_to_compute(
+    history: list[str], month: str, backfill_from: str | None
+) -> list[str]:
+    """Which months a run must compute.
+
+    An explicit backfill recomputes from there. Otherwise a run fills every month
+    after the newest one the site holds, so a run that failed on the 1st leaves a gap
+    for only one month, not for good. A first run (no history) backfills from 2026-01.
+    """
+    if backfill_from is None:
+        backfill_from = next_month(max(history)) if history else DEFAULT_BACKFILL_FROM
+        backfill_from = min(backfill_from, month)
+    if backfill_from > month:
+        msg = (
+            f"--backfill-from {backfill_from} is after the month being added ({month})"
+        )
+        raise SystemExit(msg)
+    return months_between(backfill_from, month)
+
+
 def month_bounds(month: str) -> tuple[date, date]:
     first = date.fromisoformat(f"{month}-01")
-    return first, (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return first, (first.replace(day=28) + timedelta(days=4)).replace(
+        day=1
+    ) - timedelta(days=1)
 
 
 def previous_month(today: date) -> str:
@@ -361,11 +469,13 @@ def months_between(first: str, last: str) -> list[str]:
     months, (y, m) = [], (int(first[:4]), int(first[5:]))
     while f"{y}-{m:02d}" <= last:
         months.append(f"{y}-{m:02d}")
-        y, m = (y + 1, 1) if m == 12 else (y, m + 1)  # noqa: PLR2004
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return months
 
 
-def snapshot_month(month: str, only: list[str] | None, files: dict[str, list[str]], repos: list[str]) -> dict[str, Any]:
+def snapshot_month(
+    month: str, only: list[str] | None, files: dict[str, list[str]], repos: list[str]
+) -> dict[str, Any]:
     start, end = month_bounds(month)
     log(f"{month}: counting PRs in {len(only or repos)} repos")
     counts = pr_counts(only or repos, start, end)
@@ -390,10 +500,13 @@ def download_history(site_url: str, data_dir: Path) -> list[str]:
 
     def fetch(name: str) -> bytes:
         try:
-            with urllib.request.urlopen(base + name, timeout=30) as resp:  # noqa: S310
+            # Pages serves max-age=600, so a rerun within ten minutes of a deploy can read the
+            # previous index. That is harmless: months_to_compute refills any month the index
+            # is missing, so the stale run recomputes it rather than dropping it.
+            with urllib.request.urlopen(base + name, timeout=30) as resp:
                 return resp.read()
         except urllib.error.HTTPError as err:
-            if err.code == 404 and name == "index.json":  # noqa: PLR2004
+            if err.code == 404 and name == "index.json":
                 raise FileNotFoundError from err
             msg = f"could not download {base}{name}: HTTP {err.code}. Refusing to publish without the existing history."
             raise SystemExit(msg) from err
@@ -407,13 +520,24 @@ def download_history(site_url: str, data_dir: Path) -> list[str]:
         return []
     data_dir.mkdir(parents=True, exist_ok=True)
     for month in months:
-        (data_dir / f"{month}.json").write_bytes(fetch(f"{month}.json"))
+        check_month(month)  # it becomes a file name and a URL
+        body = fetch(f"{month}.json")
+        if json.loads(body).get("month") != month:
+            msg = (
+                f"{base}{month}.json describes a different month. Refusing to publish."
+            )
+            raise SystemExit(msg)
+        (data_dir / f"{month}.json").write_bytes(body)
     return months
 
 
 def build_site(data_dir: Path, out: Path) -> None:
-    snapshots = [json.loads(p.read_text()) for p in sorted(data_dir.glob("????-??.json"))]
-    (data_dir / "index.json").write_text(json.dumps({"months": [s["month"] for s in snapshots]}))
+    snapshots = [
+        json.loads(p.read_text()) for p in sorted(data_dir.glob("????-??.json"))
+    ]
+    (data_dir / "index.json").write_text(
+        json.dumps({"months": [s["month"] for s in snapshots]})
+    )
     payload = json.dumps(snapshots).replace("</", "<\\/")
     (out / "index.html").write_text(TEMPLATE.read_text().replace("__DATA__", payload))
 
@@ -425,12 +549,18 @@ def build_site(data_dir: Path, out: Path) -> None:
 def snapshot(
     out: Path,
     month: str | None = None,
-    repo: Annotated[list[str] | None, cyclopts.Parameter(help="Limit to these repos; repeatable.")] = None,
+    repo: Annotated[
+        list[str] | None, cyclopts.Parameter(help="Limit to these repos; repeatable.")
+    ] = None,
 ) -> None:
     """Write one month's counts to a JSON file. Defaults to last month."""
-    month = month or previous_month(datetime.now(UTC).date())
+    month = check_month(month or previous_month(datetime.now(UTC).date()))
     repos = public_repos()
-    out.write_text(json.dumps(snapshot_month(month, repo, instruction_files(repos), repos), indent=2))
+    out.write_text(
+        json.dumps(
+            snapshot_month(month, repo, instruction_files(repos), repos), indent=2
+        )
+    )
     log(f"wrote {out}")
 
 
@@ -450,24 +580,29 @@ def update(
 ) -> None:
     """Add a month to the published history and rebuild the page.
 
-    First run (no site yet) backfills from 2026-01. Pass --backfill-from to
-    recompute a range, for example to recover lost history. Pass --site-url ''
-    to skip the download for a local run.
+    Fills every month after the newest one already published, so one failed run
+    leaves no permanent gap. First run (no site yet) backfills from 2026-01. Pass
+    --backfill-from to recompute a range, for example to recover lost history.
+    Pass --site-url '' to skip the download for a local run.
     """
-    month = month or previous_month(datetime.now(UTC).date())
+    month = check_month(month or previous_month(datetime.now(UTC).date()))
+    if backfill_from is not None:
+        check_month(backfill_from)
     data_dir = out / "data"
     out.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(exist_ok=True)
     history = download_history(site_url, data_dir) if site_url else []
-    if backfill_from is None and not history:
-        backfill_from = DEFAULT_BACKFILL_FROM
-    to_compute = months_between(backfill_from, month) if backfill_from else [month]
+    to_compute = months_to_compute(history, month, backfill_from)
     repos = public_repos()
     files = instruction_files(repos)
     for m in to_compute:
-        (data_dir / f"{m}.json").write_text(json.dumps(snapshot_month(m, None, files, repos)))
+        (data_dir / f"{m}.json").write_text(
+            json.dumps(snapshot_month(m, None, files, repos))
+        )
     build_site(data_dir, out)
-    log(f"site written to {out} with months {json.loads((data_dir / 'index.json').read_text())['months']}")
+    log(
+        f"site written to {out} with months {json.loads((data_dir / 'index.json').read_text())['months']}"
+    )
 
 
 if __name__ == "__main__":

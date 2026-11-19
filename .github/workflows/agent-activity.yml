@@ -30,12 +30,6 @@ on:
 permissions:
   contents: read
 
-# Two overlapping runs would each download the same history and the later deploy
-# would drop the earlier run's month.
-concurrency:
-  group: agent-activity
-  cancel-in-progress: false
-
 jobs:
   test:
     name: agent-activity (tests)
@@ -57,6 +51,12 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    # Two overlapping publishes would each download the same history and the later
+    # deploy would drop the earlier run's month. Scoped to this job so a pull
+    # request's test run cannot displace a queued publish.
+    concurrency:
+      group: agent-activity-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       pages: write
