@@ -194,9 +194,19 @@ CODE_GRAPH_PREFIX = "code-"
 # One branch delete writes one graph's branch manifest; Production's took 1 to
 # 3 seconds each on S3.
 BRANCH_DELETE_TIMEOUT_SECONDS = 120
-# The loopback server opens every graph before it serves; Production's 29
-# took under a second.
+# How long the loopback server gets to answer /healthz.
 LOOPBACK_START_SECONDS = 60
+# omnigraph-server 0.15 answers /healthz while it still loads its graphs, and
+# a request for a graph that has not loaded gets a 503 `graph_unavailable`
+# whose disposition says to retry. Production's boot on 2026-11-19 got one two
+# seconds after the loopback server served, for code-github-com-mitodl-agent-kit,
+# and refused to start on every restart. Such a request is retried for this
+# long, every GRAPH_LOAD_POLL_SECONDS, until SIGTERM or a lost Lease. The
+# wait comes out of the boot's 135s startupProbe budget (ol-infrastructure
+# applications/omnigraph/data_tier.py DEFAULT_BOOT_BUDGET_SECONDS), which the
+# loopback start, the drop, the re-plan and the apply share.
+GRAPH_LOAD_SECONDS = 60
+GRAPH_LOAD_POLL_SECONDS = 1.0
 # The loopback server's own drain on SIGTERM (OMNIGRAPH_SHUTDOWN_GRACE_SECONDS).
 # Nothing is in flight by the time it is stopped.
 LOOPBACK_SHUTDOWN_GRACE_SECONDS = 5
@@ -983,14 +993,36 @@ def view_drop_token(env: dict[str, str]) -> str:
     return json.loads(tokens_file.read_text())[env["OMNIGRAPH_VIEW_DROP_ACTOR"]]
 
 
+def _says_retry(status: int, body: bytes) -> bool:
+    """Whether a reply is a 503 for a graph that has not finished loading."""
+    if status != HTTPStatus.SERVICE_UNAVAILABLE:
+        return False
+    try:
+        reply = json.loads(body)
+    except ValueError:
+        return False
+    if not isinstance(reply, dict) or reply.get("code") != "graph_unavailable":
+        return False
+    disposition = reply.get("disposition")
+    return isinstance(disposition, dict) and disposition.get("action") == "retry"
+
+
 class ServedGraphs:
     """A server's branch API: list and delete one graph's branches.
 
     :param base_url: the server's root URL, e.g. ``http://127.0.0.1:8080``.
+    :param stopping: says why to stop waiting for a graph to load (SIGTERM,
+        a lost Lease), or ``None`` to keep waiting.
     """
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        stopping: Callable[[], str | None] = lambda: None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self._stopping = stopping
         self._headers = {
             "Authorization": f"Bearer {token}",
             "Omnigraph-Http-Api": http_contract(),
@@ -999,21 +1031,50 @@ class ServedGraphs:
     def _call(
         self, method: str, path: str, timeout: float, *, missing_ok: bool = False
     ) -> dict[str, Any]:
+        """One request, retried while its graph is still loading.
+
+        A retry is sent only while GRAPH_LOAD_SECONDS lasts and ``stopping``
+        has no reason, both checked again after the poll's sleep, and its
+        timeout is cut to what is left of GRAPH_LOAD_SECONDS.
+
+        :raises ServerUnavailable: on a 5xx, on a graph still loading after
+            GRAPH_LOAD_SECONDS, or when the server cannot be reached.
+        :raises BootRefused: on any other 4xx, or when ``stopping`` gives a
+            reason while the graph loads.
+        """
         url = f"{self.base_url}{path}"
-        request = urllib.request.Request(url, method=method, headers=self._headers)
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read() or b"{}")
-        except urllib.error.HTTPError as exc:
-            if missing_ok and exc.code == HTTPStatus.NOT_FOUND:
-                return {}
-            msg = f"{method} {url}: HTTP {exc.code}: {exc.read()[:300]!r}"
-            if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        deadline = time.monotonic() + GRAPH_LOAD_SECONDS
+        attempt_timeout = timeout
+        while True:
+            request = urllib.request.Request(url, method=method, headers=self._headers)
+            try:
+                with urllib.request.urlopen(request, timeout=attempt_timeout) as resp:
+                    return json.loads(resp.read() or b"{}")
+            except urllib.error.HTTPError as exc:
+                if missing_ok and exc.code == HTTPStatus.NOT_FOUND:
+                    return {}
+                body = exc.read()
+                if _says_retry(exc.code, body):
+                    self._refuse_if_stopping(url, exc)
+                    poll = min(GRAPH_LOAD_POLL_SECONDS, deadline - time.monotonic())
+                    time.sleep(max(0.0, poll))
+                    self._refuse_if_stopping(url, exc)
+                    left = deadline - time.monotonic()
+                    if left > 0:
+                        attempt_timeout = min(timeout, left)
+                        continue
+                msg = f"{method} {url}: HTTP {exc.code}: {body[:300]!r}"
+                if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+                    raise ServerUnavailable(msg) from exc
+                raise BootRefused(msg) from exc
+            except OSError as exc:
+                msg = f"{method} {url}: {exc}"
                 raise ServerUnavailable(msg) from exc
+
+    def _refuse_if_stopping(self, url: str, exc: Exception) -> None:
+        if reason := self._stopping():
+            msg = f"{reason} while waiting for {url} to load"
             raise BootRefused(msg) from exc
-        except OSError as exc:
-            msg = f"{method} {url}: {exc}"
-            raise ServerUnavailable(msg) from exc
 
     def serving(self) -> bool:
         try:
@@ -1061,7 +1122,15 @@ def loopback_server(
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    served = ServedGraphs(f"http://127.0.0.1:{port}", view_drop_token(env))
+
+    def stopping() -> str | None:
+        if terminated.is_set():
+            return "SIGTERM"
+        if lease.lost():
+            return "lost the unlock Lease"
+        return None
+
+    served = ServedGraphs(f"http://127.0.0.1:{port}", view_drop_token(env), stopping)
     log(f"serving {source} on {served.base_url} to drop branch views")
     child = subprocess.Popen(
         [SERVER_BINARY, "--cluster", source, "--bind", f"127.0.0.1:{port}"],
