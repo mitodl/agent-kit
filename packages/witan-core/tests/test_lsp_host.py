@@ -511,3 +511,17 @@ def test_a_commands_only_plugin_anchors_in_folder_order_and_explains(
     assert len(notes) == 1
     assert "no c features" in notes[0].message
     host.close()
+
+
+def test_a_relative_witan_config_survives_pinning_the_cwd(
+    config, monkeypatch, tmp_path
+):
+    work, home = config
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WITAN_CONFIG", "config.toml")
+    host = Host({"p": Recorder("p")})
+    host.set_folders([resolve_folder(work.as_uri(), work, None)])
+    assert host.context("p", host.folders[work.as_uri()]) is not None
+    assert Path.cwd() == work
+    assert resolve_folder(home.as_uri(), home, None).target == "personal"
+    host.close()

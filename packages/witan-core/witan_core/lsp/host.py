@@ -247,6 +247,12 @@ class Host:
                 # it to the first anchored folder, so that is the store they
                 # open. witan-code points its server at its own anchor's config
                 # in open(), so its anchor may differ.
+                # A relative WITAN_CONFIG named a file from the old cwd, which
+                # folders were routed by; keep it naming that file.
+                if config := os.environ.get("WITAN_CONFIG", "").strip():
+                    os.environ["WITAN_CONFIG"] = str(
+                        Path(config).expanduser().absolute()
+                    )
                 os.chdir(self._cwd_anchor.path)
                 self._cwd_pinned = True
             plugin = self.plugins[name]
