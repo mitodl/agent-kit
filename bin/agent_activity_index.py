@@ -501,9 +501,10 @@ def download_history(site_url: str, data_dir: Path) -> list[str]:
 
     def fetch(name: str) -> bytes:
         try:
-            # Pages serves max-age=600, so a rerun within ten minutes of a deploy can read the
-            # previous index. That is harmless: months_to_compute refills any month the index
-            # is missing, so the stale run recomputes it rather than dropping it.
+            # Pages serves max-age=600, so a run within ten minutes of a deploy can read the
+            # index from before it. months_to_compute refills a missing month when the run
+            # asks for the default month, but an explicit older month would redeploy without
+            # the newer one. The workflow waits that window out before calling this.
             with urllib.request.urlopen(base + name, timeout=30) as resp:
                 return resp.read()
         except urllib.error.HTTPError as err:

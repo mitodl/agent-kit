@@ -58,6 +58,7 @@ jobs:
       group: agent-activity-publish
       cancel-in-progress: false
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
@@ -70,6 +71,26 @@ jobs:
           persist-credentials: false
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Let the Pages cache expire after a recent publish
+        # Pages serves max-age=600. A run that starts inside that window of the last
+        # publish can read an index from before it, then redeploy without the month
+        # that publish added (for example a rerun of an older month right after a
+        # newer one). The concurrency group already makes the runs sequential, so
+        # waiting out the window is enough.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --workflow agent-activity.yml --status success --limit 20 \
+            --json updatedAt,event \
+            --jq '[.[] | select(.event != "pull_request")][0].updatedAt // empty')
+          if [ -n "$last" ]; then
+            age=$(( $(date +%s) - $(date -d "$last" +%s) ))
+            if [ "$age" -lt 660 ]; then
+              echo "Last publish finished ${age}s ago; waiting for the Pages cache to expire."
+              sleep $(( 660 - age ))
+            fi
+          fi
 
       - name: Add the month and rebuild the page
         env:
