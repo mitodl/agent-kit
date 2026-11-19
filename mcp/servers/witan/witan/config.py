@@ -11,6 +11,7 @@ from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (
     local_project_path,
     match_target,
+    match_target_at,
     parse_target_tables,
     to_list,
 )
@@ -265,7 +266,9 @@ def ui_oidc_client_id() -> str | None:
     return os.environ.get("WITAN_UI_OIDC_CLIENT_ID") or None
 
 
-def load_remote_config(target: str | None = None) -> RemoteConfig | None:
+def load_remote_config(
+    target: str | None = None, *, project_path: Path | None = None
+) -> RemoteConfig | None:
     """Resolve RemoteConfig from env > named target > global config.toml > default.
 
     Target selection mirrors ``load()``: ``target`` arg > ``WITAN_TARGET`` env
@@ -287,7 +290,9 @@ def load_remote_config(target: str | None = None) -> RemoteConfig | None:
     """
     file_cfg = _load_toml()
     targets = _parse_targets(file_cfg)
-    selected = _select_target(targets, target or os.environ.get("WITAN_TARGET"))
+    selected = _select_target(
+        targets, target or os.environ.get("WITAN_TARGET"), project_path
+    )
 
     return resolve_remote_config(file_cfg, selected)
 
@@ -848,10 +853,18 @@ def _named_target(targets: list[_Target], name: str) -> _Target:
     return selected
 
 
-def _select_target(targets: list[_Target], explicit: str | None) -> _Target | None:
-    """Pick the target block by name, or by auto-detection when none is named."""
+def _select_target(
+    targets: list[_Target], explicit: str | None, project_path: Path | None = None
+) -> _Target | None:
+    """Pick the target block by name, or by auto-detection when none is named.
+
+    ``project_path`` routes by that checkout alone, as the language server does
+    for each workspace folder; without it, by the process's checkout.
+    """
     if explicit:
         return _named_target(targets, explicit)
+    if project_path is not None:
+        return match_target_at(targets, project_path)
     return match_target(
         targets, repo_uri=repo_module.detect(), local_path=local_project_path()
     )
@@ -900,7 +913,9 @@ class LocalDispatch(BaseModel):
     when nothing matched. See :func:`diagnose_local_dispatch`."""
 
 
-def diagnose_local_dispatch(target: str | None = None) -> LocalDispatch | None:
+def diagnose_local_dispatch(
+    target: str | None = None, *, project_path: Path | None = None
+) -> LocalDispatch | None:
     """Classify a local-store dispatch as deliberate or accidental.
 
     Returns ``None`` when there is nothing to be ambiguous about: no target
@@ -930,7 +945,9 @@ def diagnose_local_dispatch(target: str | None = None) -> LocalDispatch | None:
     if not deployed:
         return None
 
-    selected = _select_target(targets, target or os.environ.get("WITAN_TARGET"))
+    selected = _select_target(
+        targets, target or os.environ.get("WITAN_TARGET"), project_path
+    )
     return LocalDispatch(
         graph_uri=_resolve_path(
             _first(
@@ -962,7 +979,7 @@ def _first(*values: str | None, default: str | None = None) -> str | None:
     return default
 
 
-def load(target: str | None = None) -> Config:
+def load(target: str | None = None, *, project_path: Path | None = None) -> Config:
     """Load config from file + environment, selecting a named target if applicable.
 
     Resolution order (highest → lowest precedence):
@@ -1014,7 +1031,9 @@ def load(target: str | None = None) -> Config:
     """
     file_cfg = _load_toml()
     targets = _parse_targets(file_cfg)
-    selected = _select_target(targets, target or os.environ.get("WITAN_TARGET"))
+    selected = _select_target(
+        targets, target or os.environ.get("WITAN_TARGET"), project_path
+    )
 
     raw_server = _first(
         os.environ.get("WITAN_MEMORY_URI"),

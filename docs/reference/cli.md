@@ -91,6 +91,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`stitch`](#witan-code-stitch)
     - [`inject-context`](#witan-code-inject-context)
     - [`serve`](#witan-code-serve)
+    - [`lsp`](#witan-code-lsp)
     - [`optimize`](#witan-code-optimize)
     - [`cleanup`](#witan-code-cleanup)
     - [`reap-views`](#witan-code-reap-views)
@@ -104,6 +105,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`logout`](#witan-code-logout)
     - [`whoami`](#witan-code-whoami)
 - [`serve`](#witan-serve)
+- [`lsp`](#witan-lsp)
 - [`run`](#witan-run)
 
 **Commands**:
@@ -115,6 +117,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`journal`](#witan-journal): Inspect and replay task writes queued while the deployment was unreachable.
 * [`login`](#witan-login): Authenticate to the deployed witan service via the OIDC device grant.
 * [`logout`](#witan-logout): Forget the cached token for the configured deployment.
+* [`lsp`](#witan-lsp): Run the witan language server on stdio, for an editor to start.
 * [`memory`](#witan-memory): Search memory (BM25), or with no query list memories (filtered by --kind).
 * [`migrate`](#witan-migrate): One-shot, idempotent schema and data migrations.
 * [`optimize`](#witan-optimize): Compact the graph store's Lance fragments, optionally then cleaning up.
@@ -1958,6 +1961,20 @@ When witan-code is mounted into the umbrella ``witan serve`` instead, that
 command has already configured observability; the call here is idempotent so
 the standalone path gets it too without double-configuring the combined one.
 
+### witan code lsp
+
+```console
+witan code lsp
+```
+
+Run the witan language server on stdio, for an editor to start.
+
+The same server as ``witan lsp``: it loads every installed witan
+language-server plugin, so with only witan-code installed it serves the
+code features alone. Each workspace folder routes to its own target, and
+``WITAN_TARGET`` routes every folder. Needs the ``lsp`` extra:
+``uv tool install 'witan-code[lsp]'``.
+
 ### witan code optimize
 
 ```console
@@ -2254,6 +2271,32 @@ deployment would 403 every request from the browser UI. See the call to
     — a witan write has been measured at 27s. Set this to the deployment's
     termination grace period. Env:
     ``WITAN_MCP_SHUTDOWN_GRACE_SECONDS``. *[env: WITAN_MCP_SHUTDOWN_GRACE_SECONDS]* *[default: 120.0]*
+
+## witan lsp
+
+```console
+witan lsp
+```
+
+Run the witan language server on stdio, for an editor to start.
+
+One server for every installed witan package: it loads the language-server
+plugins witan-council and witan-code register, and routes each workspace
+folder to its own target the way the CLI routes a checkout. ``--target``
+and ``WITAN_TARGET`` route every folder. ``witan-code lsp`` starts the same
+server. Needs the ``lsp`` extra: ``uv tool install 'witan-council[lsp]'``.
+
+**Parameters**:
+
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, memory import, traces, scan, target list,
+    and mounted witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
+    tasks`, `witan memory` and `witan code index` included, none of which
+    could be pointed at one before. Overrides auto-detection by checkout
+    path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
 
 ## witan run
 

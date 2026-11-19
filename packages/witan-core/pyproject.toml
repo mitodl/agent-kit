@@ -53,6 +53,12 @@ observability = [
 # opentelemetry-sdk dependency — a second, unrelated copy of the exact package
 # `observability` above already pins and configures.
 sentry = ["sentry-sdk>=2.20,<3"]
+# lsp/server.py and lsp/testing.py: the editor language server (ADR 0012). The
+# plugin interface in lsp/plugin.py stays stdlib-only, so witan-council and
+# witan-code import it without this extra; each has its own `lsp` extra that
+# pulls this one in. lsprotocol is imported directly for the LSP 3.17 types,
+# and pygls 2.x pins the matching release.
+lsp = ["pygls>=2,<3", "lsprotocol>=2025.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/packages/witan-core"
@@ -92,7 +98,8 @@ entry_title_template = "[{{ version }}] - {{ date.strftime('%Y-%m-%d') }}"
 # base package requires none of them. structlog + opentelemetry: the
 # `observability` extra; the tests assert on the rendered JSON and on which
 # providers get installed. sentry-sdk: the `sentry` extra; the tests assert on
-# configure_sentry's DSN gating and never-fatal behavior.
+# configure_sentry's DSN gating and never-fatal behavior. pygls + lsprotocol:
+# the `lsp` extra; the language-server tests drive the host over real JSON-RPC.
 test = [
     "pytest>=8",
     "rich>=13",
@@ -105,6 +112,8 @@ test = [
     "opentelemetry-sdk>=1.31",
     "opentelemetry-exporter-otlp-proto-http>=1.31",
     "sentry-sdk>=2.20,<3",
+    "pygls>=2,<3",
+    "lsprotocol>=2025.0.0",
 ]
 
 [tool.uv.sources]

@@ -297,7 +297,11 @@ dependencies = [
   # `all_repos`, and 0.55's RemoteMCPProxy fills the detected repo into a
   # call that omits `repo`, `all_repos` or not; 0.56.0 skips it under
   # `all_repos` (#640).
-  "witan-core[cli,remote,observability,sentry]>=0.56.0,<1",
+  #
+  # ★ >=0.59 IS AN IMPORT FLOOR: lsp_plugin.py imports `witan_core.lsp` (the
+  # language-server plugin interface, added in witan-core 0.59.0) at module
+  # scope, and config.py imports `match_target_at` from the same release.
+  "witan-core[cli,remote,observability,sentry]>=0.59.0,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -305,6 +309,14 @@ dependencies = [
   # httpx2 fork), relied on directly rather than adding classic httpx too.
   "httpx2>=2.5",
 ]
+
+[project.optional-dependencies]
+# The editor language server, `witan lsp` (ADR 0012). The host and pygls live
+# in witan-core's `lsp` extra; this package only registers its plugin.
+lsp = ["witan-core[lsp]>=0.59.0,<1"]
+
+[project.entry-points."witan.lsp.plugins"]
+council = "witan.lsp_plugin:CouncilPlugin"
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan"
@@ -381,7 +393,8 @@ md_html_anchors = false
 entry_title_template = "[{{ version }}] - {{ date.strftime('%Y-%m-%d') }}"
 
 [dependency-groups]
-test = ["pytest>=8", "pytest-xdist>=3.6"]
+# pygls + lsprotocol: the `lsp` extra, for the language-server tests.
+test = ["pytest>=8", "pytest-xdist>=3.6", "pygls>=2,<3", "lsprotocol>=2025.0.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -21,6 +21,8 @@ import re
 from pathlib import Path
 from typing import Protocol, TypeVar
 
+from .repo_key import remote_uri
+
 
 def to_list(val: object) -> list[str]:
     """Normalise a TOML value to a list of strings.
@@ -135,3 +137,15 @@ def match_target(
             return t
 
     return None
+
+
+def match_target_at(targets: list[T], path: Path) -> T | None:
+    """:func:`match_target` for the checkout at ``path``, ignoring the process.
+
+    The repo comes from ``path``'s own remote (:func:`witan_core.repo_key.remote_uri`)
+    and ``match_paths`` is tested against ``path``, where :func:`local_project_path`
+    and each server's ``repo.detect`` read ``CLAUDE_PROJECT_DIR``, ``WITAN_REPO``
+    and the cwd. A language server routes each workspace folder this way, since
+    one process serves folders that belong to different targets.
+    """
+    return match_target(targets, repo_uri=remote_uri(path), local_path=path)

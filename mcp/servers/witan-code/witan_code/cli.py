@@ -82,19 +82,28 @@ def _srv():
             print(exc, file=sys.stderr)
             raise SystemExit(1) from None
         if remote is not None:
-            from .remote.oidc import default_token_provider, default_token_refresher
-            from .remote.proxy import RemoteServerProxy
-
-            _server = RemoteServerProxy(
-                remote,
-                default_token_provider(remote),
-                default_token_refresher(remote),
-            )
+            _server = remote_proxy(remote)
         else:
             from . import server as server_module
 
             _server = server_module
     return _server
+
+
+def remote_proxy(remote):
+    """The network-dispatching proxy for one resolved ``RemoteConfig``.
+
+    Separate from :func:`_srv` because the language server opens one per
+    deployment its workspace folders route to (``witan_code.lsp_plugin``).
+    """
+    from .remote.oidc import default_token_provider, default_token_refresher
+    from .remote.proxy import RemoteServerProxy
+
+    return RemoteServerProxy(
+        remote,
+        default_token_provider(remote),
+        default_token_refresher(remote),
+    )
 
 
 def _fn(tool):
@@ -1008,6 +1017,23 @@ def serve() -> None:
     from .server import mcp
 
     mcp.run()
+
+
+@app.command
+def lsp() -> None:
+    """Run the witan language server on stdio, for an editor to start.
+
+    The same server as ``witan lsp``: it loads every installed witan
+    language-server plugin, so with only witan-code installed it serves the
+    code features alone. Each workspace folder routes to its own target, and
+    ``WITAN_TARGET`` routes every folder. Needs the ``lsp`` extra:
+    ``uv tool install 'witan-code[lsp]'``.
+    """
+    from witan_core.lsp import run_language_server
+
+    from .selected_target import selected_target
+
+    run_language_server(selected_target(), package="witan-code")
 
 
 def _resolve_store(store: str | None, *, bridge: bool = False):

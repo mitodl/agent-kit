@@ -10,6 +10,7 @@ from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (
     local_project_path,
     match_target,
+    match_target_at,
     parse_target_tables,
     to_list,
 )
@@ -201,12 +202,16 @@ def _first(*values: str | None, default: str | None = None) -> str | None:
     return default
 
 
-def _select_target(target: str | None) -> tuple[dict, _Target | None]:
+def _select_target(
+    target: str | None, project_path: Path | None = None
+) -> tuple[dict, _Target | None]:
     """Load config.toml and pick the target block that applies.
 
     ``target`` arg > ``WITAN_TARGET`` env var > auto-detect by repo/local
-    checkout path. Returns ``(file_cfg, selected_or_None)``; raises ValueError
-    for an explicitly-requested target that is not defined.
+    checkout path. ``project_path`` routes by that checkout alone, as the
+    language server does for each workspace folder; without it, by the
+    process's checkout. Returns ``(file_cfg, selected_or_None)``; raises
+    ValueError for an explicitly-requested target that is not defined.
     """
     file_cfg = _load_toml()
     targets = _parse_targets(file_cfg)
@@ -218,12 +223,16 @@ def _select_target(target: str | None) -> tuple[dict, _Target | None]:
             available = ", ".join(t.name for t in targets) or "(none defined)"
             raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
         return file_cfg, selected
+    if project_path is not None:
+        return file_cfg, match_target_at(targets, project_path)
     return file_cfg, match_target(
         targets, repo_uri=repo_module.detect(), local_path=local_project_path()
     )
 
 
-def load_remote_config(target: str | None = None) -> RemoteConfig | None:
+def load_remote_config(
+    target: str | None = None, *, project_path: Path | None = None
+) -> RemoteConfig | None:
     """Resolve RemoteConfig from env > named target > global config.toml > default.
 
     Target selection is exactly ``load()``'s, and the keys are exactly the ones
@@ -237,11 +246,11 @@ def load_remote_config(target: str | None = None) -> RemoteConfig | None:
     in-process path over the local stores. Raises ValueError when a URL is
     configured without an issuer, or for an unknown explicit target.
     """
-    file_cfg, selected = _select_target(target)
+    file_cfg, selected = _select_target(target, project_path)
     return resolve_remote_config(file_cfg, selected)
 
 
-def load(target: str | None = None) -> Config:
+def load(target: str | None = None, *, project_path: Path | None = None) -> Config:
     """Load config from config.toml + environment, selecting a named target if applicable.
 
     Resolution order (highest -> lowest precedence):
@@ -265,7 +274,7 @@ def load(target: str | None = None) -> Config:
     ``code_transport`` that is not one of :data:`CODE_TRANSPORTS`, or for a
     ``code_server`` that is not an http(s) URL.
     """
-    file_cfg, selected = _select_target(target)
+    file_cfg, selected = _select_target(target, project_path)
 
     raw_code_dir = _first(
         os.environ.get("WITAN_CODE_DIR"),

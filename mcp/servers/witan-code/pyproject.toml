@@ -235,7 +235,11 @@ dependencies = [
     # ★ >=0.58 IS AN IMPORT FLOOR: store.py imports
     # `witan_core.omnigraph.stamp_schema_applied` at module scope, so a store
     # whose schema plan has no steps is stamped the way `schema_apply` stamps it.
-    "witan-core[cli,remote,observability,sentry]>=0.58.0,<1",
+    #
+    # ★ >=0.59 IS AN IMPORT FLOOR: lsp_plugin.py imports `witan_core.lsp` (the
+    # language-server plugin interface, added in witan-core 0.59.0) at module
+    # scope, and config.py imports `match_target_at` from the same release.
+    "witan-core[cli,remote,observability,sentry]>=0.59.0,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -279,6 +283,12 @@ dependencies = [
 # because it pulls a Docket/Redis stack that the default in-process
 # `memory://` backend does not need. server.py registers it when importable.
 tasks = ["fastmcp-tasks>=4,<5"]
+# The editor language server, `witan-code lsp` (ADR 0012). The host and pygls
+# live in witan-core's `lsp` extra; this package only registers its plugin.
+lsp = ["witan-core[lsp]>=0.59.0,<1"]
+
+[project.entry-points."witan.lsp.plugins"]
+code = "witan_code.lsp_plugin:CodePlugin"
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan-code"
@@ -307,8 +317,15 @@ witan-core = { workspace = true }
 # untested — the failure mode there is the server refusing to start at all.
 # cryptography: test_github_app generates a throwaway RSA key so the JWT path
 # is exercised for real rather than mocked. joserfc requires it at runtime, so
-# this only makes an existing import explicit.
-test = ["pytest>=8", "fastmcp-tasks>=4,<5", "cryptography"]
+# this only makes an existing import explicit. pygls + lsprotocol: the `lsp`
+# extra, for the language-server tests.
+test = [
+    "pytest>=8",
+    "fastmcp-tasks>=4,<5",
+    "cryptography",
+    "pygls>=2,<3",
+    "lsprotocol>=2025.0.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
