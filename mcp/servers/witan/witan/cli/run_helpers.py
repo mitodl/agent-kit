@@ -411,10 +411,11 @@ def _launch_folder(
     """The open folder a launch runs in, or ``None`` when none fits.
 
     The invoking folder (the first) when it maps to one of ``repos`` or there
-    are none, else the first other folder that maps to one.
+    are none, else the first other folder that maps to one. ``None`` also when
+    no folder is open at all.
     """
     if not repos:
-        return workspace_folders[0]
+        return workspace_folders[0] if workspace_folders else None
     return next(
         (f for f in workspace_folders if repo_module.detect_at(f) in repos), None
     )
@@ -506,8 +507,12 @@ def build_launch_spec(
             kind,
             slug,
             "no_workspace",
-            f"{slug} belongs to {', '.join(repos)}, and no open folder is a "
-            "checkout of it.",
+            (
+                f"{slug} belongs to {', '.join(repos)}, and no open folder is a "
+                "checkout of it."
+            )
+            if repos
+            else f"No folder is open to launch {slug} in.",
         )
         refusal["repos"] = list(repos)
         return refusal

@@ -197,6 +197,18 @@ def test_a_task_with_no_repo_runs_in_the_invoking_folder(folders):
     assert spec["cwd"] == str(there)
 
 
+@pytest.mark.parametrize("kind", ["task", "project"])
+def test_no_open_folder_is_refused_for_a_record_with_no_repo(kind):
+    """An editor with no folder open still gets a refusal, not an IndexError."""
+    project = {"slug": "wp-a", "title": "P", "repos": []}
+    fake = _Fake(task=_task(repo=None), project=project, claim=_CLAIMED)
+
+    spec = _spec(fake, kind=kind, folders=[])
+
+    assert (spec["launchable"], spec["reason"]) == (False, "no_workspace")
+    assert fake.claims == []
+
+
 def test_a_missing_task_is_not_found(folders):
     here, _ = folders
     fake = _Fake(task=None)
