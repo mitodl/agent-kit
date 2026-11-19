@@ -231,7 +231,11 @@ dependencies = [
     # `witan_core.graph_ids` at module scope. It moved there from config.py so
     # ol-infrastructure's cluster provisioning can import the same function
     # instead of mirroring it.
-    "witan-core[cli,remote,observability,sentry]>=0.57.0,<1",
+    #
+    # ★ >=0.58 IS AN IMPORT FLOOR: store.py imports
+    # `witan_core.omnigraph.stamp_schema_applied` at module scope, so a store
+    # whose schema plan has no steps is stamped the way `schema_apply` stamps it.
+    "witan-core[cli,remote,observability,sentry]>=0.58.0,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled

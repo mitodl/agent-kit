@@ -41,6 +41,7 @@ from witan_core.omnigraph import (
     schema_apply_if_changed,
     schema_stamp_path,
     shared_transport,
+    stamp_schema_applied,
     store_cli_args,
     store_write_lock,
 )
@@ -540,13 +541,13 @@ def _apply_schema_over_views(
         if plan is None or plan["supported"] is not True:
             return False
         if plan["step_count"] == 0:
-            _stamp_schema(schema_file, store)
+            stamp_schema_applied(schema_file, store)
             return True
         res = _schema_cli(binary, "apply", schema_file, store)
         if res is None:
             return False
         if res.returncode == 0:
-            _stamp_schema(schema_file, store)
+            stamp_schema_applied(schema_file, store)
             return True
         if not any(
             line.startswith(_NON_MAIN_BRANCHES_REFUSAL)
@@ -637,12 +638,6 @@ def _drop_code_views(cfg: cfg_module.Config) -> None:
             reason="the bridge's views were dropped, and the bindings they held "
             "are written again only for files a branch view parses",
         )
-
-
-def _stamp_schema(schema_file: Path, store: Path) -> None:
-    """Record ``schema_file`` as applied, as :func:`schema_apply` does on success."""
-    with contextlib.suppress(OSError):
-        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
 
 
 def _schema_cli(
