@@ -108,3 +108,25 @@ def test_a_deployed_folder_opens_a_remote_proxy(folders):
     plugin = CodePlugin()
     folder = _folder(deployed, "work")
     assert isinstance(plugin.open(plugin.route(folder), folder), RemoteServerProxy)
+
+
+def test_a_relative_code_dir_resolves_against_each_folder(tmp_path, monkeypatch):
+    from witan_code import server as server_module
+
+    one = _checkout(tmp_path / "one")
+    two = _checkout(tmp_path / "two")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('code_dir = ".witan-code"\n')
+    monkeypatch.setenv("WITAN_CONFIG", str(cfg))
+    monkeypatch.delenv("WITAN_CODE_DIR", raising=False)
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.chdir(tmp_path)
+    plugin = CodePlugin()
+    routes = [plugin.route(_folder(p, None)) for p in (one, two)]
+    assert routes[0].key != routes[1].key
+    before = server_module.cfg
+    try:
+        plugin.open(routes[1], _folder(two, None))
+        assert server_module.cfg.code_dir == two / ".witan-code"
+    finally:
+        server_module.use_config(before)

@@ -153,3 +153,31 @@ def test_folders_on_one_store_keep_their_own_write_guard(tmp_path, monkeypatch):
     assert routes[0].key == routes[1].key
     opened = [plugin.open(r, _folder(stray, None)) for r in routes]
     assert [d.deliberate for d in opened] == [True, False]
+
+
+def test_store_keys_tell_graphs_and_relative_paths_apart(tmp_path, monkeypatch):
+    """One omnigraph server holds many graphs, and a relative store path names
+    a different store from each folder, so neither may collapse to one key."""
+    a = _checkout(tmp_path / "a" / "app")
+    b = _checkout(tmp_path / "b" / "app")
+    rel = _checkout(tmp_path / "rel")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        'server = "graph.omni"\n'
+        "[targets.a]\n"
+        'server = "http://omnigraph.internal:8080"\n'
+        'graph = "team-a"\n'
+        f"match_paths = [{json.dumps(str(a.parent))}]\n"
+        "[targets.b]\n"
+        'server = "http://omnigraph.internal:8080"\n'
+        'graph = "team-b"\n'
+        f"match_paths = [{json.dumps(str(b.parent))}]\n"
+    )
+    monkeypatch.setenv("WITAN_CONFIG", str(cfg))
+    monkeypatch.delenv("WITAN_MEMORY_URI", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_GRAPH", raising=False)
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.chdir(tmp_path)
+    plugin = CouncilPlugin()
+    assert plugin.route(_folder(a, "a")).key != plugin.route(_folder(b, "b")).key
+    assert plugin.route(_folder(rel, None)).key == str(rel / "graph.omni")

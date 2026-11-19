@@ -18,6 +18,22 @@ from witan_core.lsp import Folder, Plugin, Route
 from . import config as cfg_module
 
 
+def _store(cfg: cfg_module.Config, folder: Folder) -> str:
+    """The graph ``cfg`` names, as ``witan`` run from ``folder`` would open it.
+
+    An omnigraph server serves many graphs, so its URL alone does not name
+    one. A relative path is relative to the cwd, which for the CLI is the
+    folder. Credentials are left out: the key is shown in the diagnostic on a
+    refused folder, and a token does not change which graph is read.
+    """
+    uri = cfg.graph_uri
+    if uri.startswith(("http://", "https://")):
+        return f"graph {cfg.graph_name} on {uri}"
+    if uri.startswith("s3://"):
+        return uri
+    return str(folder.path / uri)
+
+
 class CouncilPlugin(Plugin):
     def route(self, folder: Folder) -> Route:
         remote = cfg_module.load_remote_config(
@@ -32,7 +48,7 @@ class CouncilPlugin(Plugin):
         guard = cfg_module.diagnose_local_dispatch(
             target=folder.target, project_path=folder.path
         )
-        return Route(key=cfg.graph_uri, local=True, guard=guard)
+        return Route(key=_store(cfg, folder), local=True, guard=guard)
 
     def open(self, route: Route, folder: Folder) -> Any:
         if not route.local:
