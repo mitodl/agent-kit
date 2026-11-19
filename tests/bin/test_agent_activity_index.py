@@ -17,8 +17,8 @@ import unittest
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest import mock
 from typing import ClassVar
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[2] / "bin/agent_activity_index.py"
 spec = importlib.util.spec_from_file_location("agent_activity_index", SCRIPT)
