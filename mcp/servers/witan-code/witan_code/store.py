@@ -614,9 +614,22 @@ def _drop_code_views(cfg: cfg_module.Config) -> None:
     main would skip the files the branch changed, so the bridge view would
     keep main's bindings for them. Re-forked too, the code view parses those
     files again and writes their bindings.
+
+    One store failing (e.g. one the installed binary cannot open) is logged
+    and skipped, so it does not keep the others on stale views.
     """
     for ref in per_repo_stores(cfg):
-        views = _delete_views(OmnigraphClient(ref.uri, cfg.queries_dir))
+        try:
+            views = _delete_views(OmnigraphClient(ref.uri, cfg.queries_dir))
+        except Exception:
+            logger.warning(
+                "witan.code.store.views_kept_for_bridge_schema",
+                store=ref.uri,
+                exc_info=True,
+                recovery="run `witan-code reindex` in each branch checkout of "
+                "this repo to rewrite its bindings",
+            )
+            continue
         logger.warning(
             "witan.code.store.views_dropped_for_bridge_schema",
             store=ref.uri,

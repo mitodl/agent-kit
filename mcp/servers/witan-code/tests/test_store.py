@@ -525,6 +525,33 @@ def test_dropping_the_bridge_views_drops_the_code_views_too(tmp_path, monkeypatc
     assert _branches(cfg, code_store) == ["main"]
 
 
+@requires_stack
+def test_a_code_store_that_cannot_be_read_does_not_stop_the_bridge_drop(
+    tmp_path, monkeypatch
+):
+    """One unreadable store would otherwise leave every store after it on
+    stale views, and fail the bindings write that found the old bridge."""
+    from witan_code import config as cfg_mod
+
+    cfg, _slug, code_store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: String\n",
+        new="    content_hash: String\n",
+    )
+    (cfg.code_dir / "aaa_unreadable.omni").mkdir()
+    field = "    language: String?\n"
+    old_bridge = tmp_path / "old-bridge-schema.pg"
+    old_bridge.write_text(cfg.bridge_schema_file.read_text().replace(field, "", 1))
+    bridge = cfg_mod.bridge_store_path(cfg.code_dir)
+    _init_with_a_view(old_bridge, bridge)
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert _branches(cfg, bridge) == ["main"]
+    assert _branches(cfg, code_store) == ["main"]
+
+
 @pytest.mark.parametrize("binary", ["/nonexistent/omnigraph", "false"])
 def test_an_unanswered_plan_is_not_a_reason_to_recreate(tmp_path, binary):
     assert not store_module._schema_change_unsupported(
