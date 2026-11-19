@@ -1248,6 +1248,39 @@ def test_a_graph_that_never_loads_is_unavailable(fake_server, monkeypatch):
         served.branches("code-x")
 
 
+def test_sigterm_stops_the_wait_for_a_graph_to_load(fake_server, monkeypatch):
+    monkeypatch.setenv("LOADING_REPLIES", "1000")
+    monkeypatch.setattr(entrypoint, "GRAPH_LOAD_POLL_SECONDS", 0.01)
+    terminated = entrypoint.Termination(30)
+    with loopback(fake_server, terminated) as served:
+        terminated.note()
+        started = time.monotonic()
+        with pytest.raises(BootRefused, match="SIGTERM while waiting") as refused:
+            served.branches("code-x")
+        assert not isinstance(refused.value, entrypoint.ServerUnavailable)
+        assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not json",
+        b'["graph_unavailable"]',
+        b'{"code": "graph_unavailable", "disposition": null}',
+        b'{"code": "graph_unavailable", "disposition": {"action": "fail"}}',
+        b'{"code": "storage_error", "disposition": {"action": "retry"}}',
+    ],
+)
+def test_only_a_loading_graphs_503_is_retried(body):
+    assert not entrypoint._says_retry(503, body)
+
+
+def test_a_loading_graphs_503_is_retried():
+    body = b'{"code": "graph_unavailable", "disposition": {"action": "retry"}}'
+    assert entrypoint._says_retry(503, body)
+    assert not entrypoint._says_retry(500, body)
+
+
 def test_a_refused_token_refuses_rather_than_waiting_for_the_boot(fake_server):
     """A 4xx is a configuration error, not a pod that is down."""
     with loopback(fake_server, actor="svc-witan-admin") as served:

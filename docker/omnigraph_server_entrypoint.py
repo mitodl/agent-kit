@@ -201,9 +201,10 @@ LOOPBACK_START_SECONDS = 60
 # whose disposition says to retry. Production's boot on 2026-11-19 got one two
 # seconds after the loopback server served, for code-github-com-mitodl-agent-kit,
 # and refused to start on every restart. Such a request is retried for this
-# long, every GRAPH_LOAD_POLL_SECONDS. It stays well inside the boot's 135s
-# startupProbe budget (ol-infrastructure applications/omnigraph/data_tier.py
-# DEFAULT_BOOT_BUDGET_SECONDS), which the drop and the apply share.
+# long, every GRAPH_LOAD_POLL_SECONDS, until SIGTERM or a lost Lease. The
+# wait comes out of the boot's 135s startupProbe budget (ol-infrastructure
+# applications/omnigraph/data_tier.py DEFAULT_BOOT_BUDGET_SECONDS), which the
+# loopback start, the drop, the re-plan and the apply share.
 GRAPH_LOAD_SECONDS = 60
 GRAPH_LOAD_POLL_SECONDS = 1.0
 # The loopback server's own drain on SIGTERM (OMNIGRAPH_SHUTDOWN_GRACE_SECONDS).
@@ -1000,21 +1001,28 @@ def _says_retry(status: int, body: bytes) -> bool:
         reply = json.loads(body)
     except ValueError:
         return False
-    return (
-        isinstance(reply, dict)
-        and reply.get("code") == "graph_unavailable"
-        and reply.get("disposition", {}).get("action") == "retry"
-    )
+    if not isinstance(reply, dict) or reply.get("code") != "graph_unavailable":
+        return False
+    disposition = reply.get("disposition")
+    return isinstance(disposition, dict) and disposition.get("action") == "retry"
 
 
 class ServedGraphs:
     """A server's branch API: list and delete one graph's branches.
 
     :param base_url: the server's root URL, e.g. ``http://127.0.0.1:8080``.
+    :param stopping: says why to stop waiting for a graph to load (SIGTERM,
+        a lost Lease), or ``None`` to keep waiting.
     """
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        stopping: Callable[[], str | None] = lambda: None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self._stopping = stopping
         self._headers = {
             "Authorization": f"Bearer {token}",
             "Omnigraph-Http-Api": http_contract(),
@@ -1027,7 +1035,8 @@ class ServedGraphs:
 
         :raises ServerUnavailable: on a 5xx, on a graph still loading after
             GRAPH_LOAD_SECONDS, or when the server cannot be reached.
-        :raises BootRefused: on any other 4xx.
+        :raises BootRefused: on any other 4xx, or when ``stopping`` gives a
+            reason while the graph loads.
         """
         url = f"{self.base_url}{path}"
         deadline = time.monotonic() + GRAPH_LOAD_SECONDS
@@ -1041,6 +1050,9 @@ class ServedGraphs:
                     return {}
                 body = exc.read()
                 if _says_retry(exc.code, body) and time.monotonic() < deadline:
+                    if reason := self._stopping():
+                        msg = f"{reason} while waiting for {url} to load"
+                        raise BootRefused(msg) from exc
                     time.sleep(GRAPH_LOAD_POLL_SECONDS)
                     continue
                 msg = f"{method} {url}: HTTP {exc.code}: {body[:300]!r}"
@@ -1097,7 +1109,15 @@ def loopback_server(
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    served = ServedGraphs(f"http://127.0.0.1:{port}", view_drop_token(env))
+
+    def stopping() -> str | None:
+        if terminated.is_set():
+            return "SIGTERM"
+        if lease.lost():
+            return "lost the unlock Lease"
+        return None
+
+    served = ServedGraphs(f"http://127.0.0.1:{port}", view_drop_token(env), stopping)
     log(f"serving {source} on {served.base_url} to drop branch views")
     child = subprocess.Popen(
         [SERVER_BINARY, "--cluster", source, "--bind", f"127.0.0.1:{port}"],
