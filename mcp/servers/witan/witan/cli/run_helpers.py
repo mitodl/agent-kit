@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
@@ -392,17 +393,50 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def strip_session_env() -> None:
-    """Remove every agent-session id variable from this process's environment.
+@contextmanager
+def bare_session_env() -> Iterator[None]:
+    """Hide every agent-session id variable from this process while inside.
 
     A launcher is not an agent session. An id it inherited (a terminal or
     editor started inside one) would qualify the launch claim with that outer
     session, and the launched agent's renewal would be refused as someone
     else's. Bare, the claim is the launched agent's to renew (docs/adr/0012,
     "A launch claim is always bare").
+
+    The values come back on exit because the language server is long-lived:
+    every later call it makes still needs whatever session id it started with.
     """
-    for name in SESSION_ID_ENV_VARS:
-        os.environ.pop(name, None)
+    saved = {
+        name: os.environ.pop(name) for name in SESSION_ID_ENV_VARS if name in os.environ
+    }
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+def launch_env(cfg: Config) -> tuple[dict[str, str], list[str]]:
+    """A launch's ``env`` and ``unset_env``: what the agent's environment changes.
+
+    :param cfg: The config the launcher dispatched with.
+    :returns: The variables to set, and the names to remove before setting them.
+    :rtype: tuple[dict[str, str], list[str]]
+    """
+    unset_env = [*SESSION_ID_ENV_VARS, *_LOCATION_ENV_VARS]
+    env: dict[str, str] = {}
+    # Pinned so the agent talks to the graph the claim was taken in. The local
+    # store has no target name, and the agent's own matching from `cwd`
+    # reaches it once an inherited WITAN_TARGET is gone.
+    if cfg.target_name:
+        env["WITAN_TARGET"] = cfg.target_name
+    else:
+        unset_env.append("WITAN_TARGET")
+    return env, unset_env
+
+
+def agent_environ(env: dict[str, str], unset_env: Sequence[str]) -> dict[str, str]:
+    """This process's environment with ``unset_env`` removed and ``env`` set over it."""
+    return {k: v for k, v in os.environ.items() if k not in unset_env} | env
 
 
 def _launch_folder(
@@ -519,11 +553,10 @@ def build_launch_spec(
 
     claim_result = None
     if kind == "task" and claim:
-        strip_session_env()
         # No explicit assignee either: only a defaulted holder is one the
         # launched agent may renew as its own (`_own_claim`). No steal offer:
         # it would print to stdout, and `force` is how a launcher steals.
-        with prompts_off():
+        with bare_session_env(), prompts_off():
             res = _fn(server.task_claim)(slug=slug, force=force)
         if res is None:
             return _refusal(kind, slug, "not_found", f"No {kind} {slug!r}.")
@@ -555,15 +588,7 @@ def build_launch_spec(
 
     resolved_agent = agent or cfg.agent
     resolved_model = model or cfg.model
-    unset_env = [*SESSION_ID_ENV_VARS, *_LOCATION_ENV_VARS]
-    env: dict[str, str] = {}
-    # Pinned so the agent talks to the graph the claim was taken in. The local
-    # store has no target name, and the agent's own matching from `cwd`
-    # reaches it once an inherited WITAN_TARGET is gone.
-    if cfg.target_name:
-        env["WITAN_TARGET"] = cfg.target_name
-    else:
-        unset_env.append("WITAN_TARGET")
+    env, unset_env = launch_env(cfg)
     return LaunchSpec(
         version=LAUNCH_SPEC_VERSION,
         kind=kind,
@@ -597,9 +622,6 @@ def _deliver(spec: LaunchSpec | LaunchRefusal, cfg, *, emit_spec: bool) -> None:
         console.print(
             f"[cyan]Claimed {spec['slug']} (assignee={spec['claim']['assignee']}).[/cyan]"
         )
-    env = {k: v for k, v in os.environ.items() if k not in spec["unset_env"]} | spec[
-        "env"
-    ]
     _launch_agent(
         cfg,
         spec["agent"],
@@ -607,7 +629,7 @@ def _deliver(spec: LaunchSpec | LaunchRefusal, cfg, *, emit_spec: bool) -> None:
         spec["prompt"],
         False,
         cwd=spec["cwd"],
-        env=env,
+        env=agent_environ(spec["env"], spec["unset_env"]),
     )
 
 

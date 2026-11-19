@@ -69,7 +69,7 @@ def _task(repo=REPO):
 
 @pytest.fixture(autouse=True)
 def session_env(monkeypatch):
-    """Let monkeypatch restore what `strip_session_env` pops for the next test."""
+    """Start every test with no session id, whatever the developer's shell has."""
     for name in SESSION_ID_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
@@ -165,6 +165,18 @@ def test_the_session_env_is_stripped_before_the_claim(folders, monkeypatch):
     _spec(fake, folders=[here])
 
     assert fake.claims == [dict.fromkeys(SESSION_ID_ENV_VARS)]
+
+
+def test_the_session_env_is_back_after_the_claim(folders, monkeypatch):
+    """The language server is long-lived; its later calls still need its id."""
+    import os
+
+    here, _ = folders
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "lsp-session")
+
+    _spec(_Fake(task=_task(), claim=_CLAIMED), folders=[here])
+
+    assert os.environ["CLAUDE_SESSION_ID"] == "lsp-session"
 
 
 def test_no_workspace_is_refused_before_the_claim(folders):
@@ -369,6 +381,35 @@ def test_the_cli_launch_runs_the_spec_in_its_folder_and_env(folders, monkeypatch
     assert Path(kw["cwd"]) == here
     assert "CLAUDE_PROJECT_DIR" not in kw["env"]
     assert "WITAN_TARGET" not in kw["env"]
+
+
+def test_the_pickers_consolidated_launch_gets_the_launch_env(folders, monkeypatch):
+    """Claimed bare, so its agent must not inherit the outer session either."""
+    import os
+
+    from witan.cli import run_helpers, tasks
+
+    here, _ = folders
+
+    class Picker(_Fake):
+        def task_ready(self, **_kwargs):
+            return [_task(), {**_task(), "slug": "tk-b"}]
+
+    _cli(monkeypatch, Picker(claim=_CLAIMED), here)
+    monkeypatch.setattr(tasks, "_pick_items", lambda items, _render: items)
+    monkeypatch.setattr(tasks.Prompt, "ask", lambda *a, **kw: "1")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "outer")
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    launched = []
+    monkeypatch.setattr(tasks, "_launch_agent", lambda *a, **kw: launched.append(kw))
+    monkeypatch.setattr(run_helpers, "_launch_agent", lambda *a, **kw: None)
+
+    tasks.task_run()
+
+    (kw,) = launched
+    for name in ("CLAUDE_SESSION_ID", "WITAN_REPO", "WITAN_TARGET"):
+        assert name not in kw["env"]
+    assert os.environ["CLAUDE_SESSION_ID"] == "outer"
 
 
 # ── task_release's if_claimed_at fence ────────────────────────────────

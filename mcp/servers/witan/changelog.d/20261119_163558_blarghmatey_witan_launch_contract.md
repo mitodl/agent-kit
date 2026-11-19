@@ -16,13 +16,14 @@
 
 ### Changed
 
-- `witan task run` claims bare. It drops every agent-session id variable
+- `witan task run` claims bare. It hides every agent-session id variable
   (`CLAUDE_SESSION_ID`, `PI_SESSION_ID`, `CODEX_SESSION_ID`) from its own
-  environment before claiming, so run from inside an agent session it no
+  environment while claiming, so run from inside an agent session it no
   longer claims as that session; the launched agent's first renewal records
-  its own. The launched agent no longer inherits those variables,
-  `CLAUDE_PROJECT_DIR` or `WITAN_REPO`, and gets `WITAN_TARGET` pinned to the
-  target the claim was taken in (or unset, for the local store).
+  its own. The launched agent, including the one the picker's consolidated
+  mode starts, no longer inherits those variables, `CLAUDE_PROJECT_DIR` or
+  `WITAN_REPO`, and gets `WITAN_TARGET` pinned to the target the claim was
+  taken in (or unset, for the local store).
 - `witan task run` and `witan project run` refuse when the current directory
   is not a checkout of the task's repo (or one of the project's repos), before
   claiming. A task or project with no repo runs anywhere. `--dry-run` skips

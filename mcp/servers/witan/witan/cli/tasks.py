@@ -37,7 +37,9 @@ from .run_helpers import (
     _prompt_memories,
     _run_prompt,
     _run_task_slug,
-    strip_session_env,
+    agent_environ,
+    bare_session_env,
+    launch_env,
 )
 from .selected_target import selected_target
 
@@ -855,13 +857,13 @@ def task_run(
         claimable = list(selected)
         claims: dict[str, dict] = {}
         if claim and not dry_run:
-            strip_session_env()
             claimable = []
             for t in selected:
-                # No explicit assignee, and bare (the session env is gone): a
+                # No explicit assignee, and bare (the session env is hidden): a
                 # task one of this person's sessions holds reads as held, and
                 # the launched agent may renew the bare claim as its own.
-                res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
+                with bare_session_env():
+                    res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
                     claimable.append(t)
@@ -888,7 +890,16 @@ def task_run(
             ],
             "task",
         )
-        _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
+        # The same environment a launch spec gives its agent, so it neither
+        # inherits a session id nor a location override that outranks its cwd.
+        _launch_agent(
+            cfg,
+            resolved_agent,
+            resolved_model,
+            merged,
+            dry_run,
+            env=agent_environ(*launch_env(cfg)),
+        )
     else:
         for t in selected:
             console.print(f"\n[bold]── {t['slug']}: {t.get('title', '')} ──[/bold]")
