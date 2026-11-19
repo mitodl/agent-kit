@@ -426,3 +426,60 @@ def test_a_config_error_costs_one_folder_its_features(config, monkeypatch):
             assert [n.message for n in await session.open(home / "b.py")] == ["m note"]
 
     run(go())
+
+
+def test_a_store_change_after_anchoring_refuses_rather_than_rerouting(
+    config, monkeypatch
+):
+    """The anchor's store is already open. Re-resolving the anchor when a
+    folder is added would compare against wherever its target points now,
+    and accept a second store."""
+    work, home = config
+    monkeypatch.chdir(work)
+    plugin = Recorder("p", {"work": Route(key="/stores/a", local=True)})
+    host = Host({"p": plugin})
+    host.set_folders([resolve_folder(work.as_uri(), work, None)])
+    assert host.context("p", host.folders[work.as_uri()]) is not None
+    plugin.routes = {
+        "work": Route(key="/stores/b", local=True),
+        "personal": Route(key="/stores/b", local=True),
+    }
+    host.change_folders([resolve_folder(home.as_uri(), home, None)], ())
+    notes = host.diagnostics(home / "x.py", (home / "x.py").as_uri())
+    assert len(notes) == 1
+    assert "/stores/b, not /stores/a" in notes[0].message
+    host.close()
+
+
+def test_each_plugin_anchors_its_own_first_routable_folder(config, monkeypatch):
+    """One plugin's config error in the first folder must not cost a healthy
+    second folder that plugin's features."""
+    work, home = config
+    monkeypatch.chdir(work)
+    routed: list[str | None] = []
+
+    class BrokenAtWork(Recorder):
+        def route(self, folder):
+            routed.append(folder.target)
+            if folder.target == "work":
+                raise ValueError("bad code config")
+            return Route(key="/stores/personal-code", local=True)
+
+    host = Host(
+        {
+            "a": Recorder(
+                "a",
+                {
+                    "work": Route(key="/stores/shared", local=True),
+                    "personal": Route(key="/stores/shared", local=True),
+                },
+            ),
+            "b": BrokenAtWork("b"),
+        }
+    )
+    host.set_folders([resolve_folder(p.as_uri(), p, None) for p in (work, home)])
+    notes = host.diagnostics(home / "x.py", (home / "x.py").as_uri())
+    assert [n.message for n in notes] == ["a note", "b note"]
+    # Each folder routed once per plugin: the anchor is not routed again.
+    assert routed == ["work", "personal"]
+    host.close()

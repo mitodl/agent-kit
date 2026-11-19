@@ -141,7 +141,11 @@ class Host:
         )
         self._routes: dict[tuple[str, str], Route | _Refused | _Unroutable] = {}
         self._providers: dict[tuple[str, Hashable], BoundTools] = {}
-        self._local_anchor: Folder | None = None
+        self._anchors: dict[str, tuple[Folder, Route]] = {}
+        """Each plugin's local store: the first folder that routed to one,
+        and that route. Kept for the life of the process, because the store
+        stays open after its target changes or its folder is removed."""
+        self._cwd_anchor: Folder | None = None
         self._cwd_pinned = False
 
     async def run(self, fn: Callable[..., T], /, *args: Any) -> T:
@@ -204,26 +208,27 @@ class Host:
     def _route(self, name: str, folder: Folder) -> Route | _Refused | _Unroutable:
         """The plugin's route for ``folder``, or why this process cannot serve it.
 
-        One process holds one local store, because both servers configure
-        theirs at import. The first folder routed to a local store anchors it,
-        and a folder whose local route differs gets no features.
+        One process holds one local store per plugin, because both servers
+        configure theirs at import. The first folder a plugin routes to a local
+        store anchors that plugin's store, and a later folder whose local route
+        differs gets none of its features. Later folders are compared with the
+        anchor's route as it was resolved, not as its target reads now: that is
+        the store already open.
         """
         key = (name, folder.uri)
         if key in self._routes:
             return self._routes[key]
         try:
             route = self.plugins[name].route(folder)
-            if route.local:
-                if self._local_anchor is None:
-                    self._local_anchor = folder
-                anchor = self._local_anchor
-                anchor_route = (
-                    route if anchor is folder else self.plugins[name].route(anchor)
-                )
-                if anchor_route != route:
-                    route = _Refused(route, anchor, anchor_route)
         except ValueError as exc:
             route = _Unroutable(str(exc))
+        else:
+            if route.local:
+                anchor, anchor_route = self._anchors.setdefault(name, (folder, route))
+                if self._cwd_anchor is None:
+                    self._cwd_anchor = anchor
+                if anchor_route.key != route.key:
+                    route = _Refused(route, anchor, anchor_route)
         self._routes[key] = route
         return route
 
@@ -236,8 +241,10 @@ class Host:
             if route.local and not self._cwd_pinned:
                 # The servers resolve their local store from the cwd when their
                 # module is imported, which may happen on any later call. Pin
-                # it to the anchor folder first, so that is the store they open.
-                os.chdir(self._local_anchor.path)
+                # it to the first anchored folder, so that is the store they
+                # open. witan-code points its server at its own anchor's config
+                # in open(), so its anchor may differ.
+                os.chdir(self._cwd_anchor.path)
                 self._cwd_pinned = True
             plugin = self.plugins[name]
             self._providers[key] = BoundTools(plugin.open(route, folder), plugin.tools)
