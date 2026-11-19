@@ -167,7 +167,7 @@ override layer.
 | `ExternalDependency` | `slug` | An observed peer that matches nothing declared. Visible as unreconciled, never guessed into an existing node. |
 | `Sighting` | `slug` | What one collector saw of one object in one scope ([10.2](#102-per-source-sightings-projected-objects)). The only rows a collector's output becomes directly. |
 | `SyncRun` | `slug` | One collector run over one scope: `collector`, `scope`, `status` (`running`, `complete`, `failed`), `started_at`, `finished_at`, `watermark`, counts. Written `running` first and set `complete` last. |
-| `SyncLease` | `slug` | The single-run lease ([10.1](#101-one-writer-one-run-at-a-time)). |
+| `SyncLease` | `slug` | The single-run lease ([10.1](#101-one-writer-one-run-at-a-time)), with an `epoch` that increments on every takeover. |
 
 Common properties on `Resource` (and, where they apply, on the others):
 `environment`, `presence` (`declared`, `observed`, `both`), `first_seen`,
@@ -211,6 +211,17 @@ duplicate.
 
 Edges are safe here where they were not in the bridge because witan-infra has
 exactly one writer (the scheduled reconciler), not many concurrent indexers.
+
+Keying an edge by its endpoints alone would lose the environment of an
+observed relation, because a `Service` is environment-independent: A calling B
+in QA and A calling B in production would be one edge. So `ObsCallsService`
+and `ObsUsesResource` carry `environments`, the sorted set of environments the
+relation was observed in (derived from the span or metric's environment
+attribute through the [environment rules](#7-environment-derivation-is-a-config-rule),
+`unknown` when none resolves), and the per-environment `first_seen`/`last_seen`
+stay on the observing collector's `Sighting` rows. Every read that takes an
+`environment` applies it to these edges, in Python after the read where the
+query language cannot filter on a set.
 
 ### 5.5 What is deliberately not modelled
 
@@ -479,14 +490,25 @@ table:
 | `kubernetes:*` | `apiVersion`, `kind`, `metadata.name`, `metadata.namespace`, `metadata.labels`, annotation `eks.amazonaws.com/role-arn` |
 | `kubernetes:apps/v1:*`, `batch/v1:*` | container `image`, `serviceAccountName`; env as name plus `value_present`, `valueFrom` refs as `value_ref`; secret and configMap volume names |
 | `kubernetes:core/v1:Service` | `spec.type`, `spec.ports`, `spec.selector` |
+| `kubernetes:networking.k8s.io/v1:Ingress` | `spec.ingressClassName`; per rule `host`, per path `path`, `pathType` and backend service `name` and `port`; `spec.tls[].hosts` and `secretName` as a reference |
+| `kubernetes:apisix.apache.org/*:ApisixRoute` | per route `name`, `match.hosts`, `match.paths`, `match.methods`, and `backends[].serviceName`/`servicePort`. Never `plugins` or `authentication`, which can carry credentials |
 | `kubernetes:core/v1:Secret`, `ConfigMap` | name, namespace, data key names with `value_present` |
 | `kubernetes:helm.sh/v3:Release` | `name`, `namespace`, `chart`, `version`, `repositoryOpts.repo`, `status.status` |
 | Vault secret CRDs, `vault:generic/secret`, `vault:kv/*` | mount and path as `value_ref`; `value_present` |
 | `vault:database/secretBackendConnection` | `name`, `backend`, `pluginName`, `allowedRoles`; host/port/db only when the URL userinfo is a `{{...}}` template |
 | `pulumi:pulumi:StackReference` | `name` only, as a `StackDependsOn` edge |
-| `pulumi:pulumi:Stack` | output key names with `value_present`; values only for `*_arn`, `*_id`, `*_name`, `*_endpoint`, `*_address`, `*_port`, `*_region`, `*_bucket` that pass the shape guard |
+| `pulumi:pulumi:Stack` | output key names with `value_present` only by default. A value is kept only for an exact, reviewed (project, output key) pair in the org's config, with a validator for that field; a key's suffix never makes its value safe (an `*_endpoint` can carry credentials in a query string) |
 | `pulumi:providers:*` | `version`; AWS `region` and `assumeRole.roleArn`; Kubernetes cluster `server` URL |
 | anything else | skeleton only, counted as `collector_unlisted_type` in coverage |
+
+Tags are kept on any type that carries them (`tags`, `tagsAll`), filtered to
+the tag keys the attribute-mapping config names (MITODL: `Application`,
+`Environment`), so the `tag` rung of the attribution ladder and the environment
+evidence rules have their input. Other tag keys are dropped.
+
+The Ingress and ApisixRoute rows, like any row, go in only after a scan of the
+current corpus confirms the listed fields are identifiers there; they are what
+lets IaC state produce `RoutesTo` edges and `public_surface`.
 
 Extending the table is a reviewed change, made only after a scan of the current
 corpus shows the new field is an identifier.
@@ -587,17 +609,38 @@ renewed while the run lasts. The scheduled CronJob, `witan infra sync` and the
 
 The lease is not enough on its own: ADR 0003 itself leaves a window in which
 two claimants can both believe they hold a claim, and a run that stalls past
-`expires_at` would keep writing after another run took over. So the destructive
-write is fenced as well. Immediately before its deletes, a run re-reads its
-lease with `read_with_commit`, confirms it still holds it, and issues the
-deletes through `change_many(if_commit=<that commit>)`, the precondition task
-writes use (`_fence_on`, `witan/server.py:1216`). Any write by another run in
-between moves the head, the deletes are refused with nothing written
-(`OmnigraphConflict`), and the run aborts. `change_many` refuses `if_commit` on
-a chunked batch, so if the deletes need chunking each chunk is fenced on the
-commit the previous chunk produced. Merges go through `load`, which takes no
-precondition; they are idempotent upserts, so a stale run's merge can at worst
-re-add rows that the next run's diff removes.
+`expires_at` would keep writing after another run took over. So writes are
+guarded in two ways.
+
+Deletes are fenced. Immediately before them, a run re-reads its lease with
+`read_with_commit`, confirms it still holds it, and issues the deletes as a
+mutation with `if_commit=<that commit>`, the precondition task writes use
+(`_fence_on`, `witan/server.py:1216`). Any write by another run in between
+moves the head, the deletes are refused with nothing written
+(`OmnigraphConflict`), and the run aborts. Setting `SyncRun` rows to
+`complete` is a mutation too and is fenced the same way, so a run that lost its
+lease never records a complete run. Today `change_many` returns no commit id
+and refuses `if_commit` on a chunked batch, so chunked deletes cannot yet be
+fenced chunk by chunk. Phase 2 makes `change_many` return the commit it
+produced over HTTP, as `change` already does, and fences each chunk on the
+previous chunk's commit. The local CLI path returns no commit id, but a local
+store is single-host and its writers are already excluded by the store flock.
+
+Merges cannot be fenced, because `load` takes no precondition, and a stale
+run's merge is not harmless: run A computes a sighting and stalls, run B takes
+the lease, writes a newer sighting and completes, and A's late merge then
+overwrites B's sighting. So sightings carry a generation. The lease row holds
+an `epoch` that increments on every takeover; a run stamps every `Sighting` it
+writes with its epoch and rewrites every sighting of each scope it collects
+(the diff applies only to projected rows), and each `complete` `SyncRun`
+records its epoch. The invariant a run checks in step 2 of
+[10.3](#103-a-run-is-a-diff-over-a-full-read): every sighting of a scope
+carries the epoch of that scope's latest complete `SyncRun` (latest by epoch).
+A scope that fails it was written by a run that lost its lease, so it is
+re-collected, never trusted. A run also re-reads the lease before each merge
+batch and stops when it has lost it, which shortens the window but does not
+close it. Projected rows a stale merge overwrote are corrected by the next
+run's diff, so a lost-lease run can leave projected data at most one run stale.
 
 Collectors run sequentially within a run, with parallelism inside a collector;
 N concurrent writers on one Lance store is contention plus fragmentation.
@@ -674,8 +717,9 @@ computes the desired graph in Python and writes the difference:
    result is the desired state of the projected types (`Resource`, `Service`,
    `Zone`, `InfraBinding`, `Alias`, `UnresolvedIdentity`,
    `ExternalDependency`, their edges) and of `Sighting`.
-6. Write, merge first and delete second: `load --mode merge` every new or
-   changed row, then the fenced deletes ([10.1](#101-one-writer-one-run-at-a-time))
+6. Write, merge first and delete second: `load --mode merge` every sighting of
+   the collected scopes (all of them, stamped with the run's epoch) and every
+   new or changed projected row, then the fenced deletes ([10.1](#101-one-writer-one-run-at-a-time))
    of every row of those types that is in the current graph and not in the
    desired state, by key (`slug` for nodes, `edge_key` for edges).
    `SyncRun` and `SyncLease` are bookkeeping, never part of the diff; `SyncRun`
@@ -740,6 +784,10 @@ sighting holds it.
 - Two runs started together: the second fails to take the lease and exits
   without writing. A run whose lease was taken over mid-run has its deletes
   refused and aborts.
+- The takeover ordering end to end: run A stalls after collecting, run B takes
+  the lease, writes and completes, A's merge lands late. The next run detects
+  the epoch mismatch, re-collects the scope, and B's data is what readers end
+  up with.
 - A stack that drops a resource and then stops changing still has the
   resource's sighting dropped after `reap_min_cycles` runs and
   `retention_days`, without the stack being re-collected.
@@ -766,8 +814,11 @@ type and terminates on cycles). So:
   `witan_core`'s `_read_rows` strips the variable prefix and silently collapses
   same-named columns;
 - an unbounded walk that alternates edge types (service to resource to
-  dependent resource to owning service, repeatedly) uses `export` of the
-  relevant types plus a Python BFS over the denormalised fields.
+  dependent resource to owning service, repeatedly) fetches the node and edge
+  columns it needs with ordinary `read` queries under the caller's token,
+  pinned to one snapshot, then runs a Python BFS over the denormalised fields.
+  It does not use `export`, which [Authorization](#14-authorization) withholds
+  from readers.
 
 ### 11.2 The batch/live rule
 
@@ -803,7 +854,7 @@ Five tools, no thin wrappers (see the surface-refinement spec's
 |---|---|
 | `infra_find(query, kind, environment, repo, evidence, limit)` | locate and browse; returns a dict so `coverage` cannot be dropped |
 | `infra_component(component_id, environment, evidence)` | one read: workloads, routes, 1-hop dependencies, config key names, declaring IaC file and line, and a `runtime` block (null until Phase 7) |
-| `infra_impact(component_id \| repo, direction, max_depth, kinds, evidence)` | transitive walk plus `public_surface`, the externally reachable routes reached; named to rhyme with `code_impact`; `repo` as a root is a one-call shortcut |
+| `infra_impact(component_id \| repo, environment, direction, max_depth, kinds, evidence)` | transitive walk plus `public_surface`, the externally reachable routes reached; named to rhyme with `code_impact`; `repo` as a root is a one-call shortcut. `environment` scopes every hop and the coverage block, because both roots (a service, a repo) span environments; omitted, results are grouped by environment rather than mixed |
 | `infra_coverage(environment)` | what is collected, from where, how fresh, and what is missing; the analogue of `code_indexed_repos` |
 | `infra_sync(source, environment, force)` | `@mcp.tool(task=TASKS_ENABLED)`, like `code_reindex` |
 
@@ -875,9 +926,12 @@ witan-code reaches witan-infra to fill it is the first [open decision](#16-open-
 `task`, `topic`, `contract` and `memory` seeds, implemented entirely in Layer 1: it
 resolves `Topic{kind: "entity", name: <component_id>}` and walks the topic's
 memories, like the existing `topic` seed. `entity` is already an accepted topic
-kind (`TopicKind`, `witan/server.py:634`), and topic resolution splits on the
-last colon (`_resolve_topic`, `:1415`), so colons inside a component id are
-safe. Memories attach through the existing `Tagged` edge. Topics are anchored
+kind (`TopicKind`, `witan/server.py:634`). The seed passes the spec
+`<component_id>:entity` (e.g. `service:mit-learn:entity`), never the bare
+component id: `_resolve_topic` (`:1415`) splits on the last colon and requires
+the suffix to be a topic kind, so the full spec parses as name
+`service:mit-learn`, kind `entity`, while a bare `service:mit-learn` would parse
+as name `service`, kind `mit-learn` and resolve nothing. Memories attach through the existing `Tagged` edge. Topics are anchored
 only at environment-independent ids (`service:…`, `datastore:…`), never
 `…@production`, to keep topic cardinality low.
 
