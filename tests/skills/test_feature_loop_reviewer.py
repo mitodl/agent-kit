@@ -31,8 +31,8 @@ reviewer = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(reviewer)
 
 # One stub serves all three CLIs; it branches on its own file name and
-# STUB_MODE (ok, badtools, readonly, badentry, noinit, nomcp, gone, fail, hang,
-# closeout, reconnect, turnfailed, errorlast, baditem).
+# STUB_MODE (ok, noinit, nomcp, gone, fail, hang, closeout, reconnect,
+# turnfailed, errorlast, baditem). STUB_TOOLS (JSON) overrides claude's tools.
 STUB = r"""
 import json, os, sys, time, uuid
 name = os.path.basename(sys.argv[0])
@@ -68,18 +68,12 @@ if mode == "closeout":
     time.sleep(60)
 if name == "claude":
     sid = flag("--session-id") or flag("--resume")
-    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": ["Glob", "Grep", "Read"], "mcp_servers": [], "model": os.environ.get("STUB_MODEL") or "stub-model"}
-    if mode == "badtools":
-        init["tools"] = ["Bash", "Glob", "Grep", "Read"]
-    if mode == "readonly":
-        init["tools"] = ["Read"]
-    if mode == "badentry":
-        init["tools"] = [["Read"], "Glob", "Grep"]
+    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": json.loads(os.environ.get("STUB_TOOLS") or '["Glob", "Grep", "Read"]'), "mcp_servers": [], "model": os.environ.get("STUB_MODEL") or "stub-model"}
     if mode == "nomcp":
         del init["mcp_servers"]
     if mode != "noinit":
         out(init)
-    if mode in ("hang", "badentry"):
+    if mode == "hang":
         time.sleep(60)
     out({"type": "result", "subtype": "success", "is_error": False, "result": reply})
 elif name == "codex":
@@ -184,7 +178,7 @@ class ReviewerTest(unittest.TestCase):
             check=False,
         )
 
-    def start(self, **env: str) -> subprocess.CompletedProcess:
+    def start(self, *extra: str, **env: str) -> subprocess.CompletedProcess:
         return self.run_script(
             "start",
             "--caller",
@@ -193,6 +187,7 @@ class ReviewerTest(unittest.TestCase):
             str(self.topic),
             "--prompt-file",
             str(self.prompt),
+            *extra,
             **env,
         )
 
@@ -236,9 +231,10 @@ class ReviewerTest(unittest.TestCase):
             ("GPT", "claude:opus-test"),
             ("glm", "pi:prov/model-test"),
         ]:
-            out = self.run_script("show", "--caller", caller)
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual(out.stdout.splitlines()[0], f"reviewer: {expected}")
+            with self.subTest(caller=caller):
+                out = self.run_script("show", "--caller", caller)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout.splitlines()[0], f"reviewer: {expected}")
 
     def test_no_matching_line_and_no_catch_all_exits_2(self) -> None:
         self.write_config("claude codex:gpt-test\n")
@@ -258,11 +254,12 @@ class ReviewerTest(unittest.TestCase):
             "claude claude:claude-sonnet-5-5\ngpt pi:openai-codex/gpt-m\n"
         )
         for caller in ("claude", "gpt"):
-            out = self.run_script(
-                "show", "--caller", caller, "--caller-model", "other-model"
-            )
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertNotIn("warning", out.stderr)
+            with self.subTest(caller=caller):
+                out = self.run_script(
+                    "show", "--caller", caller, "--caller-model", "other-model"
+                )
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertNotIn("warning", out.stderr)
 
     def test_warns_only_when_the_reviewer_is_the_callers_exact_model(self) -> None:
         for caller_model, reviewer_value, warns in [
@@ -274,51 +271,41 @@ class ReviewerTest(unittest.TestCase):
             ("gpt-6.1-sol", "codex:gpt-6-luna", False),
             (None, "claude:claude-opus-5-5", False),
         ]:
-            args = ["show", "--caller", "any"]
-            if caller_model:
-                args += ["--caller-model", caller_model]
-            out = self.run_script(*args, FEATURE_LOOP_REVIEWER=reviewer_value)
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual(
-                "same model as the main session" in out.stderr,
-                warns,
-                (caller_model, reviewer_value, out.stderr),
-            )
-
-    def start_as(self, caller_model: str, **env: str) -> subprocess.CompletedProcess:
-        return self.run_script(
-            "start",
-            "--caller",
-            "any",
-            "--caller-model",
-            caller_model,
-            "--dir",
-            str(self.topic),
-            "--prompt-file",
-            str(self.prompt),
-            **env,
-        )
+            with self.subTest(caller_model=caller_model, reviewer=reviewer_value):
+                args = ["show", "--caller", "any"]
+                if caller_model:
+                    args += ["--caller-model", caller_model]
+                out = self.run_script(*args, FEATURE_LOOP_REVIEWER=reviewer_value)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(
+                    "same model as the main session" in out.stderr, warns, out.stderr
+                )
 
     def test_same_model_reviewer_warns_once_and_still_runs(self) -> None:
-        for value, stub_model in [
-            ("codex:gpt-6.1-sol", ""),
-            ("claude:claude-opus-5-5", "claude-opus-5-5"),
+        for caller_model, value, stub_model in [
+            ("gpt-6.1-sol", "codex:gpt-6.1-sol", ""),
+            ("claude-opus-5-5", "claude:claude-opus-5-5", "claude-opus-5-5"),
+            # An alias is checked against the model claude reports at start.
+            ("claude-opus-5-5", "claude:opus", "claude-opus-5-5"),
         ]:
-            out = self.start_as(
-                "gpt-6.1-sol" if value.startswith("codex") else "claude-opus-5-5",
-                FEATURE_LOOP_REVIEWER=value,
-                STUB_MODEL=stub_model,
-            )
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual(out.stderr.count("same model as the main session"), 1)
-            self.assertIn("reviewer-reply: ", out.stdout)
+            with self.subTest(value=value):
+                out = self.start(
+                    "--caller-model",
+                    caller_model,
+                    FEATURE_LOOP_REVIEWER=value,
+                    STUB_MODEL=stub_model,
+                )
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stderr.count("same model as the main session"), 1)
+                self.assertIn("reviewer-reply: ", out.stdout)
 
-    def test_claude_alias_warns_once_resolved_to_the_callers_model(self) -> None:
-        env = {"FEATURE_LOOP_REVIEWER": "claude:opus"}
-        out = self.start_as("claude-opus-5-5", STUB_MODEL="claude-opus-5-5", **env)
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stderr.count("same model as the main session"), 1)
-        out = self.start_as("claude-opus-5-5", STUB_MODEL="claude-sonnet-5-5", **env)
+    def test_claude_alias_resolving_to_another_model_does_not_warn(self) -> None:
+        out = self.start(
+            "--caller-model",
+            "claude-opus-5-5",
+            FEATURE_LOOP_REVIEWER="claude:opus",
+            STUB_MODEL="claude-sonnet-5-5",
+        )
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertNotIn("warning", out.stderr)
 
@@ -331,9 +318,10 @@ class ReviewerTest(unittest.TestCase):
             "claude codex:a extra\n",
             "claude codex:a\nclaude claude:b\n",
         ]:
-            self.write_config(text)
-            out = self.run_script("show", "--caller", "claude")
-            self.assertEqual(out.returncode, 2, text)
+            with self.subTest(config=text):
+                self.write_config(text)
+                out = self.run_script("show", "--caller", "claude")
+                self.assertEqual(out.returncode, 2)
 
     def test_show_runs_nothing(self) -> None:
         self.write_config()
@@ -352,18 +340,19 @@ class ReviewerTest(unittest.TestCase):
         }
         models = {"codex": "m", "claude": "m", "pi": "p/m"}
         for backend, model in models.items():
-            flags = reviewer.restriction_flags(backend, model, topic)
-            for flag in required[backend]:
-                self.assertIn(flag, flags, backend)
-            for argv in (
-                reviewer.start_argv(backend, model, topic, "id"),
-                reviewer.resume_argv(backend, model, topic, "id", "/t/f.jsonl"),
-            ):
-                n = len(flags)
-                self.assertTrue(
-                    any(argv[i : i + n] == flags for i in range(len(argv))),
-                    f"{backend}: {argv} lacks {flags}",
-                )
+            with self.subTest(backend=backend):
+                flags = reviewer.restriction_flags(backend, model, topic)
+                for flag in required[backend]:
+                    self.assertIn(flag, flags)
+                for argv in (
+                    reviewer.start_argv(backend, model, topic, "id"),
+                    reviewer.resume_argv(backend, model, topic, "id", "/t/f.jsonl"),
+                ):
+                    n = len(flags)
+                    self.assertTrue(
+                        any(argv[i : i + n] == flags for i in range(len(argv))),
+                        f"{argv} lacks {flags}",
+                    )
         claude = reviewer.restriction_flags("claude", "m", topic)
         self.assertEqual(claude[claude.index("--tools") + 1], "Read,Grep,Glob")
 
@@ -374,10 +363,11 @@ class ReviewerTest(unittest.TestCase):
         for call, expected in zip(
             self.calls("claude"), ["/", str(self.topic.resolve())]
         ):
-            argv = call["argv"]
-            self.assertIn("--restricted", argv)
-            self.assertEqual(argv.count("--add-dir"), 1)
-            self.assertEqual(argv[argv.index("--add-dir") + 1], expected)
+            with self.subTest(expected=expected):
+                argv = call["argv"]
+                self.assertIn("--restricted", argv)
+                self.assertEqual(argv.count("--add-dir"), 1)
+                self.assertEqual(argv[argv.index("--add-dir") + 1], expected)
 
     def test_token_round_trip_and_garbage(self) -> None:
         token = reviewer.encode_token("pi", "openrouter/x:high", "abc-123")
@@ -392,7 +382,8 @@ class ReviewerTest(unittest.TestCase):
             reviewer.encode_token("codex", "m", "--last"),
             reviewer.encode_token("codex", "m", "abc\n"),
         ]:
-            self.assertEqual(self.resume(bad).returncode, 2, bad)
+            with self.subTest(token=bad):
+                self.assertEqual(self.resume(bad).returncode, 2)
 
     # --- runs -----------------------------------------------------------
 
@@ -461,91 +452,72 @@ class ReviewerTest(unittest.TestCase):
         sessions.mkdir(parents=True)
         (sessions / "x_pid-1.jsonl").write_text("{}\n")
         for backend, model in [("claude", "m"), ("codex", "m"), ("pi", "p/m")]:
-            token = reviewer.encode_token(backend, model, "pid-1")
-            out = self.resume(token, STUB_MODE="gone")
-            self.assertEqual(out.returncode, 3, f"{backend}: {out.stderr}")
+            with self.subTest(backend=backend):
+                token = reviewer.encode_token(backend, model, "pid-1")
+                out = self.resume(token, STUB_MODE="gone")
+                self.assertEqual(out.returncode, 3, out.stderr)
 
-    def test_claude_with_extra_tools_is_killed(self) -> None:
-        out = self.start(FEATURE_LOOP_REVIEWER="claude:m", STUB_MODE="badtools")
-        self.assertEqual(out.returncode, 1)
-        self.assertIn("'Bash'", out.stderr)
-        self.assertEqual(list(self.topic.glob("reply-*")), [])
+    def test_claude_bad_start_is_rejected(self) -> None:
+        for name, env, message in [
+            (
+                "extra tool",
+                {"STUB_TOOLS": '["Bash", "Glob", "Grep", "Read"]'},
+                "'Bash'",
+            ),
+            # claude 2.1.322 had no Grep/Glob and reported only Read.
+            ("missing tool", {"STUB_TOOLS": '["Read"]'}, "started with tools ['Read']"),
+            ("no init event", {"STUB_MODE": "noinit"}, "never started"),
+            ("no MCP field", {"STUB_MODE": "nomcp"}, "MCP servers None"),
+        ]:
+            with self.subTest(name):
+                out = self.start(FEATURE_LOOP_REVIEWER="claude:m", **env)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(message, out.stderr)
+                self.assertEqual(list(self.topic.glob("reply-*")), [])
 
-    def test_claude_missing_a_requested_tool_is_rejected(self) -> None:
-        # claude 2.1.322 had no Grep/Glob and reported only Read.
-        out = self.start(FEATURE_LOOP_REVIEWER="claude:m", STUB_MODE="readonly")
-        self.assertEqual(out.returncode, 1, out.stdout)
-        self.assertIn("started with tools ['Read']", out.stderr)
-        self.assertEqual(list(self.topic.glob("reply-*")), [])
-
-    def test_claude_malformed_tool_entry_kills_the_reviewer_at_once(self) -> None:
-        pidfile = self.root / "pid"
-        out = self.run_script(
-            "start",
-            "--caller",
-            "x",
-            "--dir",
-            str(self.topic),
-            "--prompt-file",
-            str(self.prompt),
-            "--timeout",
-            "20",
-            FEATURE_LOOP_REVIEWER="claude:m",
-            STUB_MODE="badentry",
-            STUB_PIDFILE=str(pidfile),
-        )
+    def start_until_killed(
+        self, timeout: str, pidfile: Path, **env: str
+    ) -> tuple[str, float]:
+        """Run a start whose reviewer must be killed; return stderr and seconds."""
+        began = time.monotonic()
+        out = self.start("--timeout", timeout, STUB_PIDFILE=str(pidfile), **env)
+        elapsed = time.monotonic() - began
         self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("started with tools", out.stderr)
-        self.assertNotIn("did not finish", out.stderr)
-        self.assertTrue(_wait_dead(int(pidfile.read_text())))
-
-    def test_malformed_event_kills_the_reviewer_at_once(self) -> None:
-        pidfile = self.root / "pid"
-        out = self.run_script(
-            "start",
-            "--caller",
-            "x",
-            "--dir",
-            str(self.topic),
-            "--prompt-file",
-            str(self.prompt),
-            "--timeout",
-            "20",
-            FEATURE_LOOP_REVIEWER="codex:m",
-            STUB_MODE="baditem",
-            STUB_PIDFILE=str(pidfile),
-        )
-        self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("could not read the reviewer's output", out.stderr)
         self.assertNotIn("Traceback", out.stderr)
-        self.assertNotIn("did not finish", out.stderr)
         self.assertTrue(_wait_dead(int(pidfile.read_text())))
+        return out.stderr, elapsed
 
-    def test_claude_restriction_check_fails_closed(self) -> None:
-        for mode in ("noinit", "nomcp"):
-            out = self.start(FEATURE_LOOP_REVIEWER="claude:m", STUB_MODE=mode)
-            self.assertEqual(out.returncode, 1, f"{mode}: {out.stdout}")
-            self.assertEqual(list(self.topic.glob("reply-*")), [], mode)
+    def test_unreadable_output_kills_the_reviewer_at_once(self) -> None:
+        for backend, env in [
+            # A tool list set() cannot hold, and an item that is not an object.
+            (
+                "claude",
+                {"STUB_MODE": "hang", "STUB_TOOLS": '[["Read"], "Glob", "Grep"]'},
+            ),
+            ("codex", {"STUB_MODE": "baditem"}),
+        ]:
+            with self.subTest(backend=backend):
+                stderr, elapsed = self.start_until_killed(
+                    "20",
+                    self.root / f"pid-{backend}",
+                    FEATURE_LOOP_REVIEWER=f"{backend}:m",
+                    **env,
+                )
+                self.assertIn("could not read the reviewer's output", stderr)
+                self.assertNotIn("did not finish", stderr)
+                self.assertLess(elapsed, 10, "killed by the timeout, not at once")
 
-    def test_timeout_covers_a_cli_that_closed_stdout(self) -> None:
-        pidfile = self.root / "pid"
-        out = self.run_script(
-            "start",
-            "--caller",
-            "x",
-            "--dir",
-            str(self.topic),
-            "--prompt-file",
-            str(self.prompt),
-            "--timeout",
-            "1",
-            FEATURE_LOOP_REVIEWER="codex:m",
-            STUB_MODE="closeout",
-            STUB_PIDFILE=str(pidfile),
-        )
-        self.assertEqual(out.returncode, 1)
-        self.assertIn("did not finish", out.stderr)
-        self.assertTrue(_wait_dead(int(pidfile.read_text())))
+    def test_timeout_kills_the_reviewer(self) -> None:
+        # A CLI that hangs, and one that closed stdout and then hangs.
+        for backend, mode in [("claude", "hang"), ("codex", "closeout")]:
+            with self.subTest(backend=backend):
+                stderr, _ = self.start_until_killed(
+                    "1",
+                    self.root / f"pid-{backend}",
+                    FEATURE_LOOP_REVIEWER=f"{backend}:m",
+                    STUB_MODE=mode,
+                )
+                self.assertIn("did not finish", stderr)
 
     def test_codex_reconnect_before_a_completed_turn_is_not_a_failure(self) -> None:
         out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE="reconnect")
@@ -553,10 +525,11 @@ class ReviewerTest(unittest.TestCase):
 
     def test_codex_error_without_a_completed_turn_fails(self) -> None:
         for mode in ("turnfailed", "errorlast"):
-            out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE=mode)
-            self.assertEqual(out.returncode, 1, mode)
-            self.assertIn("stream ended", out.stderr)
-            self.assertNotIn("LGTM", out.stdout)
+            with self.subTest(mode=mode):
+                out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE=mode)
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("stream ended", out.stderr)
+                self.assertNotIn("LGTM", out.stdout)
 
     def test_tilde_paths_expand_to_home(self) -> None:
         home = self.root / "home"
@@ -597,26 +570,6 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("escalated permissions", out.stderr)
         self.assertEqual(self.calls("claude"), [])
-
-    def test_timeout_kills_the_reviewer(self) -> None:
-        pidfile = self.root / "pid"
-        out = self.run_script(
-            "start",
-            "--caller",
-            "x",
-            "--dir",
-            str(self.topic),
-            "--prompt-file",
-            str(self.prompt),
-            "--timeout",
-            "1",
-            FEATURE_LOOP_REVIEWER="claude:m",
-            STUB_MODE="hang",
-            STUB_PIDFILE=str(pidfile),
-        )
-        self.assertEqual(out.returncode, 1)
-        self.assertIn("did not finish", out.stderr)
-        self.assertTrue(_wait_dead(int(pidfile.read_text())))
 
     def _hanging_resume(
         self, token: str, pidfile: Path

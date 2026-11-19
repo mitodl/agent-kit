@@ -2,35 +2,16 @@
 """Start or resume a read-only reviewer through the codex, claude or pi CLI.
 
 The feature-loop skill calls this for its plan and code reviews. The reviewer
-is picked from ``$XDG_CONFIG_HOME/feature-loop/reviewers`` (one
-``<caller family> <backend:model>`` per line, ``*`` as the catch-all) or from
-``FEATURE_LOOP_REVIEWER``. Nothing is shipped as a default, so code only goes
-to a provider the user chose. Any reviewer is allowed, the caller's own
-provider included; with ``--caller-model`` it warns when the reviewer is the
-very model the main session runs.
-
-Each backend runs with flags that make it read-only and MCP-free, built by one
-function for both start and resume so a resume cannot drop a restriction:
-
-- codex: OS sandbox (``sandbox_mode="read-only"``), user config ignored.
-- claude: ``--restricted`` with only ``Read``, ``Grep`` and ``Glob``, no MCP
-  servers. The init event is checked on every call and the run is killed if it
-  shows anything else. It can read any file the user can, like the other two,
-  unless ``FEATURE_LOOP_CLAUDE_CONFINED=1`` keeps it to the working directory
-  and ``<dir>``.
-- pi: read/grep/find/ls only, extensions, MCP and project files off.
-
-Each call holds ``<dir>/locks/<session>.lock`` and passes the fd to the child,
-so the lock outlives this script if the platform kills it and the reviewer
-keeps running; a resume in that state exits 4 instead of starting a second
-turn on the same session.
+comes from ``FEATURE_LOOP_REVIEWER`` or ``$XDG_CONFIG_HOME/feature-loop/reviewers``
+(``<caller family> <backend:model>`` per line, ``*`` as the catch-all); nothing
+is shipped as a default. ``restriction_flags`` holds each backend's read-only
+flags, shared by start and resume.
 
 Exit codes: 0 ok, 1 failure, 2 config or usage error, 3 reviewer session not
 found, 4 an earlier call on the session is still running.
 
 Stdlib-only and Python 3.9-compatible, so plain ``python3`` runs it from an
-installed skill directory with no uv environment; that is also why it uses
-argparse rather than cyclopts.
+installed skill directory; that is also why it uses argparse, not cyclopts.
 """
 
 from __future__ import annotations
@@ -428,12 +409,10 @@ class Collector:
         backend: str,
         on_session: Callable[[str], None] | None,
         caller_model: str | None = None,
-        warned: bool = False,
     ) -> None:
         self.backend = backend
         self.on_session = on_session
         self.caller_model = caller_model
-        self.warned = warned
         self.reply = ""
         self.error = ""
         self.started = False
@@ -445,10 +424,8 @@ class Collector:
                 tools, mcp = ev.get("tools"), ev.get("mcp_servers")
                 # A missing field fails too: the check must not pass by absence.
                 # claude lists the tools sorted, not in --tools order.
-                # Non-string entries fail here rather than raise from set().
                 if (
                     not isinstance(tools, list)
-                    or not all(isinstance(t, str) for t in tools)
                     or set(tools) != set(CLAUDE_TOOLS)
                     or mcp != []
                 ):
@@ -459,10 +436,9 @@ class Collector:
                         "claude CLI may have changed how its flags apply.",
                     )
                 self.started = True
-                # An alias such as `opus` resolves only here.
-                resolved = ev.get("model")
-                if not self.warned and isinstance(resolved, str):
-                    self.warned = warn_if_same_model(self.caller_model, resolved)
+                # The resolved model: an alias such as `opus` is known only here.
+                if isinstance(ev.get("model"), str):
+                    warn_if_same_model(self.caller_model, ev["model"])
             elif kind == "result":
                 self.reply = ev.get("result") or ""
                 if ev.get("is_error"):
@@ -512,89 +488,76 @@ def review(
     topic_dir = topic_dir.resolve()
     partial = open_reply(topic_dir)
     try:
-        return _review(
-            backend,
-            model,
-            topic_dir,
-            prompt_file,
-            timeout,
-            resume_id,
-            partial,
-            caller_model,
-        )
+        locks = topic_dir / "locks"
+        print(f"reviewer: {backend}:{model}", flush=True)
+        if backend != "claude":  # claude checks the model it resolved, at start
+            warn_if_same_model(caller_model, model)
+        on_session = None
+        if resume_id is not None:
+            pi_file = ""
+            if backend == "pi":
+                matches = sorted(pi_session_dir(topic_dir).glob(f"*_{resume_id}.jsonl"))
+                if not matches:
+                    raise Fail(
+                        EXIT_GONE,
+                        f"no pi session {resume_id} in {pi_session_dir(topic_dir)}",
+                    )
+                if len(matches) > 1:
+                    raise Fail(
+                        EXIT_FAIL,
+                        f"more than one pi session file for {resume_id}: {matches}",
+                    )
+                pi_file = str(matches[0])
+            lock_fd = acquire_lock(locks / f"{resume_id}.lock")
+            print(
+                f"reviewer-session: {encode_token(backend, model, resume_id)}",
+                flush=True,
+            )
+            argv = resume_argv(backend, model, topic_dir, resume_id, pi_file)
+        elif backend == "codex":
+            # codex names the thread itself; the lock moves to that name once known.
+            start_lock = locks / f"start-{uuid.uuid4()}.lock"
+            lock_fd = acquire_lock(start_lock)
+
+            def on_session(thread_id: str) -> None:
+                if not SAFE_ID.match(thread_id):
+                    raise Fail(
+                        EXIT_FAIL, f"codex reported an unusable thread id {thread_id!r}"
+                    )
+                os.rename(start_lock, locks / f"{thread_id}.lock")
+                announce(
+                    topic_dir, backend, model, encode_token(backend, model, thread_id)
+                )
+
+            argv = start_argv(backend, model, topic_dir, "")
+        else:
+            session_id = str(uuid.uuid4())
+            lock_fd = acquire_lock(locks / f"{session_id}.lock")
+            announce(
+                topic_dir, backend, model, encode_token(backend, model, session_id)
+            )
+            argv = start_argv(backend, model, topic_dir, session_id)
+
+        collect = Collector(backend, on_session, caller_model)
+        returncode, stderr = run_child(argv, prompt_file, lock_fd, timeout, collect)
+        # `started` is also what proves claude's restriction check ran.
+        if returncode != 0 or collect.error or not collect.reply or not collect.started:
+            if (
+                resume_id is not None
+                and GONE_MESSAGES[backend] in stderr + collect.error
+            ):
+                raise Fail(EXIT_GONE, f"{backend} has no session {resume_id}")
+            lines = stderr.strip().splitlines()
+            detail = collect.error or (lines[-1] if lines else f"exit {returncode}")
+            if not collect.started:
+                detail += " (the reviewer never started; is the CLI logged in?)"
+            raise Fail(EXIT_FAIL, f"{backend} reviewer failed: {detail}")
+        final = finish_reply(partial, collect.reply)
+        print(collect.reply.rstrip("\n"))
+        print(f"reviewer-reply: {final}", flush=True)
+        return 0
     finally:
         partial.unlink(missing_ok=True)
-
-
-def _review(
-    backend: str,
-    model: str,
-    topic_dir: Path,
-    prompt_file: Path,
-    timeout: float,
-    resume_id: str | None,
-    partial: Path,
-    caller_model: str | None = None,
-) -> int:
-    locks = topic_dir / "locks"
-    print(f"reviewer: {backend}:{model}", flush=True)
-    warned = warn_if_same_model(caller_model, model)
-    on_session = None
-    if resume_id is not None:
-        pi_file = ""
-        if backend == "pi":
-            matches = sorted(pi_session_dir(topic_dir).glob(f"*_{resume_id}.jsonl"))
-            if not matches:
-                raise Fail(
-                    EXIT_GONE,
-                    f"no pi session {resume_id} in {pi_session_dir(topic_dir)}",
-                )
-            if len(matches) > 1:
-                raise Fail(
-                    EXIT_FAIL,
-                    f"more than one pi session file for {resume_id}: {matches}",
-                )
-            pi_file = str(matches[0])
-        lock_fd = acquire_lock(locks / f"{resume_id}.lock")
-        print(
-            f"reviewer-session: {encode_token(backend, model, resume_id)}", flush=True
-        )
-        argv = resume_argv(backend, model, topic_dir, resume_id, pi_file)
-    elif backend == "codex":
-        # codex names the thread itself; the lock moves to that name once known.
-        start_lock = locks / f"start-{uuid.uuid4()}.lock"
-        lock_fd = acquire_lock(start_lock)
-
-        def on_session(thread_id: str) -> None:
-            if not SAFE_ID.match(thread_id):
-                raise Fail(
-                    EXIT_FAIL, f"codex reported an unusable thread id {thread_id!r}"
-                )
-            os.rename(start_lock, locks / f"{thread_id}.lock")
-            announce(topic_dir, backend, model, encode_token(backend, model, thread_id))
-
-        argv = start_argv(backend, model, topic_dir, "")
-    else:
-        session_id = str(uuid.uuid4())
-        lock_fd = acquire_lock(locks / f"{session_id}.lock")
-        announce(topic_dir, backend, model, encode_token(backend, model, session_id))
-        argv = start_argv(backend, model, topic_dir, session_id)
-
-    collect = Collector(backend, on_session, caller_model, warned)
-    returncode, stderr = run_child(argv, prompt_file, lock_fd, timeout, collect)
-    # `started` is also what proves claude's restriction check ran.
-    if returncode != 0 or collect.error or not collect.reply or not collect.started:
-        if resume_id is not None and GONE_MESSAGES[backend] in stderr + collect.error:
-            raise Fail(EXIT_GONE, f"{backend} has no session {resume_id}")
-        lines = stderr.strip().splitlines()
-        detail = collect.error or (lines[-1] if lines else f"exit {returncode}")
-        if not collect.started:
-            detail += " (the reviewer never started; is the CLI logged in?)"
-        raise Fail(EXIT_FAIL, f"{backend} reviewer failed: {detail}")
-    final = finish_reply(partial, collect.reply)
-    print(collect.reply.rstrip("\n"))
-    print(f"reviewer-reply: {final}", flush=True)
-    return 0
 
 
 def show(caller: str, caller_model: str | None = None) -> int:
@@ -604,16 +567,11 @@ def show(caller: str, caller_model: str | None = None) -> int:
     sid = "<thread_id>" if backend == "codex" else "<uuid>"
     pi_file = "<dir>/pi-sessions/<file for uuid>.jsonl"
     print(f"reviewer: {backend}:{model}")
-    print(
-        "start:  "
-        + shlex.join(start_argv(backend, model, topic, sid))
-        + " < <prompt-file>"
-    )
-    print(
-        "resume: "
-        + shlex.join(resume_argv(backend, model, topic, sid, pi_file))
-        + " < <prompt-file>"
-    )
+    for label, argv in (
+        ("start:  ", start_argv(backend, model, topic, sid)),
+        ("resume: ", resume_argv(backend, model, topic, sid, pi_file)),
+    ):
+        print(label + shlex.join(argv) + " < <prompt-file>")
     return 0
 
 
@@ -625,12 +583,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     p_start = sub.add_parser("start", help="start a new reviewer session")
-    p_start.add_argument(
-        "--caller", required=True, help="the main session's model family"
-    )
-    p_start.add_argument(
-        "--caller-model", help="the main session's exact model id, for a warning"
-    )
     p_resume = sub.add_parser("resume", help="send a prompt to an existing session")
     p_resume.add_argument(
         "--session", required=True, help="token from reviewer-session:"
@@ -646,8 +598,13 @@ def main(argv: list[str] | None = None) -> int:
     p_show = sub.add_parser(
         "show", help="print the reviewer and its argv; runs nothing"
     )
-    p_show.add_argument("--caller", required=True)
-    p_show.add_argument("--caller-model")
+    for p in (p_start, p_show):
+        p.add_argument(
+            "--caller", required=True, help="the main session's model family"
+        )
+        p.add_argument(
+            "--caller-model", help="the main session's exact model id, for a warning"
+        )
     args = parser.parse_args(argv)
 
     signal.signal(signal.SIGTERM, _on_signal)
