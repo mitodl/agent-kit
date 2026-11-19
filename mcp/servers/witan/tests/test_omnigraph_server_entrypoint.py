@@ -1103,6 +1103,7 @@ if os.environ.get("SLOW_STOP"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 port = int(sys.argv[sys.argv.index("--bind") + 1].rsplit(":", 1)[1])
 branches = {"code-x": ["main", "act-a/feat"]}
+loading = int(os.environ.get("LOADING_REPLIES", "0"))
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -1123,9 +1124,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        global loading
         if self.path == "/healthz":
             self.reply(200, {"status": "ok"})
-        elif not self.refused():
+        elif self.refused():
+            pass
+        elif loading > 0:
+            # omnigraph-server 0.15 serves /healthz while a graph still loads.
+            loading -= 1
+            self.reply(
+                503,
+                {
+                    "error": "graph is loading; wait for its startup attempt to complete",
+                    "code": "graph_unavailable",
+                    "disposition": {"effects": "none", "action": "retry"},
+                },
+            )
+        else:
             graph = self.path.split("/")[2]
             self.reply(200, {"branches": branches[graph]})
 
@@ -1157,14 +1172,16 @@ def fake_server(tmp_path, monkeypatch) -> Path:
     """A scripted `omnigraph-server` on PATH, and a config dir with a token map.
 
     ``EXIT_AT_START`` makes it exit with that code, ``SLOW_STOP`` makes it
-    ignore SIGTERM, and ``FAIL_DELETE`` makes every delete a 500.
+    ignore SIGTERM, ``FAIL_DELETE`` makes every delete a 500, and
+    ``LOADING_REPLIES`` answers that many branch listings with the 503 a
+    graph still loading gets.
     """
     binary = tmp_path / "bin" / entrypoint.SERVER_BINARY
     binary.parent.mkdir()
     binary.write_text(FAKE_SERVER)
     binary.chmod(0o755)
     monkeypatch.setenv("PATH", f"{binary.parent}:{os.environ['PATH']}")
-    for name in ("EXIT_AT_START", "SLOW_STOP", "FAIL_DELETE"):
+    for name in ("EXIT_AT_START", "SLOW_STOP", "FAIL_DELETE", "LOADING_REPLIES"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(entrypoint, "http_contract", lambda: "0.14")
     monkeypatch.setattr(entrypoint, "SIGTERM_STOP_SECONDS", 1)
@@ -1205,6 +1222,30 @@ def test_a_server_error_on_a_delete_is_unavailable(fake_server, monkeypatch):
         pytest.raises(entrypoint.ServerUnavailable, match="HTTP 500"),
     ):
         served.delete("code-x", "act-a/feat", 5)
+
+
+def test_a_graph_still_loading_is_listed_once_it_loads(fake_server, monkeypatch):
+    """The loopback server answers /healthz before every graph has loaded.
+
+    Production's boot on 2026-11-19 listed code-github-com-mitodl-agent-kit
+    two seconds after the loopback server served, got this 503, and refused
+    to start on every restart.
+    """
+    monkeypatch.setenv("LOADING_REPLIES", "3")
+    monkeypatch.setattr(entrypoint, "GRAPH_LOAD_POLL_SECONDS", 0.01)
+    with loopback(fake_server) as served:
+        assert served.branches("code-x") == ["act-a/feat"]
+
+
+def test_a_graph_that_never_loads_is_unavailable(fake_server, monkeypatch):
+    monkeypatch.setenv("LOADING_REPLIES", "1000")
+    monkeypatch.setattr(entrypoint, "GRAPH_LOAD_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(entrypoint, "GRAPH_LOAD_SECONDS", 0.2)
+    with (
+        loopback(fake_server) as served,
+        pytest.raises(entrypoint.ServerUnavailable, match="graph_unavailable"),
+    ):
+        served.branches("code-x")
 
 
 def test_a_refused_token_refuses_rather_than_waiting_for_the_boot(fake_server):

@@ -194,9 +194,18 @@ CODE_GRAPH_PREFIX = "code-"
 # One branch delete writes one graph's branch manifest; Production's took 1 to
 # 3 seconds each on S3.
 BRANCH_DELETE_TIMEOUT_SECONDS = 120
-# The loopback server opens every graph before it serves; Production's 29
-# took under a second.
+# How long the loopback server gets to answer /healthz.
 LOOPBACK_START_SECONDS = 60
+# omnigraph-server 0.15 answers /healthz while it still loads its graphs, and
+# a request for a graph that has not loaded gets a 503 `graph_unavailable`
+# whose disposition says to retry. Production's boot on 2026-11-19 got one two
+# seconds after the loopback server served, for code-github-com-mitodl-agent-kit,
+# and refused to start on every restart. Such a request is retried for this
+# long, every GRAPH_LOAD_POLL_SECONDS. It stays well inside the boot's 135s
+# startupProbe budget (ol-infrastructure applications/omnigraph/data_tier.py
+# DEFAULT_BOOT_BUDGET_SECONDS), which the drop and the apply share.
+GRAPH_LOAD_SECONDS = 60
+GRAPH_LOAD_POLL_SECONDS = 1.0
 # The loopback server's own drain on SIGTERM (OMNIGRAPH_SHUTDOWN_GRACE_SECONDS).
 # Nothing is in flight by the time it is stopped.
 LOOPBACK_SHUTDOWN_GRACE_SECONDS = 5
@@ -983,6 +992,21 @@ def view_drop_token(env: dict[str, str]) -> str:
     return json.loads(tokens_file.read_text())[env["OMNIGRAPH_VIEW_DROP_ACTOR"]]
 
 
+def _says_retry(status: int, body: bytes) -> bool:
+    """Whether a reply is a 503 for a graph that has not finished loading."""
+    if status != HTTPStatus.SERVICE_UNAVAILABLE:
+        return False
+    try:
+        reply = json.loads(body)
+    except ValueError:
+        return False
+    return (
+        isinstance(reply, dict)
+        and reply.get("code") == "graph_unavailable"
+        and reply.get("disposition", {}).get("action") == "retry"
+    )
+
+
 class ServedGraphs:
     """A server's branch API: list and delete one graph's branches.
 
@@ -999,21 +1023,33 @@ class ServedGraphs:
     def _call(
         self, method: str, path: str, timeout: float, *, missing_ok: bool = False
     ) -> dict[str, Any]:
+        """One request, retried while its graph is still loading.
+
+        :raises ServerUnavailable: on a 5xx, on a graph still loading after
+            GRAPH_LOAD_SECONDS, or when the server cannot be reached.
+        :raises BootRefused: on any other 4xx.
+        """
         url = f"{self.base_url}{path}"
-        request = urllib.request.Request(url, method=method, headers=self._headers)
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read() or b"{}")
-        except urllib.error.HTTPError as exc:
-            if missing_ok and exc.code == HTTPStatus.NOT_FOUND:
-                return {}
-            msg = f"{method} {url}: HTTP {exc.code}: {exc.read()[:300]!r}"
-            if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        deadline = time.monotonic() + GRAPH_LOAD_SECONDS
+        while True:
+            request = urllib.request.Request(url, method=method, headers=self._headers)
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read() or b"{}")
+            except urllib.error.HTTPError as exc:
+                if missing_ok and exc.code == HTTPStatus.NOT_FOUND:
+                    return {}
+                body = exc.read()
+                if _says_retry(exc.code, body) and time.monotonic() < deadline:
+                    time.sleep(GRAPH_LOAD_POLL_SECONDS)
+                    continue
+                msg = f"{method} {url}: HTTP {exc.code}: {body[:300]!r}"
+                if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+                    raise ServerUnavailable(msg) from exc
+                raise BootRefused(msg) from exc
+            except OSError as exc:
+                msg = f"{method} {url}: {exc}"
                 raise ServerUnavailable(msg) from exc
-            raise BootRefused(msg) from exc
-        except OSError as exc:
-            msg = f"{method} {url}: {exc}"
-            raise ServerUnavailable(msg) from exc
 
     def serving(self) -> bool:
         try:
