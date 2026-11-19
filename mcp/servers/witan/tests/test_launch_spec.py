@@ -486,12 +486,6 @@ def test_cli_release_reports_a_changed_claim(folders, monkeypatch, capsys):
     assert "held by" not in out
 
 
-@pytest.fixture
-def outside_a_checkout(tmp_path, monkeypatch):
-    # A claim run from a checkout carries CodeBranch steps; none are needed here.
-    monkeypatch.chdir(tmp_path)
-
-
 @requires_omnigraph
 def test_release_with_the_claims_own_instant_releases(server, outside_a_checkout):
     t = server.task_create(title="failed launch", description="x")
