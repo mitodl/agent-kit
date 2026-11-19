@@ -1261,6 +1261,27 @@ def test_sigterm_stops_the_wait_for_a_graph_to_load(fake_server, monkeypatch):
         assert time.monotonic() - started < 5
 
 
+def test_sigterm_during_the_poll_sends_no_further_request(fake_server, monkeypatch):
+    """A graph that loads during the sleep must not be listed after SIGTERM."""
+    monkeypatch.setenv("LOADING_REPLIES", "1")
+    terminated = entrypoint.Termination(30)
+    with loopback(fake_server, terminated) as served:
+        monkeypatch.setattr(entrypoint.time, "sleep", lambda _: terminated.note())
+        with pytest.raises(BootRefused, match="SIGTERM while waiting"):
+            served.branches("code-x")
+
+
+def test_the_poll_does_not_sleep_past_the_deadline(fake_server, monkeypatch):
+    monkeypatch.setenv("LOADING_REPLIES", "1000")
+    monkeypatch.setattr(entrypoint, "GRAPH_LOAD_POLL_SECONDS", 30)
+    monkeypatch.setattr(entrypoint, "GRAPH_LOAD_SECONDS", 0.2)
+    with loopback(fake_server) as served:
+        started = time.monotonic()
+        with pytest.raises(entrypoint.ServerUnavailable, match="graph_unavailable"):
+            served.branches("code-x")
+        assert time.monotonic() - started < 5
+
+
 @pytest.mark.parametrize(
     "body",
     [

@@ -1033,6 +1033,10 @@ class ServedGraphs:
     ) -> dict[str, Any]:
         """One request, retried while its graph is still loading.
 
+        A retry is sent only while GRAPH_LOAD_SECONDS lasts and ``stopping``
+        has no reason, both checked again after the poll's sleep, and its
+        timeout is cut to what is left of GRAPH_LOAD_SECONDS.
+
         :raises ServerUnavailable: on a 5xx, on a graph still loading after
             GRAPH_LOAD_SECONDS, or when the server cannot be reached.
         :raises BootRefused: on any other 4xx, or when ``stopping`` gives a
@@ -1040,21 +1044,25 @@ class ServedGraphs:
         """
         url = f"{self.base_url}{path}"
         deadline = time.monotonic() + GRAPH_LOAD_SECONDS
+        attempt_timeout = timeout
         while True:
             request = urllib.request.Request(url, method=method, headers=self._headers)
             try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    return json.loads(response.read() or b"{}")
+                with urllib.request.urlopen(request, timeout=attempt_timeout) as resp:
+                    return json.loads(resp.read() or b"{}")
             except urllib.error.HTTPError as exc:
                 if missing_ok and exc.code == HTTPStatus.NOT_FOUND:
                     return {}
                 body = exc.read()
-                if _says_retry(exc.code, body) and time.monotonic() < deadline:
-                    if reason := self._stopping():
-                        msg = f"{reason} while waiting for {url} to load"
-                        raise BootRefused(msg) from exc
-                    time.sleep(GRAPH_LOAD_POLL_SECONDS)
-                    continue
+                if _says_retry(exc.code, body):
+                    self._refuse_if_stopping(url, exc)
+                    poll = min(GRAPH_LOAD_POLL_SECONDS, deadline - time.monotonic())
+                    time.sleep(max(0.0, poll))
+                    self._refuse_if_stopping(url, exc)
+                    left = deadline - time.monotonic()
+                    if left > 0:
+                        attempt_timeout = min(timeout, left)
+                        continue
                 msg = f"{method} {url}: HTTP {exc.code}: {body[:300]!r}"
                 if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR:
                     raise ServerUnavailable(msg) from exc
@@ -1062,6 +1070,11 @@ class ServedGraphs:
             except OSError as exc:
                 msg = f"{method} {url}: {exc}"
                 raise ServerUnavailable(msg) from exc
+
+    def _refuse_if_stopping(self, url: str, exc: Exception) -> None:
+        if reason := self._stopping():
+            msg = f"{reason} while waiting for {url} to load"
+            raise BootRefused(msg) from exc
 
     def serving(self) -> bool:
         try:
