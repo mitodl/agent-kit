@@ -89,18 +89,21 @@ _PENDING_CONTENT_HASH = "pending"
 
 # Bump when the indexer writes different rows for a file whose bytes have not
 # changed: a new edge kind, a resolver fix, a new extracted field. Each
-# CodeFile row records it in `index_version`, and the default view's writer
-# treats a file stored under any other version as changed, so the next CI run
-# parses every file once and an unchanged file gets the new rows. Without it
-# the content-hash skip kept those files on the old rows indefinitely: after
-# #654, `bridge.py`'s call into `graph.check_writable` had no edge on
-# production because nobody had edited `bridge.py` since.
+# CodeFile row records it in `index_version`, and a writer that checks it
+# (`_checks_index_version`) treats a file stored under any other version as
+# changed, so the next CI run parses every file once and an unchanged file
+# gets the new rows. Without it the content-hash skip kept those files on the
+# old rows indefinitely: after #654, `bridge.py`'s call into
+# `graph.check_writable` had no edge on production because nobody had edited
+# `bridge.py` since.
 #
-# Branch views compare content only. A view is a copy of main taken when it is
-# forked, so one forked after CI's re-parse already has the new rows, and an
-# older one keeps its rows for the files it has not changed until the reaper
-# drops it. Re-parsing a whole repo onto a view instead would push every file
-# through the MCP tier, which is sized for the few files a branch changes.
+# A shared graph's branch views compare content only. A view is a copy of main
+# taken when it is forked, so one forked after CI's re-parse already has the
+# new rows, and an older one keeps its rows for the files it has not changed
+# until the reaper drops it. Re-parsing a whole repo onto a view instead would
+# push every file through the MCP tier, which is sized for the few files a
+# branch changes. A local store's views check the version, since nothing
+# re-forks them from a re-parsed main and the re-parse costs no MCP traffic.
 #
 # 1: every row written before the version was recorded (`index_version` null).
 # 2: cross-file Calls edges through imports (#654, #674).
