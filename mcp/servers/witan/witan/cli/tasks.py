@@ -559,6 +559,7 @@ def task_release_cmd(
     assignee: str | None = None,
     status: TaskStatus = "open",
     force: bool = False,
+    if_claimed_at: str | None = None,
 ) -> None:
     """Release a claim, returning the task to ``open`` (or another status).
 
@@ -574,10 +575,16 @@ def task_release_cmd(
         Status to return the task to (default ``open``).
     force:
         Release even if held by a different assignee.
+    if_claimed_at:
+        Release only the claim taken at this instant (a launch spec's
+        ``claim.claimed_at``). A claim renewed since then is left alone, and
+        ``--force`` does not lift this.
     """
     s = _srv()
+    # Sent only when set: a deployment older than the parameter rejects it.
+    fence = {"if_claimed_at": if_claimed_at} if if_claimed_at is not None else {}
     result = _fn(s.task_release)(
-        slug=slug, assignee=assignee, status=status, force=force
+        slug=slug, assignee=assignee, status=status, force=force, **fence
     )
     if _queued(result):
         return
@@ -590,10 +597,13 @@ def task_release_cmd(
             f"{_styled(result.get('status', status), _STATUS_STYLE)}"
         )
         return
-    console.print(
-        f"[yellow]Not released[/yellow] — held by {result.get('held_by')} "
-        f"(pass --force)."
-    )
+    if result.get("reason") == "claim_changed":
+        console.print("[yellow]Not released[/yellow] (claim changed).")
+    else:
+        console.print(
+            f"[yellow]Not released[/yellow] — held by {result.get('held_by')} "
+            f"(pass --force)."
+        )
     if result.get("remedy"):
         console.print(f"  {result['remedy']}")
     raise SystemExit(1)

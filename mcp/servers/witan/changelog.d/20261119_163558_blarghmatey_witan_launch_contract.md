@@ -12,7 +12,8 @@
   `in_progress` under the claim taken at that instant, and otherwise returns
   `reason: "claim_changed"`. `force` does not lift it. A launcher uses it to
   give back the claim of a launch that failed without releasing a claim the
-  launched agent has since renewed.
+  launched agent has since renewed. `witan task release --if-claimed-at` passes
+  it from the command line.
 
 ### Changed
 

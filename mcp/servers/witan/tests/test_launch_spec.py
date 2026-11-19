@@ -441,6 +441,51 @@ def test_the_pickers_consolidated_launch_gets_the_launch_env(folders, monkeypatc
 # ── task_release's if_claimed_at fence ────────────────────────────────
 
 
+class _Releaser:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def task_release(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
+
+
+def test_cli_release_sends_the_fence_only_when_given(folders, monkeypatch, capsys):
+    """A deployment older than `if_claimed_at` rejects it as an unknown argument."""
+    from witan.cli import tasks
+
+    here, _ = folders
+    fake = _Releaser({"released": True, "status": "open"})
+    _cli(monkeypatch, fake, here)
+
+    tasks.task_release_cmd("tk-a")
+    tasks.task_release_cmd("tk-a", if_claimed_at=_CLAIMED["claimed_at"])
+
+    assert "if_claimed_at" not in fake.calls[0]
+    assert fake.calls[1]["if_claimed_at"] == _CLAIMED["claimed_at"]
+
+
+def test_cli_release_reports_a_changed_claim(folders, monkeypatch, capsys):
+    from witan.cli import tasks
+
+    here, _ = folders
+    refused = {
+        "released": False,
+        "reason": "claim_changed",
+        "remedy": "tk-a is no longer the claim taken at then.",
+    }
+    _cli(monkeypatch, _Releaser(refused), here)
+
+    with pytest.raises(SystemExit) as exited:
+        tasks.task_release_cmd("tk-a", if_claimed_at=_CLAIMED["claimed_at"])
+
+    assert exited.value.code == 1
+    out = capsys.readouterr().out
+    assert "claim changed" in out
+    assert "held by" not in out
+
+
 @pytest.fixture
 def outside_a_checkout(tmp_path, monkeypatch):
     # A claim run from a checkout carries CodeBranch steps; none are needed here.

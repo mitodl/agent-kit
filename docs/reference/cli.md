@@ -1292,6 +1292,9 @@ Release a claim, returning the task to ``open`` (or another status).
     still matches, since the check is on identity, not session).
 * `--status CHOICE`: Status to return the task to (default ``open``). *[choices: open, in_progress, blocked, closed]* *[default: open]*
 * `--force, --no-force`: Release even if held by a different assignee. *[default: False]*
+* `--if-claimed-at STR`: Release only the claim taken at this instant (a launch spec's
+    ``claim.claimed_at``). A claim renewed since then is left alone, and
+    ``--force`` does not lift this.
 
 ### witan task update
 
