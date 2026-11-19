@@ -17,6 +17,7 @@ import unittest
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 from typing import ClassVar
 
 SCRIPT = Path(__file__).resolve().parents[2] / "bin/agent_activity_index.py"
@@ -267,6 +268,28 @@ class _Site(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+
+class FetchPrsTests(unittest.TestCase):
+    def test_a_window_over_the_search_cap_is_split_and_nothing_is_lost(self):
+        def fake(_query, **variables):
+            start, end = variables["q"].split("created:")[1].split("..")
+            days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+            # Only the whole month is over the cap; each half is under it.
+            node = {"number": int(start.replace("-", ""))}
+            return {
+                "data": {
+                    "search": {
+                        "issueCount": aai.SEARCH_CAP + 500 if days > 16 else 10,
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [node],
+                    }
+                }
+            }
+
+        with mock.patch.object(aai, "gh_graphql", fake):
+            prs = aai.fetch_prs("r", date(2026, 10, 1), date(2026, 10, 31))
+        self.assertEqual([p["number"] for p in prs], [20261001, 20261017])
 
 
 class DownloadHistoryTests(unittest.TestCase):
