@@ -1384,10 +1384,9 @@ none.
 * `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
 * `--model STR`: Model flag passed to the agent.
 * `--claim, --no-claim`: Mark each task in_progress before launching. *[default: True]*
-* `--force, --no-force`: Take the claim even if someone else's lease is still live. Without
-    this the command could report a task as held and offer no way past it
-    from the CLI it was reported in — the interactive steal prompt is
-    server-side and unreachable through ``_fn``, which passes no ``ctx``. *[default: False]*
+* `--force, --no-force`: Take the claim even if someone else's lease is still live. A launch
+    never offers to steal a held task (the question would land on stdout,
+    ahead of ``--emit-spec``'s JSON), so this is the way past one. *[default: False]*
 * `--dry-run, --no-dry-run`: Print the prompt(s) without launching or claiming. *[default: False]*
 * `--emit-spec, --no-emit-spec`: Claim, then print the launch spec as JSON instead of launching, for an
     editor or other launcher to run. Needs a slug. Exits non-zero, after

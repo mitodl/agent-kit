@@ -27,4 +27,7 @@
   is not a checkout of the task's repo (or one of the project's repos), before
   claiming. A task or project with no repo runs anywhere. `--dry-run` skips
   the check.
+- `witan task run` no longer offers to steal a held task at the terminal; it
+  reports the holder and `--force` takes the claim. The question would have
+  landed on stdout ahead of `--emit-spec`'s JSON.
 - The open-blockers warning `witan task run` prints goes to stderr.

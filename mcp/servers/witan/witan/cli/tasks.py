@@ -769,10 +769,9 @@ def task_run(
     claim:
         Mark each task in_progress before launching.
     force:
-        Take the claim even if someone else's lease is still live. Without
-        this the command could report a task as held and offer no way past it
-        from the CLI it was reported in — the interactive steal prompt is
-        server-side and unreachable through ``_fn``, which passes no ``ctx``.
+        Take the claim even if someone else's lease is still live. A launch
+        never offers to steal a held task (the question would land on stdout,
+        ahead of ``--emit-spec``'s JSON), so this is the way past one.
     dry_run:
         Print the prompt(s) without launching or claiming.
     emit_spec:

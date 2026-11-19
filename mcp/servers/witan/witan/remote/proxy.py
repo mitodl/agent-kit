@@ -36,7 +36,7 @@ from witan_core.remote.proxy import (
 )
 from witan_core.timeutil import parse_timestamp
 
-from .. import merge_bounds, merge_report, readiness, session_state
+from .. import merge_bounds, merge_report, prompts, readiness, session_state
 from .. import repo as repo_module
 from ..config import _QUERIES_DIR, RemoteConfig, S3Credentials
 
@@ -805,6 +805,9 @@ class RemoteServerProxy(RemoteMCPProxy):
         # derive on its own — it shares neither the filesystem nor the session id.
         handle = session_state.read_handle(session_state.current_session_id())
         return (handle or {}).get("session_slug") or None
+
+    def _elicitation_handler(self) -> Callable | None:
+        return super()._elicitation_handler() if prompts.prompts_allowed() else None
 
     def _resolve_session_id(self) -> str | None:
         # The agent session itself, for `task_claim`/`task_release`'s holder

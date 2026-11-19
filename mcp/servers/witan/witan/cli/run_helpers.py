@@ -14,6 +14,7 @@ from witan_core.observability import get_logger
 from .. import envelope, provenance
 from .. import repo as repo_module
 from ..config import Config
+from ..prompts import prompts_off
 from ..readiness import CLAIM_LEASE_SECONDS
 from ..session_state import SESSION_ID_ENV_VARS
 from ._common import (
@@ -515,8 +516,10 @@ def build_launch_spec(
     if kind == "task" and claim:
         strip_session_env()
         # No explicit assignee either: only a defaulted holder is one the
-        # launched agent may renew as its own (`_own_claim`).
-        res = _fn(server.task_claim)(slug=slug, force=force)
+        # launched agent may renew as its own (`_own_claim`). No steal offer:
+        # it would print to stdout, and `force` is how a launcher steals.
+        with prompts_off():
+            res = _fn(server.task_claim)(slug=slug, force=force)
         if res is None:
             return _refusal(kind, slug, "not_found", f"No {kind} {slug!r}.")
         # The warning advises passing a session_id, and a bare launch claim is

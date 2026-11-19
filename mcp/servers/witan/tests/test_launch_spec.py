@@ -67,6 +67,13 @@ def _task(repo=REPO):
     return {"slug": "tk-a", "title": "T", "type": "bug", "repo": repo}
 
 
+@pytest.fixture(autouse=True)
+def session_env(monkeypatch):
+    """Let monkeypatch restore what `strip_session_env` pops for the next test."""
+    for name in SESSION_ID_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def folders(tmp_path, monkeypatch):
     """Two open folders: `here` is a checkout of REPO, `there` of OTHER_REPO."""
@@ -216,6 +223,38 @@ def test_a_refused_claim_is_passed_through_with_no_argv(folders):
     assert spec["reason"] == "held"
     assert spec["claim"] == held
     assert "argv" not in spec
+
+
+def test_the_claim_never_prompts_at_a_terminal(folders, monkeypatch):
+    """A steal offer would print its question to stdout ahead of the JSON and
+    block on an answer nobody sees; `force` is how a launcher steals."""
+    from witan_core import elicit
+
+    here, _ = folders
+    monkeypatch.setattr(elicit, "has_terminal", lambda: True)
+    seen = {}
+
+    class Async(_Fake):
+        async def task_claim(self, slug, force=False, ctx=None):
+            seen["ctx"] = ctx
+            return _CLAIMED
+
+    _spec(Async(task=_task()), folders=[here])
+
+    assert seen == {"ctx": None}
+
+
+def test_prompts_off_withholds_the_remote_elicitation_handler(monkeypatch):
+    from witan.prompts import prompts_off
+    from witan.remote.proxy import RemoteServerProxy
+    from witan_core import elicit
+
+    monkeypatch.setattr(elicit, "has_terminal", lambda: True)
+    proxy = object.__new__(RemoteServerProxy)
+
+    assert proxy._elicitation_handler() is not None
+    with prompts_off():
+        assert proxy._elicitation_handler() is None
 
 
 def test_no_claim_builds_an_unclaimed_spec(folders):

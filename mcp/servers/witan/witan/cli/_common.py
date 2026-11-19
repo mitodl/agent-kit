@@ -14,7 +14,7 @@ from rich.table import Table
 from witan_core.cli import make_app
 from witan_core.elicit import with_console_ctx
 
-from .. import live_pr
+from .. import live_pr, prompts
 from .. import repo as repo_module
 from .output import dump_record, get_output_format
 from .selected_target import selected_target
@@ -158,7 +158,9 @@ def _fn(tool):
     if inspect.iscoroutinefunction(fn):
 
         def runner(*args, **kwargs):
-            return asyncio.run(fn(*args, **with_console_ctx(fn, kwargs)))
+            if prompts.prompts_allowed():
+                kwargs = with_console_ctx(fn, kwargs)
+            return asyncio.run(fn(*args, **kwargs))
 
         return runner
     return fn
