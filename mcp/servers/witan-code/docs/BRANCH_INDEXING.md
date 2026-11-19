@@ -113,7 +113,13 @@ Branch stores are re-derivable caches, so lifecycle is deletion, not merge:
   is refused for that reason deletes its views and applies again. An upgrade
   that leaves the schema as it was keeps them. Until the next full index of
   a branch (SessionStart, or `witan-code index`), its view holds `main`'s
-  rows plus whatever the edit hook has indexed since. The shared graphs drop
+  rows plus whatever the edit hook has indexed since. When the local bridge
+  store drops its views, every local code store drops its views too: the
+  indexer writes a branch's bindings only for the files its code view
+  parses, so a code view left current would leave the re-forked bridge view
+  on `main`'s bindings. If the apply still fails once the views are gone,
+  the views are not dropped again until the schema file changes
+  (`<store>.views_drop_failed` holds its mtime). The shared graphs drop
   their views in the omnigraph-server deploy
   (`docker/omnigraph_server_entrypoint.py`, "branch views and schema
   changes").
