@@ -19,6 +19,7 @@ mean "no" for a graph that is very much there.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -479,12 +480,123 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
         # Only re-apply when the schema file has changed since the last apply.
         # schema apply is additive/idempotent but spawns a subprocess on every
         # PostToolUse reindex; the mtime sidecar avoids the cost on hot paths.
-        schema_apply_if_changed(binary, cfg.schema_file, store)
+        if not schema_apply_if_changed(binary, cfg.schema_file, store):
+            _apply_schema_over_views(binary, cfg.schema_file, store, cfg.queries_dir)
 
     # Record the canonical repo URI in a sidecar so listings can show it even for
     # a 0-file store (sanitize_slug is lossy — its `_` collapse isn't reversible).
     repo_sidecar(store).write_text(slug)
     return StoreRef(str(store))
+
+
+# omnigraph 0.15's refusal of `schema apply` on a graph with a branch besides
+# main, as the omnigraph-server entrypoint matches it.
+_NON_MAIN_BRANCHES_REFUSAL = "schema apply requires a graph with only main"
+
+
+def _apply_schema_over_views(
+    binary: str, schema_file: Path, store: Path, queries_dir: Path
+) -> bool:
+    """Apply ``schema_file`` to ``store``, deleting its branch views if they block it.
+
+    omnigraph 0.15 refuses ``schema apply`` on a graph with any branch but
+    ``main``, even when the plan has no steps, while ``schema plan`` still
+    answers ``supported: true``. A local store with a view therefore failed the
+    apply on every call and never gained a field the indexer writes.
+
+    Two cases are handled here, each only on positive evidence:
+
+    * The plan has no steps: the schema file's mtime moved (every reinstall
+      does that) but its content did not. Nothing needs applying, so the store
+      is stamped as current and keeps its views.
+    * The plan has steps and the apply fails with exactly the non-main-branch
+      refusal: the views are deleted and the apply runs again. They are caches
+      (docs/BRANCH_INDEXING.md), which is why the omnigraph-server entrypoint
+      drops them on the cluster for the same refusal.
+
+    Any other outcome (no plan, an unsupported change, another apply error)
+    leaves the views alone and the store for the next call to retry.
+
+    :returns: whether the store now has the schema.
+    :rtype: bool
+    """
+    with store_write_lock(str(store)):
+        if schema_apply_if_changed(binary, schema_file, store):
+            return True
+        plan = _schema_plan(binary, schema_file, store)
+        if plan is None or plan["supported"] is not True:
+            return False
+        if plan["step_count"] == 0:
+            _stamp_schema(schema_file, store)
+            return True
+        res = _schema_cli(binary, "apply", schema_file, store)
+        if res is None:
+            return False
+        if res.returncode == 0:
+            _stamp_schema(schema_file, store)
+            return True
+        if not any(
+            line.startswith(_NON_MAIN_BRANCHES_REFUSAL)
+            for line in res.stderr.splitlines()
+        ):
+            return False
+        client = OmnigraphClient(str(store), queries_dir)
+        views = [name for name in client.list_branches() if name != "main"]
+        for view in views:
+            client.delete_branch(view)
+        logger.warning(
+            "witan.code.store.views_dropped_for_schema",
+            store=str(store),
+            views=len(views),
+            reason="omnigraph applies a schema change only to a graph with no views",
+            recovery=(
+                "the next full index of each branch (SessionStart, or "
+                "`witan-code index` in the checkout) rebuilds its view from main"
+            ),
+        )
+        return schema_apply(binary, schema_file, store)
+
+
+def _stamp_schema(schema_file: Path, store: Path) -> None:
+    """Record ``schema_file`` as applied, as :func:`schema_apply` does on success."""
+    with contextlib.suppress(OSError):
+        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
+
+
+def _schema_cli(
+    binary: str, verb: str, schema_file: Path, store: Path, *extra: str
+) -> subprocess.CompletedProcess[str] | None:
+    """Run ``omnigraph schema <verb>`` against a local store, or ``None`` when
+    the binary cannot be started."""
+    try:
+        return subprocess.run(
+            [
+                binary,
+                "schema",
+                verb,
+                "--schema",
+                str(schema_file),
+                *extra,
+                *store_cli_args(str(store), binary=binary),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+
+def _schema_plan(binary: str, schema_file: Path, store: Path) -> dict | None:
+    """``omnigraph schema plan --json`` for ``store``, or ``None`` without one."""
+    res = _schema_cli(binary, "plan", schema_file, store, "--json")
+    if res is None or res.returncode != 0:
+        return None
+    try:
+        plan = json.loads(res.stdout)
+    except ValueError:
+        return None
+    return plan if isinstance(plan, dict) else None
 
 
 def _schema_change_unsupported(binary: str, schema_file: Path, store: Path) -> bool:
@@ -495,29 +607,8 @@ def _schema_change_unsupported(binary: str, schema_file: Path, store: Path) -> b
     needs recreating, and a wrong yes deletes every repo's bindings, so each of
     those is ``False`` and the next call retries the apply.
     """
-    try:
-        res = subprocess.run(
-            [
-                binary,
-                "schema",
-                "plan",
-                "--schema",
-                str(schema_file),
-                "--json",
-                *store_cli_args(str(store), binary=binary),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return False
-    if res.returncode != 0:
-        return False
-    try:
-        return json.loads(res.stdout)["supported"] is False
-    except (ValueError, KeyError, TypeError):
-        return False
+    plan = _schema_plan(binary, schema_file, store)
+    return plan is not None and plan.get("supported") is False
 
 
 def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
@@ -555,7 +646,9 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     # the work while this one waited.
     with store_write_lock(str(store)):
         if store.exists():
-            if schema_apply_if_changed(binary, cfg.bridge_schema_file, store):
+            if _apply_schema_over_views(
+                binary, cfg.bridge_schema_file, store, cfg.queries_dir
+            ):
                 return StoreRef(str(store))
             if not _schema_change_unsupported(binary, cfg.bridge_schema_file, store):
                 return StoreRef(str(store))

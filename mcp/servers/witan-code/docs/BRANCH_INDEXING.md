@@ -107,6 +107,16 @@ Branch stores are re-derivable caches, so lifecycle is deletion, not merge:
   0005) and refused against a remote store (below). On a shared graph one
   machine's missing git ref is not evidence a branch is dead — it would
   delete another user's in-flight view.
+* A schema change deletes every view. omnigraph 0.15 applies a schema
+  change only to a graph whose sole branch is `main`. On the first index
+  after an upgrade whose schema has steps to apply, a local store whose apply
+  is refused for that reason deletes its views and applies again. An upgrade
+  that leaves the schema as it was keeps them. Until the next full index of
+  a branch (SessionStart, or `witan-code index`), its view holds `main`'s
+  rows plus whatever the edit hook has indexed since. The shared graphs drop
+  their views in the omnigraph-server deploy
+  (`docker/omnigraph_server_entrypoint.py`, "branch views and schema
+  changes").
 
 ## Who may write the shared default-branch view
 
