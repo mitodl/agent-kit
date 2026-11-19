@@ -13,6 +13,7 @@ import pytest
 from witan_core.target_config import (
     local_project_path,
     match_target,
+    named_target,
     parse_target_tables,
     to_list,
 )
@@ -269,3 +270,16 @@ def test_match_target_at_reads_the_path_not_the_process(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/somewhere/else")
     monkeypatch.setenv("WITAN_REPO", "https://github.com/alice/dotfiles")
     assert match_target_at(_TARGETS, tmp_path) is _WORK
+
+
+def test_named_target_lists_the_defined_ones_when_the_name_is_unknown():
+    @dataclass
+    class Named:
+        name: str
+
+    targets = [Named("qa"), Named("prod")]
+    assert named_target(targets, "prod") is targets[1]
+    with pytest.raises(ValueError, match=r"Unknown target 'dev'\. Available: qa, prod"):
+        named_target(targets, "dev")
+    with pytest.raises(ValueError, match=r"Available: \(none defined\)"):
+        named_target([], "dev")

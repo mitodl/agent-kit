@@ -85,6 +85,28 @@ class _MatchCriteria(Protocol):
 T = TypeVar("T", bound=_MatchCriteria)
 
 
+class _Named(Protocol):
+    name: str
+
+
+N = TypeVar("N", bound=_Named)
+
+
+def named_target(targets: list[N], name: str) -> N:
+    """The target called ``name``, or a ``ValueError`` listing the defined ones.
+
+    A named target that is not defined is an error rather than a fall-through
+    to auto-detection: silently routing to whatever the checkout matches sends
+    writes somewhere the caller did not ask for. Both servers and the language
+    server raise this one message for ``--target`` and ``WITAN_TARGET``.
+    """
+    selected = next((t for t in targets if t.name == name), None)
+    if selected is None:
+        available = ", ".join(t.name for t in targets) or "(none defined)"
+        raise ValueError(f"Unknown target {name!r}. Available: {available}")
+    return selected
+
+
 def match_target(
     targets: list[T],
     *,

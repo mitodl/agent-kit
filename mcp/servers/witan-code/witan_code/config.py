@@ -11,6 +11,7 @@ from witan_core.target_config import (
     local_project_path,
     match_target,
     match_target_at,
+    named_target,
     parse_target_tables,
     to_list,
 )
@@ -218,11 +219,7 @@ def _select_target(
 
     explicit = target or os.environ.get("WITAN_TARGET")
     if explicit:
-        selected = next((t for t in targets if t.name == explicit), None)
-        if selected is None:
-            available = ", ".join(t.name for t in targets) or "(none defined)"
-            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
-        return file_cfg, selected
+        return file_cfg, named_target(targets, explicit)
     if project_path is not None:
         return file_cfg, match_target_at(targets, project_path)
     return file_cfg, match_target(

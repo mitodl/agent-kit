@@ -17,7 +17,12 @@ from pathlib import Path
 
 from ..config_file import DEFAULT_CONFIG_PATH, load_toml
 from ..repo_key import checkout_branch, remote_uri
-from ..target_config import match_target_at, parse_target_tables, to_list
+from ..target_config import (
+    match_target_at,
+    named_target,
+    parse_target_tables,
+    to_list,
+)
 from .plugin import Folder
 
 __all__ = ["explicit_target", "resolve_folder"]
@@ -48,18 +53,14 @@ def _targets() -> list[_TargetMatch]:
 def explicit_target(flag: str | None) -> str | None:
     """The target named by ``--target`` or ``WITAN_TARGET``, checked to exist.
 
-    Raises ``ValueError`` for a name config.toml does not define, with the
-    servers' wording: routing every folder by matching instead would send
+    Raises ``ValueError`` for a name config.toml does not define
+    (:func:`witan_core.target_config.named_target`): routing every folder by matching instead would send
     reads somewhere the person did not ask for.
     """
     name = flag or os.environ.get("WITAN_TARGET")
     if not name:
         return None
-    names = [t.name for t in _targets()]
-    if name not in names:
-        available = ", ".join(names) or "(none defined)"
-        raise ValueError(f"Unknown target {name!r}. Available: {available}")
-    return name
+    return named_target(_targets(), name).name
 
 
 def resolve_folder(uri: str, path: Path, explicit: str | None) -> Folder:
