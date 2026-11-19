@@ -2,11 +2,12 @@
 name: feature-loop
 description: >
   Run the feature loop: plan a change, debate the plan with a read-only reviewer
-  on a different provider's model, stop for the user's approval, implement, then
+  on a model the user picks (usually another provider's), stop for the user's
+  approval, implement, then
   debate the code with a fresh reviewer, and commit locally. Use this skill only
   when the user explicitly asks for the feature loop or types `/feature-loop`,
   never for an ordinary "implement X" request: it sends the plan and the code to
-  a second model provider. The reviewer runs through `scripts/reviewer.py`
+  the reviewer's model provider. The reviewer runs through `scripts/reviewer.py`
   (codex, claude or pi CLI, chosen per user in
   `~/.config/feature-loop/reviewers`).
 license: BSD-3-Clause
@@ -17,7 +18,8 @@ metadata:
 # Feature loop
 
 You, the main session, own every step and do the implementation yourself. A
-reviewer on another provider's model challenges the plan and then the code.
+reviewer on a model the user picks, usually from another provider, challenges
+the plan and then the code.
 The request is the user's message that invoked this skill.
 
 **Debate cap:** 5 rounds per debate.
@@ -51,12 +53,10 @@ reviewer's replies. Never commit them.
   *         claude:<anthropic model>
   ```
 
-- `FEATURE_LOOP_REVIEWER=<backend:model>` overrides the file. A reviewer that
-  looks like the main session's own provider is refused (exit 2) unless
-  `FEATURE_LOOP_ALLOW_SAME_PROVIDER=1`. That check goes by names (`claude`,
-  `gpt`, `gemini` and the like in the caller and in a pi `<provider>/<model>`),
-  so it can miss a vendor it has no word for: choosing a different provider is
-  still yours to get right.
+- `FEATURE_LOOP_REVIEWER=<backend:model>` overrides the file. Any reviewer is
+  allowed, the main session's own provider included (another model from the
+  same provider is fine). The only check: when the reviewer is the exact model
+  the main session runs, the script warns and still runs.
 - **What the reviewer can read:** any file you can, not only this repo, and
   whatever it reads goes to that provider. The loop asks it not to open env
   files or credentials, but nothing enforces that. For a claude reviewer,
@@ -74,13 +74,18 @@ between tool calls. Run the script with `python3`. It picks the reviewer from
 the user's config (see Setup) and runs it read-only with no MCP servers.
 
 ```bash
-python3 <skill_dir>/scripts/reviewer.py start --caller <family> --dir "<dir>" --prompt-file <file>
+python3 <skill_dir>/scripts/reviewer.py start --caller <family> --caller-model <model id> --dir "<dir>" --prompt-file <file>
 python3 <skill_dir>/scripts/reviewer.py resume --session <token> --dir "<dir>" --prompt-file <file>
-python3 <skill_dir>/scripts/reviewer.py show --caller <family>
+python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <model id>
 ```
 
 - `--caller` is your own model family in lowercase: `claude` for Claude models,
   `gpt` for OpenAI GPT models, otherwise your family's name (`glm`, `gemini`).
+- `--caller-model` is your exact model id (`claude-opus-5-5`, `gpt-6.1-sol`).
+  It is optional; leave it out if you don't know your id. With it, the script
+  prints `reviewer.py: warning: the reviewer is the same model as the main
+  session (<id>)` on stderr when the reviewer is that very model. The call
+  still runs: tell the user and copy the warning into the debate log.
 - Write each prompt to a new file made with `mktemp "<dir>/prompt-XXXXXX.md"`,
   never on the command line and never at a fixed path.
 - stdout starts with `reviewer: <backend:model>` and
@@ -101,8 +106,8 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family>
   `3`, start a fresh reviewer with the plan and the debate log so far, and note
   in the log that it is a fallback. On `4`, wait a few minutes and retry, at most 3
   times, then ask the user. On `1` or `2`, stop and show the user the message. Never fall back to
-  reviewing it yourself, or to a reviewer on your own provider, unless the user
-  says so.
+  reviewing it yourself, or to a reviewer the user did not configure, unless the
+  user says so.
 - A call takes minutes. If your shell tool can run a command in the background,
   run it that way and wait for it; otherwise use the longest timeout the tool
   allows. If the call is killed anyway, the token is already in

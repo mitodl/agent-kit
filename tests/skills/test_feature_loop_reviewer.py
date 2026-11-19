@@ -68,7 +68,7 @@ if mode == "closeout":
     time.sleep(60)
 if name == "claude":
     sid = flag("--session-id") or flag("--resume")
-    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": ["Glob", "Grep", "Read"], "mcp_servers": []}
+    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": ["Glob", "Grep", "Read"], "mcp_servers": [], "model": os.environ.get("STUB_MODEL") or "stub-model"}
     if mode == "badtools":
         init["tools"] = ["Bash", "Glob", "Grep", "Read"]
     if mode == "readonly":
@@ -185,7 +185,6 @@ class ReviewerTest(unittest.TestCase):
         )
 
     def start(self, **env: str) -> subprocess.CompletedProcess:
-        # A caller on no backend's provider, so any reviewer may be picked.
         return self.run_script(
             "start",
             "--caller",
@@ -254,72 +253,74 @@ class ReviewerTest(unittest.TestCase):
         )
         self.assertEqual(out.stdout.splitlines()[0], "reviewer: codex:other")
 
-    def test_reviewer_on_the_callers_provider_exits_2(self) -> None:
-        self.write_config("gpt codex:g\n* claude:opus-test\n")
-        for caller, env in [
-            ("claude", {}),
-            ("Opus", {}),
-            ("anthropic", {}),
-            ("gpt", {}),
-            ("claude", {"FEATURE_LOOP_REVIEWER": "claude:other"}),
-            ("sonnet", {"FEATURE_LOOP_REVIEWER": "pi:Anthropic/x"}),
-            ("codex", {"FEATURE_LOOP_REVIEWER": "pi:openai/x"}),
-            ("glm", {"FEATURE_LOOP_REVIEWER": "pi:glm/x"}),
-            # Names beyond the bare family, and a vendor behind another pi provider.
-            ("fable", {}),
-            ("claude-opus-5", {}),
-            ("gpt-5", {"FEATURE_LOOP_REVIEWER": "codex:m"}),
-            ("o3", {"FEATURE_LOOP_REVIEWER": "codex:m"}),
-            ("gpt", {"FEATURE_LOOP_REVIEWER": "pi:openai-codex/m"}),
-            ("gpt", {"FEATURE_LOOP_REVIEWER": "pi:github-copilot/gpt-5"}),
-            ("claude", {"FEATURE_LOOP_REVIEWER": "pi:openrouter/anthropic/m"}),
-            ("claude", {"FEATURE_LOOP_REVIEWER": "pi:amazon-bedrock/us.claude-m"}),
-            ("gemini", {"FEATURE_LOOP_REVIEWER": "pi:google/gemini-pro"}),
-            ("gpt", {"FEATURE_LOOP_REVIEWER": "pi:github-copilot/o3"}),
-            ("o3", {"FEATURE_LOOP_REVIEWER": "pi:openrouter/o4-mini"}),
-        ]:
-            out = self.run_script("show", "--caller", caller, **env)
-            self.assertEqual(out.returncode, 2, (caller, env, out.stdout))
-            self.assertIn("own provider", out.stderr)
-            self.assertIn("FEATURE_LOOP_ALLOW_SAME_PROVIDER", out.stderr)
-        for caller, value in [
-            ("claude", "pi:github-copilot/gpt-5"),
-            ("gpt", "pi:openrouter/anthropic/m"),
-            ("gemini", "claude:m"),
-            ("glm", "pi:google/gemini-pro"),
-            ("claude", "pi:github-copilot/o3"),
-            ("gpt", "pi:ollama/llama3"),
-        ]:
+    def test_same_provider_reviewer_is_allowed(self) -> None:
+        self.write_config(
+            "claude claude:claude-sonnet-5-5\ngpt pi:openai-codex/gpt-m\n"
+        )
+        for caller in ("claude", "gpt"):
             out = self.run_script(
-                "show", "--caller", caller, FEATURE_LOOP_REVIEWER=value
+                "show", "--caller", caller, "--caller-model", "other-model"
             )
-            self.assertEqual(out.returncode, 0, (caller, value, out.stderr))
-        out = self.run_script(
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertNotIn("warning", out.stderr)
+
+    def test_warns_only_when_the_reviewer_is_the_callers_exact_model(self) -> None:
+        for caller_model, reviewer_value, warns in [
+            ("claude-opus-5-5", "claude:claude-opus-5-5", True),
+            ("Claude-Opus-5-5", "pi:openrouter/anthropic/claude-opus-5-5:high", True),
+            ("gpt-6.1-sol", "codex:gpt-6.1-sol", True),
+            ("gpt-6.1-sol", "pi:openai-codex/gpt-6.1-sol", True),
+            ("claude-opus-5-5", "claude:claude-sonnet-5-5", False),
+            ("gpt-6.1-sol", "codex:gpt-6-luna", False),
+            (None, "claude:claude-opus-5-5", False),
+        ]:
+            args = ["show", "--caller", "any"]
+            if caller_model:
+                args += ["--caller-model", caller_model]
+            out = self.run_script(*args, FEATURE_LOOP_REVIEWER=reviewer_value)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(
+                "same model as the main session" in out.stderr,
+                warns,
+                (caller_model, reviewer_value, out.stderr),
+            )
+
+    def start_as(self, caller_model: str, **env: str) -> subprocess.CompletedProcess:
+        return self.run_script(
             "start",
             "--caller",
-            "opus",
+            "any",
+            "--caller-model",
+            caller_model,
             "--dir",
             str(self.topic),
             "--prompt-file",
             str(self.prompt),
+            **env,
         )
-        self.assertEqual(out.returncode, 2)
-        self.assertEqual(list(self.log.iterdir()), [])
 
-    def test_same_provider_allowed_only_by_the_override(self) -> None:
-        self.write_config("* claude:opus-test\n")
-        out = self.run_script(
-            "show", "--caller", "opus", FEATURE_LOOP_ALLOW_SAME_PROVIDER="1"
-        )
+    def test_same_model_reviewer_warns_once_and_still_runs(self) -> None:
+        for value, stub_model in [
+            ("codex:gpt-6.1-sol", ""),
+            ("claude:claude-opus-5-5", "claude-opus-5-5"),
+        ]:
+            out = self.start_as(
+                "gpt-6.1-sol" if value.startswith("codex") else "claude-opus-5-5",
+                FEATURE_LOOP_REVIEWER=value,
+                STUB_MODEL=stub_model,
+            )
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stderr.count("same model as the main session"), 1)
+            self.assertIn("reviewer-reply: ", out.stdout)
+
+    def test_claude_alias_warns_once_resolved_to_the_callers_model(self) -> None:
+        env = {"FEATURE_LOOP_REVIEWER": "claude:opus"}
+        out = self.start_as("claude-opus-5-5", STUB_MODEL="claude-opus-5-5", **env)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.splitlines()[0], "reviewer: claude:opus-test")
-        out = self.run_script(
-            "show", "--caller", "opus", FEATURE_LOOP_ALLOW_SAME_PROVIDER="yes"
-        )
-        self.assertEqual(out.returncode, 2)
-        # Another provider's caller needs no override.
-        out = self.run_script("show", "--caller", "gemini")
+        self.assertEqual(out.stderr.count("same model as the main session"), 1)
+        out = self.start_as("claude-opus-5-5", STUB_MODEL="claude-sonnet-5-5", **env)
         self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("warning", out.stderr)
 
     def test_bad_config_lines_exit_2(self) -> None:
         for text in [

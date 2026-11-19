@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Start or resume a read-only reviewer on another provider's CLI.
+"""Start or resume a read-only reviewer through the codex, claude or pi CLI.
 
 The feature-loop skill calls this for its plan and code reviews. The reviewer
 is picked from ``$XDG_CONFIG_HOME/feature-loop/reviewers`` (one
 ``<caller family> <backend:model>`` per line, ``*`` as the catch-all) or from
 ``FEATURE_LOOP_REVIEWER``. Nothing is shipped as a default, so code only goes
-to a provider the user chose. A reviewer on the caller's own provider is
-refused unless ``FEATURE_LOOP_ALLOW_SAME_PROVIDER=1``.
+to a provider the user chose. Any reviewer is allowed, the caller's own
+provider included; with ``--caller-model`` it warns when the reviewer is the
+very model the main session runs.
 
 Each backend runs with flags that make it read-only and MCP-free, built by one
 function for both start and resume so a resume cannot drop a restriction:
@@ -71,16 +72,6 @@ GONE_MESSAGES = {
     "pi": "No session found matching",
 }
 CLAUDE_TOOLS = ["Read", "Grep", "Glob"]
-BACKEND_VENDORS = {"codex": "openai", "claude": "anthropic"}
-# Words that give a model's vendor away, wherever they sit in a caller name
-# (`claude-opus-5`, `fable`) or a pi `<provider>/<model>`
-# (`openrouter/anthropic/...`, `openai-codex/...`, `github-copilot/gpt-...`).
-VENDOR_WORDS = {
-    "anthropic": ("claude", "opus", "sonnet", "haiku", "fable", "mythos", "anthropic"),
-    "openai": ("gpt", "openai", "codex"),
-    "google": ("gemini", "google"),
-}
-ALLOW_SAME_PROVIDER = "FEATURE_LOOP_ALLOW_SAME_PROVIDER"
 CLAUDE_CONFINED = "FEATURE_LOOP_CLAUDE_CONFINED"
 
 _child: list[subprocess.Popen] = []
@@ -118,44 +109,25 @@ def parse_value(value: str, where: str) -> tuple[str, str]:
     return backend, model
 
 
-def vendors(text: str) -> set[str]:
-    text = text.lower()
-    found = {v for v, words in VENDOR_WORDS.items() if any(w in text for w in words)}
-    # OpenAI's o1, o3, ...: as a caller name or a part of a pi `<provider>/<model>`.
-    if any(re.match(r"o\d", part) for part in text.split("/")):
-        found.add("openai")
-    return found
+def model_id(model: str) -> str:
+    """The bare model id: no pi provider prefix, no `:thinking` suffix."""
+    return model.rsplit("/", 1)[-1].split(":", 1)[0].strip().lower()
 
 
-def same_provider(caller: str, backend: str, model: str) -> bool:
-    """Whether the reviewer runs a model from the caller's own vendor.
-
-    A guess from names, erring towards refusing: a caller of an unlisted
-    vendor is caught only when its name appears in a pi reviewer's string.
-    """
-    family = caller.strip().lower()
-    mine = vendors(family)
-    if backend in BACKEND_VENDORS:
-        return BACKEND_VENDORS[backend] in mine
-    return bool(mine & vendors(model)) or (len(family) > 2 and family in model.lower())
+def warn_if_same_model(caller_model: str | None, model: str) -> bool:
+    """Warn when the reviewer is exactly the main session's model."""
+    if not caller_model or model_id(caller_model) != model_id(model):
+        return False
+    print(
+        "reviewer.py: warning: the reviewer is the same model as the main "
+        f"session ({model_id(model)})",
+        file=sys.stderr,
+        flush=True,
+    )
+    return True
 
 
 def resolve(caller: str) -> tuple[str, str]:
-    backend, model = _configured(caller)
-    if (
-        same_provider(caller, backend, model)
-        and os.environ.get(ALLOW_SAME_PROVIDER) != "1"
-    ):
-        raise Fail(
-            EXIT_CONFIG,
-            f"the reviewer {backend}:{model} looks like the caller's own provider "
-            f"(caller {caller.strip()!r}). Pick a reviewer on another provider, "
-            f"or set {ALLOW_SAME_PROVIDER}=1 to allow it.",
-        )
-    return backend, model
-
-
-def _configured(caller: str) -> tuple[str, str]:
     env = os.environ.get("FEATURE_LOOP_REVIEWER", "").strip()
     if env:
         return parse_value(env, "FEATURE_LOOP_REVIEWER")
@@ -451,9 +423,17 @@ def _text_parts(content: object) -> str:
 class Collector:
     """Pulls the session id, the reply and any error out of a backend's events."""
 
-    def __init__(self, backend: str, on_session: Callable[[str], None] | None) -> None:
+    def __init__(
+        self,
+        backend: str,
+        on_session: Callable[[str], None] | None,
+        caller_model: str | None = None,
+        warned: bool = False,
+    ) -> None:
         self.backend = backend
         self.on_session = on_session
+        self.caller_model = caller_model
+        self.warned = warned
         self.reply = ""
         self.error = ""
         self.started = False
@@ -479,6 +459,10 @@ class Collector:
                         "claude CLI may have changed how its flags apply.",
                     )
                 self.started = True
+                # An alias such as `opus` resolves only here.
+                resolved = ev.get("model")
+                if not self.warned and isinstance(resolved, str):
+                    self.warned = warn_if_same_model(self.caller_model, resolved)
             elif kind == "result":
                 self.reply = ev.get("result") or ""
                 if ev.get("is_error"):
@@ -519,6 +503,7 @@ def review(
     prompt_file: Path,
     timeout: float,
     resume_id: str | None,
+    caller_model: str | None = None,
 ) -> int:
     if not prompt_file.is_file():
         raise Fail(EXIT_CONFIG, f"prompt file not found: {prompt_file}")
@@ -528,7 +513,14 @@ def review(
     partial = open_reply(topic_dir)
     try:
         return _review(
-            backend, model, topic_dir, prompt_file, timeout, resume_id, partial
+            backend,
+            model,
+            topic_dir,
+            prompt_file,
+            timeout,
+            resume_id,
+            partial,
+            caller_model,
         )
     finally:
         partial.unlink(missing_ok=True)
@@ -542,9 +534,11 @@ def _review(
     timeout: float,
     resume_id: str | None,
     partial: Path,
+    caller_model: str | None = None,
 ) -> int:
     locks = topic_dir / "locks"
     print(f"reviewer: {backend}:{model}", flush=True)
+    warned = warn_if_same_model(caller_model, model)
     on_session = None
     if resume_id is not None:
         pi_file = ""
@@ -586,7 +580,7 @@ def _review(
         announce(topic_dir, backend, model, encode_token(backend, model, session_id))
         argv = start_argv(backend, model, topic_dir, session_id)
 
-    collect = Collector(backend, on_session)
+    collect = Collector(backend, on_session, caller_model, warned)
     returncode, stderr = run_child(argv, prompt_file, lock_fd, timeout, collect)
     # `started` is also what proves claude's restriction check ran.
     if returncode != 0 or collect.error or not collect.reply or not collect.started:
@@ -603,8 +597,9 @@ def _review(
     return 0
 
 
-def show(caller: str) -> int:
+def show(caller: str, caller_model: str | None = None) -> int:
     backend, model = resolve(caller)
+    warn_if_same_model(caller_model, model)
     topic = Path("<dir>")
     sid = "<thread_id>" if backend == "codex" else "<uuid>"
     pi_file = "<dir>/pi-sessions/<file for uuid>.jsonl"
@@ -633,6 +628,9 @@ def main(argv: list[str] | None = None) -> int:
     p_start.add_argument(
         "--caller", required=True, help="the main session's model family"
     )
+    p_start.add_argument(
+        "--caller-model", help="the main session's exact model id, for a warning"
+    )
     p_resume = sub.add_parser("resume", help="send a prompt to an existing session")
     p_resume.add_argument(
         "--session", required=True, help="token from reviewer-session:"
@@ -649,17 +647,24 @@ def main(argv: list[str] | None = None) -> int:
         "show", help="print the reviewer and its argv; runs nothing"
     )
     p_show.add_argument("--caller", required=True)
+    p_show.add_argument("--caller-model")
     args = parser.parse_args(argv)
 
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
     try:
         if args.command == "show":
-            return show(args.caller)
+            return show(args.caller, args.caller_model)
         if args.command == "start":
             backend, model = resolve(args.caller)
             return review(
-                backend, model, args.dir, args.prompt_file, args.timeout, None
+                backend,
+                model,
+                args.dir,
+                args.prompt_file,
+                args.timeout,
+                None,
+                args.caller_model,
             )
         backend, model, session_id = decode_token(args.session)
         return review(
