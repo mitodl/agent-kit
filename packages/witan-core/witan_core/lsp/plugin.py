@@ -197,8 +197,14 @@ class Plugin:
         return []
 
     def references(
-        self, ctx: Context, uri: str, line: int, character: int
+        self,
+        ctx: Context,
+        uri: str,
+        line: int,
+        character: int,
+        include_declaration: bool,
     ) -> list[Location]:
+        """``include_declaration`` is the request's ``context.includeDeclaration``."""
         return []
 
     def resolve_symbol(

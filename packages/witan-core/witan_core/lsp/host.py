@@ -354,12 +354,17 @@ class Host:
         ]
 
     def references(
-        self, path: Path | None, uri: str, line: int, character: int
+        self,
+        path: Path | None,
+        uri: str,
+        line: int,
+        character: int,
+        include_declaration: bool,
     ) -> list[Location]:
         return [
             loc
             for plugin, ctx in self._contexts(Capability.REFERENCES, path)
-            for loc in plugin.references(ctx, uri, line, character)
+            for loc in plugin.references(ctx, uri, line, character, include_declaration)
         ]
 
     def execute(self, command: str, arguments: Sequence[Any]) -> Any:

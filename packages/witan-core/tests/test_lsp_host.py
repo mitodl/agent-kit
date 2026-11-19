@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from lsprotocol import types
 
-from witan_core.lsp import BOUND_TOOLS, Capability, Lens, Note, Plugin, Route
+from witan_core.lsp import BOUND_TOOLS, Capability, Lens, Location, Note, Plugin, Route
 from witan_core.lsp.folders import explicit_target, resolve_folder
 from witan_core.lsp.host import Host, PluginExit
 from witan_core.lsp.testing import lsp_session
@@ -525,3 +525,33 @@ def test_a_relative_witan_config_survives_pinning_the_cwd(
     assert Path.cwd() == work
     assert resolve_folder(home.as_uri(), home, None).target == "personal"
     host.close()
+
+
+def test_references_pass_include_declaration_through(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+
+    class Refs(Recorder):
+        capabilities = frozenset({Capability.REFERENCES})
+
+        def references(self, ctx, uri, line, character, include_declaration):
+            return [Location(uri=uri, line=int(include_declaration))]
+
+    uri = (work / "m.py").as_uri()
+
+    async def go():
+        async with lsp_session(Host({"r": Refs("r")}), [work]) as session:
+            return [
+                (
+                    await session.client.text_document_references_async(
+                        types.ReferenceParams(
+                            text_document=types.TextDocumentIdentifier(uri=uri),
+                            position=types.Position(line=0, character=0),
+                            context=types.ReferenceContext(include_declaration=flag),
+                        )
+                    )
+                )[0].range.start.line
+                for flag in (False, True)
+            ]
+
+    assert run(go()) == [0, 1]

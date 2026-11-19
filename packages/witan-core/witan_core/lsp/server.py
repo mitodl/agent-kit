@@ -193,7 +193,12 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
         async def references(ls: LanguageServer, params: types.ReferenceParams):
             uri, pos = params.text_document.uri, params.position
             locs = await host.run(
-                host.references, _path(uri), uri, pos.line, pos.character
+                host.references,
+                _path(uri),
+                uri,
+                pos.line,
+                pos.character,
+                params.context.include_declaration,
             )
             return [_location(loc) for loc in locs]
 
