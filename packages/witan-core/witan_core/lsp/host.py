@@ -140,7 +140,7 @@ class Host:
             max_workers=1, thread_name_prefix="witan-lsp-plugins"
         )
         self._routes: dict[tuple[str, str], Route | _Refused | _Unroutable] = {}
-        self._providers: dict[tuple[str, Hashable], BoundTools] = {}
+        self._providers: dict[tuple[str, Hashable, Hashable], BoundTools] = {}
         self._anchors: dict[str, tuple[Folder, Route]] = {}
         """Each plugin's local store: the first folder that routed to one,
         and that route. Kept for the life of the process, because the store
@@ -239,7 +239,7 @@ class Host:
         route = self._route(name, folder)
         if not isinstance(route, Route):
             return None
-        key = (name, route.key)
+        key = (name, route.key, route.guard)
         if key not in self._providers:
             if route.local and not self._cwd_pinned:
                 # The servers resolve their local store from the cwd when their

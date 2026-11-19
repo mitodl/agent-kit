@@ -555,3 +555,24 @@ def test_references_pass_include_declaration_through(config, monkeypatch):
             ]
 
     assert run(go()) == [0, 1]
+
+
+def test_folders_sharing_a_store_get_a_provider_per_guard(config, monkeypatch):
+    """witan-council guards a fallback store's writes but not a deliberately
+    chosen one's. Two folders on one store with different guards must share
+    the store without sharing the first folder's guard."""
+    work, home = config
+    monkeypatch.chdir(work)
+    plugin = Recorder(
+        "p",
+        {
+            "work": Route(key="/stores/one", local=True, guard="deliberate"),
+            "personal": Route(key="/stores/one", local=True, guard="fallback"),
+        },
+    )
+    host = Host({"p": plugin})
+    host.set_folders([resolve_folder(p.as_uri(), p, None) for p in (work, home)])
+    for folder in host.folders.values():
+        assert host.context("p", folder) is not None
+    assert [route.guard for route, _ in plugin.opened] == ["deliberate", "fallback"]
+    host.close()

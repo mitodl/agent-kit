@@ -26,7 +26,13 @@ class CouncilPlugin(Plugin):
         if remote is not None:
             return Route(key=remote, local=False)
         cfg = cfg_module.load(target=folder.target, project_path=folder.path)
-        return Route(key=cfg.graph_uri, local=True)
+        # The guard is per folder: a target that chose this store and a folder
+        # that fell back to it read the same graph, but only the second's
+        # writes are refused.
+        guard = cfg_module.diagnose_local_dispatch(
+            target=folder.target, project_path=folder.path
+        )
+        return Route(key=cfg.graph_uri, local=True, guard=guard)
 
     def open(self, route: Route, folder: Folder) -> Any:
         if not route.local:
@@ -35,8 +41,4 @@ class CouncilPlugin(Plugin):
             return remote_proxy(route.key)
         from .cli.local_dispatch import local_server
 
-        return local_server(
-            cfg_module.diagnose_local_dispatch(
-                target=folder.target, project_path=folder.path
-            )
-        )
+        return local_server(route.guard)

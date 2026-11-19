@@ -104,13 +104,20 @@ class Folder:
 class Route:
     """Where one plugin's reads for one folder go.
 
-    The host opens one tool provider per distinct ``key``, so folders that
-    share a deployment share its ``RemoteServerProxy``. A process holds one
-    local store, so ``local`` routes with different keys cannot both be served.
+    The host opens one tool provider per distinct ``key`` and ``guard``, so
+    folders that share a deployment share its ``RemoteServerProxy``. A process
+    holds one local store, so ``local`` routes with different keys cannot both
+    be served.
     """
 
     key: Hashable
+    """The store. Shown in the diagnostic on a folder refused a second one."""
     local: bool
+    guard: Hashable = None
+    """What else the provider depends on besides the store. Folders on one
+    store whose guards differ share the store but each get their own
+    provider: witan-council refuses writes to a local store nothing selected,
+    and must not lend that refusal, or its absence, to another folder."""
 
 
 @dataclass(frozen=True)
