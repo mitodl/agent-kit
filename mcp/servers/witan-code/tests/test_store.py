@@ -249,14 +249,14 @@ def test_discard_store_takes_the_schema_stamp_with_it(tmp_path):
     assert freed >= len("payload")
 
 
-def _plan(cfg, store) -> dict:
+def _plan(schema_file, store) -> dict:
     res = subprocess.run(
         [
             store_module._binary(),
             "schema",
             "plan",
             "--schema",
-            str(cfg.bridge_schema_file),
+            str(schema_file),
             "--json",
             *store_cli_args(str(store), binary=store_module._binary()),
         ],
@@ -304,7 +304,7 @@ def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
         check=True,
         capture_output=True,
     )
-    assert _plan(cfg, store)["supported"] is False
+    assert _plan(cfg.bridge_schema_file, store)["supported"] is False
 
     with ThreadPoolExecutor(callers) as pool:
         for future in [
@@ -312,7 +312,7 @@ def test_a_bridge_the_shipped_schema_cannot_migrate_is_recreated(
         ]:
             future.result()
 
-    assert _plan(cfg, store) == {
+    assert _plan(cfg.bridge_schema_file, store) == {
         "uri": str(store),
         "supported": True,
         "step_count": 0,
@@ -337,6 +337,219 @@ def test_a_bridge_whose_apply_fails_for_another_reason_is_kept(tmp_path, monkeyp
     store_module.ensure_bridge_store(cfg)
 
     assert marker.exists()
+
+
+def _code_store_with_a_view(tmp_path, monkeypatch, old: str, new: str):
+    """A code store built from the shipped schema with ``old`` in place of
+    ``new``, carrying one branch view, and the config that resolves it."""
+    from witan_code import config as cfg_mod
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+    current = cfg.schema_file.read_text()
+    assert new in current
+    old_schema = tmp_path / "old-code-schema.pg"
+    old_schema.write_text(current.replace(new, old, 1))
+    slug = "https://github.com/test/views"
+    store = cfg_mod.store_path(slug, cfg.code_dir)
+    _init_with_a_view(old_schema, store)
+    return cfg, slug, store
+
+
+def _init_with_a_view(schema_file, store) -> None:
+    binary = store_module._binary()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [binary, "init", "--schema", str(schema_file), str(store)],
+        check=True,
+        capture_output=True,
+    )
+    _create_view(store)
+
+
+def _create_view(store, name="act-x/feature") -> None:
+    binary = store_module._binary()
+    subprocess.run(
+        [binary, "branch", "create", name, *store_cli_args(str(store), binary=binary)],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _branches(cfg, store) -> list[str]:
+    from witan_code.graph import OmnigraphClient
+
+    return sorted(OmnigraphClient(str(store), cfg.queries_dir).list_branches())
+
+
+@requires_stack
+def test_a_code_store_with_a_view_drops_it_to_take_a_new_field(tmp_path, monkeypatch):
+    """omnigraph 0.15 refuses `schema apply` on a graph with any branch but
+    main, so a store with a view would never gain the field."""
+    cfg, slug, store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="",
+        new="    index_version: I32?\n",
+    )
+    assert _plan(cfg.schema_file, store)["step_count"] == 1
+
+    store_module.ensure_store(slug, cfg)
+
+    assert _plan(cfg.schema_file, store)["step_count"] == 0
+    assert _branches(cfg, store) == ["main"]
+
+
+@requires_stack
+def test_a_code_store_keeps_its_views_when_the_change_is_unsupported(
+    tmp_path, monkeypatch
+):
+    """Dropping the views cannot make an unsupported change apply."""
+    cfg, slug, store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: I32\n",
+        new="    content_hash: String\n",
+    )
+    assert _plan(cfg.schema_file, store)["supported"] is False
+
+    store_module.ensure_store(slug, cfg)
+
+    assert _branches(cfg, store) == ["act-x/feature", "main"]
+
+
+@requires_stack
+def test_a_reinstall_that_only_moves_the_schema_mtime_keeps_the_views(
+    tmp_path, monkeypatch
+):
+    """Every `uv tool upgrade` rewrites the schema file, so its mtime moves
+    with no change in content. omnigraph refuses even that empty apply on a
+    store with views, which must not read as a reason to drop them."""
+    import dataclasses
+
+    from witan_core.omnigraph import schema_stamp_path
+
+    cfg, slug, store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: String\n",
+        new="    content_hash: String\n",
+    )
+    reinstalled = tmp_path / "reinstalled-code-schema.pg"
+    reinstalled.write_text(cfg.schema_file.read_text())
+    cfg = dataclasses.replace(cfg, schema_file=reinstalled)
+    assert _plan(reinstalled, store)["step_count"] == 0
+
+    store_module.ensure_store(slug, cfg)
+
+    assert _branches(cfg, store) == ["act-x/feature", "main"]
+    assert schema_stamp_path(store).read_text() == str(reinstalled.stat().st_mtime)
+
+
+@requires_stack
+def test_an_apply_refused_for_another_reason_keeps_the_views(tmp_path, monkeypatch):
+    """Only omnigraph's non-main-branch refusal is evidence that the views are
+    what blocks the apply. Any other failure would recur on every index, and
+    drop the views each time."""
+    cfg, slug, store = _code_store_with_a_view(
+        tmp_path, monkeypatch, old="", new="    index_version: I32?\n"
+    )
+    schema_cli = store_module._schema_cli
+
+    def failing_apply(binary, verb, *args):
+        if verb == "apply":
+            return subprocess.CompletedProcess(
+                [binary], 1, "", "No space left on device"
+            )
+        return schema_cli(binary, verb, *args)
+
+    monkeypatch.setattr(store_module, "_schema_cli", failing_apply)
+
+    store_module.ensure_store(slug, cfg)
+
+    assert _branches(cfg, store) == ["act-x/feature", "main"]
+    assert _plan(cfg.schema_file, store)["step_count"] == 1
+
+
+@requires_stack
+def test_an_apply_that_fails_with_no_views_left_drops_them_once(tmp_path, monkeypatch):
+    """Without the marker, each index would re-fork its view and the next
+    would delete it again, so the view would only ever hold main plus the last
+    edited file. A changed schema file is a new attempt."""
+    import dataclasses
+
+    cfg, slug, store = _code_store_with_a_view(
+        tmp_path, monkeypatch, old="", new="    index_version: I32?\n"
+    )
+    monkeypatch.setattr(store_module, "schema_apply", lambda *_: False)
+
+    store_module.ensure_store(slug, cfg)
+    assert _branches(cfg, store) == ["main"]
+
+    _create_view(store)
+    store_module.ensure_store(slug, cfg)
+    assert _branches(cfg, store) == ["act-x/feature", "main"]
+
+    reinstalled = tmp_path / "reinstalled-code-schema.pg"
+    reinstalled.write_text(cfg.schema_file.read_text())
+    store_module.ensure_store(slug, dataclasses.replace(cfg, schema_file=reinstalled))
+    assert _branches(cfg, store) == ["main"]
+
+
+@requires_stack
+def test_dropping_the_bridge_views_drops_the_code_views_too(tmp_path, monkeypatch):
+    """A branch's bindings are written only for the files its code view
+    parses. A code view left current would skip the files the branch changed,
+    so the re-forked bridge view would keep main's bindings for them."""
+    from witan_code import config as cfg_mod
+
+    cfg, _slug, code_store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: String\n",
+        new="    content_hash: String\n",
+    )
+    field = "    language: String?\n"
+    current = cfg.bridge_schema_file.read_text()
+    assert field in current
+    old_bridge = tmp_path / "old-bridge-schema.pg"
+    old_bridge.write_text(current.replace(field, "", 1))
+    bridge = cfg_mod.bridge_store_path(cfg.code_dir)
+    _init_with_a_view(old_bridge, bridge)
+    assert _plan(cfg.bridge_schema_file, bridge)["step_count"] == 1
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert _plan(cfg.bridge_schema_file, bridge)["step_count"] == 0
+    assert _branches(cfg, bridge) == ["main"]
+    assert _branches(cfg, code_store) == ["main"]
+
+
+@requires_stack
+def test_a_code_store_that_cannot_be_read_does_not_stop_the_bridge_drop(
+    tmp_path, monkeypatch
+):
+    """One unreadable store would otherwise leave every store after it on
+    stale views, and fail the bindings write that found the old bridge."""
+    from witan_code import config as cfg_mod
+
+    cfg, _slug, code_store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: String\n",
+        new="    content_hash: String\n",
+    )
+    (cfg.code_dir / "aaa_unreadable.omni").mkdir()
+    field = "    language: String?\n"
+    old_bridge = tmp_path / "old-bridge-schema.pg"
+    old_bridge.write_text(cfg.bridge_schema_file.read_text().replace(field, "", 1))
+    bridge = cfg_mod.bridge_store_path(cfg.code_dir)
+    _init_with_a_view(old_bridge, bridge)
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert _branches(cfg, bridge) == ["main"]
+    assert _branches(cfg, code_store) == ["main"]
 
 
 @pytest.mark.parametrize("binary", ["/nonexistent/omnigraph", "false"])

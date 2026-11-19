@@ -22,6 +22,12 @@ node CodeFile {
     path: String @index
     language: String @index
     content_hash: String
+    // The version of the indexer that wrote this file's rows, so a file whose
+    // bytes have not changed is parsed again when the indexer extracts
+    // different rows. Null on a row written before this field existed. Kept
+    // out of content_hash because a client that does not know the field still
+    // compares that hash.
+    index_version: I32?
     indexed_at: DateTime
 }
 
