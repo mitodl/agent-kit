@@ -99,6 +99,15 @@ def test_changed_content_pending_and_missing_rows_always_reparse():
             assert not _unchanged(stored, SHA, check_version=check_version)
 
 
+def test_only_a_remote_branch_view_skips_the_version_check():
+    from witan_code.indexer import _checks_index_version
+
+    assert _checks_index_version(None, is_remote=True)
+    assert _checks_index_version(None, is_remote=False)
+    assert _checks_index_version("feature/x", is_remote=False)
+    assert not _checks_index_version("feature/x", is_remote=True)
+
+
 # ── A failing bridge write must be reported, not swallowed ──────────────────
 #
 # It was swallowed, and that cost 15 hours of silently-frozen cross-repo

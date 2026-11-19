@@ -258,19 +258,18 @@ def test_an_unchanged_file_gains_new_edges_when_the_index_version_moves(
 
 
 @requires_stack
-def test_a_branch_view_does_not_reparse_a_file_only_for_the_index_version(
+def test_a_local_branch_view_reparses_a_file_for_the_index_version(
     tmp_path, monkeypatch
 ):
-    """Parsing the whole repo onto a branch view for a version change would
-    push every file through the MCP tier, so a branch writer compares content
-    only. A view forked after CI's re-parse gets the new rows from main."""
+    """Only a remote view pays for a version re-parse through the MCP tier, so
+    a local store's branch view gets the new edges on its next index."""
     base = _two_modules_repo(tmp_path, monkeypatch)
     _index_as_an_indexer_before_cross_file_calls(base, monkeypatch)
 
     _git(base, "checkout", "-q", "-b", "feature/x")
     stats = _index(base)
-    assert stats.indexed == 0
-    assert stats.skipped == 3
+    assert stats.indexed == 3
+    assert CROSS_FILE_CALLERS <= _callers("pkg/b.py::target")
 
 
 @requires_stack

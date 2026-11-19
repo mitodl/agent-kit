@@ -673,7 +673,12 @@ def index_paths(
         stats.scanned += 1
         try:
             result = _parse_for_index(
-                path, base, slug, existing, force=force, check_version=branch is None
+                path,
+                base,
+                slug,
+                existing,
+                force=force,
+                check_version=_checks_index_version(branch, is_remote=client.is_remote),
             )
         except Exception as exc:  # one bad file must not abort
             stats.errors += 1
@@ -1230,6 +1235,16 @@ def _unchanged(
     if stored is None or stored.content_hash != content_hash:
         return False
     return not check_version or (stored.index_version or 1) == INDEX_VERSION
+
+
+def _checks_index_version(branch: str | None, *, is_remote: bool) -> bool:
+    """Whether an index re-parses unchanged files stored under another version.
+
+    Every write except a remote branch view's. That one goes through the MCP
+    tier, so a version change would push the whole repo through it; such a
+    view forked after CI's re-parse of main has the new rows already.
+    """
+    return branch is None or not is_remote
 
 
 def _delete_file_steps(file_id: str) -> list[tuple[str, str, dict]]:
