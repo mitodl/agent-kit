@@ -47,6 +47,12 @@ test-all: test-agent-config-kit test-ol-agent-kit test-witan-core test-witan-cou
 # Alias for `test-all`.
 test: test-all
 
+# Tests for bin/agent_activity_index.py (the monthly Agent Activity Index). Stdlib
+# unittest, so it needs only the cyclopts the script itself pins inline; it is not a
+# workspace package, which is why it is not part of `test-all`.
+test-agent-activity:
+    uv run --no-project --with cyclopts==5.0.0 python -m unittest discover -s tests/bin
+
 # Fail if the three omnigraph version pins have drifted apart.
 #
 # omnigraph uses strict single-version storage: a binary refuses a graph
