@@ -2219,6 +2219,16 @@ def test_schema_apply_stamps_the_schema_mtime(monkeypatch, tmp_path, fake_schema
     assert og.schema_stamp_path(store).read_text() == str(fake_schema.stat().st_mtime)
 
 
+def test_a_stamp_the_directory_refuses_is_skipped(tmp_path, fake_schema):
+    """The next call re-applies instead, which is safe because the apply is
+    idempotent. Raising would fail a caller whose store is fine."""
+    og.stamp_schema_applied(fake_schema, tmp_path / "missing-parent" / "graph.omni")
+
+    store = tmp_path / "graph.omni"
+    og.stamp_schema_applied(fake_schema, store)
+    assert og.schema_stamp_path(store).read_text() == str(fake_schema.stat().st_mtime)
+
+
 def test_schema_apply_does_not_stamp_on_failure(monkeypatch, tmp_path, fake_schema):
     """A failed apply must be retried next time, not recorded as done."""
     store = tmp_path / "graph.omni"
