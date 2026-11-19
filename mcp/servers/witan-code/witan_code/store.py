@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,7 @@ from witan_core.omnigraph import (
     schema_apply_if_changed,
     schema_stamp_path,
     shared_transport,
+    stamp_schema_applied,
     store_cli_args,
     store_write_lock,
 )
@@ -495,7 +497,12 @@ _NON_MAIN_BRANCHES_REFUSAL = "schema apply requires a graph with only main"
 
 
 def _apply_schema_over_views(
-    binary: str, schema_file: Path, store: Path, queries_dir: Path
+    binary: str,
+    schema_file: Path,
+    store: Path,
+    queries_dir: Path,
+    *,
+    on_views_dropped: Callable[[], None] | None = None,
 ) -> bool:
     """Apply ``schema_file`` to ``store``, deleting its branch views if they block it.
 
@@ -517,6 +524,13 @@ def _apply_schema_over_views(
     Any other outcome (no plan, an unsupported change, another apply error)
     leaves the views alone and the store for the next call to retry.
 
+    When the apply still fails once the views are gone, a marker records that
+    schema file's mtime and the views are not dropped again until it changes.
+    Otherwise every index would re-fork its view and the next would delete it,
+    leaving the view at main plus the last edited file.
+
+    :param on_views_dropped: called after the views are deleted, for a store
+        whose views other stores' views depend on.
     :returns: whether the store now has the schema.
     :rtype: bool
     """
@@ -527,40 +541,103 @@ def _apply_schema_over_views(
         if plan is None or plan["supported"] is not True:
             return False
         if plan["step_count"] == 0:
-            _stamp_schema(schema_file, store)
+            stamp_schema_applied(schema_file, store)
             return True
         res = _schema_cli(binary, "apply", schema_file, store)
         if res is None:
             return False
         if res.returncode == 0:
-            _stamp_schema(schema_file, store)
+            stamp_schema_applied(schema_file, store)
             return True
         if not any(
             line.startswith(_NON_MAIN_BRANCHES_REFUSAL)
             for line in res.stderr.splitlines()
         ):
             return False
-        client = OmnigraphClient(str(store), queries_dir)
-        views = [name for name in client.list_branches() if name != "main"]
-        for view in views:
-            client.delete_branch(view)
+        marker = _views_drop_failed_path(store)
+        schema_mtime = str(schema_file.stat().st_mtime)
+        if marker.is_file() and marker.read_text() == schema_mtime:
+            logger.info(
+                "witan.code.store.views_kept_after_failed_apply", store=str(store)
+            )
+            return False
+        views = _delete_views(OmnigraphClient(str(store), queries_dir))
         logger.warning(
             "witan.code.store.views_dropped_for_schema",
             store=str(store),
-            views=len(views),
+            views=views,
             reason="omnigraph applies a schema change only to a graph with no views",
             recovery=(
                 "the next full index of each branch (SessionStart, or "
                 "`witan-code index` in the checkout) rebuilds its view from main"
             ),
         )
-        return schema_apply(binary, schema_file, store)
+        if on_views_dropped is not None:
+            on_views_dropped()
+        if schema_apply(binary, schema_file, store):
+            return True
+        with contextlib.suppress(OSError):
+            marker.write_text(schema_mtime)
+        logger.warning(
+            "witan.code.store.schema_apply_failed_without_views",
+            store=str(store),
+            reason="the apply failed with no views left to block it",
+            recovery=(
+                "run `omnigraph schema apply` on the store to see the error; "
+                "views are not dropped again until the schema file changes"
+            ),
+        )
+        return False
 
 
-def _stamp_schema(schema_file: Path, store: Path) -> None:
-    """Record ``schema_file`` as applied, as :func:`schema_apply` does on success."""
-    with contextlib.suppress(OSError):
-        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
+def _views_drop_failed_path(store: Path) -> Path:
+    """Sidecar holding the schema mtime whose apply failed after a view drop."""
+    return store.parent / f"{store.name}.views_drop_failed"
+
+
+def _delete_views(client: OmnigraphClient) -> int:
+    """Delete every branch but ``main`` from ``client``'s store.
+
+    :returns: how many were deleted.
+    :rtype: int
+    """
+    views = [name for name in client.list_branches() if name != "main"]
+    for view in views:
+        client.delete_branch(view)
+    return len(views)
+
+
+def _drop_code_views(cfg: cfg_module.Config) -> None:
+    """Delete every local code store's branch views, after the bridge's went.
+
+    The indexer writes a branch's bindings only for the files it parses. A
+    code view still current after its bridge view was re-forked from bridge
+    main would skip the files the branch changed, so the bridge view would
+    keep main's bindings for them. Re-forked too, the code view parses those
+    files again and writes their bindings.
+
+    One store failing (e.g. one the installed binary cannot open) is logged
+    and skipped, so it does not keep the others on stale views.
+    """
+    for ref in per_repo_stores(cfg):
+        try:
+            views = _delete_views(OmnigraphClient(ref.uri, cfg.queries_dir))
+        except Exception:
+            logger.warning(
+                "witan.code.store.views_kept_for_bridge_schema",
+                store=ref.uri,
+                exc_info=True,
+                recovery="run `witan-code reindex` in each branch checkout of "
+                "this repo to rewrite its bindings",
+            )
+            continue
+        logger.warning(
+            "witan.code.store.views_dropped_for_bridge_schema",
+            store=ref.uri,
+            views=views,
+            reason="the bridge's views were dropped, and the bindings they held "
+            "are written again only for files a branch view parses",
+        )
 
 
 def _schema_cli(
@@ -647,7 +724,11 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     with store_write_lock(str(store)):
         if store.exists():
             if _apply_schema_over_views(
-                binary, cfg.bridge_schema_file, store, cfg.queries_dir
+                binary,
+                cfg.bridge_schema_file,
+                store,
+                cfg.queries_dir,
+                on_views_dropped=lambda: _drop_code_views(cfg),
             ):
                 return StoreRef(str(store))
             if not _schema_change_unsupported(binary, cfg.bridge_schema_file, store):
@@ -695,7 +776,9 @@ def discard_store(ref: StoreRef) -> int:
 
     The schema stamp goes too. It records the mtime of the schema file as of
     the last apply against a store that no longer exists, and leaving it would
-    make :func:`schema_apply_if_changed` skip the apply on the fresh store.
+    make :func:`schema_apply_if_changed` skip the apply on the fresh store. So
+    does the failed-apply marker, which would keep the fresh store's views
+    from being dropped for a schema it never tried.
 
     Refuses a cluster graph: the client cannot create one, so it has no
     business deleting one either.
@@ -715,7 +798,11 @@ def discard_store(ref: StoreRef) -> int:
         return 0
     freed = dir_stats(path)[0]
     shutil.rmtree(path)
-    for sidecar in (schema_stamp_path(path), repo_sidecar(path)):
+    for sidecar in (
+        schema_stamp_path(path),
+        repo_sidecar(path),
+        _views_drop_failed_path(path),
+    ):
         sidecar.unlink(missing_ok=True)
     return freed
 

@@ -352,25 +352,28 @@ def _code_store_with_a_view(tmp_path, monkeypatch, old: str, new: str):
     old_schema.write_text(current.replace(new, old, 1))
     slug = "https://github.com/test/views"
     store = cfg_mod.store_path(slug, cfg.code_dir)
-    store.parent.mkdir(parents=True)
+    _init_with_a_view(old_schema, store)
+    return cfg, slug, store
+
+
+def _init_with_a_view(schema_file, store) -> None:
+    binary = store_module._binary()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [binary, "init", "--schema", str(schema_file), str(store)],
+        check=True,
+        capture_output=True,
+    )
+    _create_view(store)
+
+
+def _create_view(store, name="act-x/feature") -> None:
     binary = store_module._binary()
     subprocess.run(
-        [binary, "init", "--schema", str(old_schema), str(store)],
+        [binary, "branch", "create", name, *store_cli_args(str(store), binary=binary)],
         check=True,
         capture_output=True,
     )
-    subprocess.run(
-        [
-            binary,
-            "branch",
-            "create",
-            "act-x/feature",
-            *store_cli_args(str(store), binary=binary),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    return cfg, slug, store
 
 
 def _branches(cfg, store) -> list[str]:
@@ -466,6 +469,87 @@ def test_an_apply_refused_for_another_reason_keeps_the_views(tmp_path, monkeypat
 
     assert _branches(cfg, store) == ["act-x/feature", "main"]
     assert _plan(cfg.schema_file, store)["step_count"] == 1
+
+
+@requires_stack
+def test_an_apply_that_fails_with_no_views_left_drops_them_once(tmp_path, monkeypatch):
+    """Without the marker, each index would re-fork its view and the next
+    would delete it again, so the view would only ever hold main plus the last
+    edited file. A changed schema file is a new attempt."""
+    import dataclasses
+
+    cfg, slug, store = _code_store_with_a_view(
+        tmp_path, monkeypatch, old="", new="    index_version: I32?\n"
+    )
+    monkeypatch.setattr(store_module, "schema_apply", lambda *_: False)
+
+    store_module.ensure_store(slug, cfg)
+    assert _branches(cfg, store) == ["main"]
+
+    _create_view(store)
+    store_module.ensure_store(slug, cfg)
+    assert _branches(cfg, store) == ["act-x/feature", "main"]
+
+    reinstalled = tmp_path / "reinstalled-code-schema.pg"
+    reinstalled.write_text(cfg.schema_file.read_text())
+    store_module.ensure_store(slug, dataclasses.replace(cfg, schema_file=reinstalled))
+    assert _branches(cfg, store) == ["main"]
+
+
+@requires_stack
+def test_dropping_the_bridge_views_drops_the_code_views_too(tmp_path, monkeypatch):
+    """A branch's bindings are written only for the files its code view
+    parses. A code view left current would skip the files the branch changed,
+    so the re-forked bridge view would keep main's bindings for them."""
+    from witan_code import config as cfg_mod
+
+    cfg, _slug, code_store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: String\n",
+        new="    content_hash: String\n",
+    )
+    field = "    language: String?\n"
+    current = cfg.bridge_schema_file.read_text()
+    assert field in current
+    old_bridge = tmp_path / "old-bridge-schema.pg"
+    old_bridge.write_text(current.replace(field, "", 1))
+    bridge = cfg_mod.bridge_store_path(cfg.code_dir)
+    _init_with_a_view(old_bridge, bridge)
+    assert _plan(cfg.bridge_schema_file, bridge)["step_count"] == 1
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert _plan(cfg.bridge_schema_file, bridge)["step_count"] == 0
+    assert _branches(cfg, bridge) == ["main"]
+    assert _branches(cfg, code_store) == ["main"]
+
+
+@requires_stack
+def test_a_code_store_that_cannot_be_read_does_not_stop_the_bridge_drop(
+    tmp_path, monkeypatch
+):
+    """One unreadable store would otherwise leave every store after it on
+    stale views, and fail the bindings write that found the old bridge."""
+    from witan_code import config as cfg_mod
+
+    cfg, _slug, code_store = _code_store_with_a_view(
+        tmp_path,
+        monkeypatch,
+        old="    content_hash: String\n",
+        new="    content_hash: String\n",
+    )
+    (cfg.code_dir / "aaa_unreadable.omni").mkdir()
+    field = "    language: String?\n"
+    old_bridge = tmp_path / "old-bridge-schema.pg"
+    old_bridge.write_text(cfg.bridge_schema_file.read_text().replace(field, "", 1))
+    bridge = cfg_mod.bridge_store_path(cfg.code_dir)
+    _init_with_a_view(old_bridge, bridge)
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert _branches(cfg, bridge) == ["main"]
+    assert _branches(cfg, code_store) == ["main"]
 
 
 @pytest.mark.parametrize("binary", ["/nonexistent/omnigraph", "false"])
