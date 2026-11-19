@@ -397,3 +397,25 @@ def test_a_non_file_folder_gets_nothing_and_breaks_nothing(config, monkeypatch):
             assert [f["uri"] for f in folders] == [work.as_uri()]
 
     run(go())
+
+
+def test_a_config_error_costs_one_folder_its_features(config, monkeypatch):
+    work, home = config
+    monkeypatch.chdir(home)
+
+    class Misconfigured(Recorder):
+        def route(self, folder):
+            if folder.target == "work":
+                raise ValueError("remote_url is set without oidc_issuer")
+            return Route(key="/stores/personal", local=True)
+
+    async def go():
+        host = Host({"m": Misconfigured("m")})
+        async with lsp_session(host, [work, home]) as session:
+            reason = "remote_url is set without oidc_issuer"
+            assert [n.message for n in await session.open(work / "a.py")] == [
+                f"witan: no m features in this folder: {reason}"
+            ]
+            assert [n.message for n in await session.open(home / "b.py")] == ["m note"]
+
+    run(go())

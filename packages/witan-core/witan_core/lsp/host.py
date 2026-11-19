@@ -102,6 +102,15 @@ class _Refused:
     anchor_route: Route
 
 
+@dataclass(frozen=True)
+class _Unroutable:
+    """The plugin could not route the folder: its config raised ``ValueError``
+    (an undefined target, a ``remote_url`` with no issuer). Kept per folder so
+    one bad target costs that folder its features, not the whole workspace."""
+
+    reason: str
+
+
 def _no_exit(fn: Callable[..., T], *args: Any) -> T:
     try:
         return fn(*args)
@@ -119,7 +128,7 @@ class Host:
         self.worker = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="witan-lsp-plugins"
         )
-        self._routes: dict[tuple[str, str], Route | _Refused] = {}
+        self._routes: dict[tuple[str, str], Route | _Refused | _Unroutable] = {}
         self._providers: dict[tuple[str, Hashable], BoundTools] = {}
         self._local_anchor: Folder | None = None
         self._cwd_pinned = False
@@ -181,7 +190,7 @@ class Host:
         ]
         return max(containing, key=lambda f: len(f.path.parts), default=None)
 
-    def _route(self, name: str, folder: Folder) -> Route | _Refused:
+    def _route(self, name: str, folder: Folder) -> Route | _Refused | _Unroutable:
         """The plugin's route for ``folder``, or why this process cannot serve it.
 
         One process holds one local store, because both servers configure
@@ -191,22 +200,25 @@ class Host:
         key = (name, folder.uri)
         if key in self._routes:
             return self._routes[key]
-        route = self.plugins[name].route(folder)
-        if route.local:
-            if self._local_anchor is None:
-                self._local_anchor = folder
-            anchor = self._local_anchor
-            anchor_route = (
-                route if anchor is folder else self.plugins[name].route(anchor)
-            )
-            if anchor_route != route:
-                route = _Refused(route, anchor, anchor_route)
+        try:
+            route = self.plugins[name].route(folder)
+            if route.local:
+                if self._local_anchor is None:
+                    self._local_anchor = folder
+                anchor = self._local_anchor
+                anchor_route = (
+                    route if anchor is folder else self.plugins[name].route(anchor)
+                )
+                if anchor_route != route:
+                    route = _Refused(route, anchor, anchor_route)
+        except ValueError as exc:
+            route = _Unroutable(str(exc))
         self._routes[key] = route
         return route
 
     def context(self, name: str, folder: Folder) -> _Context | None:
         route = self._route(name, folder)
-        if isinstance(route, _Refused):
+        if not isinstance(route, Route):
             return None
         key = (name, route.key)
         if key not in self._providers:
@@ -233,22 +245,30 @@ class Host:
         ]
 
     def refusals(self, folder: Folder) -> list[Note]:
-        """One Information note naming every plugin this folder gets nothing
-        from because it routes to a second local store, or none."""
-        refused = {
-            name: route
+        """Why plugins give this folder nothing: one note for every plugin
+        refused a second local store, and one per config error."""
+        routes = {
+            name: self._route(name, folder)
             for name, plugin in self.plugins.items()
             if plugin.capabilities
-            and isinstance(route := self._route(name, folder), _Refused)
         }
+        notes = [
+            Note(
+                line=0, message=f"witan: no {name} features in this folder: {r.reason}"
+            )
+            for name, r in routes.items()
+            if isinstance(r, _Unroutable)
+        ]
+        refused = {n: r for n, r in routes.items() if isinstance(r, _Refused)}
         if not refused:
-            return []
+            return notes
         anchor = next(iter(refused.values())).anchor
         stores = "; ".join(
             f"{name}: {r.route.key}, not {r.anchor_route.key}"
             for name, r in refused.items()
         )
         return [
+            *notes,
             Note(
                 line=0,
                 message=(
@@ -258,7 +278,7 @@ class Host:
                     "serves one local store; open this folder in its own editor "
                     "window."
                 ),
-            )
+            ),
         ]
 
     # ── merged features ───────────────────────────────────────────────────
