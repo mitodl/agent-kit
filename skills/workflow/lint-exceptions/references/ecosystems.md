@@ -156,12 +156,29 @@ Placement is the trap. The comment on the line *above* the flagged line parses
 fine, suppresses nothing, and looks exactly like a working suppression:
 
 ```yaml
-      # zizmor: ignore[template-injection]
-      - run: echo "${{ github.event.comment.body }}"   # still reported
-      - run: echo "${{ github.event.comment.body }}" # zizmor: ignore[template-injection]
+name: label
+on: [pull_request_target] # zizmor: ignore[dangerous-triggers] - labels only, never checks out the head
 ```
 
-Confirm it took: the summary line reads `N findings (1 ignored, ...)`.
+One line higher - above `on:` - and the finding is still reported. Confirm it
+took: the summary line reads `N findings (1 ignored, ...)`.
+
+The rule in that example is one a suppression can be right about: a
+`pull_request_target` workflow that only labels a PR, and never checks out or
+runs the contributor's code, does not have the privilege-escalation shape
+`dangerous-triggers` warns about. **`template-injection` is not that rule.**
+When zizmor reports `${{ github.event.* }}` reaching a `run:` block, the finding
+is real and the fix is rung 0 - pass the value through `env:` so the shell reads
+it as data instead of the runner pasting it into the script:
+
+```yaml
+      - run: echo "$BODY"
+        env:
+          BODY: ${{ github.event.comment.body }}
+```
+
+A suppression there leaves a runner that executes whatever a commenter writes,
+and leaves the lint green while it does.
 
 ### actionlint
 
