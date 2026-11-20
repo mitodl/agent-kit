@@ -10,6 +10,7 @@ cannot receive a custom method and Sublime needs a helper package for each one
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import sys
@@ -264,14 +265,15 @@ def serve(target: str | None = None) -> None:
     protocol_in, protocol_out = sys.stdin.buffer, sys.stdout.buffer
     # stdin and stdout are the JSON-RPC channel. The reader and writer hold
     # the real streams. Anything a plugin or a server module prints lands on
-    # stderr, and stdin reads as a closed non-terminal, so no prompt
+    # stderr, and stdin reads as an empty non-terminal, so no prompt
     # (`witan_core.elicit.has_terminal`) can read a request as its answer,
-    # even when the server was started by hand in a terminal.
+    # even when the server was started by hand in a terminal. Not
+    # os.devnull: on Windows that is the NUL character device, whose
+    # isatty() is True.
     originals = sys.stdin, sys.stdout
-    sys.stdin, sys.stdout = open(os.devnull), sys.stderr  # noqa: SIM115
+    sys.stdin, sys.stdout = io.StringIO(), sys.stderr
     try:
         server.start_io(protocol_in, protocol_out)
     finally:
-        sys.stdin.close()
         sys.stdin, sys.stdout = originals
         host.close()
