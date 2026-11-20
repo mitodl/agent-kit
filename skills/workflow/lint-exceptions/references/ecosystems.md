@@ -151,6 +151,7 @@ Confirm it took: the summary line reads `N findings (1 ignored, ...)`.
 | --- | --- |
 | Line | **none** - there is no inline escape |
 | Config | `.github/actionlint.yaml`, `paths:` mapping a glob to `ignore:` regexes matched against the message text |
+| CLI | a repeatable `-ignore <regex>`, which applies to every file the run covers - broader than the config, so prefer `paths:` |
 | Unused | none |
 
 With no inline form, the smallest available suppression is a config entry keyed
