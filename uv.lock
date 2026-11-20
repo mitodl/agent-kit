@@ -923,8 +923,8 @@ version = "0.1.5"
 source = { editable = "packages/agent-kit" }
 dependencies = [
     { name = "agent-config-kit", extra = ["cli"] },
-    { name = "witan-code", extra = ["lsp"] },
-    { name = "witan-council", extra = ["lsp"] },
+    { name = "witan-code" },
+    { name = "witan-council" },
 ]
 
 [package.dev-dependencies]
@@ -935,8 +935,8 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "agent-config-kit", extras = ["cli"], editable = "packages/agent-config-kit" },
-    { name = "witan-code", extras = ["lsp"], editable = "mcp/servers/witan-code" },
-    { name = "witan-council", extras = ["lsp"], editable = "mcp/servers/witan" },
+    { name = "witan-code", editable = "mcp/servers/witan-code" },
+    { name = "witan-council", editable = "mcp/servers/witan" },
 ]
 
 [package.metadata.requires-dev]

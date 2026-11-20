@@ -14,13 +14,11 @@ dependencies = [
     # Floored at the releases that speak MCP 2026-07-28 (MRTR elicitation, the
     # tasks extension, cacheable list results). Still no upper bound, so a fresh
     # install keeps picking up newer releases of either server automatically.
-    # [lsp]: the editor language server (`witan lsp`), so the meta-package
-    # installs a working one with both plugins (ADR 0012).
-    "witan-council[lsp]>=0.34.0",
+    "witan-council>=0.34.0",
     # >=0.32.0: witan-council imports witan-code in process and calls
     # code_find_definition(symbol_id=...) for stale-refs and recall(memory=...);
     # an older witan-code raises on that keyword and every lookup degrades.
-    "witan-code[lsp]>=0.32.0",
+    "witan-code>=0.32.0",
 ]
 
 [project.urls]
