@@ -8,6 +8,31 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.33.0] - 2026-11-20
+
+### Added
+
+- `CodeFile.index_version: I32?` in `code-schema.pg`, for recording which indexer version wrote a file's rows. Nothing writes or reads it yet. It ships ahead of the indexer change that uses it so that every store has the field before any client writes it. On omnigraph 0.15 `schema plan` and `cluster plan` both report it as one supported `add_property` step.
+
+- `witan-code lsp` starts the same witan language server as `witan lsp` (ADR 0012), so with only witan-code installed an editor still gets the code features once they land. It needs the new `lsp` extra (`uv tool install 'witan-code[lsp]'`). witan-code registers a plugin under `witan.lsp.plugins` that provides no features yet; it routes each workspace folder to a `RemoteServerProxy` for a deployed target, or points the in-process server at that folder's local stores.
+- `config.load` and `load_remote_config` take `project_path=`, which routes by that checkout instead of the process's.
+
+### Changed
+
+- Requires witan-core 0.58.0, whose `stamp_schema_applied` writes the stamp for a plan with no steps, so that path and `schema_apply` record the same thing.
+
+- Requires witan-core 0.59.0.
+
+### Fixed
+
+- An index of the default branch now parses a file again when the stored rows came from an indexer that extracts different ones, even if the file's content has not changed. Each `CodeFile` row records `INDEX_VERSION` in `index_version`. A null value counts as version 1. The version moves to 2 for the cross-file `Calls` edges of 0.32.0. Before this, the content-hash skip kept an unchanged file on the old indexer's rows indefinitely. The CI indexer has no force switch, so the shared graphs never got cross-file edges for files nobody edited (e.g. on production, `bridge.py`'s call into `graph.check_writable` had no edge). The first CI run after this release parses every file of every shared graph once. A local store does the same on its next index of any branch. A shared graph's branch views still compare content only, so a version change never makes a client re-parse a whole repo onto a view through the MCP tier. `content_hash` stays a bare sha256, so clients older than this release compare it as before.
+
+- A local store with branch views now takes a schema change. omnigraph 0.15 refuses `schema apply` on a graph with any branch but `main` ("schema apply requires a graph with only main") while its plan still reports the change as supported. The apply failed quietly on every index, so such a store never gained a new field or index (e.g. the `Symbol.docstring` index of 0.31.0). When the plan has steps and the apply fails with that refusal, the store's views are deleted and the apply runs again. Any other failure leaves them. A plan with no steps (a reinstall rewrites the schema file's mtime but not its content) marks the store current without an apply, which omnigraph would refuse too. A view is a cache, and the next full index of its branch rebuilds it from `main`. The bridge store follows the same rule, and when it drops its views every local code store drops its views too, so the next index of each branch parses the files it changed and writes their bindings again. If the apply still fails once the views are gone, they are not dropped again until the schema file changes, so a broken store does not lose its views on every index.
+
+### Notes
+
+- Deploying an omnigraph-server image built with this schema deletes every branch view on every `code-<repo>` graph. The plan gate does this through the serving pod (#663), as it did for the `Symbol.docstring` index.
+
 ## [0.32.1] - 2026-11-18
 
 ### Fixed
