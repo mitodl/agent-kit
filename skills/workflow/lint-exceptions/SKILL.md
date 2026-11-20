@@ -148,9 +148,13 @@ is the one most likely to be read by someone who has no idea why it is there.
 
 ### Hard rules
 
-- **Never a bare suppression.** An escape with no rule identifier silences
-  everything at that site, including the next bug, and it survives the rename of
-  the rule it was meant for. Always name the rule.
+- **Never a bare suppression where the syntax takes a rule identifier.** An
+  escape with no identifier silences everything at that site, including the next
+  bug, and it survives the rename of the rule it was meant for. A few escapes
+  take no identifier at all - `@ts-expect-error`, `gitleaks:allow`,
+  `# yamllint disable-file`. Those are *broad by construction*, not an exception
+  to the rule: name the diagnostic you mean in the reason, and keep what they
+  cover as small as the tool allows.
 - **Always a reason, inline.** Some tools take a structured one and some do not;
   where the syntax has no slot for it, put a comment on the line above - or
   below, for the rare directive that has to be the whole first line of a file
@@ -201,14 +205,24 @@ and the shape the original `ol-github-workflows` miss should have had from the
 start:
 
 ```python
-# Fixed arguments, and git is found on PATH because the runner decides where it lives.
+# Every caller passes literal subcommands (see main), so S603 has no
+# attacker-controlled argument to worry about. S607 is right that "git" is
+# resolved from PATH: on a hosted runner the image owns that path, so there is
+# no absolute one to pin that stays correct across images.
 return subprocess.run(["git", *args], capture_output=True, check=False)  # noqa: S603, S607
 ```
 
-Both name the premise that does not hold. The first says the construct is
-deliberate and what it buys; the second says the two things `S603`/`S607` worry
-about - attacker-controlled arguments and an ambiguous executable - are not true
-at this call site.
+The two codes are there for different reasons, and the reason says which is
+which. `S603`'s premise fails - the arguments are not attacker-controlled, and
+the reason names where a reader checks that. `S607`'s premise holds: the
+executable really is resolved from `PATH`, and the reason says why the fix the
+rule wants is not available rather than pretending the finding is wrong. Those
+are the second and third outcomes from section 1, and a reason that blurs them
+is a reason that has not been thought through.
+
+Note what the reason does **not** do: it does not say "fixed arguments" and
+leave a reader staring at `*args`. A claim a reader cannot check from the code
+in front of them is the same as no reason at all.
 
 ## 3. Prove the narrowing
 

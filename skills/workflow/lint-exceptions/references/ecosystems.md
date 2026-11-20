@@ -101,7 +101,7 @@ code added inside a region later is silently covered too.
 | --- | --- |
 | Line | `// @ts-expect-error reason` - prose goes straight after the directive |
 | File | `// @ts-nocheck` |
-| Config | `exclude` in `tsconfig.json` - rung 5, it stops checking those files entirely |
+| Config | `exclude` in `tsconfig.json` - rung 3 for named files, rung 4 for a glob, and it drops them from typechecking entirely rather than silencing one diagnostic |
 | Unused | built in to `@ts-expect-error`: `TS2578: Unused '@ts-expect-error' directive` |
 
 **Use `@ts-expect-error`, not `@ts-ignore`.** They suppress the same way, but the
