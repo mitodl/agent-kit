@@ -35,6 +35,7 @@ from .run_helpers import (
     _pick_items,
     _project_run_prompt,
     _run_project_slug,
+    check_emit_spec_args,
 )
 from .selected_target import selected_target
 
@@ -678,9 +679,7 @@ def project_run(
     all_repos:
         Span all repos in the picker.
     """
-    if emit_spec and (dry_run or not slug):
-        print_error("--emit-spec needs a slug and cannot be combined with --dry-run.")
-        raise SystemExit(1)
+    check_emit_spec_args(emit_spec, slug=slug, dry_run=dry_run)
     try:
         cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:

@@ -2324,6 +2324,8 @@ Claim a task and launch an agent to execute it.
 Claims the task (status in_progress, assignee = your author), then hands the
 terminal to ``<agent>`` seeded with a prompt describing the work. Run from
 the task's repo checkout so the agent has the right working directory.
+The single-slug form of ``witan task run``: same claim, same launch, same
+``--emit-spec`` output.
 
 **Parameters**:
 
@@ -2342,4 +2344,8 @@ the task's repo checkout so the agent has the right working directory.
 * `--model STR`: Model passed to the agent's --model flag. Overrides WITAN_MODEL env
     var and target/config-file default.
 * `--claim, --no-claim`: Mark the task in_progress and assign it to you first. *[default: True]*
+* `--force, --no-force`: Take the claim even if someone else's lease is still live. *[default: False]*
 * `--dry-run, --no-dry-run`: Print the prompt and exit without launching or claiming. *[default: False]*
+* `--emit-spec, --no-emit-spec`: Claim, then print the launch spec as JSON instead of launching, for an
+    editor or other launcher to run. Exits non-zero, after printing the
+    refusal spec, when there is nothing to launch. *[default: False]*

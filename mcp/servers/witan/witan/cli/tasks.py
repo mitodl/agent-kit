@@ -39,6 +39,7 @@ from .run_helpers import (
     _run_task_slug,
     agent_environ,
     bare_session_env,
+    check_emit_spec_args,
     launch_env,
 )
 from .selected_target import selected_target
@@ -798,9 +799,7 @@ def task_run(
     project:
         Scope the picker to a specific wp- project slug.
     """
-    if emit_spec and (dry_run or not slug):
-        print_error("--emit-spec needs a slug and cannot be combined with --dry-run.")
-        raise SystemExit(1)
+    check_emit_spec_args(emit_spec, slug=slug, dry_run=dry_run)
     try:
         cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:

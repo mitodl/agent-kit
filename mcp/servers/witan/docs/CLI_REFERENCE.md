@@ -227,7 +227,9 @@ task's repo checkout.
 | `--agent` | str \| None | config/target default | Agent CLI to launch (`claude`, `pi`, `copilot`, `opencode`, `kilo`); also `WITAN_AGENT` |
 | `--model` | str \| None | config/target default | Model passed to the agent's `--model` flag; also `WITAN_MODEL` |
 | `--claim` | bool | `True` | Mark the task `in_progress` and assign it to you first |
+| `--force` | bool | `False` | Take the claim even if someone else's lease is still live |
 | `--dry-run` | bool | `False` | Print the prompt and exit without launching or claiming |
+| `--emit-spec` | bool | `False` | Claim, then print the JSON launch spec instead of launching (same output as `witan task run --emit-spec`); exits non-zero on a refusal |
 
 ```bash
 witan run tk-fix-flaky-retry-abc123 --dry-run
@@ -323,7 +325,9 @@ consolidated single-session prompt or sequential per-task runs.
 | `--agent` | str \| None | config/target default | Agent CLI to launch |
 | `--model` | str \| None | config/target default | Model flag passed to the agent |
 | `--claim` | bool | `True` | Mark each task `in_progress` before launching |
+| `--force` | bool | `False` | Take the claim even if someone else's lease is still live |
 | `--dry-run` | bool | `False` | Print the prompt(s) without launching or claiming |
+| `--emit-spec` | bool | `False` | Claim, then print the JSON launch spec instead of launching; needs a slug, exits non-zero on a refusal |
 | `--repo` | str \| None | detected repo | Scope the picker to a specific repo |
 | `--all-repos` | bool | `False` | Span all repos in the picker |
 | `--project` | str \| None | — | Scope the picker to a `wp-` project slug |
@@ -389,6 +393,7 @@ consolidated or sequential run.
 | `--agent` | str \| None | config/target default | Agent CLI to launch |
 | `--model` | str \| None | config/target default | Model flag |
 | `--dry-run` | bool | `False` | Print the prompt(s) without launching |
+| `--emit-spec` | bool | `False` | Print the JSON launch spec instead of launching; claims nothing, needs a slug, exits non-zero on a refusal |
 | `--repo` | str \| None | detected repo | Scope the picker to a specific repo |
 | `--all-repos` | bool | `False` | Span all repos in the picker |
 
