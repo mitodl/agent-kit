@@ -87,7 +87,7 @@ discussion="$(gh api "repos/${repo}/issues/${pr}/comments" --paginate \
   --jq '[.[] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]')"
 
 reviews="$(gh api "repos/${repo}/pulls/${pr}/reviews" --paginate \
-  --jq '[.[] | {author: .user.login, author_type: .user.type, state, body, submitted_at}]')"
+  --jq '[.[] | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]')"
 
 # GitHub shows a pending review only to its author, so this finds the
 # viewer's own. The comment bodies are a snapshot for reading; the user can
@@ -126,8 +126,28 @@ jq -n \
   '{repo: $repo, pr: $pr, review_threads: $review_threads, discussion_comments: $discussion_comments, reviews: $reviews, pending_review: $pending_review}' \
   > "$output"
 
+# Only the thread count has any resolution state behind it, and reporting it
+# alone is how an unread discussion comment or a finding buried in a review
+# body gets called "addressed". Count each channel separately and say outright
+# that two of them have no resolved state.
 unresolved_count="$(jq '[.[] | select(.isResolved == false)] | length' "$threads_file")"
-echo "Fetched ${unresolved_count} unresolved review thread(s), $(echo "$discussion" | jq 'length') discussion comment(s), $(echo "$reviews" | jq 'length') review(s) for ${repo}#${pr}" >&2
+discussion_count="$(jq 'length' <<<"$discussion")"
+review_count="$(jq 'length' <<<"$reviews")"
+# A review with an empty body carried only thread comments. Counting those as
+# feedback to read overstates the pile and buries the ones that aren't empty.
+reviews_with_body="$(jq '[.[] | select((.body // "") != "")] | length' <<<"$reviews")"
+
+echo "${repo}#${pr}: ${unresolved_count} unresolved review thread(s), ${discussion_count} discussion comment(s), ${reviews_with_body} review(s) with a body (of ${review_count})" >&2
+echo "Discussion comments and review bodies have no resolved state - read each one; the thread count alone does not mean a PR is addressed." >&2
+
+# Named because a colleague's architectural judgment usually arrives here
+# rather than pinned to a line, and it is the easiest feedback on the PR to
+# scroll past. author_type is GitHub's own actor type, so a service account on
+# a user token lands in this list too; over-naming is the safe direction.
+human_commenters="$(jq -r '[.[] | select(.author_type == "User") | .author] | unique | join(", ")' <<<"$discussion")"
+if [[ -n "$human_commenters" ]]; then
+  echo "Discussion comment(s) from: ${human_commenters}" >&2
+fi
 
 if [[ "$pending_review" != "null" ]]; then
   echo "You have a pending review with $(echo "$pending_review" | jq '.comment_count') comment(s) on ${repo}#${pr}. It is unsubmitted; submitting it is your call." >&2
