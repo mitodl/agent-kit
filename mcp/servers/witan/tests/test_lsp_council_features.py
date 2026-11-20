@@ -346,7 +346,60 @@ def test_a_folder_opened_through_a_symlink_gets_its_notes(checkout, tmp_path):
     assert row["uri"] == (link / "app" / "svc.py").as_uri()
 
 
+def test_a_malformed_missing_ref_costs_no_other_note(checkout):
+    """Another deployment's server may call a ref missing that this one
+    cannot split; it is skipped, not a TypeError that drops the file."""
+
+    def stale(**kwargs):
+        result = _stale(**kwargs)
+        result["memories"][0]["refs"].insert(
+            0, {"symbol_ref": "not-a-symbol-id", "status": "missing"}
+        )
+        return result
+
+    tools = FakeTools(memory_stale_refs=stale)
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            return await s.open(checkout / "app" / "svc.py")
+
+    [note] = run(go())
+    assert "pat-moved" in note.message
+
+
 # ── list commands ─────────────────────────────────────────────────────────
+
+
+def test_list_ready_tasks_reads_the_branch_checked_out_now(checkout):
+    tools = FakeTools(task_ready=[], task_for_branch=[])
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            await asyncio.to_thread(
+                subprocess.run,
+                ["git", "-C", str(checkout), "switch", "-q", "-c", "later"],
+                check=True,
+            )
+            return await s.command(LIST_READY_TASKS)
+
+    assert run(go())["branch"] == "later"
+    assert tools.called("task_for_branch") == [{"branch": "later", "repo": REPO}]
+
+
+def test_a_uri_spelled_through_a_symlink_names_its_folder(checkout, tmp_path):
+    """The folder was opened by its physical path; the client names a file
+    through a link to it."""
+    link = tmp_path / "link"
+    link.symlink_to(checkout)
+    tools = FakeTools(task_list=[])
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            return await s.command(
+                LIST_MY_WORK, {"uri": (link / "app" / "svc.py").as_uri()}
+            )
+
+    assert run(go()) == {"repo": REPO, "tasks": []}
 
 
 def test_list_commands_scope_every_call_to_the_folders_repo(checkout, tmp_path):
@@ -418,6 +471,8 @@ _CLAIM = {
 def test_run_task_returns_the_launch_spec_and_spawns_nothing(checkout, monkeypatch):
     for name in SESSION_ID_ENV_VARS:
         monkeypatch.setenv(name, "outer-session")
+    for name in ("WITAN_TARGET", "CLAUDE_PROJECT_DIR", "WITAN_REPO"):
+        monkeypatch.delenv(name, raising=False)
     seen_env = []
 
     def claim(**kwargs):
@@ -438,6 +493,10 @@ def test_run_task_returns_the_launch_spec_and_spawns_nothing(checkout, monkeypat
     assert spec["kind"] == "task"
     assert spec["cwd"] == str(checkout)
     assert spec["agent"] == "pi"
+    # One folder and no overrides in this process, which `witan task run`
+    # would offer a handoff for. Under `serve()` the overrides the editor
+    # has are already gone, so the server never offers one.
+    assert spec["handoff"] is False
     assert spec["claim"]["claimed_at"] == _CLAIM["claimed_at"]
     # The claim is bare, and prompts are off for every call the launch makes.
     assert seen_env == [dict.fromkeys(SESSION_ID_ENV_VARS, False)]

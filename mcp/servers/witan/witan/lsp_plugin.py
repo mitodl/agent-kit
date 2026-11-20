@@ -27,7 +27,8 @@ commands answer ``{"repo": ..., <list>: [...]}`` for that folder's repo:
 - ``witan.listProjects``: ``projects`` (``workflow_project_list``).
 - ``witan.listMyWork``: ``tasks``, the caller's ``in_progress`` tasks.
 - ``witan.runTask`` / ``witan.runProject`` take ``slug`` and optional
-  ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal.
+  ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal, with
+  ``handoff`` always false (see ``_launch``).
 - ``witan.releaseTask`` takes ``slug`` and ``claimed_at`` (the spec's
   ``claim.claimed_at``, plus the ``uri`` the launch was run with) and answers
   ``task_release``'s result.
@@ -64,6 +65,7 @@ from witan_core.lsp import (
     Route,
 )
 from witan_core.observability import get_logger
+from witan_core.repo_key import checkout_branch
 
 from . import config as cfg_module
 from .prompts import prompts_off
@@ -285,7 +287,11 @@ class CouncilPlugin(Plugin):
         for memory in stale["memories"]:
             for ref in memory["refs"]:
                 parts = _split_ref(ref["symbol_ref"])
-                if ref["status"] != "missing" or parts[:2] != (folder.repo, relative):
+                if (
+                    parts is None
+                    or ref["status"] != "missing"
+                    or parts[:2] != (folder.repo, relative)
+                ):
                     continue
                 candidates = ref.get("candidates") or []
                 found = (
@@ -372,22 +378,26 @@ class CouncilPlugin(Plugin):
             raise ValueError("No workspace folder is open.")
         if uri is None:
             return ctx.folders[0]
-        path = _uri_path(uri)
-        containing = [f for f in ctx.folders if path.is_relative_to(f.path)]
+        # Resolved on both sides: a client may spell the uri through a
+        # symlink the folder was not opened through, or the other way round.
+        path = _uri_path(uri).resolve()
+        real = {f.uri: f.path.resolve() for f in ctx.folders}
+        containing = [f for f in ctx.folders if path.is_relative_to(real[f.uri])]
         if not containing:
             raise ValueError(f"{uri} is in no open workspace folder.")
-        return max(containing, key=lambda f: len(f.path.parts))
+        return max(containing, key=lambda f: len(real[f.uri].parts))
 
     def _list(self, ctx: Context, command: str) -> dict[str, Any]:
         tools, folder = ctx.tools, ctx.folder
         if command == LIST_READY_TASKS:
+            # Read now: `folder.branch` is what was checked out when the
+            # folder was added, and the person may have switched since.
+            branch = checkout_branch(folder.path)
             return {
-                "branch": folder.branch,
+                "branch": branch,
                 "ready": tools.task_ready(repo=folder.repo),
-                "for_branch": tools.task_for_branch(
-                    branch=folder.branch, repo=folder.repo
-                )
-                if folder.branch
+                "for_branch": tools.task_for_branch(branch=branch, repo=folder.repo)
+                if branch
                 else [],
             }
         if command == LIST_PROJECTS:
@@ -449,7 +459,7 @@ class CouncilPlugin(Plugin):
         from .cli.run_helpers import build_launch_spec
 
         folder = fctx.folder
-        return build_launch_spec(
+        spec = build_launch_spec(
             "task" if command == RUN_TASK else "project",
             _required(args, "slug", command),
             server=fctx.tools,
@@ -463,3 +473,10 @@ class CouncilPlugin(Plugin):
             agent=args.get("agent"),
             model=args.get("model"),
         )
+        if spec["launchable"]:
+            # `serve()` drops CLAUDE_PROJECT_DIR and WITAN_REPO before any
+            # plugin runs, so the handoff check cannot see that the editor,
+            # whose environment a chat-panel agent inherits, still has them.
+            # Never offer a handoff until the host can say what it removed.
+            spec["handoff"] = False
+        return spec
