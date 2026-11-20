@@ -22,9 +22,10 @@ The features, from ADR 0012's feature map:
   actions.
 - Hover on a line holding an env var, endpoint, package or service binding:
   who provides and who consumes it, with repo, file and line.
-- Definition and references across indexed repos. A location in a repo that
-  no workspace folder has checked out cannot be opened, so the hover names it
-  instead (repo, path and line).
+- Definition across indexed repos, and references within the definition's
+  repo (each repo's graph holds only its own edges). A location in a repo
+  that no workspace folder has checked out cannot be opened, so the hover
+  names it instead (repo, path and line).
 - One Information diagnostic on line 0 when the folder's repo, or its branch,
   has no index.
 
@@ -228,11 +229,21 @@ class CodePlugin(Plugin):
         return self._roots[folder.path]
 
     def _branch(self, folder: Folder) -> str | None:
-        """The branch checked out in ``folder`` now. ``Folder.branch`` is
-        what it was when the editor reported the folder."""
+        """The ``branch`` to read ``folder``'s checkout at now, or ``None``
+        for the store's main view.
+
+        ``None`` on the repo's default branch and on a detached HEAD, decided
+        the way indexing decides it (``repo.store_branch``). Naming the
+        default branch instead would be read as a git branch and mapped
+        through ``branch_store_name``, which sends ``main`` to the ``_main``
+        view a git branch named ``_main`` indexes onto. ``Folder.branch`` is
+        not used: it is what was checked out when the editor reported the
+        folder.
+        """
         stamp, branch = self._branches.get(folder.path, (0.0, None))
         if time.monotonic() - stamp >= _BRANCH_TTL_SECONDS:
-            branch = checkout_branch(folder.path)
+            on_main = repo_module.store_branch(folder.path) is None
+            branch = None if on_main else checkout_branch(folder.path)
             self._branches[folder.path] = (time.monotonic(), branch)
         return branch
 
@@ -318,7 +329,8 @@ class CodePlugin(Plugin):
 
     def _targets(self, ctx: Context, uri: str, line: int, character: int) -> list[dict]:
         """Definitions of the identifier under the cursor: in the folder's own
-        repo at its branch, else in any indexed repo."""
+        repo at its branch, else in the other open repos at their branches and
+        in every repo no folder has open at its main view."""
         word = _word_at(ctx.text(uri), line, character)
         if word is None or self._document(ctx, uri) is None:
             return []
@@ -328,7 +340,22 @@ class CodePlugin(Plugin):
         )
         if own or word in _UNLIKELY_NAMES:
             return own
-        return ctx.tools.code_find_definition(name=word)
+        others = {}
+        for f in ctx.folders:
+            if f.repo is not None and f.repo != folder.repo:
+                others.setdefault(f.repo, f)
+        found = [
+            row
+            for repo, f in others.items()
+            for row in ctx.tools.code_find_definition(
+                name=word, repo=repo, branch=self._branch(f)
+            )
+        ]
+        return found + [
+            row
+            for row in ctx.tools.code_find_definition(name=word)
+            if row["repo"] not in others
+        ]
 
     def _references(self, ctx: Context, target: dict) -> list[dict]:
         return ctx.tools.code_find_references(
@@ -347,7 +374,11 @@ class CodePlugin(Plugin):
         except _UNAVAILABLE:
             return None  # this plugin's hover says why
         around = [s for s in symbols if s["start_line"] <= line + 1 <= s["end_line"]]
-        best = min(around, key=lambda s: s["end_line"] - s["start_line"], default=None)
+        best = min(
+            around,
+            key=lambda s: (s["kind"] == "module", s["end_line"] - s["start_line"]),
+            default=None,
+        )
         return best["symbol_id"] if best else None
 
     def code_lenses(self, ctx: Context, uri: str) -> list[Lens]:
@@ -406,7 +437,9 @@ class CodePlugin(Plugin):
         checked out.
         """
         folder_uri, symbol_id = arguments
-        folder = {f.uri: f for f in ctx.folders}[folder_uri]
+        folder = {f.uri: f for f in ctx.folders}.get(folder_uri)
+        if folder is None:
+            raise ValueError("witan: this folder is no longer served")
         fctx = ctx.context(folder)
         if fctx is None:
             raise ValueError(
@@ -548,7 +581,7 @@ class CodePlugin(Plugin):
             ]
         # The default branch is the store's main view, which exists with the
         # store; a detached HEAD reads main. Neither has a view to look for.
-        if branch is None or repo_module.store_branch(folder.path) is None:
+        if branch is None:
             return []
         if row["views"] is None or row["views"]:
             return []

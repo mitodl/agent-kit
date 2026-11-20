@@ -14,7 +14,6 @@ cluster rather than to a client of it.
 
 from __future__ import annotations
 
-import subprocess
 from typing import ClassVar
 
 import pytest
@@ -31,34 +30,10 @@ from witan_code.remote.store import (
 )
 from witan_core.graph_ids import BRIDGE_GRAPH_ID
 
-from .conftest import SAMPLE, requires_stack
+from .conftest import SAMPLE, git, git_checkout, requires_stack
 
 REPO = "https://github.com/test/cg"
 ACTOR = "act-alice"
-
-
-def _git(base, *args):
-    subprocess.run(
-        ["git", "-C", str(base), *args], check=True, capture_output=True, text=True
-    )
-
-
-def _git_repo(path, branch="main"):
-    path.mkdir(exist_ok=True)
-    _git(path, "init", "-q", "-b", branch)
-    _git(
-        path,
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "--allow-empty",
-        "-q",
-        "-m",
-        "init",
-    )
-    return path
 
 
 @pytest.fixture
@@ -110,9 +85,9 @@ def test_a_branch_index_lands_on_the_deployments_store(in_memory_tier, tmp_path)
     from witan_code.graph import OmnigraphClient
 
     _session, server_cfg = in_memory_tier
-    base = _git_repo(tmp_path / "r")
+    base = git_checkout(tmp_path / "r")
     (base / "svc.py").write_text(SAMPLE)
-    _git(base, "checkout", "-q", "-b", "feature/new-api")
+    git(base, "checkout", "-q", "-b", "feature/new-api")
 
     stats = indexer.index_path(base, config=cfg_module.load())
     assert stats.indexed >= 1
@@ -155,9 +130,9 @@ def test_listing_graphs_answers_in_repo_uris(in_memory_tier, tmp_path):
     from witan_code import indexer
 
     _session, _server_cfg = in_memory_tier
-    base = _git_repo(tmp_path / "r")
+    base = git_checkout(tmp_path / "r")
     (base / "svc.py").write_text(SAMPLE)
-    _git(base, "checkout", "-q", "-b", "feature/x")
+    git(base, "checkout", "-q", "-b", "feature/x")
     indexer.index_path(base, config=cfg_module.load())
 
     assert [ref.via_mcp for ref in store_module.per_repo_stores(cfg_module.load())] == [

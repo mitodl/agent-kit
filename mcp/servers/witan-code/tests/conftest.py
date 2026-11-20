@@ -11,6 +11,7 @@ optional extra — so there's nothing to gate on there.
 import asyncio
 import inspect
 import shutil
+import subprocess
 
 import pytest
 
@@ -20,6 +21,33 @@ requires_stack = pytest.mark.skipif(
     not omnigraph_available,
     reason="requires omnigraph binary",
 )
+
+
+def git(path, *args: str) -> None:
+    """Run git in ``path`` as a fixed committer, so a commit needs no
+    identity from the (hermetic, empty) global config."""
+    subprocess.run(
+        ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def git_checkout(path, *, branch="main", remote=None, files=None):
+    """A checkout at ``path`` on ``branch`` with one commit of ``files``
+    (repo-relative path to text; an empty commit without them), and
+    ``remote`` as its origin when given."""
+    for rel, text in (files or {}).items():
+        (path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (path / rel).write_text(text)
+    path.mkdir(parents=True, exist_ok=True)
+    git(path, "init", "-q", "-b", branch)
+    if remote:
+        git(path, "remote", "add", "origin", remote)
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "--allow-empty", "-m", "seed")
+    return path
 
 
 def tool_fn(tool):

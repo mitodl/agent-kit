@@ -86,15 +86,21 @@ class BoundTools:
         return call
 
 
-@dataclass(frozen=True)
-class _Context:
-    folder: Folder
-    tools: Any
+class _Workspace:
+    """The workspace snapshot both context classes give a plugin."""
+
     host: Host
 
     @property
     def folders(self) -> Sequence[Folder]:
         return list(self.host.folders.values())
+
+
+@dataclass(frozen=True)
+class _Context(_Workspace):
+    folder: Folder
+    tools: Any
+    host: Host
 
     def symbol_at(self, uri: str, line: int, character: int) -> str | None:
         return self.host.resolve_symbol(self.folder, uri, line, character)
@@ -104,13 +110,9 @@ class _Context:
 
 
 @dataclass(frozen=True)
-class _CommandContext:
+class _CommandContext(_Workspace):
     plugin: str
     host: Host
-
-    @property
-    def folders(self) -> Sequence[Folder]:
-        return list(self.host.folders.values())
 
     def context(self, folder: Folder) -> _Context | None:
         return self.host.context(self.plugin, folder)

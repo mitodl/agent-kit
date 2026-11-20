@@ -16,6 +16,7 @@ a MINOR bump may include breaking changes).
 - For a client with no CodeLens (eglot; Zed by default), the host puts the resolved lenses on a hovered line into the hover and offers their commands as code actions, per ADR 0012's per-editor fallbacks.
 - A plugin's `Context` has `folders` (every workspace folder) and `text(uri)` (the editor's buffer for an open document, else the file on disk).
 - `witan_core.lsp.escape_markdown`, for rendering text a plugin does not control as plain text inside a hover.
+- Hover, definition and references hand plugins the cursor column in code points, converted from whatever position encoding the client negotiated (UTF-8 for Neovim, UTF-16 by default), so a multibyte character earlier on the line no longer shifts the column a plugin indexes.
 
 ### Changed
 

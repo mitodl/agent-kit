@@ -744,3 +744,41 @@ def test_serve_keeps_stdin_away_from_prompts(monkeypatch):
     server_module.serve()
     assert seen == {"channel": stdin.buffer, "terminal": False, "read": ""}
     assert sys.stdin is stdin
+
+
+def test_plugins_get_columns_in_code_points_whatever_the_encoding(config, monkeypatch):
+    """Neovim negotiates UTF-8, VS Code uses UTF-16. Column 2 after `é` is the
+    second character either way once the host converts it."""
+    work, _ = config
+    monkeypatch.chdir(work)
+
+    class Columns(Recorder):
+        capabilities = frozenset({Capability.HOVER})
+
+        def hover(self, ctx, uri, line, character):
+            return ctx.text(uri).splitlines()[line][character]
+
+    path = work / "m.py"
+    utf8 = types.ClientCapabilities(
+        general=types.GeneralClientCapabilities(
+            position_encodings=[types.PositionEncodingKind.Utf8]
+        )
+    )
+
+    async def go(capabilities, column):
+        async with lsp_session(
+            Host({"c": Columns("c")}), [work], client_capabilities=capabilities
+        ) as session:
+            await session.open(path, "é😋ab\n")
+            hover = await session.client.text_document_hover_async(
+                types.HoverParams(
+                    text_document=types.TextDocumentIdentifier(uri=path.as_uri()),
+                    position=types.Position(line=0, character=column),
+                )
+            )
+            return hover.contents.value
+
+    # `a` is after two bytes of `é` and four of `😋` in UTF-8, after one and
+    # two code units in UTF-16.
+    assert run(go(utf8, 6)) == "a"
+    assert run(go(None, 3)) == "a"

@@ -27,7 +27,7 @@ from witan_core.lsp.host import Host
 from witan_core.lsp.plugin import discover_plugins
 from witan_core.lsp.testing import lsp_session, spawned_status
 
-from .conftest import requires_stack
+from .conftest import git, git_checkout, requires_stack
 
 RA = "https://github.com/test/app"
 RI = "https://github.com/test/infra"
@@ -83,23 +83,8 @@ def _checkout(path: Path) -> Path:
     return path
 
 
-def _git(path: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@x", *args],
-        check=True,
-        capture_output=True,
-    )
-
-
 def _repo(path: Path, remote: str, files: dict[str, str]) -> Path:
-    for rel, text in files.items():
-        (path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (path / rel).write_text(text)
-    _git(path, "init", "-q", "-b", "main")
-    _git(path, "remote", "add", "origin", remote)
-    _git(path, "add", "-A")
-    _git(path, "commit", "-qm", "seed")
-    return path
+    return git_checkout(path, remote=remote, files=files)
 
 
 @dataclass(frozen=True)
@@ -124,11 +109,11 @@ def seed(tmp_path_factory) -> Seed:
     infra = _repo(root / "infra", RI, {"Pulumi.QA.yaml": PULUMI})
     lib = _repo(root / "lib", RL, {"lib/maths.py": COMPUTE})
     feature = root / "app-feature"
-    _git(app, "worktree", "add", "-q", "-b", "feature", str(feature))
+    git(app, "worktree", "add", "-q", "-b", "feature", str(feature))
     (feature / "app" / "service.py").write_text(ADDED)
-    _git(feature, "commit", "-qam", "added")
+    git(feature, "commit", "-qam", "added")
     unindexed = root / "app-unindexed"
-    _git(app, "worktree", "add", "-q", "-b", "unindexed", str(unindexed))
+    git(app, "worktree", "add", "-q", "-b", "unindexed", str(unindexed))
     stray = _repo(root / "stray", "https://github.com/test/stray", {"m.py": "x = 1\n"})
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("WITAN_CODE_DIR", str(code_dir))
@@ -530,7 +515,7 @@ def test_a_branch_switch_reaches_the_next_read(graph, tmp_path, monkeypatch):
 
     monkeypatch.setattr(lsp_plugin, "_BRANCH_TTL_SECONDS", 0.0)
     checkout = tmp_path / "switching"
-    _git(
+    git(
         graph.app,
         "worktree",
         "add",
@@ -545,8 +530,116 @@ def test_a_branch_switch_reaches_the_next_read(graph, tmp_path, monkeypatch):
     try:
         [note] = host.diagnostics(path, path.as_uri())
         assert f"branch scratch-{tmp_path.name} has no code index" in note.message
-        _git(checkout, "switch", "-q", "--detach")
+        git(checkout, "switch", "-q", "--detach")
         assert host.diagnostics(path, path.as_uri()) == []
     finally:
         host.close()
-        _git(graph.app, "worktree", "remove", "--force", str(checkout))
+        git(graph.app, "worktree", "remove", "--force", str(checkout))
+
+
+@requires_stack
+def test_the_default_branch_reads_main_beside_a_branch_named__main(graph, tmp_path):
+    """A git branch named `_main` indexes onto the `_main` view, which is also
+    where an explicit read of branch `main` maps. A folder on the default
+    branch must read the main view instead."""
+    from witan_code import indexer
+    from witan_code import server as server_module
+
+    repo = "https://github.com/test/solo"
+    solo = _repo(tmp_path / "solo", repo, {"m.py": "def shared():\n    return 1\n"})
+    under = tmp_path / "solo-under"
+    git(solo, "worktree", "add", "-q", "-b", "_main", str(under))
+    (under / "m.py").write_text(
+        "def shared():\n    return 1\n\n\ndef only_on_underscore_main():\n    return 2\n"
+    )
+    git(under, "commit", "-qam", "more")
+    for path in (solo, under):
+        indexer.index_path(path, repo_override=repo, config=cfg_module.load())
+
+    host = _host()
+    host.set_folders([resolve_folder(solo.as_uri(), solo, None)])
+    path = solo / "m.py"
+    try:
+        lenses = host.code_lenses(path, path.as_uri())
+        assert [lens.data["data"]["symbol"] for lens in lenses] == [
+            f"{repo}#m.py::shared"
+        ]
+        # The collision being avoided: naming `main` reads the `_main` view.
+        named = asyncio.run(
+            server_module.code_symbols_in_file(path="m.py", repo=repo, branch="main")
+        )
+        assert "only_on_underscore_main" in {s["name"] for s in named}
+    finally:
+        host.close()
+
+
+@requires_stack
+def test_definition_reads_an_open_dependency_at_its_branch(graph, tmp_path):
+    """The library is open on a branch that adds `fresh`; main has no such
+    function, so a fallback that read main everywhere would find nothing."""
+    from witan_code import indexer
+
+    lib_branch = tmp_path / "lib-fresh"
+    git(
+        graph.lib,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        f"fresh-{tmp_path.name}",
+        str(lib_branch),
+    )
+    maths = lib_branch / "lib" / "maths.py"
+    maths.write_text(COMPUTE + "\n\ndef fresh():\n    return 3\n")
+    git(lib_branch, "commit", "-qam", "fresh")
+    indexer.index_path(lib_branch, repo_override=RL, config=cfg_module.load())
+    service = graph.app / "app" / "service.py"
+
+    async def go():
+        async with lsp_session(_host(), [graph.app, lib_branch]) as session:
+            await session.open(service, "x = fresh()\n")
+            return await session.client.text_document_definition_async(
+                types.DefinitionParams(text_document=_doc(service), position=_at(0, 6))
+            )
+
+    try:
+        [loc] = run(go())
+        assert (loc.uri, loc.range.start.line) == (maths.as_uri(), 8)
+    finally:
+        git(graph.lib, "worktree", "remove", "--force", str(lib_branch))
+
+
+def test_a_whole_file_function_wins_over_its_module(monkeypatch):
+    """Both span every line; the module is only the fallback."""
+    plugin = CodePlugin()
+    rows = [
+        {
+            "symbol_id": "r#w.py::<module>",
+            "kind": "module",
+            "start_line": 1,
+            "end_line": 2,
+        },
+        {
+            "symbol_id": "r#w.py::whole",
+            "kind": "function",
+            "start_line": 1,
+            "end_line": 2,
+        },
+    ]
+    monkeypatch.setattr(plugin, "_symbols", lambda ctx, uri: rows)
+    assert plugin.resolve_symbol(None, "file:///w.py", 1, 0) == "r#w.py::whole"
+
+
+@requires_stack
+def test_an_absolute_path_reads_its_own_checkout_not_the_cwds(graph):
+    """Detached from the cwd, the server relativises an absolute path against
+    the checkout that holds it; the cwd here is the app, not the library."""
+    from witan_code import server as server_module
+
+    server_module.use_config(cfg_module.load(), follow_checkout=False)
+    rows = asyncio.run(
+        server_module.code_symbols_in_file(
+            path=str(graph.lib / "lib" / "maths.py"), repo=RL
+        )
+    )
+    assert {"compute", "twice"} <= {r["name"] for r in rows}

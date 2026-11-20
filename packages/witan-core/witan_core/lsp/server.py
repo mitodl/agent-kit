@@ -47,6 +47,18 @@ def _range(line: int, character: int = 0) -> types.Range:
     return types.Range(start=position, end=position)
 
 
+def _position(ls: LanguageServer, uri: str, position: types.Position):
+    """``position`` in code points. A client counts columns in the encoding
+    it negotiated (UTF-16 by default, UTF-8 for Neovim), and plugins index
+    Python strings, so a multibyte character earlier on the line would
+    otherwise shift every column after it. A document the client has not
+    opened has no text to convert against, and is passed through."""
+    document = ls.workspace.text_documents.get(uri)
+    if document is None:
+        return position
+    return document.position_from_client_units(position)
+
+
 def _location(loc: Location) -> types.Location:
     return types.Location(uri=loc.uri, range=_range(loc.line, loc.character))
 
@@ -168,7 +180,8 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
 
         @server.feature(types.TEXT_DOCUMENT_HOVER)
         async def hover(ls: LanguageServer, params: types.HoverParams):
-            uri, pos = params.text_document.uri, params.position
+            uri = params.text_document.uri
+            pos = _position(ls, uri, params.position)
             text = await host.run(host.hover, _path(uri), uri, pos.line, pos.character)
             if text is None:
                 return None
@@ -211,7 +224,8 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
 
         @server.feature(types.TEXT_DOCUMENT_DEFINITION)
         async def definition(ls: LanguageServer, params: types.DefinitionParams):
-            uri, pos = params.text_document.uri, params.position
+            uri = params.text_document.uri
+            pos = _position(ls, uri, params.position)
             locs = await host.run(
                 host.definition, _path(uri), uri, pos.line, pos.character
             )
@@ -221,7 +235,8 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
 
         @server.feature(types.TEXT_DOCUMENT_REFERENCES)
         async def references(ls: LanguageServer, params: types.ReferenceParams):
-            uri, pos = params.text_document.uri, params.position
+            uri = params.text_document.uri
+            pos = _position(ls, uri, params.position)
             locs = await host.run(
                 host.references,
                 _path(uri),

@@ -579,9 +579,10 @@ target's graph, at its own checkout branch:
   `{title, repo, path, line, uri}`, `uri` null for a repo no folder has open;
 - hover on a line that reads or sets an env var, calls or serves an endpoint,
   imports a package or names a service: who provides and who consumes it;
-- go to definition and find references across indexed repos. A definition
-  in a repo no workspace folder has checked out is named in the hover instead
-  (repo, path and line), with its references;
+- go to definition across indexed repos, and find references in the
+  definition's own repo (the code graph records no symbol-level use across
+  repos). A definition in a repo no workspace folder has checked out is named
+  in the hover instead (repo, path and line), with its references;
 - an Information diagnostic on line 1 when the folder's repo, or its branch,
   has no index (reads then show the default branch).
 

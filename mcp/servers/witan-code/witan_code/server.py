@@ -447,11 +447,15 @@ def _as_symbol_id(rows: list[dict]) -> list[dict]:
 def _file_id(path: str, repo: str) -> str:
     """Build the CodeFile id (`repo#relpath`) for a repo-relative or abs path."""
     p = Path(path)
-    if not _follow_checkout and not p.is_absolute():
+    if _follow_checkout:
+        base = repo_module.root() or Path.cwd()
+    elif not p.is_absolute():
         # The cwd's checkout is not the file's (see use_config), so a relative
         # path is already relative to its repo's root.
         return f"{repo}#{p.as_posix()}"
-    base = repo_module.root() or Path.cwd()
+    else:
+        # Nor is an absolute path under the cwd's checkout: use its own.
+        base = repo_module.root(p.parent) or p.parent
     try:
         rel = (
             p.resolve().relative_to(base.resolve()).as_posix()
