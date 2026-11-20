@@ -36,6 +36,7 @@ Skills are organized by **category**. Each skill lives in
 | workflow | [`extract-style-profile`](./workflow/extract-style-profile/SKILL.md) | Profile how a person, team, or repo codes and communicates from git/GitHub history; outputs CLAUDE.md/AGENTS.md rules with evidence |
 | workflow | [`verify-before-claiming`](./workflow/verify-before-claiming/SKILL.md) | Re-fetch PR/CI/task/deploy state before stating it, and label findings verified or inferred; keep multi-step shell logic in script files and edits in the edit tool; injected at session start on Claude Code, Codex and Pi |
 | workflow | [`session-preflight`](./workflow/session-preflight/SKILL.md) | Session-start hook reporting expired credentials, unreachable services and a stale checkout, one line per failure with its fix |
+| workflow | [`lint-exceptions`](./workflow/lint-exceptions/SKILL.md) | Satisfy the finding first; suppress at the narrowest scope the tool offers, with a reason that says why, and prove the scope with a probe |
 | process | [`create-ol-github-issue`](./process/create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |
 | process | [`create-ol-pull-request`](./process/create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template, after an independent goal/security review and a claim audit |
 | process | [`create-ol-rfc-discussion`](./process/create-ol-rfc-discussion/SKILL.md) | Write and post an RFC to mitodl/hq: an executive summary of a proposal plus real questions on what is still undecided |
