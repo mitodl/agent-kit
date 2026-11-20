@@ -7,9 +7,9 @@ actually run; a finding from something else is covered by the last section.
 Every form below was run against a deliberately-violating fixture with a second,
 unsuppressed violation as a probe - the method [the skill](../SKILL.md) asks for.
 Each tool ran at the version agent-kit pins for it - the hooks from `prek.toml`,
-biome from `mcp/servers/witan/ui/package.json` - except gitleaks, which ran from
-the prek hook cache. Renovate moves those pins, so read a version out of the
-file rather than from a number written here. mypy, tsc, eslint and yamllint,
+biome and tsc from `mcp/servers/witan/ui/package.json` - except gitleaks, which
+ran from the prek hook cache. Renovate moves those pins, so read a version out
+of the file rather than from a number written here. mypy, eslint and yamllint,
 which agent-kit does not use, ran on current releases.
 
 The five things to find in any tool, including one not listed here: the **rule
@@ -220,8 +220,19 @@ makes the rule wrong, not that it was noisy.
 | --- | --- |
 | Line | `# yamllint disable-line rule:line-length` |
 | Block | `# yamllint disable rule:line-length` ... `# yamllint enable rule:line-length` |
-| File | `# yamllint disable-file` |
+| File | `# yamllint disable-file`, **on the first line of the file** |
 | Config | `.yamllint` |
+
+Placement is the trap, as it is for zizmor. `disable-file` is honoured only as
+the very first line, so it has to go *above* the `---` that opens most workflow
+and config YAML. One line lower it is inert - no error, no warning, and the
+finding still reported:
+
+```yaml
+---
+# yamllint disable-file   # silently does nothing here
+one: <a line over the limit>   # still reported
+```
 
 ## A tool that is not listed
 

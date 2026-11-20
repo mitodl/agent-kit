@@ -14,8 +14,8 @@
 		},
 		{
 			"id": 2,
-			"prompt": "biome reports lint/suspicious/noExplicitAny on this file in mcp/servers/witan/ui. Get `npm run lint` green.\n\nsrc/graph/counts.ts:\n```ts\nexport function totalNodes(payload: any): number {\n\treturn payload.nodes.length;\n}\n```\n\nEvery caller passes the result of `JSON.parse` on a response shaped `{ nodes: GraphNode[] }`, and `GraphNode` is already exported from `src/graph/types.ts`.",
-			"expected_output": "The parameter gets a real type - the existing shape, or `unknown` narrowed before use - and no biome-ignore is added. The caller information in the prompt is what makes the type knowable, so 'the type is not known' is not available as a justification.",
+			"prompt": "biome reports lint/suspicious/noExplicitAny on this file. Get `npm run lint` green.\n\nsrc/graph/counts.ts:\n```ts\nexport function totalNodes(payload: any): number {\n\treturn payload.nodes.length;\n}\n```\n\nEvery caller passes the result of `JSON.parse` on a response shaped `{ nodes: GraphNode[] }`, and `GraphNode` is already exported from `src/graph/types.ts`.",
+			"expected_output": "The parameter gets a real type - the shape the prompt describes, or `unknown` narrowed before use - and no biome-ignore is added. The caller information in the prompt is what makes the type knowable, so 'the type is not known' is not available as a justification.",
 			"files": [],
 			"expectations": [
 				"The parameter is typed from the shape the prompt describes, reusing GraphNode rather than redeclaring it",
