@@ -59,13 +59,16 @@ def _diagnostic(note: Note) -> types.Diagnostic:
     )
 
 
-def _lens(lens: Lens) -> types.CodeLens:
-    return types.CodeLens(
-        range=_range(lens.line),
-        command=types.Command(
-            title=lens.title, command=lens.command, arguments=list(lens.arguments)
-        ),
+def _command(lens: Lens) -> types.Command:
+    return types.Command(
+        title=lens.title, command=lens.command, arguments=list(lens.arguments)
     )
+
+
+def _lens(lens: Lens) -> types.CodeLens:
+    if not lens.command:
+        return types.CodeLens(range=_range(lens.line), data=lens.data)
+    return types.CodeLens(range=_range(lens.line), command=_command(lens))
 
 
 def _folders(params: types.InitializeParams) -> list[types.WorkspaceFolder]:
@@ -102,6 +105,9 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
     @server.feature(types.INITIALIZE)
     def initialize(ls: LanguageServer, params: types.InitializeParams) -> None:
         pending.extend(_folders(params))
+        document = params.capabilities.text_document
+        host.lens_fallback = document is None or document.code_lens is None
+        host.document_text = lambda uri: ls.workspace.get_text_document(uri).source
 
     @server.feature(types.INITIALIZED)
     async def initialized(ls: LanguageServer, params: types.InitializedParams) -> None:
@@ -177,6 +183,29 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
             lenses = await host.run(host.code_lenses, _path(uri), uri)
             return [_lens(lens) for lens in lenses]
 
+        @server.feature(types.CODE_LENS_RESOLVE)
+        async def resolve_lens(ls: LanguageServer, params: types.CodeLens):
+            lens = await host.run(
+                host.resolve_lens,
+                _path(params.data["uri"]),
+                params.range.start.line,
+                params.data,
+            )
+            return types.CodeLens(range=params.range, command=_command(lens))
+
+        # Registered whatever the client, since the client's capabilities
+        # arrive after the handlers are; the host answers with nothing unless
+        # the client has no CodeLens.
+        @server.feature(types.TEXT_DOCUMENT_CODE_ACTION)
+        async def code_action(ls: LanguageServer, params: types.CodeActionParams):
+            uri = params.text_document.uri
+            lenses = await host.run(
+                host.code_actions, _path(uri), uri, params.range.start.line
+            )
+            # Bare commands rather than CodeActions: every client runs one
+            # through workspace/executeCommand, and nothing here edits text.
+            return [_command(lens) for lens in lenses]
+
     if Capability.DEFINITION in capabilities:
 
         @server.feature(types.TEXT_DOCUMENT_DEFINITION)
@@ -232,12 +261,17 @@ def serve(target: str | None = None) -> None:
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     host = Host(discover_plugins())
     server = build_server(host, target=explicit)
-    protocol_out = sys.stdout.buffer
-    # stdout is the JSON-RPC channel. The writer holds the real stream, and
-    # anything a plugin or a server module prints lands on stderr instead.
-    original, sys.stdout = sys.stdout, sys.stderr
+    protocol_in, protocol_out = sys.stdin.buffer, sys.stdout.buffer
+    # stdin and stdout are the JSON-RPC channel. The reader and writer hold
+    # the real streams. Anything a plugin or a server module prints lands on
+    # stderr, and stdin reads as a closed non-terminal, so no prompt
+    # (`witan_core.elicit.has_terminal`) can read a request as its answer,
+    # even when the server was started by hand in a terminal.
+    originals = sys.stdin, sys.stdout
+    sys.stdin, sys.stdout = open(os.devnull), sys.stderr  # noqa: SIM115
     try:
-        server.start_io(sys.stdin.buffer, protocol_out)
+        server.start_io(protocol_in, protocol_out)
     finally:
-        sys.stdout = original
+        sys.stdin.close()
+        sys.stdin, sys.stdout = originals
         host.close()

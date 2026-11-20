@@ -15,10 +15,12 @@ import inspect
 import os
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from .plugin import (
     Capability,
@@ -28,6 +30,7 @@ from .plugin import (
     Note,
     Plugin,
     Route,
+    escape_markdown,
     validate_plugins,
 )
 
@@ -89,8 +92,15 @@ class _Context:
     tools: Any
     host: Host
 
+    @property
+    def folders(self) -> Sequence[Folder]:
+        return list(self.host.folders.values())
+
     def symbol_at(self, uri: str, line: int, character: int) -> str | None:
         return self.host.resolve_symbol(self.folder, uri, line, character)
+
+    def text(self, uri: str) -> str:
+        return self.host.document_text(uri)
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,10 @@ class _Unroutable:
     reason: str
 
 
+def _disk_text(uri: str) -> str:
+    return Path(url2pathname(urlparse(uri).path)).read_text(errors="replace")
+
+
 def _no_exit(fn: Callable[..., T], *args: Any) -> T:
     try:
         return fn(*args)
@@ -147,6 +161,13 @@ class Host:
         stays open after its target changes or its folder is removed."""
         self._cwd_anchor: Folder | None = None
         self._cwd_pinned = False
+        self.document_text: Callable[[str], str] = _disk_text
+        """What :meth:`Context.text` reads. The server points it at the
+        editor's open buffers."""
+        self.lens_fallback = False
+        """The client has no CodeLens (eglot; Zed by default). The host then
+        puts the resolved lenses on a hovered line into the hover, and offers
+        their commands as code actions (ADR 0012's per-editor fallbacks)."""
 
     async def run(self, fn: Callable[..., T], /, *args: Any) -> T:
         """Run ``fn(*args)`` on the worker thread, from the event loop."""
@@ -325,13 +346,56 @@ class Host:
             for plugin, ctx in self._contexts(Capability.HOVER, path)
             if (section := plugin.hover(ctx, uri, line, character))
         ]
+        if self.lens_fallback and (lenses := self._lenses_on(path, uri, line)):
+            sections.append("\n\n".join(escape_markdown(lens.title) for lens in lenses))
         return "\n\n---\n\n".join(sections) or None
 
     def code_lenses(self, path: Path | None, uri: str) -> list[Lens]:
+        """Every plugin's lenses. An unresolved one carries the plugin and
+        document in its ``data``, which ``codeLens/resolve`` hands back."""
+        folder = self.folder_for(path)
+        if folder is None:
+            return []
+        lenses = []
+        for name, plugin in self._with(Capability.CODE_LENS):
+            ctx = self.context(name, folder)
+            if ctx is None:
+                continue
+            lenses += [
+                lens
+                if lens.command
+                else replace(lens, data={"plugin": name, "uri": uri, "data": lens.data})
+                for lens in plugin.code_lenses(ctx, uri)
+            ]
+        return lenses
+
+    def resolve_lens(self, path: Path | None, line: int, data: Any) -> Lens:
+        """The lens :meth:`code_lenses` sent unresolved, with its command."""
+        name = data["plugin"]
+        folder = self.folder_for(path)
+        ctx = self.context(name, folder) if folder is not None else None
+        if ctx is None:
+            # The folder was removed, or stopped routing, since the lens was sent.
+            return Lens(
+                line=line,
+                title="witan: this folder is no longer served",
+                command=STATUS_COMMAND,
+            )
+        return self.plugins[name].resolve_lens(
+            ctx, data["uri"], Lens(line=line, data=data["data"])
+        )
+
+    def code_actions(self, path: Path | None, uri: str, line: int) -> list[Lens]:
+        """The lens fallback's code actions: each resolved lens on ``line``,
+        whose title and command become the action's."""
+        return self._lenses_on(path, uri, line) if self.lens_fallback else []
+
+    def _lenses_on(self, path: Path | None, uri: str, line: int) -> list[Lens]:
         return [
-            lens
+            lens if lens.command else plugin.resolve_lens(ctx, uri, lens)
             for plugin, ctx in self._contexts(Capability.CODE_LENS, path)
             for lens in plugin.code_lenses(ctx, uri)
+            if lens.line == line
         ]
 
     def diagnostics(self, path: Path | None, uri: str) -> list[Note]:
