@@ -1,6 +1,6 @@
 # witan-infra: a map of running infrastructure as witan's third layer (spec)
 
-Status: proposed (spec phase). Three decisions are left to the owner; they are
+Status: proposed (spec phase). Two decisions are left to the owner; they are
 listed in [Open decisions](#16-open-decisions), each with a recommendation.
 Project: `wp-witan-infra-digital-twin-of-running-infrastructu-544088`
 Epic: task `tk-epic-witan-infra-digital-twin-of-running-infrast-3ccc57`
@@ -917,8 +917,24 @@ omitted entirely on timeout or when witan-infra is absent (no `"deployment":
 null`). The kill switch is config, not a tool parameter.
 
 This is the main bet on discoverability: a field in a result the agent already
-asked for arrives at the moment it is relevant and costs nothing to read. How
-witan-code reaches witan-infra to fill it is the first [open decision](#16-open-decisions).
+asked for arrives at the moment it is relevant and costs nothing to read.
+
+#### witan-code and witan-infra never import each other
+
+Decided by the owner on 2026-11-20. `witan_core` defines a `ResultEnricher`
+protocol and an entry-point group. witan-code looks up the enrichers
+registered for a tool's result and calls them; witan-infra registers the one
+that fills `deployment`. Neither server package imports the other, so either
+installs and ships alone, and the enricher is a plain function testable without
+a server. It uses the entry-point mechanism witan-infra's collectors already
+need ([9.1](#91-protocols-and-registration)).
+
+Rejected: witan-code importing witan-infra optionally, the best-effort pattern
+of `_code_server()` (`witan/server.py:8898`), because it couples a hardened
+package to a new one and makes the DAG `witan_core <- witan_infra <-
+witan_code`; and a FastMCP middleware in the umbrella `serve` that rewrites
+results by tool name, because matching on tool-name strings is opaque and only
+works when both servers run in the umbrella.
 
 ### 13.3 Memory
 
@@ -995,24 +1011,13 @@ authenticated identity, rather than each collector writing the graph.
 
 Each is the owner's call; the spec is written to the recommendation.
 
-1. How `code_impact` reaches witan-infra for the `deployment` block. Options:
-   (a) witan-code imports witan-infra optionally, the best-effort pattern of
-   `_code_server()` (`witan/server.py:8898`), making the DAG
-   `witan_core <- witan_infra <- witan_code`; (b) a FastMCP middleware in the
-   umbrella `serve` that post-processes results by tool name; (c) a
-   `ResultEnricher` protocol in `witan_core` and an entry-point group that
-   witan-code calls and witan-infra registers into. I recommend (c): neither
-   server imports the other, the enricher is a plain function testable on its
-   own, and it uses the same entry-point mechanism witan-infra's collectors
-   already require. (a) couples a hardened package to a new one; (b) is opaque
-   string matching on tool names.
-2. Who reads the `infra` graph. `render_groups.py` today can only put every
+1. Who reads the `infra` graph. `render_groups.py` today can only put every
    `act-*` actor into `witan-users`; a narrower `witan-infra-readers` needs a
    membership source. I recommend a Keycloak group synced by the existing token
    sync into a second membership map, read by a new flag on `render_groups.py`.
    Until it exists the group is unprovisioned and only the service and admin
    actors can read, which is the safe default.
-3. The MITODL service set and synonyms ([6.3](#63-the-service-set-is-config)):
+2. The MITODL service set and synonyms ([6.3](#63-the-service-set-is-config)):
    57 services and 18 synonyms as measured. I recommend accepting it as the
    first config instance and letting the attribution test in Phase 4 flag
    changes.
@@ -1030,10 +1035,12 @@ The phase tasks under the epic stand. Changes from the August plan:
   the `FastMCP.mount()` instructions question (answered and fixed by "trim tool
   schemas and annotate every tool", #661).
 - The Cedar bundle spike is answered ([Authorization](#14-authorization)) but
-  stays open on open decision 2, who reads the graph. It blocks only Phase 5.
+  stays open on the [open decision](#16-open-decisions) of who reads the
+  graph. It blocks only Phase 5.
 - The schema-evolution spike (adding an enum variant on a live graph) no longer
   blocks anything, because the infra schema has no enums.
-- The import-direction task is resolved by open decision 1.
+- The import-direction task is resolved: [witan-code and witan-infra never
+  import each other](#witan-code-and-witan-infra-never-import-each-other).
 - Attribution moves from Phase 4 to Phase 2. The IaC-sourced rungs need nothing
   from Kubernetes, the tools in Phase 3 need `ComposedOf` to answer anything
   by service, and the reconciler recomputes attribution every run anyway.
@@ -1053,11 +1060,11 @@ The phase tasks under the epic stand. Changes from the August plan:
 | 2 | reconciler: lease, `SyncRun`, watermarks, projection, IaC attribution, diff write, reap gate | 1b, `normalize_key` promotion |
 | 3 | the five `infra_*` tools, graph-backed | 2 |
 | 4 | Kubernetes collector, identity ladder, Kubernetes attribution rungs | 3, Kubernetes access spike |
-| 5 | `infra` graph, bundle and sync CronJob in ol-infrastructure | 3, Cedar bundle spike (open decision 2) |
+| 5 | `infra` graph, bundle and sync CronJob in ol-infrastructure | 3, Cedar bundle spike (who reads the graph) |
 | 6 | sampled and partial observed-topology collectors | 4 |
 | 7 | live-read path | 3 |
 | 8 | cloud inventory and the undeclared delta | 4 |
-| 9 | `deployment` enrichment, recall seed, skill, CLI | 3, open decision 1 |
+| 9 | `ResultEnricher` protocol in `witan_core`, `deployment` enrichment, recall seed, skill, CLI | 3 |
 | follow-on | retire IaC source scraping from witan-code's bridge | 5 |
 
 Phases 0 to 4 land in agent-kit alone, before anything needs an
