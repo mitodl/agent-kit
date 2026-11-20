@@ -122,7 +122,7 @@ RUN mkdir -p /witan && npm run build
 
 # ── Build the relocatable venv from the uv workspace ──────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS builder
-COPY --from=ghcr.io/astral-sh/uv:0.12.19@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d /uv /uvx /usr/local/bin/
 
 # build-essential is insurance for any dependency that ships only an sdist; the
 # runtime stage discards it. UV_PYTHON_DOWNLOADS=never keeps uv on the image's
