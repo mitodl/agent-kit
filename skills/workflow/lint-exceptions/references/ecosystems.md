@@ -6,11 +6,11 @@ actually run; a finding from something else is covered by the last section.
 
 Every form below was run against a deliberately-violating fixture with a second,
 unsuppressed violation as a probe - the method [the skill](../SKILL.md) asks for.
-Where agent-kit pins the tool, that pin is the version used
-(`prek.toml`: ruff 0.17.2, shellcheck 0.11, actionlint 1.7.12, zizmor 1.31.1,
-markdownlint-cli 0.50.0; `mcp/servers/witan/ui`: biome 2.6.8). gitleaks ran from
-the hook cache, and mypy, tsc, eslint and yamllint - which agent-kit does not
-use - ran on current releases.
+Each tool ran at the version agent-kit pins for it - the hooks from `prek.toml`,
+biome from `mcp/servers/witan/ui/package.json` - except gitleaks, which ran from
+the prek hook cache. Renovate moves those pins, so read a version out of the
+file rather than from a number written here. mypy, tsc, eslint and yamllint,
+which agent-kit does not use, ran on current releases.
 
 The five things to find in any tool, including one not listed here: the **rule
 identifier**, the **inline escape**, the **file-level escape**, the **config
@@ -132,7 +132,7 @@ around it.
 | --- | --- |
 | Line | `# zizmor: ignore[template-injection]`, **on the same line as the finding** |
 | Config | `.github/zizmor.yml`: `rules:` → the rule name → `ignore:` → a list of filenames |
-| Unused | the run summary counts ignored findings, so a directive that stops matching shows up as a drop in that count |
+| Unused | none. The run summary counts ignored findings in aggregate, which will not tell you that *your* directive stopped matching |
 
 Placement is the trap. The comment on the line *above* the flagged line parses
 fine, suppresses nothing, and looks exactly like a working suppression:
