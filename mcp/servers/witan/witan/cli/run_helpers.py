@@ -12,6 +12,7 @@ from typing import Literal, NotRequired, TypedDict
 
 from witan_core.observability import get_logger
 
+from .. import config as config_module
 from .. import envelope, provenance
 from .. import repo as repo_module
 from ..config import Config
@@ -73,8 +74,9 @@ class LaunchRefusal(TypedDict):
     """Why a launch was refused. A refusal never carries an ``argv``.
 
     ``reason`` is ``not_found``, ``no_workspace`` (``repos`` names what no open
-    folder maps to), or the refused claim's own ``reason``, with the claim
-    result itself in ``claim``.
+    folder maps to), ``target_mismatch`` (the launcher used the local store,
+    and an agent started in the folder would match ``target`` instead), or the
+    refused claim's own ``reason``, with the claim result itself in ``claim``.
     """
 
     version: int
@@ -85,6 +87,7 @@ class LaunchRefusal(TypedDict):
     message: str
     claim: dict | None
     repos: NotRequired[list[str]]
+    target: NotRequired[str]
 
 
 def _parse_number_selection(raw: str, count: int) -> list[int]:
@@ -562,6 +565,23 @@ def build_launch_spec(
             else f"No folder is open to launch {slug} in.",
         )
         refusal["repos"] = list(repos)
+        return refusal
+
+    # A named target is pinned in `env`, so the agent follows it whatever the
+    # folder matches. The local store cannot be pinned (it has no name, and an
+    # empty WITAN_TARGET means auto-detect), so the agent only reaches it if
+    # its own matching from the folder does.
+    if not cfg.target_name and (agent_target := config_module.folder_target(folder)):
+        refusal = _refusal(
+            kind,
+            slug,
+            "target_mismatch",
+            f"This launch reads {slug} from the local store, but an agent "
+            f"started in {folder} would use the {agent_target!r} target, where "
+            f"it would not find what it was given. Launch with --target "
+            f"{agent_target} to use that target instead.",
+        )
+        refusal["target"] = agent_target
         return refusal
 
     claim_result = None

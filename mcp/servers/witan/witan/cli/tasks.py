@@ -768,7 +768,8 @@ def task_run(
     The claim is always bare: any agent-session id in the environment is
     dropped first, so the launched agent's own renewal qualifies it. The task
     must belong to the repo checked out in the current directory, or have
-    none.
+    none. Using the local store, it refuses before claiming when the agent,
+    started here, would match a named target instead.
 
     Parameters
     ----------

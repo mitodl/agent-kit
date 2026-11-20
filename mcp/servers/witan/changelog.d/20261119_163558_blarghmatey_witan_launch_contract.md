@@ -4,9 +4,12 @@
   launch spec (`version`, `kind`, `slug`, `launchable`, `argv`, `cwd`, `env`,
   `unset_env`, `handoff`, `prompt`, `agent`, `model`, `claim`) instead of
   launching, for an editor or other launcher to run (ADR 0012, "3. The launch
-  contract"). A refusal (`not_found`, `no_workspace`, or a refused claim
-  passed through as `claim`) prints a spec with `launchable: false` and no
-  `argv`, and exits 1. `build_launch_spec` in `witan.cli.run_helpers` returns
+  contract"). A refusal (`not_found`, `no_workspace`, `target_mismatch`, or a
+  refused claim passed through as `claim`) prints a spec with
+  `launchable: false` and no `argv`, and exits 1. `target_mismatch` (with the
+  matched name in `target`) means the launcher used the local store, but an
+  agent started in the launch folder would match a named target, so it would
+  not find the task it was handed; nothing is claimed. `build_launch_spec` in `witan.cli.run_helpers` returns
   the same spec as data, with no console output, for the language server.
 - `task_release` takes `if_claimed_at`: it releases only when the task is still
   `in_progress` under the claim taken at that instant, and otherwise returns

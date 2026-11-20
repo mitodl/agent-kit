@@ -290,8 +290,13 @@ object; neither parses CLI output.
   resolved to, whether that came from `--target`, `WITAN_TARGET` or the
   folder's `match_*` rules. When the folder resolved to the local store, which
   has no target name, `unset_env` also lists `WITAN_TARGET`, and the agent's
-  matching from `cwd` reaches the same local store. Either way the agent talks
-  to the graph the claim was taken in. `env` never contains a credential; the
+  matching from `cwd` reaches the same local store. That matching runs without
+  the overrides `unset_env` removes, so it can land on a named target the
+  launcher never matched (an inherited `CLAUDE_PROJECT_DIR` steered the
+  launcher's own matching elsewhere). The launcher checks this before
+  claiming and refuses with `reason: "target_mismatch"`, naming the target in
+  `target`, because the local store cannot be pinned. Either way the agent
+  talks to the graph the claim was taken in. `env` never contains a credential; the
   launched agent's own witan resolves the token from the `witan login` store,
   as any agent does today.
 - A task launch claims first, as `_run_task_slug` does, and the claim is bare

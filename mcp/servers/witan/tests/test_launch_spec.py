@@ -147,6 +147,69 @@ def test_the_local_store_unsets_the_target_and_a_named_one_pins_it(folders):
     assert "WITAN_TARGET" not in named["unset_env"]
 
 
+@pytest.fixture
+def config_toml(tmp_path, monkeypatch):
+    """Point witan at a config.toml written by the test."""
+    path = tmp_path / "config.toml"
+    monkeypatch.setenv("WITAN_CONFIG", str(path))
+    return path
+
+
+@pytest.mark.parametrize("kind", ["task", "project"])
+def test_a_folder_that_routes_elsewhere_is_refused_before_the_claim(
+    folders, config_toml, monkeypatch, kind
+):
+    """The launcher dispatched to the local store (here because an inherited
+    CLAUDE_PROJECT_DIR pointed its matching elsewhere), but the agent, started
+    in the folder without it, matches a deployment and would never see the
+    claim (or the project it was handed)."""
+    here, _ = folders
+    config_toml.write_text(
+        '[targets.prod]\nremote_url = "https://witan.example.edu"\n'
+        f'match_repos = ["{REPO.removeprefix("https://")}"]\n'
+    )
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/somewhere/else")
+    project = {"slug": "wp-a", "title": "P", "repos": [REPO]}
+    fake = _Fake(task=_task(), project=project, claim=_CLAIMED)
+
+    spec = _spec(fake, kind=kind, folders=[here])
+
+    assert spec["launchable"] is False
+    assert spec["reason"] == "target_mismatch"
+    assert spec["target"] == "prod"
+    assert "the local store" in spec["message"]
+    assert "'prod'" in spec["message"]
+    assert "argv" not in spec
+    assert fake.claims == []
+
+
+def test_a_folder_that_routes_to_the_local_store_launches(folders, config_toml):
+    here, _ = folders
+    config_toml.write_text(
+        '[targets.prod]\nremote_url = "https://witan.example.edu"\n'
+        'match_repos = ["github.com/test/elsewhere"]\n'
+    )
+
+    spec = _spec(_Fake(task=_task(), claim=_CLAIMED), folders=[here])
+
+    assert spec["launchable"] is True
+
+
+def test_a_named_target_is_pinned_whatever_the_folder_matches(folders, config_toml):
+    here, _ = folders
+    config_toml.write_text(
+        '[targets.prod]\nremote_url = "https://witan.example.edu"\n'
+        f'match_repos = ["{REPO.removeprefix("https://")}"]\n'
+    )
+    cfg = _Cfg()
+    cfg.target_name = "qa"
+
+    spec = _spec(_Fake(task=_task(), claim=_CLAIMED), folders=[here], cfg=cfg)
+
+    assert spec["launchable"] is True
+    assert spec["env"] == {"WITAN_TARGET": "qa"}
+
+
 def test_handoff_only_when_the_editor_env_resolves_what_the_spec_does(
     folders, monkeypatch
 ):
