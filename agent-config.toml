@@ -83,6 +83,7 @@ django-api-benchmark            = "skills/python/django-api-benchmark/SKILL.md"
 docker-uv-image-builds          = "skills/containers/docker-uv-image-builds/SKILL.md"
 drf-api-performance             = "skills/python/drf-api-performance/SKILL.md"
 extract-style-profile           = "skills/workflow/extract-style-profile/SKILL.md"
+feature-loop                    = "skills/workflow/feature-loop/SKILL.md"
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
@@ -169,6 +170,7 @@ skills = [
     "dependency-updates",
     "deploy-verification",
     "extract-style-profile",
+    "feature-loop",
     "github-issue-triage",
     "github-pr-triage",
     "renovate-security-triage",
