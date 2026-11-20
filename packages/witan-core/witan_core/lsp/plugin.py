@@ -13,6 +13,7 @@ and the host turns them into LSP messages, so no plugin imports pygls either.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -33,6 +34,7 @@ __all__ = [
     "Plugin",
     "Route",
     "discover_plugins",
+    "escape_markdown",
     "validate_plugins",
 ]
 
@@ -122,10 +124,20 @@ class Route:
 
 @dataclass(frozen=True)
 class Lens:
+    """A CodeLens on one line.
+
+    A plugin whose lens is costly to compute returns it with ``data`` and no
+    ``command``: the host sends it unresolved and calls
+    :meth:`Plugin.resolve_lens` only for the lenses the client asks
+    ``codeLens/resolve`` about (the ones on screen). ``data`` must be
+    JSON-serialisable, since it travels to the client and back.
+    """
+
     line: int
-    title: str
-    command: str
+    title: str = ""
+    command: str = ""
     arguments: tuple[Any, ...] = ()
+    data: Any = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +164,18 @@ class Context(Protocol):
     :attr:`Plugin.tools`. Tools are plain synchronous callables that take
     keyword arguments only, as a deployment's ``RemoteServerProxy`` does."""
 
+    @property
+    def folders(self) -> Sequence[Folder]:
+        """Every workspace folder, so a plugin can tell whether a location in
+        another repo is checked out in this workspace."""
+        ...
+
     def symbol_at(self, uri: str, line: int, character: int) -> str | None: ...
+
+    def text(self, uri: str) -> str:
+        """The document's text: the editor's buffer when the document is open,
+        else the file on disk, else empty."""
+        ...
 
 
 class CommandContext(Protocol):
@@ -195,6 +218,10 @@ class Plugin:
     def code_lenses(self, ctx: Context, uri: str) -> list[Lens]:
         return []
 
+    def resolve_lens(self, ctx: Context, uri: str, lens: Lens) -> Lens:
+        """Fill in the title and command of a lens returned with only ``data``."""
+        return lens
+
     def diagnostics(self, ctx: Context, uri: str) -> list[Note]:
         return []
 
@@ -223,6 +250,20 @@ class Plugin:
         self, ctx: CommandContext, command: str, arguments: Sequence[Any]
     ) -> Any:
         raise NotImplementedError(command)
+
+
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~:])")
+
+
+def escape_markdown(text: str) -> str:
+    """``text`` as literal markdown: no link, image, emphasis or HTML.
+
+    For text a plugin does not control (teammate-written titles, keys and
+    paths read from the graph), which ADR 0012 has the server render as plain
+    text inside its markdown. Escaping ``:`` stops a bare URL from autolinking,
+    and a line break becomes a space, so no setext heading or list starts.
+    """
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.splitlines()))
 
 
 def discover_plugins() -> dict[str, Plugin]:

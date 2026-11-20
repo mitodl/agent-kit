@@ -76,6 +76,7 @@ you want calls only. Heuristic — may miss or over-report.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `symbol_id` | str | **required** | The symbol to start from (a ``symbol_id`` from a name-based tool). |
+| `branch` | str? | `null` | Branch or view of ``symbol_id``'s repo to read; see instructions. |
 
 ## `code_impact`
 
@@ -131,6 +132,25 @@ shared omnigraph-server.
 *Read-only.*
 
 *Takes no parameters.*
+
+## `code_interface_bindings_in_file`
+
+List the cross-repo interface bindings in one source file, with their lines.
+
+Each row is a contract the file provides or consumes: its ``kind``
+(``env_var``, ``package``, ``service``, ``endpoint``), ``key`` as written,
+``key_norm``, ``role``, ``line`` (1-based; null for a binding with no
+single line), and the enclosing ``symbol_id``. Pass a row's ``kind`` and
+``key`` to code_interface_providers / code_interface_consumers to find the
+other side. Returns ``[]`` when the bridge store does not exist yet.
+
+*Read-only.*
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path` | str | **required** | Source file path, repo-relative or absolute. |
+| `repo` | str? | `null` | Repo the file belongs to. Defaults to the current repo. |
+| `branch` | str? | `null` | Branch whose bridge overlay for ``repo`` to read; see instructions. A<br>branch with no overlay reads bridge main. |
 
 ## `code_interface_consumers`
 

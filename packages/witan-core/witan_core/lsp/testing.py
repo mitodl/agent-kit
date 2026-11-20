@@ -83,10 +83,18 @@ class Session:
 
 @asynccontextmanager
 async def lsp_session(
-    host: Host, folders: Sequence[Path], *, target: str | None = None
+    host: Host,
+    folders: Sequence[Path],
+    *,
+    target: str | None = None,
+    client_capabilities: types.ClientCapabilities | None = None,
 ) -> AsyncIterator[Session]:
     """Start a server for ``host``, initialize it with ``folders``, and yield
-    a :class:`Session`. Shuts the server down and joins its thread on exit."""
+    a :class:`Session`. Shuts the server down and joins its thread on exit.
+
+    ``client_capabilities`` defaults to an empty ``ClientCapabilities()``,
+    which does not advertise CodeLens, so the host's lens fallback is on.
+    """
     server = build_server(host, target=target)
     to_server_r, to_server_w = os.pipe()
     to_client_r, to_client_w = os.pipe()
@@ -127,7 +135,7 @@ async def lsp_session(
         result = await asyncio.wait_for(
             client.initialize_async(
                 types.InitializeParams(
-                    capabilities=types.ClientCapabilities(),
+                    capabilities=client_capabilities or types.ClientCapabilities(),
                     workspace_folders=[
                         types.WorkspaceFolder(uri=p.as_uri(), name=p.name)
                         for p in folders

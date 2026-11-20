@@ -194,6 +194,21 @@ query bindings_for_symbol($symbol_id: String) {
     limit 500
 }
 
+// Bindings in one source file — code_interface_bindings_in_file, which the
+// language server reads to find the contract under the cursor.
+
+query bindings_in_file($repo: String, $file: String) {
+    match {
+        $b: InterfaceBinding { repo: $repo, file: $file }
+    }
+    return {
+        $b.kind, $b.key, $b.key_norm, $b.role, $b.line, $b.symbol_id,
+        $b.framework, $b.generic
+    }
+    order { $b.line asc }
+    limit 500
+}
+
 // ── Full-text search (BM25 on key_norm) ───────────────────────────
 
 query search_bindings($query: String) {
