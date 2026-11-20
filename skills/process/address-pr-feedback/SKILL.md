@@ -98,8 +98,9 @@ Resolve two things before running anything, asking if either is unclear:
 ./skills/process/address-pr-feedback/scripts/fetch-feedback.sh mitodl/agent-kit 116 /tmp/pr116-feedback.json
 ```
 
-This is one call regardless of PR size — it follows GraphQL cursor pagination
-for review threads internally, so a PR with 200 threads across a dozen
+This is one call regardless of PR size — it paginates all three channels
+internally (GraphQL cursors for review threads, slurped REST pages for
+discussion comments and reviews), so a PR with 200 threads across a dozen
 review rounds comes back complete, not truncated at the first page. By
 default it excludes already-resolved threads; add `--include-resolved` when
 you need the full history (e.g. re-checking a PR you partially addressed in

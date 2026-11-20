@@ -83,11 +83,17 @@ jq '[.[] | .comments.nodes |= map(.author_type = (.author.__typename // "Unknown
   "$threads_file" > "${threads_file}.tmp"
 mv "${threads_file}.tmp" "$threads_file"
 
-discussion="$(gh api "repos/${repo}/issues/${pr}/comments" --paginate \
-  --jq '[.[] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]')"
+# `--slurp` wraps the pages in one outer array; the `.[][]` flattens it back.
+# Without it, `--paginate` emits each page as a separate top-level JSON array,
+# which concatenate into something --argjson rejects outright ("invalid JSON
+# text") the moment a PR passes 100 comments or 100 reviews — the long-running
+# PRs this script exists for. `--slurp` is refused alongside `--jq`, so the
+# filter moves into a pipe.
+discussion="$(gh api "repos/${repo}/issues/${pr}/comments" --paginate --slurp \
+  | jq '[.[][] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]')"
 
-reviews="$(gh api "repos/${repo}/pulls/${pr}/reviews" --paginate \
-  --jq '[.[] | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]')"
+reviews="$(gh api "repos/${repo}/pulls/${pr}/reviews" --paginate --slurp \
+  | jq '[.[][] | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]')"
 
 # GitHub shows a pending review only to its author, so this finds the
 # viewer's own. The comment bodies are a snapshot for reading; the user can

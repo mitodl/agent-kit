@@ -155,3 +155,14 @@ yes, PR discussion comments live under the *issues* REST endpoint, not
 `pulls`) have no thread/resolution concept at all. You can only reply to
 them with a new top-level comment (`reply-comment.sh`, i.e. `gh pr comment`);
 there's nothing to mark resolved.
+
+The REST paths have their own truncation trap, and it is the opposite of the
+GraphQL one above: `--paginate` fetches every page but prints each as its own
+top-level JSON array, so `gh api ... --paginate --jq '[.[] | ...]'` yields
+*N* concatenated arrays rather than one. Nothing warns you — the 100th comment
+is the last one that fits in a single page, and past that the concatenation is
+no longer valid JSON, so `jq --argjson` rejects it with "invalid JSON text" and
+the script dies. `--slurp` wraps the pages into one outer array, which `.[][]`
+flattens; it is refused alongside `--jq`, so the filter has to move into a
+pipe. The same applies to `repos/.../pulls/{n}/reviews`, where a PR with many
+bot review rounds passes 100 well before its comments do.
