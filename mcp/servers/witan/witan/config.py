@@ -857,6 +857,25 @@ def _select_target(
     )
 
 
+def folder_target(folder: Path) -> str | None:
+    """The target a witan started in ``folder`` matches, with no override set.
+
+    What a launched agent resolves: its cwd is ``folder`` and the launch
+    removes ``WITAN_REPO`` and ``CLAUDE_PROJECT_DIR``, so matching reads that
+    folder's own remote and path.
+
+    :param folder: The folder the agent starts in.
+    :returns: The matched target's name, or ``None`` for the local store.
+    :rtype: str | None
+    """
+    matched = match_target(
+        _parse_targets(_load_toml()),
+        repo_uri=repo_module.detect_at(folder),
+        local_path=folder,
+    )
+    return matched.name if matched else None
+
+
 def load_target(name: str) -> _Target:
     """Return the ``[targets.<name>]`` block itself, by name.
 

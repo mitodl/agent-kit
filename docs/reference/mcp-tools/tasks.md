@@ -187,6 +187,8 @@ Release a claim: clear the assignee/lease and return the task to ``open``.
 Call when stepping away from an unfinished task so others can pick it up
 (closing a finished task — use ``task_close`` — also ends the claim). Refuses
 if the task is held by a different ``assignee`` unless ``force`` is set.
+With ``if_claimed_at``, also refuses (``reason: "claim_changed"``) unless
+the task is still ``in_progress`` under the claim taken at that instant.
 
 *Writes (destructive).*
 
@@ -197,6 +199,7 @@ if the task is held by a different ``assignee`` unless ``force`` is set.
 | `session_id` | str? | `null` | Your agent session id; see instructions. |
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to. |
 | `force` | bool | `False` | Release even if held by a different assignee. |
+| `if_claimed_at` | str? | `null` | The ``claimed_at`` a ``task_claim`` returned. Release only that claim:<br>not one renewed since, and not a task that has left ``in_progress``.<br>``force`` does not lift this check. |
 
 ## `task_close`
 

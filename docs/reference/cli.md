@@ -775,6 +775,10 @@ running each project sequentially in separate agent invocations.
 * `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
 * `--model STR`: Model flag passed to the agent.
 * `--dry-run, --no-dry-run`: Print the prompt(s) without launching. *[default: False]*
+* `--emit-spec, --no-emit-spec`: Print the launch spec as JSON instead of launching, for an editor or
+    other launcher to run. Needs a slug. Claims nothing: the prompt has
+    the agent claim each task it starts. Exits non-zero, after printing
+    the refusal spec, when there is nothing to launch. *[default: False]*
 * `--repo STR`: Scope the picker to a specific repo URI.
 * `--all-repos, --no-all-repos`: Span all repos in the picker. *[default: False]*
 
@@ -1291,6 +1295,9 @@ Release a claim, returning the task to ``open`` (or another status).
     still matches, since the check is on identity, not session).
 * `--status CHOICE`: Status to return the task to (default ``open``). *[choices: open, in_progress, blocked, closed]* *[default: open]*
 * `--force, --no-force`: Release even if held by a different assignee. *[default: False]*
+* `--if-claimed-at STR`: Release only the claim taken at this instant (a launch spec's
+    ``claim.claimed_at``). A claim renewed since then is left alone, and
+    ``--force`` does not lift this.
 
 ### witan task update
 
@@ -1372,17 +1379,25 @@ Without a slug, shows an interactive picker of ready tasks. Multiple
 selections offer a choice between a consolidated single-session prompt or
 running each task sequentially in separate agent invocations.
 
+The claim is always bare: any agent-session id in the environment is
+dropped first, so the launched agent's own renewal qualifies it. The task
+must belong to the repo checked out in the current directory, or have
+none. Using the local store, it refuses before claiming when the agent,
+started here, would match a named target instead.
+
 **Parameters**:
 
 * `SLUG, --slug`: Task slug to run directly (skips the picker).
 * `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
 * `--model STR`: Model flag passed to the agent.
 * `--claim, --no-claim`: Mark each task in_progress before launching. *[default: True]*
-* `--force, --no-force`: Take the claim even if someone else's lease is still live. Without
-    this the command could report a task as held and offer no way past it
-    from the CLI it was reported in — the interactive steal prompt is
-    server-side and unreachable through ``_fn``, which passes no ``ctx``. *[default: False]*
+* `--force, --no-force`: Take the claim even if someone else's lease is still live. A launch
+    never offers to steal a held task (the question would land on stdout,
+    ahead of ``--emit-spec``'s JSON), so this is the way past one. *[default: False]*
 * `--dry-run, --no-dry-run`: Print the prompt(s) without launching or claiming. *[default: False]*
+* `--emit-spec, --no-emit-spec`: Claim, then print the launch spec as JSON instead of launching, for an
+    editor or other launcher to run. Needs a slug. Exits non-zero, after
+    printing the refusal spec, when there is nothing to launch. *[default: False]*
 * `--repo STR`: Scope the picker to a specific repo URI.
 * `--all-repos, --no-all-repos`: Span all repos in the picker. *[default: False]*
 * `--project STR`: Scope the picker to a specific wp- project slug.

@@ -648,6 +648,7 @@ def project_run(
     agent: str | None = None,
     model: str | None = None,
     dry_run: bool = False,
+    emit_spec: bool = False,
     repo: str | None = None,
     all_repos: bool = False,
 ) -> None:
@@ -667,11 +668,19 @@ def project_run(
         Model flag passed to the agent.
     dry_run:
         Print the prompt(s) without launching.
+    emit_spec:
+        Print the launch spec as JSON instead of launching, for an editor or
+        other launcher to run. Needs a slug. Claims nothing: the prompt has
+        the agent claim each task it starts. Exits non-zero, after printing
+        the refusal spec, when there is nothing to launch.
     repo:
         Scope the picker to a specific repo URI.
     all_repos:
         Span all repos in the picker.
     """
+    if emit_spec and (dry_run or not slug):
+        print_error("--emit-spec needs a slug and cannot be combined with --dry-run.")
+        raise SystemExit(1)
     try:
         cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
@@ -684,7 +693,14 @@ def project_run(
     s = _srv()
 
     if slug:
-        _run_project_slug(slug, cfg=cfg, agent=agent, model=model, dry_run=dry_run)
+        _run_project_slug(
+            slug,
+            cfg=cfg,
+            agent=agent,
+            model=model,
+            dry_run=dry_run,
+            emit_spec=emit_spec,
+        )
         return
 
     repo_arg = _repo_arg(repo, all_repos)

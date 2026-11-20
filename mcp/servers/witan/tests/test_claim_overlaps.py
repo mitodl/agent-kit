@@ -179,7 +179,7 @@ class _FakeServer:
     def task_get(self, slug):
         return {"slug": slug, "title": "T", "type": "bug"}
 
-    def task_claim(self, slug, force=False):
+    def task_claim(self, slug, force=False, repo=None, branch=None):
         return self.claim
 
     def recall(self, **_kwargs):
@@ -194,9 +194,9 @@ def _launched_prompt(monkeypatch, claim):
     monkeypatch.setattr(
         run_helpers,
         "_launch_agent",
-        lambda _cfg, _agent, _model, prompt, _dry: launched.append(prompt),
+        lambda _cfg, _agent, _model, prompt, _dry, **_kw: launched.append(prompt),
     )
-    cfg = type("Cfg", (), {"agent": "claude", "model": None})()
+    cfg = type("Cfg", (), {"agent": "claude", "model": None, "target_name": None})()
     run_helpers._run_task_slug(
         "tk-a", cfg=cfg, agent=None, model=None, claim=True, dry_run=False
     )
@@ -205,13 +205,17 @@ def _launched_prompt(monkeypatch, claim):
 
 def test_a_run_prompt_carries_the_overlaps_its_claim_returned(monkeypatch):
     """A renewal omits the key, so the launched agent's prompt is its one chance."""
-    prompt = _launched_prompt(monkeypatch, {"claimed": True, "overlaps": [_OVERLAP]})
+    prompt = _launched_prompt(
+        monkeypatch, {"claimed": True, "assignee": "me", "overlaps": [_OVERLAP]}
+    )
 
     assert "tk-live (someone-else): Live work" in prompt
     assert f"shared files: {REPO}#a.py" in prompt
 
 
 def test_a_run_prompt_says_nothing_when_there_are_none(monkeypatch):
-    prompt = _launched_prompt(monkeypatch, {"claimed": True, "overlaps": []})
+    prompt = _launched_prompt(
+        monkeypatch, {"claimed": True, "assignee": "me", "overlaps": []}
+    )
 
     assert "In-flight tasks" not in prompt

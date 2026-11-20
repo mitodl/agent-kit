@@ -478,7 +478,7 @@ class _FakeServer:
     def task_get(self, slug):
         return {"slug": slug, "title": "T", "type": "bug"}
 
-    def task_claim(self, slug, force=False):
+    def task_claim(self, slug, force=False, repo=None, branch=None):
         return self.claim
 
     def recall(self, **_kwargs):
@@ -494,9 +494,9 @@ def _run(monkeypatch, fake, *, claim=True, dry_run=False):
     monkeypatch.setattr(
         run_helpers,
         "_launch_agent",
-        lambda _cfg, _agent, _model, prompt, _dry: launched.append(prompt),
+        lambda _cfg, _agent, _model, prompt, _dry, **_kw: launched.append(prompt),
     )
-    cfg = type("Cfg", (), {"agent": "claude", "model": None})()
+    cfg = type("Cfg", (), {"agent": "claude", "model": None, "target_name": None})()
     run_helpers._run_task_slug(
         "tk-a", cfg=cfg, agent=None, model=None, claim=claim, dry_run=dry_run
     )
@@ -506,7 +506,7 @@ def _run(monkeypatch, fake, *, claim=True, dry_run=False):
 def test_a_run_prompt_uses_the_list_its_claim_returned(monkeypatch):
     """Otherwise the count logged for that claim would not describe this session,
     and every run would add a recall nobody asked for to the read figures."""
-    fake = _FakeServer({"claimed": True, "memories": [_FROM_CLAIM]})
+    fake = _FakeServer({"claimed": True, "assignee": "me", "memories": [_FROM_CLAIM]})
 
     prompt = _run(monkeypatch, fake)[0]
 
@@ -515,7 +515,7 @@ def test_a_run_prompt_uses_the_list_its_claim_returned(monkeypatch):
 
 
 def test_a_claim_with_nothing_does_not_look_again(monkeypatch):
-    fake = _FakeServer({"claimed": True, "memories": []})
+    fake = _FakeServer({"claimed": True, "assignee": "me", "memories": []})
 
     prompt = _run(monkeypatch, fake)[0]
 
@@ -525,7 +525,7 @@ def test_a_claim_with_nothing_does_not_look_again(monkeypatch):
 
 def test_a_renewal_looks_them_up_for_the_new_session(monkeypatch):
     """A renewal returns no list, but this session has not seen one."""
-    fake = _FakeServer({"claimed": True})
+    fake = _FakeServer({"claimed": True, "assignee": "me"})
 
     prompt = _run(monkeypatch, fake)[0]
 

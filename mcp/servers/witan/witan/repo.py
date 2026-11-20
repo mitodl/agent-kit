@@ -36,16 +36,29 @@ def detect(override: str | None = None) -> str | None:
         # MCP server config where the server CWD is not the session's repo).
         return normalise(env_repo) if env_repo else None
 
-    cwd = Path.cwd()
+    return detect_at(Path.cwd())
 
+
+def detect_at(path: Path) -> str | None:
+    """The canonical repo key of the checkout at ``path``, or ``None``.
+
+    Reads only the checkout's own remotes, never ``WITAN_REPO``: a launch maps
+    each open workspace folder to a repo with this, and an inherited override
+    would map every folder to the same one.
+
+    :param path: A directory inside the checkout.
+    :returns: The canonical HTTPS remote URI, or ``None`` outside a checkout
+        with a remote.
+    :rtype: str | None
+    """
     # git is the only correct parser of its own config: it resolves worktrees
     # (where .git is a file) and tolerates multi-valued keys (e.g. several
     # `fetch =` lines) that configparser rejects. Fall back to parsing
     # .git/config directly when the git binary is unavailable.
-    if url := git_remote_url(cwd):
+    if url := git_remote_url(path):
         return normalise(url)
 
-    git_config_path = find_git_config(cwd)
+    git_config_path = find_git_config(path)
     if git_config_path is None:
         return None
 

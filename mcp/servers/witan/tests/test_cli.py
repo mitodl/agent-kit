@@ -1067,6 +1067,12 @@ def test_task_run_force_gets_past_a_held_task(server, monkeypatch):
     monkeypatch.setattr(
         run_helpers, "_launch_agent", lambda *a, **kw: launched.append(a)
     )
+    # The launch's workspace check: run from a checkout of the task's repo.
+    monkeypatch.setattr(
+        run_helpers.repo_module,
+        "detect_at",
+        lambda _path: "https://github.com/test/repo",
+    )
     cfg = cfg_module.load()
 
     t = server.task_create(title="already held", description="x")
