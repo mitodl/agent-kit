@@ -10,7 +10,7 @@ flags, shared by start and resume.
 Exit codes: 0 ok, 1 failure, 2 config or usage error, 3 reviewer session not
 found, 4 an earlier call on the session is still running.
 
-Stdlib-only and Python 3.9-compatible, so plain ``python3`` runs it from an
+Stdlib-only, for Python 3.11 or later, so plain ``python3`` runs it from an
 installed skill directory; that is also why it uses argparse, not cyclopts.
 """
 

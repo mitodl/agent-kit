@@ -37,7 +37,7 @@ reviewer's replies. Never commit them.
 
 ## Setup (once per user)
 
-- **Needs:** `python3` 3.9 or later on Linux or macOS, and the reviewer's CLI
+- **Needs:** `python3` 3.11 or later on Linux or macOS, and the reviewer's CLI
   installed and logged in. The flags the script passes were checked against
   codex 0.167.0, claude 2.1.327 and pi 1.5.2; an older claude may be refused
   by the tool check.
