@@ -25,7 +25,7 @@
 		},
 		{
 			"id": 3,
-			"prompt": "In mitodl/ol-github-workflows, `uv run ruff check` fails on a new file with S603 (subprocess without shell=True) and S607 (partial executable path). The file is evals/files/uv-lock-revision/actions/uv-lock-revision/check.py.\n\nThe project's pyproject.toml already carries:\n\n```toml\n[tool.ruff.lint]\nselect = [\"ALL\"]\n\n[tool.ruff.lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"S603\", \"S607\"]\n```\n\n`actions/` holds this one file. The action runs on GitHub-hosted runners, where the runner image decides where git lives, and `args` comes from the action's own inputs, not from workflow input. Make the check pass.",
+			"prompt": "Treat evals/files/uv-lock-revision/ as a checkout of mitodl/ol-github-workflows, and the config below as its pyproject.toml (the fixture ships only the source file, so copy both into a scratch directory to run ruff against them).\n\n```toml\n[tool.ruff.lint]\nselect = [\"ALL\"]\n\n[tool.ruff.lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"S603\", \"S607\"]\n```\n\n`uv run ruff check` fails on a new file, actions/uv-lock-revision/check.py, with S603 (subprocess without shell=True) and S607 (partial executable path). `actions/` holds that one file. The action runs on GitHub-hosted runners, where the runner image decides where git lives, and `args` comes from the action's own inputs, not from workflow input. Make the check pass.",
 			"expected_output": "A line-level `# noqa: S603, S607` on the single `subprocess.run` call, carrying a reason that names why each rule's premise fails here (fixed argument list, git resolved from the runner's PATH by design). The existing `\"tests/**\"` entry is left alone and no `\"actions/**\"` entry is added. The answer runs the probe: a second violating call in the same file is still reported.",
 			"files": [
 				"evals/files/uv-lock-revision/actions/uv-lock-revision/check.py"
@@ -35,19 +35,21 @@
 				"A reason is attached that refers to the fixed argument list and to git being resolved from the runner's PATH, not a bare 'false positive' or 'needed for CI'",
 				"No glob is added to per-file-ignores, and the existing \"tests/**\" entry is unchanged",
 				"The answer verifies the scope by adding a second violating call, confirming it is still reported, and removing it",
-				"The answer considers fixing the code first and says why the fix is unavailable (the executable's location is the runner's to decide)"
+				"The answer considers fixing the code first and says why the fix is unavailable (the executable's location is the runner's to decide)",
+				"The reproduction runs ruff against the supplied config, not against agent-kit's own ruff settings, which do not enable S603/S607"
 			]
 		},
 		{
 			"id": 4,
-			"prompt": "The actionlint hook fails on evals/files/release-workflow/.github/workflows/release.yml with: label \"ubuntu-24.04-arm-8core\" is unknown [runner-label]. That runner is a real self-hosted label our org registered. Get the hook green.",
+			"prompt": "Treat evals/files/release-workflow/ as a repo checkout. Running actionlint over it reports: label \"ubuntu-24.04-arm-8core\" is unknown [runner-label]. (agent-kit's own actionlint hook only matches ^.github/workflows/, so reproduce this by copying the fixture into a scratch git repo and running actionlint there.) That runner is a real self-hosted label our org registered. Get actionlint clean.",
 			"expected_output": "The label is declared in .github/actionlint.yaml under `self-hosted-runner: labels:`, which is the fix rather than a suppression. No `paths:` ignore is added. The answer notes that actionlint has no inline escape, so a suppression here would have been a config-level one, which is why finding the real fix mattered.",
 			"files": ["evals/files/release-workflow/.github/workflows/release.yml"],
 			"expectations": [
 				"The answer declares the label under self-hosted-runner in .github/actionlint.yaml",
 				"No paths/ignore entry is added, and the rule is not disabled",
 				"The answer states that actionlint offers no inline suppression, so the available suppression would have covered a whole path",
-				"The answer confirms the result by re-running actionlint, not by asserting the config is correct"
+				"The answer confirms the result by re-running actionlint, not by asserting the config is correct",
+				"The reproduction runs actionlint against the fixture in a scratch repo rather than relying on agent-kit's hook, whose path filter never reaches it"
 			]
 		}
 	]
