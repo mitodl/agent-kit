@@ -115,10 +115,28 @@ broad: they cover every error on the next line. Keep the line they guard small.
 
 | | |
 | --- | --- |
-| Line | `# shellcheck disable=SC2086` - applies to the **next command only** |
-| File | the same directive placed before the first command |
+| Line | `# shellcheck disable=SC2086` - applies to the **next complete command** |
+| File | the same directive, placed before the first command |
 | Config | `.shellcheckrc` with `disable=SC2086` - rung 5 |
 | Unused | none; a directive that suppresses nothing is reported nowhere |
+
+**One directive, two scopes, decided by where it sits.** Before the first
+command - right under the shebang, where it reads like a file header - it
+covers the whole script. Anywhere else it covers the next complete command,
+and for a `for`, `while`, `if` or function that means the entire body, not the
+first line of it:
+
+```bash
+# shellcheck disable=SC2086
+for f in $files; do
+    ls $f       # suppressed
+    cp $f /tmp  # also suppressed - same command
+done
+ls $files       # reported: the loop was the command
+```
+
+So a disable written for one expansion, moved to the top of the script while
+tidying, silently becomes a file-wide exemption with no diff to show for it.
 
 Because there is no unused-directive check, a shellcheck disable left behind
 after a refactor is invisible. Re-run with it removed when touching the code

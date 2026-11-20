@@ -112,6 +112,40 @@ this glob match my file" - it is **"will the next file added under this glob als
 deserve the exemption?"** If the answer is no, or unknown, the glob is wrong and
 a line, a block, or a named file is right.
 
+### A directive at the top of a file is rung 3, whatever it looks like
+
+Most tools have a form that exempts the **whole file**, and it is usually one
+word away from the line form. Writing it because it was the first spelling that
+came to mind, or because it was easier than finding the right line, opts every
+present and future violation in that file out of the check - including the ones
+nobody has written yet.
+
+| Tool | The form that takes the whole file |
+| --- | --- |
+| ruff | `# ruff: noqa` or `# ruff: noqa: CODE` anywhere in the file |
+| mypy | `# mypy: disable-error-code="..."` at the top |
+| biome | `// biome-ignore-all lint/group/rule: reason` |
+| TypeScript | `// @ts-nocheck` |
+| eslint | `/* eslint-disable rule */` with no matching `enable` |
+| shellcheck | a `# shellcheck disable=SCxxxx` placed **before the first command** |
+| yamllint | `# yamllint disable-file` on line 1 |
+| markdownlint | `<!-- markdownlint-disable-file RULE -->` |
+
+shellcheck's is the one that bites, because the same directive means two
+different things depending on where it sits: before the first command it covers
+the file, and anywhere else it covers the next complete command - which for a
+loop or a function is its whole body, not one line. A directive written for one
+expansion and parked at the top of the script silences every expansion in it.
+
+Before writing any of these, answer the rung-3 question out loud: **does the
+whole file have the property that makes the rule wrong?** A test module whose
+entire point is shelling out does. A 300-line module with one unusual call does
+not - that is a line. If the file is long enough that you cannot say, it is a
+line.
+
+A file-level directive earns the same reason as any other suppression, and it
+is the one most likely to be read by someone who has no idea why it is there.
+
 ### Hard rules
 
 - **Never a bare suppression.** An escape with no rule identifier silences
@@ -182,14 +216,27 @@ Do not assert that a suppression is correctly scoped. Two checks, both cheap:
 
 **Is it wider than the violation?**
 
-> Add a second, deliberately-violating line nearby. Re-run the linter. If the
-> probe is **not** flagged, the suppression covers more than the violation it was
-> written for. Narrow it. Remove the probe.
+> Add a second, deliberately-violating line **just outside the scope you meant
+> to exempt**. Re-run the linter. If the probe is **not** flagged, the
+> suppression reaches further than you intended. Narrow it. Remove the probe.
 
-This is what separates a line-level exemption from a glob that merely looks
-narrow. In the `ol-github-workflows` case the probe was silent under
-`"actions/**"` and flagged immediately under the line-level `noqa` - same file,
-same rule, and only one of the two was actually scoped to the violation.
+"Just outside" is the whole check, and it is different per rung. A probe inside
+the scope is *supposed* to be silent, so putting one there proves nothing and
+will talk you into narrowing a scope that was correct:
+
+| Rung | Where the probe goes |
+| --- | --- |
+| 1, the line | The next line |
+| 2, the block | After the `enable`, or outside the disabled region |
+| 3, the file | A second file in the same directory |
+| 4, a glob | A path the glob should not match - a sibling directory, or a file one level up |
+| 5, off for the project | Nowhere; instead confirm a *different* enabled rule still fires, so you know the config edit did not take the whole rule set with it |
+
+In the `ol-github-workflows` case the probe was a second `subprocess.run` in the
+same file. Under `"actions/**"` it was silent - the glob covered the file, not
+the call - and under the line-level `noqa` it was flagged immediately. Same
+probe, same rule, and only one of the two scopes was actually the size of the
+violation.
 
 **Is it needed at all?**
 
