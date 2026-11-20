@@ -1,0 +1,56 @@
+{
+	"skill_name": "lint-exceptions",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "ruff is failing this file with DTZ005 `datetime.datetime.now()` called without a `tz` argument. Make the check pass.\n\nsrc/reports/window.py:\n```python\nfrom datetime import datetime, timedelta\n\n\ndef recent_cutoff(days: int) -> datetime:\n    return datetime.now() - timedelta(days=days)\n```",
+			"expected_output": "The call gains the timezone the rule asks for (`datetime.now(tz=UTC)` or equivalent) and the answer contains no suppression at all. The rule is right: a naive timestamp is the defect DTZ005 describes.",
+			"files": [],
+			"expectations": [
+				"The fix passes a timezone to datetime.now()",
+				"No noqa, per-file-ignores entry, or select/ignore change appears anywhere in the answer",
+				"The answer says why the rule was right rather than only showing the diff"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "biome reports lint/suspicious/noExplicitAny on this file. Get `npm run lint` green.\n\nsrc/graph/counts.ts:\n```ts\nexport function totalNodes(payload: any): number {\n\treturn payload.nodes.length;\n}\n```\n\nEvery caller passes the result of `JSON.parse` on a response shaped `{ nodes: GraphNode[] }`, and `GraphNode` is already exported from `src/graph/types.ts`.",
+			"expected_output": "The parameter gets a real type - the shape the prompt describes, or `unknown` narrowed before use - and no biome-ignore is added. The caller information in the prompt is what makes the type knowable, so 'the type is not known' is not available as a justification.",
+			"files": [],
+			"expectations": [
+				"The parameter is typed from the shape the prompt describes, reusing GraphNode rather than redeclaring it",
+				"No biome-ignore comment appears in the answer",
+				"If `unknown` is used instead of the concrete type, the value is narrowed before `.nodes` is read"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "Treat evals/files/uv-lock-revision/ as a checkout of mitodl/ol-github-workflows, and the config below as its pyproject.toml (the fixture ships only the source file, so copy both into a scratch directory to run ruff against them).\n\n```toml\n[tool.ruff.lint]\nselect = [\"ALL\"]\n\n[tool.ruff.lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"S603\", \"S607\"]\n```\n\n`uv run ruff check` fails on a new file, actions/uv-lock-revision/check.py, with S603 (subprocess without shell=True) and S607 (partial executable path). `actions/` holds that one file. The action runs on GitHub-hosted runners, where the runner image decides where git lives, and `args` comes from the action's own inputs, not from workflow input. Make the check pass.",
+			"expected_output": "A line-level `# noqa: S603, S607` on the single `subprocess.run` call, carrying a reason that names why each rule's premise fails here (fixed argument list, git resolved from the runner's PATH by design). The existing `\"tests/**\"` entry is left alone and no `\"actions/**\"` entry is added. The answer runs the probe: a second violating call in the same file is still reported.",
+			"files": [
+				"evals/files/uv-lock-revision/actions/uv-lock-revision/check.py"
+			],
+			"expectations": [
+				"The suppression is a line-level noqa naming both codes, not a per-file-ignores entry",
+				"A reason is attached that refers to the fixed argument list and to git being resolved from the runner's PATH, not a bare 'false positive' or 'needed for CI'",
+				"No glob is added to per-file-ignores, and the existing \"tests/**\" entry is unchanged",
+				"The answer verifies the scope by adding a second violating call, confirming it is still reported, and removing it",
+				"The answer considers fixing the code first and says why the fix is unavailable (the executable's location is the runner's to decide)",
+				"The reproduction runs ruff against the supplied config, not against agent-kit's own ruff settings, which do not enable S603/S607"
+			]
+		},
+		{
+			"id": 4,
+			"prompt": "Treat evals/files/release-workflow/ as a repo checkout. Running actionlint over it reports: label \"ubuntu-24.04-arm-8core\" is unknown [runner-label]. (agent-kit's own actionlint hook only matches ^.github/workflows/, so reproduce this by copying the fixture into a scratch git repo and running actionlint there.) That runner is a real self-hosted label our org registered. Get actionlint clean.",
+			"expected_output": "The label is declared in .github/actionlint.yaml under `self-hosted-runner: labels:`, which is the fix rather than a suppression. No `paths:` ignore is added. The answer notes that actionlint has no inline escape, so a suppression here would have been a config-level one, which is why finding the real fix mattered.",
+			"files": ["evals/files/release-workflow/.github/workflows/release.yml"],
+			"expectations": [
+				"The answer declares the label under self-hosted-runner in .github/actionlint.yaml",
+				"No paths/ignore entry is added, and the rule is not disabled",
+				"The answer states that actionlint offers no inline suppression, so the available suppression would have covered a whole path",
+				"The answer confirms the result by re-running actionlint, not by asserting the config is correct",
+				"The reproduction runs actionlint against the fixture in a scratch repo rather than relying on agent-kit's hook, whose path filter never reaches it"
+			]
+		}
+	]
+}
