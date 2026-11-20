@@ -1,0 +1,114 @@
+name: agent-activity
+
+# Monthly Agent Activity Index for the public mitodl repositories, published to
+# GitHub Pages. See bin/agent_activity_index.py for how the history is kept: it
+# lives on the deployed site itself, and `update` refuses to publish if it cannot
+# download it. Releases are unaffected: nothing here touches a package's
+# pyproject.toml, which is what triggers each publish-*.yml.
+#
+# Pages must be enabled once by a repo admin: Settings -> Pages -> Source:
+# GitHub Actions.
+on:
+  schedule:
+    # 06:17 UTC on the 1st, summarising the month that just ended.
+    - cron: "17 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to add, YYYY-MM (default: last month)"
+        required: false
+      backfill_from:
+        description: "Recompute every month from here, YYYY-MM (recovers lost history)"
+        required: false
+  pull_request:
+    paths:
+      - "bin/agent_activity_index.py"
+      - "bin/agent_activity_report.html"
+      - "tests/bin/**"
+      - ".github/workflows/agent-activity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: agent-activity (tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Run the tests
+        # Same pin as the script's inline metadata.
+        run: uv run --no-project --with cyclopts==5.0.0 python -m unittest discover -s tests/bin
+
+  publish:
+    name: agent-activity (publish)
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # Two overlapping publishes would each download the same history and the later
+    # deploy would drop the earlier run's month. Scoped to this job so a pull
+    # request's test run cannot displace a queued publish.
+    concurrency:
+      group: agent-activity-publish
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Let the Pages cache expire after a recent publish
+        # Pages serves max-age=600. A run that starts inside that window of the last
+        # publish can read an index from before it, then redeploy without the month
+        # that publish added (for example a rerun of an older month right after a
+        # newer one). The concurrency group already makes the runs sequential, so
+        # waiting out the window is enough.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --workflow agent-activity.yml --status success --limit 20 \
+            --json updatedAt,event \
+            --jq '[.[] | select(.event != "pull_request")][0].updatedAt // empty')
+          if [ -n "$last" ]; then
+            age=$(( $(date +%s) - $(date -d "$last" +%s) ))
+            if [ "$age" -lt 660 ]; then
+              echo "Last publish finished ${age}s ago; waiting for the Pages cache to expire."
+              sleep $(( 660 - age ))
+            fi
+          fi
+
+      - name: Add the month and rebuild the page
+        env:
+          # Public data only, so the built-in token is enough.
+          GH_TOKEN: ${{ github.token }}
+          MONTH: ${{ inputs.month }}
+          BACKFILL_FROM: ${{ inputs.backfill_from }}
+        run: |
+          args=(--out pages/agent-activity)
+          if [ -n "$MONTH" ]; then args+=(--month "$MONTH"); fi
+          if [ -n "$BACKFILL_FROM" ]; then args+=(--backfill-from "$BACKFILL_FROM"); fi
+          ./bin/agent_activity_index.py update "${args[@]}"
+          # The report lives under /agent-activity/; send the site root there.
+          echo '<meta http-equiv="refresh" content="0; url=agent-activity/">' > pages/index.html
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: pages
+
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

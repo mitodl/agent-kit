@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mitodl Agent Activity Index</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600&family=IBM+Plex+Mono&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: one narrow reading column, one section per question, trend first. */
+:root{--bg:#f7f8fa;--surface:#fcfcfb;--fg:#14171c;--fg2:#4a505a;--fg3:#6b717b;--line:#dfe2e7;
+--c-human:#9aa1ac;--c-agent:#2a78d6;--c-agentonly:#eb6834;--c-bot:#6250d6;--c-aqua:#1baf7a;
+--merged:#2a78d6;--closed:#9aa1ac;--open:#d9dce2;color-scheme:light;
+--display:"Fraunces",Georgia,serif;--body:"IBM Plex Sans",system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#111316;--surface:#1a1a19;--fg:#eceef1;--fg2:#b9bec7;--fg3:#8b919b;--line:#2d3138;
+--c-human:#7d848f;--c-agent:#3987e5;--c-agentonly:#d95926;--c-bot:#9085e9;--c-aqua:#199e70;--merged:#3987e5;--closed:#7d848f;--open:#3a3e45;color-scheme:dark}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.55;
+padding-block:32px 56px;padding-inline:max(16px,env(safe-area-inset-left,0px)) max(16px,env(safe-area-inset-right,0px))}
+main{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1{font-family:var(--display);font-size:clamp(28px,5vw,40px);line-height:1.1;margin:0;text-wrap:balance;font-weight:600}
+h2{font-family:var(--display);font-size:20px;margin:0 0 4px;font-weight:600;text-wrap:balance}
+p{margin:0}.sub{color:var(--fg2);max-width:65ch}.note{color:var(--fg3);font-size:13px;max-width:70ch}
+header{display:flex;flex-direction:column;gap:8px}.meta{font-family:var(--mono)}
+section{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+label{font-size:13px;color:var(--fg2)}select{font:inherit;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px 8px;margin-left:6px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--fg2)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.row{display:grid;grid-template-columns:minmax(90px,150px) 1fr 64px;align-items:center;gap:10px;font-size:13px}
+.row.out{grid-template-columns:minmax(90px,150px) 1fr 84px}
+.row .lab{color:var(--fg2);overflow-wrap:anywhere}.row .val{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.val small{display:block;color:var(--fg3);font-size:11px;font-family:var(--body)}
+.bar{display:flex;height:18px;gap:2px;min-width:0}.bar>div{height:100%;min-width:0}
+.bar>div:first-child{border-radius:4px 0 0 4px}.bar>div:last-child{border-radius:0 4px 4px 0}.bar>div:only-child{border-radius:4px}
+.seg{font-size:11px;line-height:18px;color:#fff;text-align:center;overflow:hidden;font-variant-numeric:tabular-nums}.seg.open{color:var(--fg2)}
+.track{position:relative;height:18px}.fill{position:absolute;left:0;top:0;height:100%;border-radius:0 4px 4px 0;min-width:2px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+svg{width:100%;height:auto;overflow:visible}svg text{fill:var(--fg3);font-size:11px;font-family:var(--body)}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}summary{cursor:pointer;color:var(--fg2);font-size:13px}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const SNAPS = __DATA__;
+const CL = [["human","Human","--c-human"],["human+agent","Human + agent","--c-agent"],["agent","Agent-authored","--c-agentonly"],["bot","Bots","--c-bot"]];
+const AGC = {"Claude Code":"--c-agent","Copilot":"--c-agentonly","Gemini":"--c-aqua"};
+const app = document.getElementById("app");
+const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+const mr = (o) => pct(o.merged, o.merged + o.closed);
+const legend = (items) => `<div class="legend">${items.map(([n, v]) => `<span><i style="background:var(${v})"></i>${n}</span>`).join("")}</div>`;
+const fmt = (iso) => new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"});
+const monthName = (m) => new Date(m + "-01T00:00:00Z").toLocaleDateString("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
+
+// Sum every numeric leaf; instruction files describe the repos today, so they come from the newest snapshot.
+function add(a, b) {
+  if (typeof a === "number") return a + (b || 0);
+  const out = {...a};
+  for (const k of Object.keys(b)) out[k] = k in a ? add(a[k], b[k]) : b[k];
+  return out;
+}
+function merge(snaps) {
+  const last = snaps[snaps.length - 1];
+  const keys = ["classes","agent_prs","commit_trailers","bot_authors","bot_reviews","reviewed_by_class","by_repo"];
+  const out = {start: snaps[0].start, end: last.end, total_prs: 0, repo_count: last.repo_count, instruction_files: last.instruction_files, months: snaps.length};
+  for (const k of keys) out[k] = {};
+  for (const s of snaps) {
+    out.total_prs += s.total_prs;
+    for (const k of keys) out[k] = add(out[k], s[k]);
+  }
+  return out;
+}
+
+function trend() {
+  const pts = SNAPS.map((s) => {
+    const rbc = Object.values(s.reviewed_by_class).reduce((a, c) => a + c.reviewed, 0);
+    const ag = sum(s.classes.agent) + sum(s.classes["human+agent"]);
+    return {m: s.month, agent: pct(ag, s.total_prs), bot: pct(sum(s.classes.bot), s.total_prs), rev: pct(rbc, s.total_prs)};
+  });
+  const lines = [["agent","Agent fingerprint","--c-agent"],["bot","Opened by bots","--c-bot"],["rev","Got a bot review","--c-aqua"]];
+  if (pts.length < 2) {
+    return `<section><div><h2>Trend</h2><p class="note">The trend appears once there are two months of data. Months so far: ${pts.map((p) => monthName(p.m)).join(", ")}.</p></div></section>`;
+  }
+  const W = 640, H = 200, L = 34, R = 12, T = 10, B = 24;
+  const x = (i) => L + (W - L - R) * i / (pts.length - 1);
+  const y = (v) => T + (H - T - B) * (1 - v / 100);
+  const grid = [0, 50, 100].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}%</text>`).join("");
+  const xl = pts.map((p, i) => i % Math.ceil(pts.length / 8) === 0 ? `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${p.m}</text>` : "").join("");
+  const paths = lines.map(([k, n, c]) => `<polyline fill="none" stroke="var(${c})" stroke-width="2" points="${pts.map((p, i) => `${x(i)},${y(p[k])}`).join(" ")}"/>${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p[k])}" r="${i === pts.length - 1 ? 4 : 3}" fill="var(${c})" stroke="var(--surface)" stroke-width="2"><title>${n}, ${p.m}: ${p[k]}%</title></circle>`).join("")}`).join("");
+  return `<section><div><h2>Trend</h2><p class="note">Share of each month's PRs. Hover a point for its value.</p></div>${legend(lines.map((l) => [l[1], l[2]]))}<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly shares of agent, bot and bot-reviewed PRs">${grid}${xl}${paths}</svg></section>`;
+}
+
+function render(D) {
+  const total = D.total_prs, bots = sum(D.classes.bot);
+  const ag = sum(D.classes.agent) + sum(D.classes["human+agent"]);
+  const reviewedAll = Object.values(D.reviewed_by_class).reduce((a, c) => a + c.reviewed, 0);
+  const who = `<section><div><h2>Who opened the ${total.toLocaleString()} PRs</h2><p class="note">Every PR falls into exactly one group, so the shares add up to 100%. PRs with an agent fingerprint are the human + agent and agent-authored groups together: ${ag.toLocaleString()} PRs, ${pct(ag, total)}%. ${pct(reviewedAll, total)}% of all PRs got at least one bot review.</p></div>
+<div class="bar" role="img" aria-label="${CL.map((k) => k[1] + " " + pct(sum(D.classes[k[0]]), total) + "%").join(", ")}">${CL.map((k) => {const n = sum(D.classes[k[0]]); return n ? `<div class="seg" title="${k[1]}: ${n} PRs (${pct(n, total)}%)" style="width:${100 * n / total}%;background:var(${k[2]})">${100 * n / total >= 9 ? pct(n, total) + "%" : ""}</div>` : "";}).join("")}</div>
+${legend(CL.map((k) => [k[1] + " · " + sum(D.classes[k[0]]).toLocaleString(), k[2]]))}</section>`;
+
+  const repoRows = Object.entries(D.by_repo).map(([r, c]) => [r, c, sum(c)]).sort((a, b) => b[2] - a[2]);
+  const top = repoRows.slice(0, 15), rest = repoRows.slice(15);
+  if (rest.length) {
+    const other = {}; CL.forEach((k) => other[k[0]] = rest.reduce((a, r) => a + r[1][k[0]], 0));
+    top.push([`${rest.length} other repos`, other, sum(other)]);
+  }
+  const repos = `<section><div><h2>Agent share by repo</h2><p class="note">Each bar is one repo's PRs, split by who opened them. The 15 busiest repos are shown; the number is PRs opened in the period.</p></div>${legend(CL.map((c) => [c[1], c[2]]))}
+${top.map(([r, c, n]) => `<div class="row"><span class="lab">${r}</span><div class="bar" role="img" aria-label="${r}: ${CL.map((k) => k[1] + " " + c[k[0]]).join(", ")}">${CL.map((k) => c[k[0]] ? `<div title="${k[1]}: ${c[k[0]]} PRs (${pct(c[k[0]], n)}%)" style="width:${100 * c[k[0]] / n}%;background:var(${k[2]})"></div>` : "").join("")}</div><span class="val">${n}</span></div>`).join("")}</section>`;
+
+  const agents = Object.keys(D.agent_prs), maxPR = Math.max(1, ...agents.map((a) => sum(D.agent_prs[a])));
+  const byAgent = `<section><div><h2>PRs by agent</h2><p class="note">PRs carrying the agent's fingerprint: an author account, a "Generated with" footer, a branch prefix such as cc/, or a Co-Authored-By trailer on a commit. The small number is the commits in those PRs that carry a trailer. A PR can count for more than one agent.</p></div>
+${agents.length ? agents.map((a) => {const n = sum(D.agent_prs[a]), c = D.commit_trailers[a] || 0; return `<div class="row out"><span class="lab">${a}</span><div class="track"><div class="fill" title="${a}: ${n} PRs, ${c} commits with trailers" style="width:${100 * n / maxPR}%;background:var(${AGC[a] || "--c-bot"})"></div></div><span class="val">${n}<small>${c} commits</small></span></div>`;}).join("") : `<p class="note">No agent fingerprints in this period.</p>`}</section>`;
+
+  const groups = [...agents.map((a) => [a, D.agent_prs[a], AGC[a] || "--c-bot"]), ["Human-only", D.classes.human, "--c-human"], ["Bots", D.classes.bot, "--c-bot"]];
+  const outcomes = `<section><div><h2>Merge rate and outcomes</h2><p class="note">Merge rate counts decided PRs only (merged or closed). Outcomes show merged, closed and still open, as a share of all PRs. Small groups give noisy rates. Agents may be given easier tasks, so this does not show quality.</p></div>
+<div class="two"><div>${groups.map(([n, o, c]) => `<div class="row"><span class="lab">${n}</span><div class="track"><div class="fill" title="${n}: ${mr(o)}% of ${o.merged + o.closed} decided PRs" style="width:${mr(o)}%;background:var(${c})"></div></div><span class="val">${mr(o)}%<small>${o.merged + o.closed} decided</small></span></div>`).join("")}<p class="note"><b>Merge rate</b> = merged ÷ (merged + closed). Open PRs are left out.</p></div>
+<div>${legend([["Merged","--merged"],["Closed","--closed"],["Open","--open"]])}${groups.map(([n, o]) => {const t = sum(o); return t ? `<div class="row out"><span class="lab">${n}</span><div class="bar">${["merged","closed","open"].map((k) => o[k] ? `<div class="seg ${k}" title="${k}: ${o[k]} of ${t} PRs (${pct(o[k], t)}%)" style="width:${100 * o[k] / t}%;background:var(--${k})">${100 * o[k] / t >= 9 ? pct(o[k], t) + "%" : ""}</div>` : "").join("")}</div><span class="val">${pct(o.merged, t)}%<small>of ${t} PRs</small></span></div>` : "";}).join("")}<p class="note"><b>Outcome mix</b> = each outcome as a share of all PRs, open ones included.</p></div></div></section>`;
+
+  const ba = Object.entries(D.bot_authors).sort((a, b) => sum(b[1]) - sum(a[1])), maxB = Math.max(1, ...ba.map((x) => sum(x[1])));
+  const botPRs = `<section><div><h2>PRs opened by bots</h2><p class="note">Renovate and other automation accounts, counted as their own group so they don't inflate or hide the agent numbers. The small number is the merge rate on decided PRs.</p></div>
+${ba.map(([n, o]) => {const t = sum(o); return `<div class="row out"><span class="lab">${n}</span><div class="track"><div class="fill" title="${n}: ${t} PRs" style="width:${100 * t / maxB}%;background:var(--c-bot)"></div></div><span class="val">${t}<small>${mr(o)}% merged</small></span></div>`;}).join("")}</section>`;
+
+  const br = Object.entries(D.bot_reviews).sort((a, b) => b[1].reviews - a[1].reviews), maxR = Math.max(1, ...br.map((x) => x[1].reviews));
+  const reviews = `<section><div><h2>Bot reviews</h2><p class="note">Every review left by a bot account: AI reviewers and automation such as Renovate's auto-approve account. One PR can get several reviews from the same bot, so reviews outnumber PRs. Bot comments that are not submitted reviews are not counted.</p></div>
+<div class="two"><div>${br.map(([n, v]) => `<div class="row out"><span class="lab">${n}</span><div class="track"><div class="fill" title="${n}: ${v.reviews} reviews on ${v.prs} PRs, ${v.approvals} approvals" style="width:${100 * v.reviews / maxR}%;background:var(--c-agent)"></div></div><span class="val">${v.reviews}<small>${v.prs} PRs · ${v.approvals} approved</small></span></div>`).join("")}<p class="note">Reviews per bot</p></div>
+<div>${CL.map((c) => {const r = D.reviewed_by_class[c[0]]; return `<div class="row"><span class="lab">${c[1]}</span><div class="track"><div class="fill" title="${r.reviewed} of ${r.prs}" style="width:${pct(r.reviewed, r.prs)}%;background:var(${c[2]})"></div></div><span class="val">${pct(r.reviewed, r.prs)}%</span></div>`;}).join("")}<p class="note">Share of each kind of PR that got at least one bot review</p></div></div></section>`;
+
+  const files = Object.entries(D.instruction_files).sort((a, b) => b[1].length - a[1].length), n = D.repo_count;
+  const instr = `<section><div><h2>Agent instruction files</h2><p class="note">Files present on the default branch today, out of ${n} public repos. This does not change with the period selected.</p></div>
+${files.length ? files.map(([f, rs]) => `<div class="row"><span class="lab">${f}</span><div class="track"><div class="fill" title="${rs.join(", ")}" style="width:${100 * rs.length / n}%;background:var(--c-agent)"></div></div><span class="val">${rs.length}</span></div>`).join("") : `<p class="note">None found.</p>`}</section>`;
+
+  const table = `<details><summary>Table view: PRs per repo and class</summary><div class="tw"><table><thead><tr><th>Repo</th>${CL.map((c) => `<th>${c[1]}</th>`).join("")}</tr></thead><tbody>${repoRows.map(([r, c]) => `<tr><td>${r}</td>${CL.map((k) => `<td>${c[k[0]]}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+  return who + repos + byAgent + outcomes + botPRs + reviews + instr + table;
+}
+
+function page(period) {
+  const snaps = period === "all" ? SNAPS : SNAPS.filter((s) => s.month === period);
+  const D = merge(snaps);
+  const options = [...SNAPS].reverse().map((s) => `<option value="${s.month}"${s.month === period ? " selected" : ""}>${monthName(s.month)}</option>`).join("") + (SNAPS.length > 1 ? `<option value="all"${period === "all" ? " selected" : ""}>All months</option>` : "");
+  app.innerHTML = `<header><p class="note meta">mitodl · ${fmt(D.start)} – ${fmt(D.end)} · ${D.repo_count} public repos</p><h1>Agent Activity Index for mitodl</h1><p class="sub">Pull requests opened in the public mitodl repositories, grouped by who opened them and whether an agent or a bot took part. Agents are counted only where they leave a fingerprint, so every figure is a floor.</p><label for="period">Period<select id="period">${options}</select></label></header>${trend()}${render(D)}
+<p class="note">Method: PR author app, body footer, branch prefix (claude/, cc/, codex/, copilot/) and commit trailers. Merge rates use merged or closed PRs only. Human PRs that use an agent without leaving a trace are counted as human. Generated monthly by bin/agent_activity_index.py in mitodl/agent-kit.</p>`;
+  document.getElementById("period").addEventListener("change", (e) => page(e.target.value));
+}
+
+if (SNAPS.length) page(SNAPS[SNAPS.length - 1].month);
+else app.innerHTML = `<header><h1>Agent Activity Index for mitodl</h1><p class="sub">No data has been published yet.</p></header>`;
+</script>
+</body>
+</html>

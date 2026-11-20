@@ -65,6 +65,7 @@ uv run prek install -f  # -f replaces a pre-commit git hook if one is installed
 | `agent-kit profiles agent-config.toml` | List profiles and their resolved entry counts |
 | `uv run prek run --all-files` | Run all hooks (`prek.toml`), as CI's `prek` check does |
 | `just test-all` (alias `just test`) | Run every workspace package's tests, each isolated, all in parallel |
+| `just test-agent-activity` | Tests for `bin/agent_activity_index.py`, the monthly Agent Activity Index published to GitHub Pages by `.github/workflows/agent-activity.yml` (standalone script, not a workspace package) |
 | `just test-witan-core` / `test-witan-council` / `test-witan-code` / `test-agent-config-kit` / `test-ol-agent-kit` | Run one package's tests in isolation (`*args` forwards to pytest, e.g. `just test-witan-council -k merge`) |
 
 CI runs on push/PR: skill ZIP packaging (on tags), per-package tests, and the `autofix.ci` workflow
