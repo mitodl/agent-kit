@@ -452,6 +452,61 @@ def test_emit_spec_exits_non_zero_on_a_refusal(folders, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["reason"] == "no_workspace"
 
 
+def test_top_level_run_emits_the_same_spec_as_task_run(folders, monkeypatch, capsys):
+    import witan.cli as top
+    from witan.cli import tasks
+
+    here, _ = folders
+    _cli(monkeypatch, _Fake(task=_task(), claim=_CLAIMED), here)
+
+    tasks.task_run("tk-a", emit_spec=True)
+    via_task_run = capsys.readouterr().out
+    top.run("tk-a", emit_spec=True)
+
+    assert capsys.readouterr().out == via_task_run
+    assert json.loads(via_task_run)["launchable"] is True
+
+
+class _HeldFake(_Fake):
+    """A task under someone else's live lease: only ``force`` takes the claim."""
+
+    def task_claim(self, slug, force=False, repo=None, branch=None):
+        super().task_claim(slug, force=force, repo=repo, branch=branch)
+        if force:
+            return _CLAIMED
+        return {"slug": slug, "claimed": False, "reason": "held", "held_by": "other"}
+
+
+def test_top_level_run_passes_force_through(folders, monkeypatch, capsys):
+    import witan.cli as top
+    from witan.cli import tasks
+
+    here, _ = folders
+    _cli(monkeypatch, _HeldFake(task=_task()), here)
+
+    tasks.task_run("tk-a", emit_spec=True, force=True)
+    via_task_run = capsys.readouterr().out
+    top.run("tk-a", emit_spec=True, force=True)
+
+    assert capsys.readouterr().out == via_task_run
+    assert json.loads(via_task_run)["launchable"] is True
+
+
+def test_top_level_run_refuses_emit_spec_with_dry_run(folders, monkeypatch, capsys):
+    import witan.cli as top
+
+    here, _ = folders
+    fake = _Fake(task=_task(), claim=_CLAIMED)
+    _cli(monkeypatch, fake, here)
+
+    with pytest.raises(SystemExit) as exited:
+        top.run("tk-a", emit_spec=True, dry_run=True)
+
+    assert exited.value.code == 1
+    assert fake.claims == []
+    assert capsys.readouterr().out == ""
+
+
 def test_the_cli_launch_runs_the_spec_in_its_folder_and_env(folders, monkeypatch):
     from witan.cli import run_helpers, tasks
 

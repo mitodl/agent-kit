@@ -641,6 +641,21 @@ def build_launch_spec(
     )
 
 
+def check_emit_spec_args(emit_spec: bool, *, slug: str | None, dry_run: bool) -> None:
+    """Exit non-zero when ``--emit-spec`` comes without a slug or with ``--dry-run``.
+
+    A spec describes one launch, so the picker has nothing to emit, and a dry
+    run prints a prompt where the caller is waiting for JSON.
+
+    :param emit_spec: Whether ``--emit-spec`` was passed.
+    :param slug: The slug the command was given, if any.
+    :param dry_run: Whether ``--dry-run`` was passed.
+    """
+    if emit_spec and (dry_run or not slug):
+        print_error("--emit-spec needs a slug and cannot be combined with --dry-run.")
+        raise SystemExit(1)
+
+
 def _deliver(spec: LaunchSpec | LaunchRefusal, cfg, *, emit_spec: bool) -> None:
     """Print ``spec`` as JSON, or run it, exiting non-zero on a refusal."""
     if emit_spec:
