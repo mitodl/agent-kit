@@ -118,9 +118,12 @@ a line, a block, or a named file is right.
   everything at that site, including the next bug, and it survives the rename of
   the rule it was meant for. Always name the rule.
 - **Always a reason, inline.** Some tools take a structured one and some do not;
-  where the syntax has no slot for it, put a comment on the line above. A
-  suppression with no reason is indistinguishable from an accident, and nobody
-  who finds it later can tell whether it is still needed.
+  where the syntax has no slot for it, put a comment on the line above - or
+  below, for the rare directive that has to be the whole first line of a file
+  and so has no line above it. Check the reason did not break the directive:
+  a few tools treat trailing text as part of the directive and silently stop
+  suppressing. A suppression with no reason is indistinguishable from an
+  accident, and nobody who finds it later can tell whether it is still needed.
 - **Prefer the self-expiring form.** Where a tool offers a directive that errors
   once the underlying finding disappears, use it over the one that rots silently.
   Where it offers a check for suppressions that no longer suppress anything,
