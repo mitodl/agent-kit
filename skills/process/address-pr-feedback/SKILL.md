@@ -126,11 +126,10 @@ colleague's architectural judgment left as a top-level comment, and a bot's
 summary review usually carries its real findings in `reviews[].body` rather than
 in any thread. Read both in Phase 2, account for both in Phase 5.
 
-Entries on both carry `is_viewer`, true for the ones you wrote — the summary
-comments Phase 4 posts land on the same endpoint a reviewer's comment does, and
-only this field tells them apart. Skip your own by that field rather than by
-recognizing the login in `viewer` (the authenticated account); without it every
-pass re-triages the summary the last pass left.
+Entries on both carry `is_viewer`, true for the ones you wrote: Phase 4's
+summary comments land on the same endpoint a reviewer's do, and only this field
+tells them apart — without it every pass re-triages the summary the last one
+left. (`viewer` at the top level is the login it was derived from.)
 
 `pending_review` is the viewer's own unsubmitted review (`null` when there
 is none), with each comment's node `id` and a snapshot of its `body`. When
@@ -190,9 +189,10 @@ before deciding a stale-looking thread is moot.
 Bot review-state fields (`APPROVED`/`COMMENTED`/`CHANGES_REQUESTED` in
 `reviews[]`) tell you formality, not substance — most bots leave everything in
 `COMMENTED`, so the state never tells you whether a review carries findings.
-Only the body does, and bots differ in where they put them: Copilot and Gemini
-leave the body empty and the substance in thread comments, while a summary
-reviewer like `agent-optibot` does the opposite.
+Neither does the vendor: some put their substance in thread comments and leave
+the body boilerplate, others carry real findings in the body and open no thread
+at all, and the same bot changes shape between versions. Read both and judge
+from what is in them.
 
 **Read every discussion comment and every non-empty review body, not just the
 threads.** They go in the same priority list as thread items — they are feedback
@@ -540,7 +540,7 @@ Report every item, one line each:
 - **Unresolved review threads** — how many remain, and for each one why
   (deferred pending a human decision, blocked on another PR, a design choice
   you're waiting on).
-- **Discussion comments** — every one without `is_viewer`, with its disposition:
+- **Discussion comments** — every one with `is_viewer: false`, with its disposition:
   fixed (and where), replied, declined with reasoning, or carried to a follow-up
   issue. "Read it, no action needed" is a disposition; silence is not.
 - **Review bodies** — every finding you pulled out of a non-empty
