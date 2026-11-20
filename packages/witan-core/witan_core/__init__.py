@@ -22,6 +22,7 @@ from .repo_key import find_git_config, normalise
 from .target_config import (
     local_project_path,
     match_target,
+    match_target_at,
     parse_target_tables,
     to_list,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "load_toml",
     "local_project_path",
     "match_target",
+    "match_target_at",
     "normalise",
     "now_iso",
     "parse_target_tables",

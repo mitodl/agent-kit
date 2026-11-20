@@ -9,11 +9,16 @@ source of truth here, guarded by ``tests/test_repo_key.py``'s golden table.
 ``detect``/``current_branch`` are intentionally NOT here: they diverge between
 the two servers (witan keeps the raw branch; witan-code sanitizes it for
 omnigraph-safe branch storage), so each keeps its own in ``repo.py``.
+:func:`remote_uri` and :func:`checkout_branch` are the path-explicit pair the
+language server uses per workspace folder, and :func:`git_remote_url` is the
+origin-first remote lookup under it and under witan's ``repo.detect``. The branch is raw; a witan-code
+read has to sanitize it the way witan-code's own ``repo.py`` does.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 # Hosts whose org/repo path segments are known to be case-insensitive, so
@@ -74,3 +79,60 @@ def find_git_config(start: Path) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def remote_uri(start: Path) -> str | None:
+    """The canonical repo key of the checkout at ``start``, or ``None``.
+
+    ``origin`` if it is set, else the first remote git lists, normalised.
+    Unlike each server's ``repo.detect``, this reads only the path it is given:
+    no ``WITAN_REPO``, no process cwd. A language server holds several
+    workspace folders in one process, so the folder is the only input that
+    says which repo a document belongs to. ``None`` outside a checkout, for a
+    checkout with no remote, or when git is not installed.
+    """
+    url = git_remote_url(start)
+    return normalise(url) if url else None
+
+
+def git_remote_url(start: Path) -> str | None:
+    """Resolve a remote URL via git itself: ``origin`` if present, else the
+    first remote of any name that has a URL.
+
+    Falling back past ``origin`` means a checkout whose canonical remote is
+    named ``upstream``/``fork``/etc. (or a single differently-named remote)
+    still yields repo context instead of silently getting none. Returns the
+    raw URL; callers normalise it. Fault-tolerant: no git binary or no remote
+    → ``None``.
+    """
+    if url := _git(start, "remote", "get-url", "origin"):
+        return url
+    for name in (_git(start, "remote") or "").splitlines():
+        if name.strip() in ("", "origin"):
+            continue  # already tried above; don't spawn a redundant git call
+        if url := _git(start, "remote", "get-url", name.strip()):
+            return url
+    return None
+
+
+def checkout_branch(start: Path) -> str | None:
+    """The raw branch checked out at ``start``, or ``None``.
+
+    ``None`` outside a checkout, on a detached HEAD, or when git is not
+    installed. Reads only ``start``, for the reason :func:`remote_uri` gives.
+    """
+    return _git(start, "symbolic-ref", "--quiet", "--short", "HEAD")
+
+
+def _git(start: Path, *args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    out = result.stdout.strip()
+    return out if result.returncode == 0 and out else None

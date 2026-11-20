@@ -8,6 +8,17 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.59.0] - 2026-11-19
+
+### Added
+
+- The witan language server host, behind a new `lsp` extra on pygls 2.x (ADR 0012). `witan_core.lsp.server.serve` runs it on stdio; `witan_core.lsp.run_language_server` is the body both servers' `lsp` commands share. It loads plugins from the `witan.lsp.plugins` entry-point group, advertises the union of their capabilities, merges their hover sections, CodeLens lists and diagnostics in entry-point order, and owns a `witan.status` command reporting the plugins found and each workspace folder's repo, branch and target. Plugin calls run on one worker thread, with stdout redirected to stderr and a plugin's `SystemExit` turned into a failed request.
+- `witan_core.lsp` is the plugin interface (`Plugin`, `Capability`, `Folder`, `Route`, `Lens`, `Note`, `Location`, `BOUND_TOOLS`). It is stdlib only, so a server imports it without the extra. A plugin declares symbol resolution as a capability, and `BOUND_TOOLS` is the ADR's enumerated tool list; the host refuses a plugin that names a tool outside it or a command outside `witan.*`. Bound tools take keyword arguments only, as a deployment's `RemoteServerProxy` does, and `Plugin.references` receives the request's `includeDeclaration`.
+- Each workspace folder routes to its own target: `--target` or `WITAN_TARGET`, else `match_*` against the folder's own path and remote. The host opens one tool provider per deployment and serves one local store per plugin per process, anchored by the first folder that plugin routes to one; a folder routed to a second local store gets one Information diagnostic and no features. A `Route.guard` gives folders that share a store their own provider, for witan-council's per-folder write guard.
+- `witan_core.lsp.testing` runs the server in-process over OS pipes against a real pygls client, for the language-server tests in all three packages.
+- `witan_core.target_config.match_target_at(targets, path)`, `witan_core.repo_key.remote_uri(path)` and `checkout_branch(path)` route and identify a checkout by its path alone, ignoring `CLAUDE_PROJECT_DIR`, `WITAN_REPO` and the cwd.
+- `witan_core.target_config.named_target(targets, name)` and `witan_core.repo_key.git_remote_url(path)`, moved from the servers so the unknown-target error and the origin-first remote lookup have one implementation.
+
 ## [0.58.0] - 2026-11-19
 
 ### Added

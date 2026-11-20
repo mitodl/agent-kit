@@ -39,6 +39,8 @@ neither server pulls weight it doesn't use:
   traces; the OTel halves are imported defensively so an install without an
   exporter still works)
 - `witan-core[sentry]` → `sentry-sdk`
+- `witan-core[lsp]` → `pygls`, `lsprotocol` (the editor language server that
+  `witan lsp` and `witan-code lsp` start)
 
 `sentry` is **additive to `observability`, not an alternative to it**:
 `telemetry.py` imports `observability.logging`, which imports `structlog` at
@@ -95,6 +97,12 @@ Later additions, past the original extraction list:
   the only route to `load`, `branch`, and `optimize`.
 - `chunking` — splits a bulk load into batches omnigraph-server will accept,
   rather than dying on a `413` part-way through a repo-scale index.
+- `lsp/` — the editor language server host (ADR 0012). `plugin` is the
+  stdlib-only interface witan-council and witan-code implement and register
+  under the `witan.lsp.plugins` entry-point group; `host` routes each workspace
+  folder to its target, runs plugin calls on one worker thread and merges their
+  results; `server` adapts it to pygls on stdio (needs the `lsp` extra);
+  `testing` runs it in-process against a real client for the packages' tests.
 - `caching` — server-declared cache directives for `tools/list` and friends
   (MCP 2026-07-28, SEP-2549), so a client stops re-fetching a surface that only
   changes on deploy.

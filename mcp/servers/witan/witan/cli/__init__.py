@@ -281,6 +281,21 @@ def serve(
 
 
 @app.command
+def lsp() -> None:
+    """Run the witan language server on stdio, for an editor to start.
+
+    One server for every installed witan package: it loads the language-server
+    plugins witan-council and witan-code register, and routes each workspace
+    folder to its own target the way the CLI routes a checkout. ``--target``
+    and ``WITAN_TARGET`` route every folder. ``witan-code lsp`` starts the same
+    server. Needs the ``lsp`` extra: ``uv tool install 'witan-council[lsp]'``.
+    """
+    from witan_core.lsp import run_language_server
+
+    run_language_server(selected_target(), package="witan-council")
+
+
+@app.command
 def run(
     slug: str,
     *,

@@ -21,6 +21,8 @@ import re
 from pathlib import Path
 from typing import Protocol, TypeVar
 
+from .repo_key import remote_uri
+
 
 def to_list(val: object) -> list[str]:
     """Normalise a TOML value to a list of strings.
@@ -83,6 +85,28 @@ class _MatchCriteria(Protocol):
 T = TypeVar("T", bound=_MatchCriteria)
 
 
+class _Named(Protocol):
+    name: str
+
+
+N = TypeVar("N", bound=_Named)
+
+
+def named_target(targets: list[N], name: str) -> N:
+    """The target called ``name``, or a ``ValueError`` listing the defined ones.
+
+    A named target that is not defined is an error rather than a fall-through
+    to auto-detection: silently routing to whatever the checkout matches sends
+    writes somewhere the caller did not ask for. Both servers and the language
+    server raise this one message for ``--target`` and ``WITAN_TARGET``.
+    """
+    selected = next((t for t in targets if t.name == name), None)
+    if selected is None:
+        available = ", ".join(t.name for t in targets) or "(none defined)"
+        raise ValueError(f"Unknown target {name!r}. Available: {available}")
+    return selected
+
+
 def match_target(
     targets: list[T],
     *,
@@ -135,3 +159,15 @@ def match_target(
             return t
 
     return None
+
+
+def match_target_at(targets: list[T], path: Path) -> T | None:
+    """:func:`match_target` for the checkout at ``path``, ignoring the process.
+
+    The repo comes from ``path``'s own remote (:func:`witan_core.repo_key.remote_uri`)
+    and ``match_paths`` is tested against ``path``, where :func:`local_project_path`
+    and each server's ``repo.detect`` read ``CLAUDE_PROJECT_DIR``, ``WITAN_REPO``
+    and the cwd. A language server routes each workspace folder this way, since
+    one process serves folders that belong to different targets.
+    """
+    return match_target(targets, repo_uri=remote_uri(path), local_path=path)
