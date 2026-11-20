@@ -17,13 +17,14 @@ import sys
 from importlib import metadata
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 from pygls.uris import to_fs_path
 
 from .folders import explicit_target, resolve_folder
-from .host import Host
+from .host import Host, disk_text
 from .plugin import Capability, Lens, Location, Note, discover_plugins
 
 __all__ = ["build_server", "serve"]
@@ -53,10 +54,16 @@ def _position(ls: LanguageServer, uri: str, position: types.Position):
     Python strings, so a multibyte character earlier on the line would
     otherwise shift every column after it. A document the client has not
     opened has no text to convert against, and is passed through."""
-    document = ls.workspace.text_documents.get(uri)
+    document = _open_document(ls, uri)
     if document is None:
         return position
     return document.position_from_client_units(position)
+
+
+def _open_document(ls: LanguageServer, uri: str):
+    """The client's buffer for ``uri``, or ``None`` when it is not open.
+    pygls keys open documents by the unquoted URI."""
+    return ls.workspace.text_documents.get(unquote(uri))
 
 
 def _location(loc: Location) -> types.Location:
@@ -120,7 +127,14 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
         pending.extend(_folders(params))
         document = params.capabilities.text_document
         host.lens_fallback = document is None or document.code_lens is None
-        host.document_text = lambda uri: ls.workspace.get_text_document(uri).source
+        # Not workspace.get_text_document(uri).source: for a document the
+        # client has not opened it reads the file itself, and raises when the
+        # file does not exist.
+        host.document_text = lambda uri: (
+            document.source
+            if (document := _open_document(ls, uri)) is not None
+            else disk_text(uri)
+        )
 
     @server.feature(types.INITIALIZED)
     async def initialized(ls: LanguageServer, params: types.InitializedParams) -> None:
@@ -199,6 +213,10 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
 
         @server.feature(types.CODE_LENS_RESOLVE)
         async def resolve_lens(ls: LanguageServer, params: types.CodeLens):
+            if params.data is None:
+                # Only a lens sent unresolved carries data, and it has its
+                # command already otherwise.
+                return params
             lens = await host.run(
                 host.resolve_lens,
                 _path(params.data["uri"]),
@@ -284,9 +302,10 @@ def serve(target: str | None = None) -> None:
     # (`witan_core.elicit.has_terminal`) can read a request as its answer,
     # even when the server was started by hand in a terminal. Not
     # os.devnull: on Windows that is the NUL character device, whose
-    # isatty() is True.
+    # isatty() is True. A TextIOWrapper rather than a StringIO, so code that
+    # reaches for sys.stdin.buffer still finds one.
     originals = sys.stdin, sys.stdout
-    sys.stdin, sys.stdout = io.StringIO(), sys.stderr
+    sys.stdin, sys.stdout = io.TextIOWrapper(io.BytesIO()), sys.stderr
     try:
         server.start_io(protocol_in, protocol_out)
     finally:

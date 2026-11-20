@@ -174,7 +174,7 @@ class Context(Protocol):
 
     def text(self, uri: str) -> str:
         """The document's text: the editor's buffer when the document is open,
-        else the file on disk."""
+        else the file on disk, else empty."""
         ...
 
 

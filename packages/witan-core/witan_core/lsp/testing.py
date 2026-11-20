@@ -92,8 +92,8 @@ async def lsp_session(
     """Start a server for ``host``, initialize it with ``folders``, and yield
     a :class:`Session`. Shuts the server down and joins its thread on exit.
 
-    ``client_capabilities`` defaults to none at all, which is a client with no
-    CodeLens, so the host's lens fallback is on.
+    ``client_capabilities`` defaults to an empty ``ClientCapabilities()``,
+    which does not advertise CodeLens, so the host's lens fallback is on.
     """
     server = build_server(host, target=target)
     to_server_r, to_server_w = os.pipe()

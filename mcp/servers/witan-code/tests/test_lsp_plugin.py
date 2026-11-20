@@ -20,7 +20,12 @@ import pytest
 from lsprotocol import types
 
 from witan_code import config as cfg_module
-from witan_code.lsp_plugin import CALLERS_COMMAND, IMPACT_COMMAND, CodePlugin
+from witan_code.lsp_plugin import (
+    CALLERS_COMMAND,
+    IMPACT_COMMAND,
+    CodePlugin,
+    _word_at,
+)
 from witan_core.lsp import Capability, Folder
 from witan_core.lsp.folders import resolve_folder
 from witan_core.lsp.host import Host
@@ -607,6 +612,18 @@ def test_definition_reads_an_open_dependency_at_its_branch(graph, tmp_path):
         assert (loc.uri, loc.range.start.line) == (maths.as_uri(), 8)
     finally:
         git(graph.lib, "worktree", "remove", "--force", str(lib_branch))
+
+
+def test_the_identifier_under_the_cursor_includes_its_end():
+    """A cursor just after a word (the column `match.end()` names) still
+    means that word, as editors place it after typing one."""
+    line = "x = fresh()"
+    assert [_word_at(line, 0, column) for column in (4, 6, 9, 10)] == [
+        "fresh",
+        "fresh",
+        "fresh",
+        None,
+    ]
 
 
 def test_a_whole_file_function_wins_over_its_module(monkeypatch):

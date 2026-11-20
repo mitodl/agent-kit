@@ -34,7 +34,7 @@ from .plugin import (
     validate_plugins,
 )
 
-__all__ = ["HOST_COMMANDS", "STATUS_COMMAND", "Host", "PluginExit"]
+__all__ = ["HOST_COMMANDS", "STATUS_COMMAND", "Host", "PluginExit", "disk_text"]
 
 STATUS_COMMAND = "witan.status"
 HOST_COMMANDS = (STATUS_COMMAND,)
@@ -134,8 +134,13 @@ class _Unroutable:
     reason: str
 
 
-def _disk_text(uri: str) -> str:
-    return Path(url2pathname(urlparse(uri).path)).read_text(errors="replace")
+def disk_text(uri: str) -> str:
+    """The file ``uri`` names, read from disk; empty when it does not exist
+    (a document the client has not opened may have been deleted)."""
+    try:
+        return Path(url2pathname(urlparse(uri).path)).read_text(errors="replace")
+    except FileNotFoundError:
+        return ""
 
 
 def _no_exit(fn: Callable[..., T], *args: Any) -> T:
@@ -163,7 +168,7 @@ class Host:
         stays open after its target changes or its folder is removed."""
         self._cwd_anchor: Folder | None = None
         self._cwd_pinned = False
-        self.document_text: Callable[[str], str] = _disk_text
+        self.document_text: Callable[[str], str] = disk_text
         """What :meth:`Context.text` reads. The server points it at the
         editor's open buffers."""
         self.lens_fallback = False

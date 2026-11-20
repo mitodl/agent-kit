@@ -583,7 +583,7 @@ target's graph, at its own checkout branch:
   definition's own repo (the code graph records no symbol-level use across
   repos). A definition in a repo no workspace folder has checked out is named
   in the hover instead (repo, path and line), with its references;
-- an Information diagnostic on line 1 when the folder's repo, or its branch,
+- an Information diagnostic on the first line when the folder's repo, or its branch,
   has no index (reads then show the default branch).
 
 An editor without CodeLens (eglot, Zed by default) gets each lens's text in

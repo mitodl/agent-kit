@@ -716,6 +716,53 @@ def test_a_plugin_reads_the_open_buffer_and_every_folder(config, monkeypatch):
     host.close()
 
 
+def test_an_unopened_document_reads_from_disk_and_a_missing_one_is_empty(
+    config, monkeypatch
+):
+    """pygls builds an unopened document from disk and raises for a file that
+    is gone; the host reads disk itself and answers empty instead."""
+    work, _ = config
+    monkeypatch.chdir(work)
+
+    class Reads(Recorder):
+        capabilities = frozenset({Capability.HOVER})
+
+        def hover(self, ctx, uri, line, character):
+            return repr(ctx.text(uri))
+
+    present, missing = work / "present.py", work / "missing.py"
+    present.write_text("on disk\n")
+
+    async def go():
+        async with lsp_session(Host({"r": Reads("r")}), [work]) as session:
+            return [
+                (await _hover(session, p.as_uri(), 0)).contents.value
+                for p in (present, missing)
+            ]
+
+    assert run(go()) == ["'on disk\\n'", "''"]
+
+
+def test_resolving_a_lens_that_has_its_command_returns_it(config, monkeypatch):
+    """Only an unresolved lens carries data. A client that resolves one that
+    already has its command gets it back rather than an error."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    lens = types.CodeLens(
+        range=types.Range(start=types.Position(1, 0), end=types.Position(1, 0)),
+        command=types.Command(title="cheap", command="witan.echo", arguments=[3]),
+    )
+
+    async def go():
+        async with lsp_session(
+            Host({"z": Lazy("lazy")}), [work], client_capabilities=_lens_client()
+        ) as session:
+            return await session.client.code_lens_resolve_async(lens)
+
+    resolved = run(go())
+    assert (resolved.command.title, resolved.data) == ("cheap", None)
+
+
 def test_serve_keeps_stdin_away_from_prompts(monkeypatch):
     """stdin is the JSON-RPC channel. A plugin call that looks for a terminal
     to prompt on finds none, even when the server was started from one."""
@@ -736,13 +783,23 @@ def test_serve_keeps_stdin_away_from_prompts(monkeypatch):
     seen = {}
 
     def start_io(self, reader, writer):
-        seen.update(channel=reader, terminal=has_terminal(), read=sys.stdin.read())
+        seen.update(
+            channel=reader,
+            terminal=has_terminal(),
+            read=sys.stdin.read(),
+            buffer=sys.stdin.buffer.read(),
+        )
 
     monkeypatch.setattr(sys, "stdin", stdin)
     monkeypatch.setattr(server_module, "discover_plugins", dict)
     monkeypatch.setattr(LanguageServer, "start_io", start_io)
     server_module.serve()
-    assert seen == {"channel": stdin.buffer, "terminal": False, "read": ""}
+    assert seen == {
+        "channel": stdin.buffer,
+        "terminal": False,
+        "read": "",
+        "buffer": b"",
+    }
     assert sys.stdin is stdin
 
 
