@@ -126,6 +126,12 @@ colleague's architectural judgment left as a top-level comment, and a bot's
 summary review usually carries its real findings in `reviews[].body` rather than
 in any thread. Read both in Phase 2, account for both in Phase 5.
 
+Entries on both carry `is_viewer`, true for the ones you wrote — the summary
+comments Phase 4 posts land on the same endpoint a reviewer's comment does, and
+only this field tells them apart. Skip your own by that field rather than by
+recognizing the login in `viewer` (the authenticated account); without it every
+pass re-triages the summary the last pass left.
+
 `pending_review` is the viewer's own unsubmitted review (`null` when there
 is none), with each comment's node `id` and a snapshot of its `body`. When
 it is set, the script also prints "You have a pending review with N
@@ -182,17 +188,18 @@ underlying concern may still apply. Read the current code at that path
 before deciding a stale-looking thread is moot.
 
 Bot review-state fields (`APPROVED`/`COMMENTED`/`CHANGES_REQUESTED` in
-`reviews[]`) tell you formality, not substance — most bots (Copilot, Gemini)
-leave everything in `COMMENTED` state with the real content in the thread
-comments, which is why
-[`github-pr-triage`](../github-pr-triage/SKILL.md#how-the-signals-are-read)
-reads unresolved threads rather than review states.
+`reviews[]`) tell you formality, not substance — most bots leave everything in
+`COMMENTED`, so the state never tells you whether a review carries findings.
+Only the body does, and bots differ in where they put them: Copilot and Gemini
+leave the body empty and the substance in thread comments, while a summary
+reviewer like `agent-optibot` does the opposite.
 
 **Read every discussion comment and every non-empty review body, not just the
 threads.** They go in the same priority list as thread items — they are feedback
-with no thread attached, not metadata. Skip only the comments you posted
-yourself in an earlier round. The human-vs-bot rule below applies to them
-unchanged, decided from the same `author_type` field.
+with no thread attached, not metadata. Skip only the entries with
+`is_viewer: true`, which are yours: a summary comment from an earlier round, or
+your own review of someone else's PR. The human-vs-bot rule below applies to
+everything that's left, decided from the same `author_type` field.
 
 Bot review bodies vary by vendor: `agent-optibot` files findings under a
 `**Risks**` heading inside a `<details>` block, others use `Issues`, `Concerns`,
@@ -360,12 +367,19 @@ In draft-only mode:
   finding, or failing check:
 
 ```text
-| Thread | Author | Verdict | Proposed reply | Local commit | Evidence |
-|--------|--------|---------|----------------|--------------|----------|
+| Item | Author | Verdict | Proposed reply | Local commit | Evidence |
+|------|--------|---------|----------------|--------------|----------|
 | [a.py:42](https://github.com/o/r/pull/7#discussion_r1) | copilot-pull-request-reviewer | fix | Fixed in a1b2c3d: transport is now streamable-http (tests/test_config.py, 3 passed). | a1b2c3d | tests/test_config.py: 3 passed |
 | [b.py:10](https://github.com/o/r/pull/7#discussion_r2) | gemini-code-assist | disagree | Not adding the guard: ensure_bridge_store runs at every call site. | (none) | callers at x.py:12, y.py:40 |
-| [c.py:5](https://github.com/o/r/pull/7#discussion_r3) | tmacey | needs you | (your wording) | (none) | two defensible fixes, see below |
+| [review body](https://github.com/o/r/pull/7#pullrequestreview-5928924500): reference_budgets() ignores `before` | agent-optibot | fix | Fixed in d4e5f6a: reference_budgets now filters on the requested date (tests/test_budgets.py, 6 passed). | d4e5f6a | tests/test_budgets.py: 6 passed |
+| [discussion comment](https://github.com/o/r/pull/7#issuecomment-7048965644) | rachellougee | needs you | (your wording) | (none) | proposes moving the panel builders to another repo |
 ```
+
+An item with no thread has no `path:line` to name it by, so link its
+`html_url` and say what it is: the review body's finding in a few words, or
+just "discussion comment". Rows for those two channels are the ones most
+likely to be missing — check the table has one per item Phase 2 found before
+showing it.
 
 Verdict is one of `fix`, `reply only`, `disagree`, or `needs you`. The
 proposed reply is the exact text that would be posted, in Phase 4's reply
@@ -526,7 +540,7 @@ Report every item, one line each:
 - **Unresolved review threads** — how many remain, and for each one why
   (deferred pending a human decision, blocked on another PR, a design choice
   you're waiting on).
-- **Discussion comments** — every one you didn't author, with its disposition:
+- **Discussion comments** — every one without `is_viewer`, with its disposition:
   fixed (and where), replied, declined with reasoning, or carried to a follow-up
   issue. "Read it, no action needed" is a disposition; silence is not.
 - **Review bodies** — every finding you pulled out of a non-empty

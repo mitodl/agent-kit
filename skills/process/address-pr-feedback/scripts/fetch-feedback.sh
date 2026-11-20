@@ -98,9 +98,15 @@ reviews="$(gh api "repos/${repo}/pulls/${pr}/reviews" --paginate --slurp \
 # GitHub shows a pending review only to its author, so this finds the
 # viewer's own. The comment bodies are a snapshot for reading; the user can
 # edit them in the browser at any time, so re-fetch one before editing it.
+#
+# `viewer { login }` rides along on this call rather than costing a second
+# one. Without it there is no way to tell your own summary comment from a
+# reviewer's: both are plain `User` entries on the same endpoint, so each
+# pass would re-triage the summary the previous pass posted.
 # shellcheck disable=SC2016  # GraphQL variables, not shell
 pending_query='
 query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviews(states: [PENDING], first: 1) {
@@ -118,18 +124,28 @@ query($owner: String!, $name: String!, $number: Int!) {
   }
 }'
 
-pending_review="$(gh api graphql -f query="$pending_query" -f owner="$owner" -f name="$name" -F number="$pr" \
-  | jq '[.data.repository.pullRequest.reviews.nodes[] | select(.viewerDidAuthor)] | .[0]
-        | if . == null then null else {id, comment_count: .comments.totalCount, comments_truncated: .comments.pageInfo.hasNextPage, comments: .comments.nodes} end')"
+viewer_and_pending="$(gh api graphql -f query="$pending_query" -f owner="$owner" -f name="$name" -F number="$pr")"
+
+viewer="$(jq -r '.data.viewer.login' <<<"$viewer_and_pending")"
+
+pending_review="$(jq '[.data.repository.pullRequest.reviews.nodes[] | select(.viewerDidAuthor)] | .[0]
+        | if . == null then null else {id, comment_count: .comments.totalCount, comments_truncated: .comments.pageInfo.hasNextPage, comments: .comments.nodes} end' \
+  <<<"$viewer_and_pending")"
+
+# Tag what is yours so the skill can skip it mechanically rather than by
+# recognizing a login.
+discussion="$(jq --arg me "$viewer" 'map(.is_viewer = (.author == $me))' <<<"$discussion")"
+reviews="$(jq --arg me "$viewer" 'map(.is_viewer = (.author == $me))' <<<"$reviews")"
 
 jq -n \
   --arg repo "$repo" \
   --argjson pr "$pr" \
+  --arg viewer "$viewer" \
   --argjson review_threads "$(cat "$threads_file")" \
   --argjson discussion_comments "$discussion" \
   --argjson reviews "$reviews" \
   --argjson pending_review "$pending_review" \
-  '{repo: $repo, pr: $pr, review_threads: $review_threads, discussion_comments: $discussion_comments, reviews: $reviews, pending_review: $pending_review}' \
+  '{repo: $repo, pr: $pr, viewer: $viewer, review_threads: $review_threads, discussion_comments: $discussion_comments, reviews: $reviews, pending_review: $pending_review}' \
   > "$output"
 
 # Only the thread count has any resolution state behind it, and reporting it
@@ -137,20 +153,22 @@ jq -n \
 # body gets called "addressed". Count each channel separately and say outright
 # that two of them have no resolved state.
 unresolved_count="$(jq '[.[] | select(.isResolved == false)] | length' "$threads_file")"
-discussion_count="$(jq 'length' <<<"$discussion")"
 review_count="$(jq 'length' <<<"$reviews")"
-# A review with an empty body carried only thread comments. Counting those as
-# feedback to read overstates the pile and buries the ones that aren't empty.
-reviews_with_body="$(jq '[.[] | select((.body // "") != "")] | length' <<<"$reviews")"
+# Both counts exclude your own, so they describe what is left to read rather
+# than growing by one every time Phase 4 posts a summary comment. A review
+# with an empty body carried only thread comments; counting those as feedback
+# to read overstates the pile and buries the ones that aren't empty.
+discussion_count="$(jq '[.[] | select(.is_viewer | not)] | length' <<<"$discussion")"
+reviews_with_body="$(jq '[.[] | select((.is_viewer | not) and (.body // "") != "")] | length' <<<"$reviews")"
 
-echo "${repo}#${pr}: ${unresolved_count} unresolved review thread(s), ${discussion_count} discussion comment(s), ${reviews_with_body} review(s) with a body (of ${review_count})" >&2
+echo "${repo}#${pr}: ${unresolved_count} unresolved review thread(s), ${discussion_count} discussion comment(s), ${reviews_with_body} review(s) with a body -- yours excluded, ${review_count} review(s) in total" >&2
 echo "Discussion comments and review bodies have no resolved state - read each one; the thread count alone does not mean a PR is addressed." >&2
 
 # Named because a colleague's architectural judgment usually arrives here
 # rather than pinned to a line, and it is the easiest feedback on the PR to
 # scroll past. author_type is GitHub's own actor type, so a service account on
 # a user token lands in this list too; over-naming is the safe direction.
-human_commenters="$(jq -r '[.[] | select(.author_type == "User") | .author] | unique | join(", ")' <<<"$discussion")"
+human_commenters="$(jq -r '[.[] | select((.is_viewer | not) and .author_type == "User") | .author] | unique | join(", ")' <<<"$discussion")"
 if [[ -n "$human_commenters" ]]; then
   echo "Discussion comment(s) from: ${human_commenters}" >&2
 fi
