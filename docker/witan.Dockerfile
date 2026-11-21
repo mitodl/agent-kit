@@ -59,7 +59,7 @@ ARG WITAN_HTTP_API_CONTRACTS=0.14,0.13
 ARG WITAN_VERSION=0.8.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS omnigraph-fetch
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS omnigraph-fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_SHA256_X86_64
