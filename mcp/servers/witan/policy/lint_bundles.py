@@ -23,14 +23,15 @@ import yaml
 
 # Per-graph actions bind to Omnigraph::Graph::"<id>"; graph_list is server-scoped
 # (Omnigraph::Server::"root"). Matches omnigraph-policy's PolicyAction.
-BRANCH_SCOPE_ACTIONS = {"read", "export", "change"}
+# `maintain` (optimize, index builds) and `reclaim` (cleanup) arrived in 0.16.
+BRANCH_SCOPE_ACTIONS = {"read", "export", "change", "maintain"}
 TARGET_BRANCH_SCOPE_ACTIONS = {
     "schema_apply",
     "branch_create",
     "branch_delete",
     "branch_merge",
 }
-UNSCOPED_GRAPH_ACTIONS = {"invoke_query", "admin"}
+UNSCOPED_GRAPH_ACTIONS = {"invoke_query", "admin", "reclaim"}
 SERVER_ACTIONS = {"graph_list"}
 GRAPH_ACTIONS = (
     BRANCH_SCOPE_ACTIONS | TARGET_BRANCH_SCOPE_ACTIONS | UNSCOPED_GRAPH_ACTIONS

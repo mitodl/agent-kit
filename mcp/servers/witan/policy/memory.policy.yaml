@@ -84,8 +84,10 @@ rules:
       branch_scope: any
   # The MCP service applies the memory schema/migrations as a default op; it
   # reads current state to decide whether a migration is needed.
-  # NOTE: `omnigraph repair`/`optimize`/`cleanup` are direct-storage-only and
-  # CANNOT be Cedar-gated — restrict those with AWS IAM on the bucket instead.
+  # NOTE: `optimize`/`cleanup` are direct-storage-only. Since 0.16 this policy
+  # also judges them (`maintain`/`reclaim`, see the admin rules), but the actor
+  # a direct command names is self-declared, so AWS IAM on the bucket is still
+  # what restricts who can run them.
   - id: service-read-memory
     allow:
       actors: { group: witan-service }
@@ -122,6 +124,21 @@ rules:
       actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected
+  # The nightly maintenance window (docker/omnigraph_maintenance.py) runs
+  # `optimize` and `cleanup` directly against the root as this actor
+  # (OMNIGRAPH_MAINTENANCE_ACTOR). From 0.16 those commands are judged by this
+  # policy and denied without a grant: `maintain` covers optimize and index
+  # builds and preserves content, `reclaim` covers cleanup, which deletes
+  # history no retained commit needs. Neither action changes a row.
+  - id: admin-maintain-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [maintain]
+      branch_scope: any
+  - id: admin-reclaim-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [reclaim]
   # The whole grant: prove the graph answers a read. No export (nothing to
   # hand a caller no human is behind), no change, no schema_apply.
   - id: probe-read-memory

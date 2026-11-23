@@ -29,8 +29,9 @@ groups:
   witan-ci: [act-svc-witan-ci]
   # The witan MCP service's own account: owns the bridge schema/migrations.
   witan-service: [act-svc-witan]
-  # Break-glass maintenance principal (ADR-0005 path b): read + schema only,
-  # same reasoning as code-graph.policy.yaml — the bridge is derived too.
+  # Break-glass maintenance principal (ADR-0005 path b): read + schema, plus
+  # the maintenance window's maintain/reclaim, and no write, same reasoning as
+  # code-graph.policy.yaml — the bridge is derived too.
   witan-admin: [act-svc-witan-admin]
 
 # The committed cross-repo projection. Protecting it does two jobs: it keeps
@@ -117,3 +118,18 @@ rules:
       actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected
+  # The nightly maintenance window (docker/omnigraph_maintenance.py) runs
+  # `optimize` and `cleanup` directly against the root as this actor
+  # (OMNIGRAPH_MAINTENANCE_ACTOR). From 0.16 those commands are judged by this
+  # policy and denied without a grant: `maintain` covers optimize and index
+  # builds and preserves content, `reclaim` covers cleanup, which deletes
+  # history no retained commit needs. Neither action changes a row.
+  - id: admin-maintain-bridge
+    allow:
+      actors: { group: witan-admin }
+      actions: [maintain]
+      branch_scope: any
+  - id: admin-reclaim-bridge
+    allow:
+      actors: { group: witan-admin }
+      actions: [reclaim]

@@ -39,9 +39,13 @@ crate — the constraints that shaped this bundle:
   destination). Values: `any | protected | unprotected`. `protected_branches:`
   is a bundle-level list of branch names. `invoke_query` and `graph_list` are
   unscoped.
-- **`omnigraph repair`/`optimize`/`cleanup` are direct-storage-only** and cannot
-  be Cedar-gated at all. Restrict maintenance with **AWS IAM on the bucket**,
-  not a Cedar principal.
+- **`optimize`/`cleanup` are direct-storage-only.** Since 0.16 a direct command
+  on a cluster graph is judged by that graph's policy (`maintain` for optimize
+  and index builds, taking `branch_scope`; `reclaim` for cleanup, unscoped), and
+  one that names no actor is denied. The `--as` actor of a direct command is
+  self-declared, so this keeps the storage owner inside the policy rather than
+  authenticating it: restrict who can run maintenance with **AWS IAM on the
+  bucket**. (`omnigraph repair` is gone in 0.16.)
 
 ## Actors and groups
 
@@ -80,8 +84,8 @@ Four distinct non-human identities, deliberately kept separate:
   MCP service applies the appropriate schema/migrations on every graph
   (`schema_apply`) as part of its normal boot/ownership duties — it is not a
   per-user permission and not the reindex pipeline. It gets `read` to decide
-  whether a migration is needed, and `schema_apply`; nothing else. (`omnigraph
-  repair`/`optimize`/`cleanup` remain outside Cedar entirely → AWS IAM.)
+  whether a migration is needed, and `schema_apply`; nothing else.
+  (`optimize`/`cleanup` are the maintenance window's, as `witan-admin`.)
 - **`witan-admin` (`act-svc-witan-admin`) — break-glass maintenance.** The
   principal the in-cluster maintenance Job authenticates as: `witan migrate
   topics` / `migrate repo-keys` / `migrate merge` / a forced `schema` apply, none
@@ -95,12 +99,15 @@ Four distinct non-human identities, deliberately kept separate:
     and every `witan-users` member can already write all of it, so the only thing
     the admin adds over a human is `schema_apply`.
   - On the **code** and **bridge** graphs it gets `read`/`export`/`invoke_query` +
-    `schema_apply` and **nothing else**. No `change` (a code graph is
-    re-derivable — the fix for a bad index is a reindex, by CI or the view's own
-    writer), no `branch_merge` (promotion into the reviewed `main` is a
+    `schema_apply` (and the maintenance pair below) and **no write**. No
+    `change` (a code graph is re-derivable — the fix for a bad index is a
+    reindex, by CI or the view's own writer), no `branch_merge` (promotion into the reviewed `main` is a
     deliberate CI act with a git merge behind it), no `branch_delete` (Cedar
     cannot tell whose view a delete targets, so the grant would make one token a
     way to destroy every developer's in-flight index).
+  - On **every** graph it also gets `maintain` and `reclaim`, the two actions
+    0.16 judges the nightly maintenance window's direct `optimize` and
+    `cleanup` by. Neither touches a row.
   - Never held by a human. An operator working interactively authenticates with
     `witan login` as their own `act-<sub>` (ADR-0005 path a); the admin token
     lives only in the cluster, mounted into Jobs.
@@ -228,8 +235,11 @@ here) must:
    are baked into the omnigraph-server image alongside the `.pg` schemas
    (`docker/omnigraph-server.Dockerfile`), for the same reason the schemas are:
    the Pulumi stack has no access to this tree at apply time.
-3. Gate maintenance ops (`repair`/`optimize`/`cleanup`) with **AWS IAM** on the
-   backing bucket — Cedar cannot.
+3. Gate maintenance ops (`optimize`/`cleanup`) with **AWS IAM** on the backing
+   bucket. Cedar judges them from 0.16, but only against the actor the command
+   names for itself. Set `OMNIGRAPH_MAINTENANCE_ACTOR` on the maintenance
+   CronJob to `svc-witan-admin`, the actor the bundles grant `maintain` and
+   `reclaim`.
 4. **Schedule the stale-view reaper.** `witan-ci`'s `branch_delete` grant is
    authorization for a job that has to actually run: every developer's every git
    branch gets a view on the shared graph, and nothing else removes one. Run
