@@ -4214,27 +4214,35 @@ def _log_session(session_id: str | None) -> str | None:
 #: measurement of surfaced reads had to drop it by hand. The organic
 #: ``memory_get`` reads in the same 11 days numbered 25.
 _BULK_READ_CALLS = 20
+#: The same, counted per actor across all their clients, for a sweep that does
+#: not keep one client id (a new process or MCP session per call). Well above
+#: what one person's parallel agents read together.
+_BULK_READ_CALLS_PER_ACTOR = 100
 _BULK_READ_WINDOW_SECONDS = 60.0
 # Process memory by design: a lost window after a rollout leaves at most the
 # first `_BULK_READ_CALLS` calls of a sweep untagged, the same as its start.
-_recent_reads: dict[tuple[str, str | None, str], deque[float]] = {}
+_recent_reads: dict[tuple, deque[float]] = {}
 _recent_reads_lock = threading.Lock()
 
 
 def _bulk_read(surface: str) -> bool:
     """Count one ``surface`` call by the current client; whether it is a bulk read.
 
-    True from the :data:`_BULK_READ_CALLS`-th call within the window on, so the
+    True from the :data:`_BULK_READ_CALLS`-th call by one client within the
+    window on, or the :data:`_BULK_READ_CALLS_PER_ACTOR`-th by one actor, so the
     first calls of a sweep are untagged; they sit seconds before the tagged ones.
     """
     now = time.monotonic()
+    actor = _current_author()
+    counts = []
     with _recent_reads_lock:
-        key = (_current_author(), _log_client_instance(), surface)
-        calls = _recent_reads.setdefault(key, deque())
-        calls.append(now)
-        while calls[0] <= now - _BULK_READ_WINDOW_SECONDS:
-            calls.popleft()
-        return len(calls) >= _BULK_READ_CALLS
+        for key in ((actor, _log_client_instance(), surface), (actor, surface)):
+            calls = _recent_reads.setdefault(key, deque())
+            calls.append(now)
+            while calls[0] <= now - _BULK_READ_WINDOW_SECONDS:
+                calls.popleft()
+            counts.append(len(calls))
+    return counts[0] >= _BULK_READ_CALLS or counts[1] >= _BULK_READ_CALLS_PER_ACTOR
 
 
 def _log_memory_read(

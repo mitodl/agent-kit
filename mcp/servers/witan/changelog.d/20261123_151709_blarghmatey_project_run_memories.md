@@ -21,6 +21,7 @@
   caller passes no `session_id`, so a `memory_get` through the proxy no
   longer logs a null session.
 - `witan.memory.read` lines carry `bulk`, true from the 20th call to one read
-  surface by one actor's one client process within a minute, so a scripted
-  sweep can be left out of a measurement without filtering it by hand.
+  surface by one actor's one client process within a minute, or the 100th by
+  one actor across all their clients, so a scripted sweep can be left out of
+  a measurement without filtering it by hand.
 - Requires witan-core 0.61.0 for `witan_core.client_instance`.

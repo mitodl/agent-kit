@@ -519,6 +519,19 @@ def test_parallel_clients_of_one_actor_are_not_a_sweep(server, monkeypatch, logg
     assert not any(f["bulk"] for f in logged["witan.memory.read"])
 
 
+@requires_omnigraph
+def test_a_sweep_with_a_new_client_per_call_is_still_tagged(
+    server, monkeypatch, logged
+):
+    monkeypatch.setattr(server._module, "_BULK_READ_CALLS_PER_ACTOR", 3)
+
+    for n in range(3):
+        monkeypatch.setenv("WITAN_CLIENT_INSTANCE", f"process-{n}")
+        server.memory_get("pat-missing")
+
+    assert [f["bulk"] for f in logged["witan.memory.read"]] == [False, False, True]
+
+
 def _project_run(server, task_slugs, **kwargs):
     return server.workflow_project_run_memories(
         slug="wp-p", task_slugs=task_slugs, **kwargs
