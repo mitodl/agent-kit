@@ -40,9 +40,15 @@ function fail(message: string): never {
 const base = { ...process.env };
 // Only this launcher runs as node; the agent is a normal process.
 delete base.ELECTRON_RUN_AS_NODE;
-const env = effectiveEnv(base, launch);
+const env = effectiveEnv(base, launch, process.platform);
 const [program = "", ...args] = launch.argv;
-const executable = findExecutable(program, env, process.platform, isExecutable);
+const executable = findExecutable(
+	program,
+	env,
+	launch.cwd,
+	process.platform,
+	isExecutable,
+);
 if (executable === undefined) {
 	fail(
 		`${program} is not on the PATH a terminal gets. Install it, or set witan.agent.`,

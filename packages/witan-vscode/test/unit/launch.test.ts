@@ -70,6 +70,7 @@ test("the effective env keeps everything the terminal would get otherwise", () =
 			UNSET: undefined,
 		},
 		spec(),
+		"linux",
 	);
 	assert.deepEqual(env, {
 		PATH: "/usr/bin",
@@ -78,20 +79,69 @@ test("the effective env keeps everything the terminal would get otherwise", () =
 	});
 });
 
+test("on POSIX env names are case-sensitive", () => {
+	const env = effectiveEnv(
+		{ Witan_Target: "kept", Claude_Session_Id: "kept" },
+		spec(),
+		"linux",
+	);
+	assert.deepEqual(env, {
+		Witan_Target: "kept",
+		Claude_Session_Id: "kept",
+		WITAN_TARGET: "prod",
+	});
+});
+
+test("on Windows env names match in any case, for removal and overlay", () => {
+	const env = effectiveEnv(
+		{
+			Path: "C:\\Windows",
+			Witan_Target: "personal",
+			Claude_Session_Id: "outer",
+		},
+		spec(),
+		"win32",
+	);
+	assert.deepEqual(env, { Path: "C:\\Windows", WITAN_TARGET: "prod" });
+});
+
 test("the agent is looked up on the launched env's PATH", () => {
 	const present = new Set(["/opt/agents/claude", "/usr/bin/git"]);
 	const exists = (file: string) => present.has(file);
 	const env = { PATH: "/usr/bin:/opt/agents" };
+	const cwd = "/home/me/repo";
 	assert.equal(
-		findExecutable("claude", env, "linux", exists),
+		findExecutable("claude", env, cwd, "linux", exists),
 		"/opt/agents/claude",
 	);
-	assert.equal(findExecutable("codex", env, "linux", exists), undefined);
+	assert.equal(findExecutable("codex", env, cwd, "linux", exists), undefined);
 	assert.equal(
-		findExecutable("/opt/agents/claude", {}, "linux", exists),
+		findExecutable("/opt/agents/claude", {}, cwd, "linux", exists),
 		"/opt/agents/claude",
 	);
-	assert.equal(findExecutable("claude", {}, "linux", exists), undefined);
+	assert.equal(findExecutable("claude", {}, cwd, "linux", exists), undefined);
+});
+
+test("relative commands and PATH entries resolve against the spawn cwd", () => {
+	const present = new Set([
+		"/home/me/repo/node_modules/.bin/claude",
+		"/home/me/repo/bin/pi",
+	]);
+	const exists = (file: string) => present.has(file);
+	const env = { PATH: "node_modules/.bin:/usr/bin" };
+	assert.equal(
+		findExecutable("claude", env, "/home/me/repo", "linux", exists),
+		"/home/me/repo/node_modules/.bin/claude",
+	);
+	assert.equal(
+		findExecutable("./bin/pi", {}, "/home/me/repo", "linux", exists),
+		"/home/me/repo/bin/pi",
+	);
+	// The same names from another folder are other files, or none.
+	assert.equal(
+		findExecutable("claude", env, "/home/me/other", "linux", exists),
+		undefined,
+	);
 });
 
 test("on Windows the lookup honours PATHEXT and any spelling of PATH", () => {
@@ -101,6 +151,7 @@ test("on Windows the lookup honours PATHEXT and any spelling of PATH", () => {
 		findExecutable(
 			"claude",
 			{ Path: "C:\\Windows;C:\\tools", PATHEXT: ".EXE;.CMD" },
+			"C:\\repo",
 			"win32",
 			exists,
 		),

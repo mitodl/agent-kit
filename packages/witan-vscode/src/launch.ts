@@ -83,15 +83,24 @@ export type LaunchStatus = { started: number } | { error: string };
  * `base` (the environment the terminal gave the launcher) as the agent gets
  * it: `unset_env` removed, then `env` set over it. Everything else the
  * person's terminals get is kept, which is what a strict env would lose.
+ *
+ * Windows environment names are case-insensitive, but a copy of `process.env`
+ * is a plain object, so there names are compared upper-cased: an inherited
+ * `Witan_Target` must not survive an `unset_env` of `WITAN_TARGET`.
  */
 export function effectiveEnv(
 	base: Readonly<Record<string, string | undefined>>,
 	spec: Pick<LaunchSpec, "env" | "unset_env">,
+	platform: NodeJS.Platform,
 ): Record<string, string> {
-	const unset = new Set(spec.unset_env);
+	const key = (name: string) =>
+		platform === "win32" ? name.toUpperCase() : name;
+	const replaced = new Set(
+		[...spec.unset_env, ...Object.keys(spec.env)].map(key),
+	);
 	const env: Record<string, string> = {};
 	for (const [name, value] of Object.entries(base)) {
-		if (value !== undefined && !unset.has(name)) {
+		if (value !== undefined && !replaced.has(key(name))) {
 			env[name] = value;
 		}
 	}
@@ -99,12 +108,15 @@ export function effectiveEnv(
 }
 
 /**
- * Where `command` resolves on `env`'s PATH, or `undefined` when it does not.
- * A command with a directory in it is taken as a path.
+ * Where `command` resolves on `env`'s PATH, as an absolute path, or
+ * `undefined` when it does not. A command with a directory in it is taken as
+ * a path. Relative commands and PATH entries resolve against `cwd`, the
+ * directory the agent is spawned in, so the file checked is the file run.
  */
 export function findExecutable(
 	command: string,
 	env: Readonly<Record<string, string>>,
+	cwd: string,
 	platform: NodeJS.Platform,
 	isExecutable: (file: string) => boolean,
 ): string | undefined {
@@ -117,11 +129,11 @@ export function findExecutable(
 			: [""];
 	const candidates =
 		command.includes(lib.sep) || command.includes("/")
-			? [command]
+			? [lib.resolve(cwd, command)]
 			: (pathValue(env, "PATH") ?? "")
 					.split(lib.delimiter)
 					.filter(Boolean)
-					.map((dir) => lib.join(dir, command));
+					.map((dir) => lib.resolve(cwd, dir, command));
 	for (const candidate of candidates) {
 		for (const ext of extensions) {
 			if (isExecutable(candidate + ext)) {
