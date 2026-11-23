@@ -19,6 +19,8 @@ a MINOR bump may include breaking changes).
   joined to the surfacing that preceded it when the agent passed no
   `session_id`. The proxy negotiates MCP 2026-07-28, which has no transport
   session to fall back on.
+- `workflow_project_run_memories` joins the language server's `BOUND_TOOLS`,
+  so an editor project launch can put team memories in its prompt.
 
 ### Changed
 

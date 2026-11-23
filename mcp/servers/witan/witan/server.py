@@ -4221,7 +4221,11 @@ _BULK_READ_CALLS_PER_ACTOR = 100
 _BULK_READ_WINDOW_SECONDS = 60.0
 # Process memory by design: a lost window after a rollout leaves at most the
 # first `_BULK_READ_CALLS` calls of a sweep untagged, the same as its start.
+# Bounded two ways: each window keeps no more timestamps than its threshold
+# needs, and a key idle for a whole window is dropped, because a sweep that
+# changes client id per call would otherwise leave one key behind per call.
 _recent_reads: dict[tuple, deque[float]] = {}
+_recent_reads_swept = 0.0
 _recent_reads_lock = threading.Lock()
 
 
@@ -4232,17 +4236,29 @@ def _bulk_read(surface: str) -> bool:
     window on, or the :data:`_BULK_READ_CALLS_PER_ACTOR`-th by one actor, so the
     first calls of a sweep are untagged; they sit seconds before the tagged ones.
     """
+    global _recent_reads_swept
     now = time.monotonic()
+    expired = now - _BULK_READ_WINDOW_SECONDS
     actor = _current_author()
-    counts = []
+    windows = (
+        ((actor, _log_client_instance(), surface), _BULK_READ_CALLS),
+        ((actor, surface), _BULK_READ_CALLS_PER_ACTOR),
+    )
     with _recent_reads_lock:
-        for key in ((actor, _log_client_instance(), surface), (actor, surface)):
-            calls = _recent_reads.setdefault(key, deque())
+        if _recent_reads_swept <= expired:
+            for key in [
+                k for k, calls in _recent_reads.items() if calls[-1] <= expired
+            ]:
+                del _recent_reads[key]
+            _recent_reads_swept = now
+        full = False
+        for key, threshold in windows:
+            calls = _recent_reads.setdefault(key, deque(maxlen=threshold))
             calls.append(now)
-            while calls[0] <= now - _BULK_READ_WINDOW_SECONDS:
+            while calls[0] <= expired:
                 calls.popleft()
-            counts.append(len(calls))
-    return counts[0] >= _BULK_READ_CALLS or counts[1] >= _BULK_READ_CALLS_PER_ACTOR
+            full = full or len(calls) >= threshold
+    return full
 
 
 def _log_memory_read(

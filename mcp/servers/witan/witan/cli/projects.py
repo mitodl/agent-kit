@@ -41,6 +41,7 @@ from .run_helpers import (
     agent_environ,
     bare_session_env,
     check_emit_spec_args,
+    launch_env,
     launched_client_instance,
 )
 from .selected_target import selected_target
@@ -754,13 +755,16 @@ def project_run(
                 memories = _project_prompt_memories(s, p["slug"], p_tasks)
             prompts.append(_project_run_prompt(p, p_tasks, memories))
         merged = _merge_prompts(prompts, "project")
+        # The same environment a launch spec gives its agent: the target pinned,
+        # and no inherited session id or location override.
+        env, unset_env = launch_env(cfg)
         _launch_agent(
             cfg,
             resolved_agent,
             resolved_model,
             merged,
             dry_run,
-            env=agent_environ({CLIENT_INSTANCE_ENV: instance}, []),
+            env=agent_environ({**env, CLIENT_INSTANCE_ENV: instance}, unset_env),
         )
     else:
         for p in selected:

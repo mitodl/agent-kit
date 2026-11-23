@@ -204,8 +204,9 @@ no feature depends on that default.
 The host holds the tool binding as an enumerated list, as ADR-0011 does for the
 UI: the tools named in the feature map below, plus `task_list`, `task_get`,
 `workflow_project_get`, `task_ready`, `recall`, `task_claim` and `task_release`,
-which the launch contract uses. A plugin that needs a tool outside the list
-amends this ADR.
+which the launch contract uses, and `workflow_project_run_memories`, which a
+project launch's prompt uses for its team memories (added after acceptance). A
+plugin that needs a tool outside the list amends this ADR.
 
 #### Feature map
 

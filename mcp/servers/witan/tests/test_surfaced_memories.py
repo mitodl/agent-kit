@@ -541,6 +541,45 @@ def test_a_sweep_with_a_new_client_per_call_is_still_tagged(
     assert [f["bulk"] for f in logged["witan.memory.read"]] == [False, False, True]
 
 
+def test_an_idle_client_window_is_dropped(server, monkeypatch, logged):
+    """A sweep that changes client id per call leaves one key per call, so the
+    windows must not outlive their last call."""
+    module = server._module
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module, "_recent_reads_swept", 0.0)
+    for n in range(3):
+        monkeypatch.setenv("WITAN_CLIENT_INSTANCE", f"process-{n}")
+        module._bulk_read("memory_get")
+    assert len(module._recent_reads) == 4  # three clients, one actor
+
+    clock[0] += module._BULK_READ_WINDOW_SECONDS + 1
+    monkeypatch.setenv("WITAN_CLIENT_INSTANCE", "process-late")
+    module._bulk_read("memory_get")
+
+    assert len(module._recent_reads) == 2
+    assert all(len(calls) == 1 for calls in module._recent_reads.values())
+
+
+def test_an_editor_project_launch_may_look_up_memories():
+    """The language server reaches tools only through BoundTools; one missing
+    from the plugin's list raises AttributeError, which the launch swallows
+    and so silently drops the memories."""
+    from witan.cli.run_helpers import _project_prompt_memories
+    from witan.lsp_plugin import CouncilPlugin
+    from witan_core.lsp.host import BoundTools
+    from witan_core.lsp.plugin import BOUND_TOOLS
+
+    class Provider:
+        def workflow_project_run_memories(self, slug, task_slugs):
+            return [{**_FROM_CLAIM, "task": task_slugs[0]}]
+
+    assert CouncilPlugin.tools <= BOUND_TOOLS
+    tools = BoundTools(Provider(), CouncilPlugin.tools)
+    memories = _project_prompt_memories(tools, "wp-p", [{"slug": "tk-a"}])
+    assert [m["task"] for m in memories] == ["tk-a"]
+
+
 def _project_run(server, task_slugs, **kwargs):
     return server.workflow_project_run_memories(
         slug="wp-p", task_slugs=task_slugs, **kwargs

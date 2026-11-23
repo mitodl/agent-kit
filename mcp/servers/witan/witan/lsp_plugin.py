@@ -196,6 +196,7 @@ class CouncilPlugin(Plugin):
             "workflow_project_get",
             "task_claim",
             "task_release",
+            "workflow_project_run_memories",
         }
     )
 
