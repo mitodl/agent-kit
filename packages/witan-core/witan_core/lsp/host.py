@@ -95,6 +95,10 @@ class _Workspace:
     def folders(self) -> Sequence[Folder]:
         return list(self.host.folders.values())
 
+    @property
+    def editor_environ(self) -> Mapping[str, str]:
+        return self.host.editor_environ
+
 
 @dataclass(frozen=True)
 class _Context(_Workspace):
@@ -153,9 +157,18 @@ def _no_exit(fn: Callable[..., T], *args: Any) -> T:
 class Host:
     """Holds the plugins and the workspace folders, and answers for them."""
 
-    def __init__(self, plugins: Mapping[str, Plugin]) -> None:
+    def __init__(
+        self,
+        plugins: Mapping[str, Plugin],
+        *,
+        editor_environ: Mapping[str, str] = os.environ,
+    ) -> None:
         validate_plugins(dict(plugins), reserved_commands=HOST_COMMANDS)
         self.plugins = dict(plugins)
+        self.editor_environ = editor_environ
+        """The environment the editor started this process with. ``serve()``
+        passes what it had before it changed ``os.environ``; a host built
+        any other way changed nothing, so it reads the live one."""
         self.folders: dict[str, Folder] = {}
         self.worker = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="witan-lsp-plugins"

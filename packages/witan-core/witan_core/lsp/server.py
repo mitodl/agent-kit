@@ -285,6 +285,9 @@ def serve(target: str | None = None) -> None:
     before the protocol starts, so the CLI can print it and exit.
     """
     explicit = explicit_target(target)
+    # Before anything below changes it: a chat-panel agent the editor starts
+    # gets this environment, not the one the plugins run under.
+    editor_environ = dict(os.environ)
     if explicit is not None:
         # The servers read WITAN_TARGET, not the flag, when they configure
         # their local store at import.
@@ -293,7 +296,7 @@ def serve(target: str | None = None) -> None:
         os.environ.pop(name, None)
 
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
-    host = Host(discover_plugins())
+    host = Host(discover_plugins(), editor_environ=editor_environ)
     server = build_server(host, target=explicit)
     protocol_in, protocol_out = sys.stdin.buffer, sys.stdout.buffer
     # stdin and stdout are the JSON-RPC channel. The reader and writer hold

@@ -27,11 +27,16 @@ commands answer ``{"repo": ..., <list>: [...]}`` for that folder's repo:
 - ``witan.listProjects``: ``projects`` (``workflow_project_list``).
 - ``witan.listMyWork``: ``tasks``, the caller's ``in_progress`` tasks.
 - ``witan.runTask`` / ``witan.runProject`` take ``slug`` and optional
-  ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal, with
-  ``handoff`` always false (see ``_launch``).
-- ``witan.releaseTask`` takes ``slug`` and ``claimed_at`` (the spec's
-  ``claim.claimed_at``, plus the ``uri`` the launch was run with) and answers
-  ``task_release``'s result.
+  ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal.
+  ``witan.runTask`` also takes ``claim`` (default true); ``false`` builds the
+  unclaimed spec a chat-panel handoff needs. ``handoff`` is always false for
+  now (see ``_launch``). A spec that took a claim carries ``release``, the
+  arguments for ``witan.releaseTask``.
+- ``witan.releaseTask`` takes ``slug``, ``claimed_at`` and ``uri``, which is
+  the spec's ``release`` as given, and answers ``task_release``'s result.
+  ``uri`` is required and names the folder the launch was invoked from, not
+  the spec's ``cwd``: the claim was taken through that folder's route, and
+  ``cwd`` can be another open folder that routes to a different graph.
 
 Every tool call passes the folder's own repo, so nothing falls back to the
 process's cwd or asks. Every call also runs inside :func:`prompts_off`: stdin
@@ -332,6 +337,10 @@ class CouncilPlugin(Plugin):
         self, ctx: CommandContext, command: str, arguments: Sequence[Any]
     ) -> Any:
         args: Mapping[str, Any] = arguments[0] if arguments else {}
+        if command == RELEASE_TASK:
+            # No first-folder default: only the launch's own folder routes to
+            # the graph the claim was taken in.
+            _required(args, "uri", command)
         folder = self._folder(ctx, args.get("uri"))
         fctx = ctx.context(folder)
         if fctx is None:
@@ -442,6 +451,9 @@ class CouncilPlugin(Plugin):
         from .cli.run_helpers import build_launch_spec
 
         folder = fctx.folder
+        claim = args.get("claim", True)
+        if not isinstance(claim, bool):
+            raise TypeError(f"{command}'s 'claim' argument must be true or false.")
         spec = build_launch_spec(
             "task" if command == RUN_TASK else "project",
             _required(args, "slug", command),
@@ -455,11 +467,20 @@ class CouncilPlugin(Plugin):
             started_with_target="WITAN_TARGET" in os.environ,
             agent=args.get("agent"),
             model=args.get("model"),
+            claim=claim,
         )
         if spec["launchable"]:
             # `serve()` drops CLAUDE_PROJECT_DIR and WITAN_REPO before any
             # plugin runs, so the handoff check cannot see that the editor,
             # whose environment a chat-panel agent inherits, still has them.
-            # Never offer a handoff until the host can say what it removed.
+            # witan-core's `CommandContext.editor_environ` says what the editor
+            # had; until a published witan-core carries it, never offer one.
             spec["handoff"] = False
+        if spec["launchable"] and spec["claim"]:
+            # The folder the claim was routed through, which `cwd` need not be.
+            spec["release"] = {
+                "slug": spec["slug"],
+                "claimed_at": spec["claim"]["claimed_at"],
+                "uri": folder.uri,
+            }
         return spec

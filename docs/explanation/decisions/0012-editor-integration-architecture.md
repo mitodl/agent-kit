@@ -335,6 +335,14 @@ the two strings never match.
 `claimed_at` moves and the release is refused; a closed task is refused too. It
 never passes `force`.
 
+The release has to reach the graph the claim was taken in, which is the one the
+invoking folder routes to, and `cwd` can be a different open folder that routes
+elsewhere. So a spec from `witan.runTask` that took a claim carries `release`:
+the `slug`, `claimed_at` and `uri` (the invoking folder) that
+`witan.releaseTask` takes, which the client passes back unchanged.
+`witan.releaseTask` refuses a call without `uri` rather than defaulting to the
+first folder.
+
 #### Why the spec carries no session id
 
 An earlier draft minted a session id per launch and handed it down as
@@ -388,14 +396,18 @@ Launch modes, in order of delivery:
    the agent's own panel: Copilot's `openNewSessionSidebar.agent-host-copilotcli`
    submits it, and the Claude Code extension's `claude-vscode.editor.open` only
    prefills it. A handoff never claims. It uses a task spec built with the
-   claim off (the existing `claim=False` path of `_run_task_slug`, whose prompt
-   tells the agent to claim first) or a project spec, because a prefilled
+   claim off (`witan.runTask` with `claim: false`, the `claim=False` path of
+   `_run_task_slug`, whose prompt tells the agent to claim first) or a project
+   spec, and a spec that took a claim always has `handoff: false`, because a
+   prefilled
    prompt the person never submits would otherwise hold a lease for an hour
    with no agent behind it and no failure the client could release on.
    Neither command carries env or `unset_env`, so the panel agent resolves its
    target and repo from VS Code's own environment. The server sets the spec's
    `handoff` to true only when that resolution matches the launch's: its own
-   environment (which it shares with the VS Code process that started it) has
+   environment (which it shares with the VS Code process that started it, as
+   it was before `serve()` changed it; the host hands plugins that copy as
+   `CommandContext.editor_environ`) has
    none of `WITAN_TARGET`, `CLAUDE_PROJECT_DIR` or `WITAN_REPO`, it was not
    started with `--target`, and the window has one workspace folder. The client
    offers a handoff only for a spec with `handoff: true`. Both commands are internal to their owners, so the VS Code client
