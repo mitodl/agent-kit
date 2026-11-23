@@ -78,8 +78,11 @@ local LISTS = {
   'witan.listStaleRefs', 'witan.listCallers', 'witan.listCrossRepoImpact',
 }
 
+-- The witan client serving this buffer. From a buffer it does not serve (the
+-- quickfix list), any witan client, and the uri sent picks the folder.
 local function client()
-  return assert(vim.lsp.get_clients({ name = 'witan' })[1], 'witan is not running')
+  return vim.lsp.get_clients({ bufnr = 0, name = 'witan' })[1]
+    or assert(vim.lsp.get_clients({ name = 'witan' })[1], 'witan is not running')
 end
 
 -- The folder a command applies to: the current file's, else the cwd's.
@@ -114,18 +117,18 @@ local function show_list(command, result)
   vim.cmd.copen()
 end
 
-local function exec(command, arguments, bufnr, on_result)
-  client():request('workspace/executeCommand', { command = command, arguments = arguments },
+local function exec(c, command, arguments, on_result)
+  c:request('workspace/executeCommand', { command = command, arguments = arguments },
     function(err, result)
       if err then
         return vim.notify(command .. ': ' .. err.message, vim.log.levels.ERROR)
       end
       on_result(result)
-    end, bufnr)
+    end)
 end
 
 -- Run a launch spec in a terminal, per ADR 0012's launch contract.
-local function run_spec(spec, uri)
+local function run_spec(c, spec, uri)
   if spec.version ~= LAUNCH_SPEC_VERSION then
     return vim.notify(('witan: launch spec version %s is not one this config knows (%d)')
       :format(spec.version, LAUNCH_SPEC_VERSION), vim.log.levels.ERROR)
@@ -141,18 +144,18 @@ local function run_spec(spec, uri)
   local ok, job = pcall(vim.fn.jobstart, spec.argv, { term = true, cwd = spec.cwd, env = env, clear_env = true })
   if ok and job > 0 then return end
   vim.cmd.tabclose()
-  vim.notify(('witan: %s did not start: %s'):format(spec.argv[1], ok and job or job), vim.log.levels.ERROR)
+  vim.notify(('witan: %s did not start: %s'):format(spec.argv[1], job), vim.log.levels.ERROR)
   if spec.claim ~= vim.NIL then
     -- Don't leave the task held for the lease when no agent is behind it.
-    exec('witan.releaseTask', { { slug = spec.slug, claimed_at = spec.claim.claimed_at, uri = uri } }, nil,
+    exec(c, 'witan.releaseTask', { { slug = spec.slug, claimed_at = spec.claim.claimed_at, uri = uri } },
       function(r) vim.notify(('witan: released %s: %s'):format(spec.slug, vim.inspect(r))) end)
   end
 end
 
 local function launch(command)
   return function(opts)
-    local uri = here()
-    exec(command, { { slug = opts.args, uri = uri } }, nil, function(spec) run_spec(spec, uri) end)
+    local c, uri = client(), here()
+    exec(c, command, { { slug = opts.args, uri = uri } }, function(spec) run_spec(c, spec, uri) end)
   end
 end
 
@@ -161,7 +164,8 @@ for _, name in ipairs(LISTS) do
   -- Lenses and code actions run their command through these, so the rows
   -- land in quickfix instead of being dropped by the default handler.
   commands[name] = function(cmd, ctx)
-    exec(cmd.command, cmd.arguments, ctx.bufnr, function(result) show_list(cmd.command, result) end)
+    exec(vim.lsp.get_client_by_id(ctx.client_id), cmd.command, cmd.arguments,
+      function(result) show_list(cmd.command, result) end)
   end
 end
 
@@ -175,7 +179,7 @@ vim.lsp.codelens.enable(true)
 
 local function list(command)
   return function()
-    exec(command, { { uri = here() } }, nil, function(result) show_list(command, result) end)
+    exec(client(), command, { { uri = here() } }, function(result) show_list(command, result) end)
   end
 end
 vim.api.nvim_create_user_command('WitanReady', list('witan.listReadyTasks'), {})
@@ -256,9 +260,9 @@ for eglot or lsp-mode.")
 
 (defun witan-show-list (command result)
   "Render a list COMMAND's RESULT in a `tabulated-list-mode' buffer."
-  ;; An array is a vector (eglot) or a list of hash tables (lsp-mode); an
-  ;; object is a plist (eglot) or a hash table (lsp-mode).
-  (let ((rows (if (or (vectorp result) (and (consp result) (hash-table-p (car result))))
+  ;; An array is a vector (eglot) or a list (lsp-mode); an object is a plist,
+  ;; which starts with a keyword, or a hash table.
+  (let ((rows (if (or (vectorp result) (and (consp result) (not (keywordp (car result)))))
                   (append result nil)
                 (cl-loop for key in '("for_branch" "ready" "projects" "tasks" "refs")
                          append (append (witan--get result key) nil)))))
@@ -368,15 +372,22 @@ open in a list buffer.
                        (list :command command :arguments arguments))))
 ```
 
-Add the major modes you want witan in to the list. eglot starts one server per
-project, so a second repo opened in the same Emacs gets its own server; a
-definition in a repo that is not the current project is named in the hover
-rather than opened.
+eglot runs one server per buffer, taken from the first entry in
+`eglot-server-programs` that matches the major mode, and `add-to-list` puts
+this entry first. So in the modes listed here witan replaces the mode's own
+server (pyright for Python, say). List only modes you run no other server in,
+or use lsp-mode, where witan runs as an add-on. eglot also starts one server
+per project, so a second repo opened in the same Emacs gets its own server,
+and a definition in a repo that is not the current project is named in the
+hover rather than opened.
 
 ### lsp-mode
 
 Registered as an add-on client, so it runs alongside the language server
-lsp-mode already starts for the file. CodeLens shows with `lsp-lens-mode`
+lsp-mode already starts for the file. Commands go to witan's server only:
+lsp-mode would otherwise send each one to every server in the buffer, and a
+server that refuses unknown commands (pyright answers "Unsupported command")
+would fail the request even when witan answered it. CodeLens shows with `lsp-lens-mode`
 (on by default), and clicking a lens opens its rows in a list buffer.
 
 ```elisp
@@ -384,10 +395,21 @@ lsp-mode already starts for the file. CodeLens shows with `lsp-lens-mode`
 ;;; An add-on client, so it runs beside the file's own language server.
 (require 'lsp-mode)
 
+(defun witan--lsp-execute (command arguments)
+  ;; To witan alone: lsp-request sends a command to every server in the
+  ;; buffer, and another server's "unsupported command" error would win.
+  (with-lsp-workspace
+      (or (seq-find (lambda (workspace)
+                      (eq (lsp--client-server-id (lsp--workspace-client workspace))
+                          'witan))
+                    (lsp-workspaces))
+          (user-error "witan: no witan server for this buffer"))
+    (lsp-request "workspace/executeCommand"
+                 (list :command command :arguments arguments))))
+
 (defun witan--lsp-show (action)
   (let ((command (witan--get action "command")))
-    (witan-show-list command (lsp-workspace-command-execute
-                              command (witan--get action "arguments")))))
+    (witan-show-list command (witan--lsp-execute command (witan--get action "arguments")))))
 
 (lsp-register-client
  (make-lsp-client
@@ -400,9 +422,7 @@ lsp-mode already starts for the file. CodeLens shows with `lsp-lens-mode`
                      (dolist (command witan-list-commands handlers)
                        (puthash command #'witan--lsp-show handlers)))))
 
-(setq witan-execute-function
-      (lambda (command arguments)
-        (lsp-workspace-command-execute command arguments)))
+(setq witan-execute-function #'witan--lsp-execute)
 ```
 
 Opening a file from a second repo with `M-x lsp` adds that repo to the same
@@ -416,7 +436,7 @@ open the agent in a terminal buffer.
 
 Checked with Neovim 0.12.6, Emacs 31.1's eglot, and lsp-mode 20261109.751,
 each driven headlessly with exactly the configuration above against a local
-store. "Fallback" is the per-editor fallback ADR 0012 specifies for a client
+store. lsp-mode ran once with witan alone and once beside ruff and ty. "Fallback" is the per-editor fallback ADR 0012 specifies for a client
 that lacks the LSP feature.
 
 | Feature | Neovim | eglot | lsp-mode |
