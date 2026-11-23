@@ -532,6 +532,27 @@ def test_run_task_refuses_a_claim_that_is_not_a_boolean(checkout):
         _unclaimed(checkout, {"slug": "tk-a", "claim": "no"})
 
 
+def test_release_names_the_invoking_folder_when_the_launch_runs_in_another(
+    checkout, tmp_path
+):
+    """The claim went through the invoking folder's route, and `cwd` is the
+    other open folder that is a checkout of the task's repo."""
+    invoking = _checkout(tmp_path / "other", "https://github.com/test/other")
+    tools = FakeTools(
+        task_get={"slug": "tk-a", "title": "T", "type": "bug", "repo": REPO},
+        task_claim=dict(_CLAIM),
+    )
+
+    async def go():
+        host = Host({"council": Council(tools)})
+        async with lsp_session(host, [invoking, checkout]) as s:
+            return await s.command(RUN_TASK, {"slug": "tk-a", "uri": invoking.as_uri()})
+
+    spec = run(go())
+    assert spec["cwd"] == str(checkout)
+    assert spec["release"]["uri"] == invoking.as_uri()
+
+
 def test_run_project_claims_nothing(checkout):
     tools = FakeTools(
         workflow_project_get={"slug": "wp-p", "title": "P", "repos": [REPO]},
