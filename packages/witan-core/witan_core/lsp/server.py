@@ -126,7 +126,12 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
     def initialize(ls: LanguageServer, params: types.InitializeParams) -> None:
         pending.extend(_folders(params))
         document = params.capabilities.text_document
-        host.lens_fallback = document is None or document.code_lens is None
+        workspace = params.capabilities.workspace
+        # lsp-mode renders lenses but advertises only `workspace.codeLens`
+        # (refresh support), never `textDocument.codeLens`.
+        host.lens_fallback = (document is None or document.code_lens is None) and (
+            workspace is None or workspace.code_lens is None
+        )
         # Not workspace.get_text_document(uri).source: for a document the
         # client has not opened it reads the file itself, and raises when the
         # file does not exist.
