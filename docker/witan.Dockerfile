@@ -187,10 +187,19 @@ COPY --chmod=0755 docker/witan-ci-index.sh /usr/local/bin/witan-ci-index
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /src /src
 
+# FASTMCP_ENABLE_SUBSCRIPTIONS_LISTEN=false: fastmcp 4.2.5 serves the
+# 2026-07-28 `subscriptions/listen` stream by default, and nothing closes an
+# open one on SIGTERM (uvicorn waits on connections before lifespan shutdown
+# runs). One listening client then holds every terminating pod for the whole
+# 120s grace window that exists for in-flight writes (DEFAULT_SHUTDOWN_GRACE_SECONDS
+# in witan/cli/__init__.py). witan publishes no change notifications, so the
+# stream carries nothing; off, `subscriptions/listen` answers METHOD_NOT_FOUND
+# and `listChanged` is not advertised, as before 4.2.5. Read at server creation.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:$PATH
+    PATH=/opt/venv/bin:$PATH \
+    FASTMCP_ENABLE_SUBSCRIPTIONS_LISTEN=false
 WORKDIR /src
 USER witan
 
