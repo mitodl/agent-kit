@@ -3,7 +3,9 @@
 // the launch specs the server returns. Everything witan decides (what is
 // ready, what to run, what to claim) comes from the server.
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import {
 	ExecuteCommandRequest,
@@ -19,12 +21,11 @@ import {
 } from "./handoff";
 import {
 	checkVersion,
-	effectiveEnv,
-	findExecutable,
+	type LaunchFile,
 	type LaunchKind,
 	type LaunchResult,
 	type LaunchSpec,
-	terminalEnv,
+	type LaunchStatus,
 } from "./launch";
 import {
 	errorMessage,
@@ -40,6 +41,7 @@ const RELEASE_TASK = "witan.releaseTask";
 const STATUS = "witan.status";
 
 const PROCESS_START_TIMEOUT_MS = 15_000;
+const STATUS_POLL_MS = 100;
 
 /** What `activate` returns; the smoke test drives the extension through it. */
 export interface WitanApi {
@@ -188,8 +190,20 @@ export async function activate(
 		);
 	};
 
+	// A command an extension contributes is listed before the extension has
+	// activated and registered it; running it activates the extension.
 	const handoffs = async () =>
-		availableHandoffs(await vscode.commands.getCommands(true));
+		availableHandoffs([
+			...(await vscode.commands.getCommands(true)),
+			...vscode.extensions.all.flatMap(
+				(e) =>
+					(
+						e.packageJSON?.contributes?.commands as
+							| Array<{ command: string }>
+							| undefined
+					)?.map((c) => c.command) ?? [],
+			),
+		]);
 
 	const handoff = async (
 		target: HandoffTarget,
@@ -211,11 +225,12 @@ export async function activate(
 		}
 		if (!result.handoff) {
 			const choice = await vscode.window.showWarningMessage(
-				`witan did not offer ${slug} for a chat-panel handoff. A chat-panel agent ` +
-					"starts with VS Code's own environment, which would not resolve the " +
-					"same witan target and repo as this launch (more than one folder is " +
-					"open, WITAN_TARGET, CLAUDE_PROJECT_DIR or WITAN_REPO is set, or the " +
-					"server was started with --target).",
+				`witan did not offer ${slug} for a chat-panel handoff. Either this ` +
+					"witan does not offer handoffs yet, or a chat-panel agent, which " +
+					"starts with VS Code's own environment, would not resolve the same " +
+					"witan target and repo as this launch (more than one folder is open, " +
+					"WITAN_TARGET, CLAUDE_PROJECT_DIR or WITAN_REPO is set, or the server " +
+					"was started with --target).",
 				"Run in Terminal",
 			);
 			if (choice) {
@@ -307,72 +322,64 @@ export async function activate(
 
 	return { request, tree, launch, handoff, handoffs };
 
+	/**
+	 * Run `spec` in a new terminal through the launcher (src/launcher.ts), and
+	 * resolve once the agent has started. The spec goes in a file, not in the
+	 * terminal's args, env or cwd, which VS Code would resolve `${...}` in.
+	 */
 	async function openTerminal(spec: LaunchSpec): Promise<void> {
-		const [program = "", ...args] = spec.argv;
-		const env = effectiveEnv(terminalBaseEnv(), spec);
-		const executable = findExecutable(
-			program,
-			env,
-			process.platform,
-			isExecutable,
-		);
-		if (executable === undefined) {
-			throw new LaunchFailed(
-				`${program} is not on the PATH a terminal gets. Install it, or set witan.agent`,
-			);
-		}
-		// Merged over the environment any terminal gets; never strictEnv, which
-		// would drop everything the person's terminals otherwise have.
+		const dir = path.join(context.globalStorageUri.fsPath, "launches");
+		fs.mkdirSync(dir, { recursive: true });
+		const id = randomUUID();
+		const file = path.join(dir, `${id}.json`);
+		const status = path.join(dir, `${id}.status.json`);
+		const launchFile: LaunchFile = {
+			argv: spec.argv,
+			cwd: spec.cwd,
+			env: spec.env,
+			unset_env: spec.unset_env,
+			status,
+		};
+		// The prompt is in it; the launcher deletes it as it reads it.
+		fs.writeFileSync(file, JSON.stringify(launchFile), { mode: 0o600 });
 		const terminal = vscode.window.createTerminal({
 			name: `witan: ${spec.slug}`,
-			shellPath: executable,
-			shellArgs: args,
-			cwd: spec.cwd,
-			env: terminalEnv(spec),
+			// The editor's own runtime as plain node: the extension host's binary,
+			// which in desktop VS Code is Electron.
+			shellPath: process.execPath,
+			shellArgs: [context.asAbsolutePath("dist/launcher.cjs"), file],
+			env: { ELECTRON_RUN_AS_NODE: "1" },
 		});
-		const pid = await Promise.race([
-			terminal.processId,
-			new Promise<undefined>((resolve) =>
-				setTimeout(() => resolve(undefined), PROCESS_START_TIMEOUT_MS),
-			),
-		]);
-		if (pid === undefined) {
+		let result: LaunchStatus | undefined;
+		try {
+			result = await readStatus(status);
+		} finally {
+			fs.rmSync(file, { force: true });
+			fs.rmSync(status, { force: true });
+		}
+		if (result === undefined) {
 			terminal.dispose();
 			throw new LaunchFailed("the terminal's process never started");
 		}
 		terminal.show();
+		if ("error" in result) {
+			throw new LaunchFailed(result.error);
+		}
 	}
+}
+
+/** The launcher's report, or `undefined` if none came in time. */
+async function readStatus(file: string): Promise<LaunchStatus | undefined> {
+	const deadline = Date.now() + PROCESS_START_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (fs.existsSync(file)) {
+			return JSON.parse(fs.readFileSync(file, "utf8")) as LaunchStatus;
+		}
+		await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_MS));
+	}
+	return undefined;
 }
 
 export async function deactivate(): Promise<void> {
 	await client?.stop();
-}
-
-/** The environment a new terminal starts from: this process's, with the
- * person's `terminal.integrated.env.<platform>` applied (`null` removes). */
-function terminalBaseEnv(): Record<string, string | undefined> {
-	const platform =
-		process.platform === "win32"
-			? "windows"
-			: process.platform === "darwin"
-				? "osx"
-				: "linux";
-	const overrides =
-		vscode.workspace
-			.getConfiguration("terminal.integrated.env")
-			.get<Record<string, string | null>>(platform) ?? {};
-	const env: Record<string, string | undefined> = { ...process.env };
-	for (const [name, value] of Object.entries(overrides)) {
-		env[name] = value ?? undefined;
-	}
-	return env;
-}
-
-function isExecutable(file: string): boolean {
-	try {
-		fs.accessSync(file, fs.constants.X_OK);
-		return fs.statSync(file).isFile();
-	} catch {
-		return false;
-	}
 }

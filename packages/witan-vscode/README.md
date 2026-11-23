@@ -18,7 +18,7 @@ Run `witan login` first if your work routes to a deployment; the server never pr
 
 - Hover, diagnostics, CodeLens, definition and references from the language server: callers and cross-repo impact of a definition, the providers and consumers of an env var or endpoint, tasks and memories that name a symbol, memories whose symbol refs went stale, and a note when the open branch has no code index.
 - The witan view in the activity bar lists, per workspace folder, your own in-progress tasks, the tasks linked to the checked-out branch, the ready tasks for the repo, and its active projects.
-- Run in Terminal on a task claims it and starts the agent in a terminal; on a project it starts the agent with the project's ready tasks and claims nothing. If the agent cannot start (not on PATH, or the terminal never opens), the extension releases the claim it took.
+- Run in Terminal on a task claims it and starts the agent in a terminal; on a project it starts the agent with the project's ready tasks and claims nothing. If the agent cannot start (not on PATH, or the terminal never opens), the extension releases the claim it took. On Windows, `witan.agent` has to name an executable, not an npm `.cmd` shim, because cmd.exe would reparse the prompt.
 - Hand Off to Copilot or Claude Code passes the prompt to that agent's chat panel instead, without a claim (the prompt tells the agent to claim first). It appears only when the target's command exists in this VS Code, and only runs when the server says the panel agent would resolve the same witan target and repo as the launch.
 
 ## Settings

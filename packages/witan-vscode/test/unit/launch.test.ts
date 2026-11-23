@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	availableHandoffs,
 	CLAUDE_HANDOFF_COMMAND,
@@ -11,7 +16,6 @@ import {
 	effectiveEnv,
 	findExecutable,
 	type LaunchSpec,
-	terminalEnv,
 	UnsupportedSpecVersion,
 } from "../../src/launch.ts";
 
@@ -52,22 +56,6 @@ test("a spec of an unknown version is refused", () => {
 	assert.throws(
 		() => checkVersion({ version: undefined }),
 		/version undefined/,
-	);
-});
-
-test("the terminal env removes every unset_env name and sets env over it", () => {
-	assert.deepEqual(
-		terminalEnv(
-			spec({ unset_env: ["CLAUDE_SESSION_ID", "WITAN_TARGET"], env: {} }),
-		),
-		{ CLAUDE_SESSION_ID: null, WITAN_TARGET: null },
-	);
-	// A name in both: env wins, which is how the spec pins a target.
-	assert.deepEqual(
-		terminalEnv(
-			spec({ unset_env: ["WITAN_TARGET"], env: { WITAN_TARGET: "qa" } }),
-		),
-		{ WITAN_TARGET: "qa" },
 	);
 });
 
@@ -135,4 +123,81 @@ test("handoff targets follow the registered commands", () => {
 test("each handoff command gets the prompt the way it takes it", () => {
 	assert.deepEqual(handoffArguments("copilot", "p"), [{ prompt: "p" }]);
 	assert.deepEqual(handoffArguments("claude", "p"), [undefined, "p"]);
+});
+
+const LAUNCHER = fileURLToPath(
+	new URL("../../src/launcher.ts", import.meta.url),
+);
+
+/** Run the launcher on a launch file, with `bin` as the whole PATH. */
+function runLauncher(argv: string[]) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "witan-launcher-"));
+	const bin = path.join(dir, "bin");
+	fs.mkdirSync(bin);
+	const record = path.join(dir, "record.json");
+	fs.writeFileSync(
+		path.join(bin, "fake-agent"),
+		`#!${process.execPath}\n` +
+			"require('node:fs').writeFileSync(process.env.RECORD, JSON.stringify(" +
+			"{ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env }));\n",
+		{ mode: 0o755 },
+	);
+	// No package.json above the agent says "module", so require() works.
+	fs.writeFileSync(path.join(bin, "package.json"), '{"type": "commonjs"}');
+	const file = path.join(dir, "launch.json");
+	const status = path.join(dir, "status.json");
+	fs.writeFileSync(
+		file,
+		JSON.stringify({
+			argv,
+			cwd: dir,
+			env: { WITAN_TARGET: "prod" },
+			unset_env: ["CLAUDE_SESSION_ID"],
+			status,
+		}),
+	);
+	const result = spawnSync(process.execPath, [LAUNCHER, file], {
+		env: {
+			PATH: bin,
+			RECORD: record,
+			CLAUDE_SESSION_ID: "outer",
+			ELECTRON_RUN_AS_NODE: "1",
+			KEPT: "kept",
+		},
+		encoding: "utf8",
+	});
+	const read = (f: string) =>
+		fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : undefined;
+	const out = {
+		code: result.status,
+		stderr: result.stderr,
+		launchFileLeft: fs.existsSync(file),
+		status: read(status),
+		agent: read(record),
+	};
+	fs.rmSync(dir, { recursive: true, force: true });
+	return out;
+}
+
+test("the launcher passes the prompt through untouched and applies the spec's env", {
+	skip: process.platform === "win32",
+}, () => {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: the literal is the point.
+	const prompt = "Fix ${env:KEPT} in ${workspaceFolder}\nand `$(rm -rf /)`";
+	const run = runLauncher(["fake-agent", "--model", "opus", prompt]);
+	assert.equal(run.code, 0, run.stderr);
+	assert.equal(run.launchFileLeft, false);
+	assert.equal(typeof run.status.started, "number");
+	assert.deepEqual(run.agent.argv, ["--model", "opus", prompt]);
+	assert.equal(run.agent.env.WITAN_TARGET, "prod");
+	assert.equal(run.agent.env.KEPT, "kept");
+	assert.equal(run.agent.env.CLAUDE_SESSION_ID, undefined);
+	assert.equal(run.agent.env.ELECTRON_RUN_AS_NODE, undefined);
+});
+
+test("the launcher reports an agent that is not on PATH", () => {
+	const run = runLauncher(["no-such-agent", "prompt"]);
+	assert.equal(run.code, 127);
+	assert.match(run.status.error, /no-such-agent is not on the PATH/);
+	assert.equal(run.agent, undefined);
 });

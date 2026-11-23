@@ -1,6 +1,7 @@
 // The launch contract as this client runs it (ADR 0012, "3. The launch
 // contract"). No vscode import, so the unit tests run under plain node.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 /** The launch-spec versions this client knows how to run. */
@@ -63,23 +64,29 @@ export function checkVersion(result: { version: unknown }): void {
 }
 
 /**
- * The `env` for `vscode.window.createTerminal`: every `unset_env` name as
- * `null`, which removes it from the environment the terminal would otherwise
- * get, then `env` over that. Never paired with `strictEnv`, so everything else
- * the person's terminals get is kept.
+ * What the extension hands the launcher (src/launcher.ts) in a file: the spec's
+ * fields that would otherwise be terminal arguments, and where to report back.
  */
-export function terminalEnv(spec: LaunchSpec): Record<string, string | null> {
-	const env: Record<string, string | null> = {};
-	for (const name of spec.unset_env) {
-		env[name] = null;
-	}
-	return { ...env, ...spec.env };
+export interface LaunchFile {
+	argv: string[];
+	cwd: string;
+	env: Record<string, string>;
+	unset_env: string[];
+	/** Where the launcher writes a {@link LaunchStatus}. */
+	status: string;
 }
 
-/** `base` as the launched process will see it: `unset_env` removed, `env` set. */
+/** The launcher's report: the agent started, or why it did not. */
+export type LaunchStatus = { started: number } | { error: string };
+
+/**
+ * `base` (the environment the terminal gave the launcher) as the agent gets
+ * it: `unset_env` removed, then `env` set over it. Everything else the
+ * person's terminals get is kept, which is what a strict env would lose.
+ */
 export function effectiveEnv(
 	base: Readonly<Record<string, string | undefined>>,
-	spec: LaunchSpec,
+	spec: Pick<LaunchSpec, "env" | "unset_env">,
 ): Record<string, string> {
 	const unset = new Set(spec.unset_env);
 	const env: Record<string, string> = {};
@@ -93,9 +100,7 @@ export function effectiveEnv(
 
 /**
  * Where `command` resolves on `env`'s PATH, or `undefined` when it does not.
- * A command with a directory in it is taken as a path. Checked before the
- * terminal opens, because a terminal whose executable is missing shows an
- * error the extension cannot see, and the claim would sit held for the lease.
+ * A command with a directory in it is taken as a path.
  */
 export function findExecutable(
 	command: string,
@@ -132,4 +137,13 @@ function pathValue(
 ): string | undefined {
 	const key = Object.keys(env).find((k) => k.toUpperCase() === name);
 	return key === undefined ? undefined : env[key];
+}
+
+export function isExecutable(file: string): boolean {
+	try {
+		fs.accessSync(file, fs.constants.X_OK);
+		return fs.statSync(file).isFile();
+	} catch {
+		return false;
+	}
 }

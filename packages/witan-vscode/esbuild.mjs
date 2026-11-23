@@ -21,6 +21,13 @@ await esbuild.build({
 });
 await esbuild.build({
 	...common,
+	entryPoints: ["src/launcher.ts"],
+	outfile: "dist/launcher.cjs",
+	minify: true,
+	sourcemap: false,
+});
+await esbuild.build({
+	...common,
 	entryPoints: ["test/smoke/suite.ts"],
 	outfile: "out/smoke/suite.cjs",
 });

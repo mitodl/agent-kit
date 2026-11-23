@@ -15,6 +15,7 @@ interface Smoke {
 	repo: string;
 	record: string;
 	launchTask: string;
+	literal: string;
 	failTask: string;
 	symbolTask: string;
 	project: string;
@@ -103,6 +104,11 @@ const checks: Array<[string, (api: WitanApi, smoke: Smoke) => Promise<void>]> =
 					),
 				);
 				assert.equal(fs.realpathSync(run.cwd), fs.realpathSync(smoke.repo));
+				// The prompt arrives as witan wrote it, with nothing substituted.
+				assert.ok(
+					run.argv.at(-1)?.includes(`Smoke launch ${smoke.literal}`),
+					`the prompt was rewritten: ${run.argv.at(-1)}`,
+				);
 				// unset_env took the editor's agent-session variables back out, the
 				// local store left WITAN_TARGET unset, and nothing else was dropped.
 				assert.deepEqual(run.env, {

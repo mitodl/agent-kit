@@ -163,7 +163,12 @@ const project = created([
 	"--repo",
 	REPO,
 ]);
-const launchTask = create("Smoke launch", ["--project", project]);
+// Teammate-written text reaches the prompt. VS Code resolves `${...}` in a
+// terminal's args, env and cwd, so this title would hand the agent the value
+// of SMOKE_KEPT if the prompt went to the terminal as an argument.
+// biome-ignore lint/suspicious/noTemplateCurlyInString: the literal is the point.
+const LITERAL = "${env:SMOKE_KEPT} ${workspaceFolder}";
+const launchTask = create(`Smoke launch ${LITERAL}`, ["--project", project]);
 const failTask = create("Smoke failed launch");
 const symbolTask = create("Smoke symbol", [
 	"--symbol-refs",
@@ -252,6 +257,7 @@ await runTests({
 			repo,
 			record,
 			launchTask,
+			literal: LITERAL,
 			failTask,
 			symbolTask,
 			project,
