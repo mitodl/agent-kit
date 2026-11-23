@@ -26,11 +26,10 @@ from witan.lsp_plugin import (
     RUN_PROJECT,
     RUN_TASK,
     CouncilPlugin,
-    plain,
 )
 from witan.prompts import prompts_allowed
 from witan.session_state import SESSION_ID_ENV_VARS
-from witan_core.lsp import Capability, Plugin, Route
+from witan_core.lsp import Capability, Plugin, Route, escape_markdown
 from witan_core.lsp.host import Host
 from witan_core.lsp.testing import lsp_session
 from witan_core.remote.oidc import NeedsLogin
@@ -172,8 +171,11 @@ def test_hover_lists_tasks_and_memories_naming_the_symbol(checkout):
     text = hover.contents.value
     assert hover.contents.kind == types.MarkupKind.Markdown
     assert "Tasks:" in text and "Memories:" in text
-    assert plain("# Heading\n* not a list `code`") in text
-    assert plain("Retries [click](https://evil.example) ![x](y) <b>hi</b>") in text
+    assert escape_markdown("# Heading\n* not a list `code`") in text
+    assert (
+        escape_markdown("Retries [click](https://evil.example) ![x](y) <b>hi</b>")
+        in text
+    )
     # Teammate text never forms a link, an image or HTML.
     assert "](" not in text.replace("\\](", "")
     assert "<b>" not in text
@@ -203,21 +205,6 @@ def test_hover_with_nothing_to_show_is_empty(checkout):
             return await _hover(s, checkout / "app" / "svc.py", 3)
 
     assert run(go()) is None
-
-
-@pytest.mark.parametrize(
-    ("text", "markdown"),
-    [
-        ("[a](b)", r"\[a\]\(b\)"),
-        ("![i](u)", r"\!\[i\]\(u\)"),
-        ("<img src=x>", r"\<img src\=x\>"),
-        ("&amp;", r"\&amp\;"),
-        ("line\n# two", r"line \# two"),
-        ("snake_case *x*", r"snake\_case \*x\*"),
-    ],
-)
-def test_plain_text_cannot_form_markdown(text, markdown):
-    assert plain(text) == markdown
 
 
 # ── stale-ref diagnostics ─────────────────────────────────────────────────

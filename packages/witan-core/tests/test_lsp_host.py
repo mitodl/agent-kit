@@ -10,7 +10,16 @@ from pathlib import Path
 import pytest
 from lsprotocol import types
 
-from witan_core.lsp import BOUND_TOOLS, Capability, Lens, Location, Note, Plugin, Route
+from witan_core.lsp import (
+    BOUND_TOOLS,
+    Capability,
+    Lens,
+    Location,
+    Note,
+    Plugin,
+    Route,
+    escape_markdown,
+)
 from witan_core.lsp.folders import explicit_target, resolve_folder
 from witan_core.lsp.host import Host, PluginExit
 from witan_core.lsp.testing import lsp_session
@@ -680,7 +689,7 @@ def test_without_codelens_the_lenses_move_into_hover_and_code_actions(
         async with lsp_session(Host({"z": Lazy("lazy")}), [work]) as session:
             hover = await _hover(session, uri, 1)
             # Escaped: a lens title is plain text, and in hover it must stay so.
-            assert hover.contents.value == r"\[f\]\(https\://evil\) callers"
+            assert hover.contents.value == escape_markdown("[f](https://evil) callers")
             assert await _hover(session, uri, 2) is None
             actions = await _code_actions(session, uri, 3)
             assert [(a.title, a.command, list(a.arguments)) for a in actions] == [
@@ -839,3 +848,21 @@ def test_plugins_get_columns_in_code_points_whatever_the_encoding(config, monkey
     # two code units in UTF-16.
     assert run(go(utf8, 6)) == "a"
     assert run(go(None, 3)) == "a"
+
+
+@pytest.mark.parametrize(
+    ("text", "markdown"),
+    [
+        ("[a](b)", r"\[a\]\(b\)"),
+        ("![i](u)", r"\!\[i\]\(u\)"),
+        ("<img src=x>", r"\<img src\=x\>"),
+        ("&amp;", r"\&amp\;"),
+        ("line\n# two", r"line \# two"),
+        ("snake_case *x*", r"snake\_case \*x\*"),
+        ("see https://x.example", r"see https\:\/\/x\.example"),
+        ("ann@x.example", r"ann\@x\.example"),
+        ("    indented\tcode", r"indented code"),
+    ],
+)
+def test_escape_markdown_renders_text_as_itself(text, markdown):
+    assert escape_markdown(text) == markdown

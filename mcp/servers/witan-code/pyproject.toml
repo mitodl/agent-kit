@@ -246,7 +246,12 @@ dependencies = [
     # resolved lenses (`Lens(data=...)`, `Plugin.resolve_lens`) and reads
     # `Context.folders` and `Context.text`, all added in witan-core 0.60.0 in
     # the same change.
-    "witan-core[cli,remote,observability,sentry]>=0.60.0,<1",
+    #
+    # ★ >=0.60.1 IS A BEHAVIOR FLOOR: `escape_markdown` escapes every ASCII
+    # punctuation character from 0.60.1. 0.60.0 imports fine but leaves `&`,
+    # `@` and `/` unescaped, so a teammate-written key in a hover can form an
+    # entity.
+    "witan-core[cli,remote,observability,sentry]>=0.60.1,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<6",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -292,7 +297,7 @@ dependencies = [
 tasks = ["fastmcp-tasks>=4,<5"]
 # The editor language server, `witan-code lsp` (ADR 0012). The host and pygls
 # live in witan-core's `lsp` extra; this package only registers its plugin.
-lsp = ["witan-core[lsp]>=0.59.0,<1"]
+lsp = ["witan-core[lsp]>=0.60.1,<1"]
 
 [project.entry-points."witan.lsp.plugins"]
 code = "witan_code.lsp_plugin:CodePlugin"

@@ -302,7 +302,12 @@ dependencies = [
   # language-server plugin interface, added in witan-core 0.59.0) at module
   # scope, config.py imports `match_target_at` and `named_target`, and repo.py
   # imports `git_remote_url`, all from the same release.
-  "witan-core[cli,remote,observability,sentry]>=0.59.0,<1",
+  #
+  # ★ >=0.60.1: lsp_plugin.py imports `witan_core.lsp.escape_markdown` (added
+  # in 0.60.0) for teammate-written text in hovers, and needs 0.60.1's
+  # version, which escapes every ASCII punctuation character. 0.60.0's leaves
+  # `&`, `@` and `/` unescaped.
+  "witan-core[cli,remote,observability,sentry]>=0.60.1,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -314,7 +319,7 @@ dependencies = [
 [project.optional-dependencies]
 # The editor language server, `witan lsp` (ADR 0012). The host and pygls live
 # in witan-core's `lsp` extra; this package only registers its plugin.
-lsp = ["witan-core[lsp]>=0.59.0,<1"]
+lsp = ["witan-core[lsp]>=0.60.1,<1"]
 
 [project.entry-points."witan.lsp.plugins"]
 council = "witan.lsp_plugin:CouncilPlugin"

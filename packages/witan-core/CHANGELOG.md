@@ -8,6 +8,12 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.60.1] - 2026-11-23
+
+### Fixed
+
+- `witan_core.lsp.escape_markdown` escapes every ASCII punctuation character, the set CommonMark lets a backslash escape, and collapses whitespace runs to one space. It used to leave `&`, `@`, `/`, `=` and others alone, so teammate-written text in a hover could form an entity (`&amp;` rendered as `&`), and an indented line could start a code block.
+
 ## [0.60.0] - 2026-11-20
 
 ### Added
