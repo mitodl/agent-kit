@@ -161,6 +161,16 @@ _CONTRACTS: dict[int, dict] = {
         "keyed_edges": True,
         "upgrade_check": {6: "check_failed", 9: "check_passed"},
     },
+    # Format 17. Measured on omnigraph 0.16.0 by running this suite
+    # against it; every surface below came out as format 16's.
+    17: {
+        "export_datetime": "iso-string",
+        "keyed_row_cap": 8192,
+        "export_null_optional": "omitted",
+        "export_id": "top-level",
+        "keyed_edges": True,
+        "upgrade_check": {6: "check_failed", 9: "check_passed"},
+    },
 }
 
 # One node type carrying every field shape witan reads back (a @key String, an

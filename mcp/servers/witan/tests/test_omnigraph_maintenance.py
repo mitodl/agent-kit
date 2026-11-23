@@ -33,6 +33,7 @@ from .test_omnigraph_server_entrypoint import (
     FakeServed,
     change_stub_schema,
     cluster_dir,  # noqa: F401  (fixture)
+    converge_with_memory_branches,
     dialect,  # noqa: F401  (fixture)
     entrypoint,
     pod,
@@ -244,6 +245,33 @@ def test_cleanup_keeps_a_count_instead_of_an_age(kube, cli, env):
         ["cleanup", "code-bridge", "--keep", "1", "--confirm", "--yes"],
         ["cleanup", "council", "--keep", "1", "--confirm", "--yes"],
     ]
+
+
+def test_every_maintenance_command_names_the_actor(kube, cli, env):
+    """0.16 judges direct maintenance on a cluster graph by its policy, which
+    denies a command that names no actor (upstream #1423)."""
+    today = str(datetime.now(UTC).isoweekday())
+    acting = {
+        **env,
+        "OMNIGRAPH_MAINTENANCE_ACTOR": "svc-witan-admin",
+        "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": today,
+    }
+    assert maintenance.main(acting) == 0
+    assert len(cli.maintained) == 4
+    assert all(
+        command[2:4] == ["--as", "svc-witan-admin"] for command in cli.maintained
+    )
+
+
+def test_policy_without_an_actor_fails_before_the_server_stops(kube, cli, env):
+    """Every graph's optimize and cleanup would be refused, with the server
+    stopped for nothing."""
+    config = Path(env["OMNIGRAPH_CLUSTER_DIR"])
+    (config / "memory.policy.yaml").write_text("version: 1\n")
+    with pytest.raises(ValueError, match="OMNIGRAPH_MAINTENANCE_ACTOR"):
+        maintenance.main(env)
+    assert kube.scaled == []
+    assert cli.calls == []
 
 
 @pytest.mark.parametrize(
@@ -865,6 +893,7 @@ def test_real_window_takes_the_serve_lock_maintains_and_leaves_no_lock(
             "OMNIGRAPH_CLEANUP_OLDER_THAN": "30d",
             "OMNIGRAPH_CLEANUP_ISO_WEEKDAY": str(datetime.now(UTC).isoweekday()),
             "OMNIGRAPH_WINDOW_SECONDS": "300",
+            "OMNIGRAPH_MAINTENANCE_ACTOR": "svc-witan-admin",
         }
     )
     assert status == 0
@@ -879,10 +908,8 @@ def real_gate(config: Path, *memory_branches: str) -> tuple[int, int, list]:
     """The gate's verdict without and with code-example allow-listed, run
     beside a real server it deletes views through, and the views left."""
     env = {**real_env(config), "OMNIGRAPH_CLUSTER_DIR": str(config)}
-    entrypoint.converge(config, env, entrypoint.NoPeers(may_unlock=True))
+    converge_with_memory_branches(config, env, *memory_branches)
     real_branch(config, "code-example", "act-alice/feat_x")
-    for branch in memory_branches:
-        real_branch(config, "memory", branch)
     change_stub_schema(config)
     lease = entrypoint.NoPeers(may_unlock=True)
     # The serving pod, as the Deployment's would be during a deploy.

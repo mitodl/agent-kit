@@ -1405,6 +1405,25 @@ def test_0_14_addresses_the_s3_root_with_target(monkeypatch, tmp_path):
     ]
 
 
+def test_a_maintenance_command_names_the_actor(monkeypatch, tmp_path):
+    monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: True)
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"storage": ROOT, "graphs": {"council": {}}})
+    )
+    cluster = entrypoint.Cluster(
+        tmp_path, "svc-witan-admin", entrypoint.NoPeers(may_unlock=True)
+    )
+    assert cluster.graph_command("optimize", "council") == [
+        "optimize",
+        "--target",
+        ROOT,
+        "--graph",
+        "council",
+        "--as",
+        "svc-witan-admin",
+    ]
+
+
 def test_0_13_addresses_a_graph_with_cluster(monkeypatch, tmp_path):
     monkeypatch.setattr(entrypoint, "cli_speaks_targets", lambda: False)
     (tmp_path / "cluster.yaml").write_text(
@@ -1699,21 +1718,45 @@ def test_real_dropped_graph_is_refused_and_its_storage_kept(cluster_dir):
     assert real_lock(cluster_dir)["locked"] is False
 
 
-def real_branch(config: Path, graph: str, name: str) -> None:
+def real_branch(
+    config: Path, graph: str, name: str, actor: str | None = "svc-witan-ci"
+) -> None:
     """Create a branch view the way a writer would, and remove its lock."""
-    cluster = entrypoint.Cluster(config, None, entrypoint.NoPeers(may_unlock=True))
+    cluster = entrypoint.Cluster(config, actor, entrypoint.NoPeers(may_unlock=True))
     subprocess.run(
         [
             "omnigraph",
-            *cluster.graph_command(
-                "branch", graph, "--as", "svc-witan-ci", "create", name, "--json"
-            ),
+            *cluster.graph_command("branch", graph, "create", name, "--json"),
         ],
         check=True,
         capture_output=True,
     )
     # A direct `branch create` keeps its `graph_operation` lock after it exits.
     cluster.force_unlock(cluster.lock()["lock_id"])
+
+
+def converge_with_memory_branches(
+    config: Path, env: dict[str, str], *branches: str
+) -> None:
+    """Converge, leaving ``branches`` on the memory graph.
+
+    The memory bundle grants `branch_create` to nobody, and from 0.16 a direct
+    write obeys the graph's applied policy (upstream #1423), so a branch there
+    can only predate the policy's binding. The graph is converged unbound and
+    branched, and its binding is put back for the next converge to apply.
+    """
+    if not branches:
+        entrypoint.converge(config, env, entrypoint.NoPeers(may_unlock=True))
+        return
+    manifest = config / "cluster.yaml"
+    bound = manifest.read_text()
+    unbound = yaml.safe_load(bound)
+    del unbound["policies"]["memory_rules"]
+    manifest.write_text(yaml.safe_dump(unbound))
+    entrypoint.converge(config, env, entrypoint.NoPeers(may_unlock=True))
+    for branch in branches:
+        real_branch(config, "memory", branch, actor=None)
+    manifest.write_text(bound)
 
 
 def real_branches(config: Path, graph: str) -> list[str]:
@@ -1784,9 +1827,8 @@ def test_real_code_graph_views_are_dropped_so_the_schema_change_applies(
 @requires_omnigraph_server
 def test_real_memory_graph_branch_still_refuses_the_schema_change(cluster_dir):
     env = real_env(cluster_dir, OMNIGRAPH_BRANCH_DROP_ALLOWLIST="code-example")
-    entrypoint.converge(cluster_dir, env, entrypoint.NoPeers(may_unlock=True))
+    converge_with_memory_branches(cluster_dir, env, "wip")
     real_branch(cluster_dir, "code-example", "act-alice/feat_x")
-    real_branch(cluster_dir, "memory", "wip")
     change_stub_schema(cluster_dir)
 
     with pytest.raises(BootRefused, match=r"still block.*'memory'"):

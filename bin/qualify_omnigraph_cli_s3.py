@@ -17,10 +17,13 @@ runs both policies:
 3. Against the copy, with an inline ``s3://`` target: status, plan (must see
    the copy as converged), apply of a config that adds a graph (a real write,
    as boot converge does after an image bump), status and replay by
-   deployment id with ``--writers-stopped``, force-unlock, optimize (must
+   deployment id with ``--writers-stopped``, which must leave no lock (0.16
+   releases a converged apply's own, upstream PR #1360), optimize (must
    write), cleanup (refused without ``--yes``, then ``--older-than 0s``,
-   which must remove objects, then ``--keep 1``), force-unlock after each. Every retained lock must be released by
-   its exact id and nothing may be left locked.
+   which must remove objects, then ``--keep 1``), force-unlock after each.
+   Every retained lock must be released by its exact id and nothing may be
+   left locked. Since 0.16 the graph's policy judges optimize and cleanup
+   (upstream PR #1423), so both name an actor it grants them to.
 4. Copy the root back and query it locally: every loaded row must survive
    maintenance.
 
@@ -75,6 +78,17 @@ rules:
     allow:
       actors: {{ group: operators }}
       actions: [read, change, schema_apply]
+  # From 0.16 the graph's policy judges direct optimize (`maintain`) and
+  # cleanup (`reclaim`), as it does the deployed bundles' (upstream #1423).
+  - id: operators-maintain
+    allow:
+      actors: {{ group: operators }}
+      actions: [maintain]
+      branch_scope: any
+  - id: operators-reclaim
+    allow:
+      actors: {{ group: operators }}
+      actions: [reclaim]
 """
 # Added to the config before the apply on S3, so that apply has a graph to
 # create there rather than converging a root that is already converged.
@@ -183,7 +197,9 @@ def _write_config(directory: Path, graphs: list[str]) -> None:
 def _seed(local: Omnigraph, config: Path, work: Path) -> set[str]:
     deployed = local.json("--as", ACTOR, "cluster", "apply", "--config", str(config))
     _expect(deployed["status"] == "complete", f"local seed apply: {deployed}")
-    local.unlock_retained("local seed apply")
+    # 0.16 releases a converged direct apply's lock once its writes settle
+    # (upstream #1360), on local storage and S3 alike.
+    local.assert_unlocked("after the local seed apply")
     names = set()
     for batch in range(BATCHES):
         rows = [
@@ -269,7 +285,7 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
         "cluster", "apply", "--deployment-id", deployment_id, "--writers-stopped"
     )
     _expect(replayed == deployed, f"replay by id is not lookup-only: {replayed}")
-    s3.unlock_retained("cluster apply")
+    s3.assert_unlocked("after the S3 apply")
     plan = s3.json("cluster", "plan", "--config", str(config))
     _expect(plan["changes"] == [], f"the S3 root did not converge: {plan}")
 
@@ -288,8 +304,12 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     )
     print("  data commands still refuse an inline S3 root")
 
-    # optimize and cleanup take no --as; the CLI refuses the flag on them.
+    # optimize and cleanup name the actor the graph's policy grants `maintain`
+    # and `reclaim`, as the maintenance window does: from 0.16 the policy
+    # denies them without one.
     refused = s3.run(
+        "--as",
+        ACTOR,
         "--graph",
         GRAPH,
         "cleanup",
@@ -306,7 +326,7 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     s3.assert_unlocked("after the refused cleanup")
 
     before = _object_count(s3_root)
-    s3.json("--graph", GRAPH, "optimize")
+    s3.json("--as", ACTOR, "--graph", GRAPH, "optimize")
     s3.unlock_retained("optimize")
     optimized = _object_count(s3_root)
     # The policy the maintenance window runs: a cutoff and no --keep. With
@@ -314,6 +334,8 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     # concurrently, which is #1188's S3 read path. It runs first,
     # because after a --keep 1 run there would be no older version to read.
     s3.json(
+        "--as",
+        ACTOR,
         "--graph",
         GRAPH,
         "cleanup",
@@ -325,6 +347,8 @@ def _run(binary: Path, s3_root: str, work: Path) -> None:
     s3.unlock_retained("cleanup --older-than")
     aged = _object_count(s3_root)
     s3.json(
+        "--as",
+        ACTOR,
         "--graph",
         GRAPH,
         "cleanup",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nightly maintenance window for the omnigraph data tier (omnigraph 0.13 to 0.15).
+"""Nightly maintenance window for the omnigraph data tier (omnigraph 0.13 to 0.16).
 
 `omnigraph optimize` and `cleanup` are direct writers of the storage root.
 From 0.12 on a direct writer is refused with `state_lock_held` while the
@@ -128,6 +128,8 @@ class Settings:
         command's timeout and the restore.
     :param close_seconds: how long the close may take after SIGTERM: this
         pod's termination grace less ``SIGTERM_CLOSE_MARGIN_SECONDS``.
+    :param actor: passed to `optimize` and `cleanup` as ``--as`` (see
+        ``maintenance_actor``).
     """
 
     config_dir: Path
@@ -140,13 +142,13 @@ class Settings:
     command_timeout_seconds: float
     server_stop_seconds: float
     close_seconds: float
+    actor: str | None
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> Settings:
+        config_dir = Path(env.get("OMNIGRAPH_CLUSTER_DIR", handoff.DEFAULT_CLUSTER_DIR))
         return cls(
-            config_dir=Path(
-                env.get("OMNIGRAPH_CLUSTER_DIR", handoff.DEFAULT_CLUSTER_DIR)
-            ),
+            config_dir=config_dir,
             deployment=env["OMNIGRAPH_SERVER_DEPLOYMENT"],
             lease_name=env["OMNIGRAPH_UNLOCK_LEASE"],
             pod_name=env.get("POD_NAME") or env["HOSTNAME"],
@@ -175,7 +177,33 @@ class Settings:
                     )
                 )
             ),
+            actor=maintenance_actor(
+                config_dir, env.get("OMNIGRAPH_MAINTENANCE_ACTOR", "")
+            ),
         )
+
+
+def maintenance_actor(config_dir: Path, actor: str) -> str | None:
+    """The actor `optimize` and `cleanup` name, ``None`` without policy.
+
+    From 0.16 a direct maintenance command on a cluster graph is judged by the
+    graph's applied policy: `optimize` needs `maintain` on `main` and `cleanup`
+    needs `reclaim`, and a command naming no actor is denied (upstream #1423).
+    The bundles baked beside cluster.yaml are the ones the server applies, so
+    their presence is what says the root has policy.
+
+    :raises ValueError: on bundles without an actor. Settings are read before
+        the server is stopped, so this fails the run without opening a window,
+        where every graph's maintenance would otherwise be refused.
+    """
+    actor = actor.strip()
+    if actor or not any(config_dir.glob("*.policy.yaml")):
+        return actor or None
+    msg = (
+        "policy bundles present but OMNIGRAPH_MAINTENANCE_ACTOR is unset; "
+        "omnigraph refuses optimize and cleanup that name no actor"
+    )
+    raise ValueError(msg)
 
 
 def sigterm_close_seconds(grace: float) -> float:
@@ -317,7 +345,9 @@ class Window:
         self._resource_version = deployment["metadata"]["resourceVersion"]
         self._selector = pod_selector(deployment)
         self._terminated = Termination(settings.close_seconds)
-        self._cluster = Cluster(settings.config_dir, None, lease, self._terminated)
+        self._cluster = Cluster(
+            settings.config_dir, settings.actor, lease, self._terminated
+        )
         _, self._graphs = handoff.cluster_layout(settings.config_dir)
         self._deadline = time.monotonic() + settings.window_seconds
         self._may_have_stopped_server = False

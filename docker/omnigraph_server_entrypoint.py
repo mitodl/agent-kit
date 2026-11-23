@@ -956,12 +956,17 @@ class Cluster:
         sys.stdout.write(result.stdout)
 
     def graph_command(self, command: str, graph: str, *args: str) -> list[str]:
-        """The argv of a direct maintenance command on one graph of the root."""
+        """The argv of a direct maintenance command on one graph of the root.
+
+        Carries the actor as ``--as``: from 0.16 a direct write or maintenance
+        command on a cluster graph is judged by the graph's applied policy,
+        which denies one that names no actor (upstream #1423).
+        """
         if self._targets:
             scope = self._target
         else:
             scope = ["--cluster", cluster_layout(Path(self._config_dir))[0]]
-        return [command, *scope, "--graph", graph, *args]
+        return [command, *scope, "--graph", graph, *self._as, *args]
 
 
 # ── Branch views over HTTP ───────────────────────────────────────────────────

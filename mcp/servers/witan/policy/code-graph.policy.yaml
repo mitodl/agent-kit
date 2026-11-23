@@ -123,8 +123,9 @@ rules:
       actors: { group: witan-service }
       actions: [schema_apply]
       target_branch_scope: protected
-  # Break-glass maintenance (ADR-0005 path b) gets READ + SCHEMA ONLY here, and
-  # that asymmetry with its memory-graph grant is the point of the principal.
+  # Break-glass maintenance (ADR-0005 path b) gets READ + SCHEMA here (plus the
+  # maintenance window's maintain/reclaim below) and no write, and that
+  # asymmetry with its memory-graph grant is the point of the principal.
   #
   # No `change`: every row in a code graph is re-derivable by reindexing a
   # checkout, so there is no maintenance operation that has to edit one in
@@ -154,3 +155,18 @@ rules:
       actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected
+  # The nightly maintenance window (docker/omnigraph_maintenance.py) runs
+  # `optimize` and `cleanup` directly against the root as this actor
+  # (OMNIGRAPH_MAINTENANCE_ACTOR). From 0.16 those commands are judged by this
+  # policy and denied without a grant: `maintain` covers optimize and index
+  # builds and preserves content, `reclaim` covers cleanup, which deletes
+  # history no retained commit needs. Neither action changes a row.
+  - id: admin-maintain-code
+    allow:
+      actors: { group: witan-admin }
+      actions: [maintain]
+      branch_scope: any
+  - id: admin-reclaim-code
+    allow:
+      actors: { group: witan-admin }
+      actions: [reclaim]

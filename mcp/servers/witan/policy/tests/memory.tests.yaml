@@ -105,3 +105,24 @@ cases:
     action: schema_apply
     target_branch: main
     expect: deny
+
+  # ── Maintenance (0.16 judges direct optimize and cleanup) ─────────────────
+  # The nightly window runs both as the admin actor; nobody else holds either.
+  - id: admin-maintains-memory-main
+    actor: act-svc-witan-admin
+    action: maintain
+    branch: main
+    expect: allow
+  - id: admin-reclaims-memory
+    actor: act-svc-witan-admin
+    action: reclaim
+    expect: allow
+  - id: user-cannot-maintain-memory
+    actor: act-alice
+    action: maintain
+    branch: main
+    expect: deny
+  - id: user-cannot-reclaim-memory
+    actor: act-alice
+    action: reclaim
+    expect: deny
