@@ -10,7 +10,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "agent-config-kit[cli]>=0.3.7",
+    # >=0.15: witan-council 0.52.0 requires agent-config-kit>=0.15, so nothing
+    # older resolves alongside the server floors below.
+    "agent-config-kit[cli]>=0.15",
     # Floored at the releases that speak MCP 2026-07-28 (MRTR elicitation, the
     # tasks extension, cacheable list results). Still no upper bound, so a fresh
     # install keeps picking up newer releases of either server automatically.
