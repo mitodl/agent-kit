@@ -480,17 +480,77 @@ def test_run_task_returns_the_launch_spec_and_spawns_nothing(checkout, monkeypat
     assert spec["kind"] == "task"
     assert spec["cwd"] == str(checkout)
     assert spec["agent"] == "pi"
-    # One folder and no overrides in this process, which `witan task run`
-    # would offer a handoff for. Under `serve()` the overrides the editor
-    # has are already gone, so the server never offers one.
+    # One folder and no overrides, but the spec claimed, and a handoff never
+    # holds a claim.
     assert spec["handoff"] is False
     assert spec["claim"]["claimed_at"] == _CLAIM["claimed_at"]
+    # The release goes back through the folder the launch was invoked from.
+    assert spec["release"] == {
+        "slug": "tk-a",
+        "claimed_at": _CLAIM["claimed_at"],
+        "uri": checkout.as_uri(),
+    }
     # The claim is bare, and prompts are off for every call the launch makes.
     assert seen_env == [dict.fromkeys(SESSION_ID_ENV_VARS, False)]
     assert not any(tools.prompts_allowed)
     assert tools.called("task_claim") == [
         {"slug": "tk-a", "force": False, "repo": REPO, "branch": "main"}
     ]
+
+
+def _unclaimed(checkout, arguments):
+    tools = FakeTools(
+        task_get={"slug": "tk-a", "title": "T", "type": "bug", "repo": REPO},
+        recall={"memories": []},
+    )
+
+    async def go():
+        host = Host({"council": Council(tools)})
+        async with lsp_session(host, [checkout]) as s:
+            return await s.command(RUN_TASK, arguments)
+
+    return run(go()), tools
+
+
+def test_run_task_without_a_claim_claims_nothing(checkout, monkeypatch):
+    """The spec a chat-panel handoff needs: its prompt has the agent claim."""
+    for name in ("WITAN_TARGET", "CLAUDE_PROJECT_DIR", "WITAN_REPO"):
+        monkeypatch.delenv(name, raising=False)
+
+    spec, tools = _unclaimed(checkout, {"slug": "tk-a", "claim": False})
+
+    assert spec["launchable"] is True and spec["claim"] is None
+    assert 'task_claim(slug="tk-a")' in spec["prompt"]
+    assert "release" not in spec
+    assert tools.called("task_claim") == []
+    # Still never a handoff: this process cannot see the editor's overrides.
+    assert spec["handoff"] is False
+
+
+def test_run_task_refuses_a_claim_that_is_not_a_boolean(checkout):
+    with pytest.raises(Exception, match="true or false"):
+        _unclaimed(checkout, {"slug": "tk-a", "claim": "no"})
+
+
+def test_release_names_the_invoking_folder_when_the_launch_runs_in_another(
+    checkout, tmp_path
+):
+    """The claim went through the invoking folder's route, and `cwd` is the
+    other open folder that is a checkout of the task's repo."""
+    invoking = _checkout(tmp_path / "other", "https://github.com/test/other")
+    tools = FakeTools(
+        task_get={"slug": "tk-a", "title": "T", "type": "bug", "repo": REPO},
+        task_claim=dict(_CLAIM),
+    )
+
+    async def go():
+        host = Host({"council": Council(tools)})
+        async with lsp_session(host, [invoking, checkout]) as s:
+            return await s.command(RUN_TASK, {"slug": "tk-a", "uri": invoking.as_uri()})
+
+    spec = run(go())
+    assert spec["cwd"] == str(checkout)
+    assert spec["release"]["uri"] == invoking.as_uri()
 
 
 def test_run_project_claims_nothing(checkout):
@@ -514,10 +574,22 @@ def test_release_is_fenced_on_the_specs_claim_and_never_forced(checkout):
     async def go():
         async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
             released = await s.command(
-                RELEASE_TASK, {"slug": "tk-a", "claimed_at": _CLAIM["claimed_at"]}
+                RELEASE_TASK,
+                {
+                    "slug": "tk-a",
+                    "claimed_at": _CLAIM["claimed_at"],
+                    "uri": checkout.as_uri(),
+                },
             )
             with pytest.raises(Exception, match="claimed_at"):
-                await s.command(RELEASE_TASK, {"slug": "tk-a"})
+                await s.command(
+                    RELEASE_TASK, {"slug": "tk-a", "uri": checkout.as_uri()}
+                )
+            # No first-folder default: the client has to name the launch's.
+            with pytest.raises(Exception, match="'uri'"):
+                await s.command(
+                    RELEASE_TASK, {"slug": "tk-a", "claimed_at": _CLAIM["claimed_at"]}
+                )
             return released
 
     assert run(go())["released"] is True
@@ -611,14 +683,8 @@ def test_launch_list_and_release_against_a_local_store(server, checkout, monkeyp
             ready = await s.command(LIST_READY_TASKS)
             spec = await s.command(RUN_TASK, {"slug": task["slug"]})
             mine = await s.command(LIST_MY_WORK)
-            released = await s.command(
-                RELEASE_TASK,
-                {"slug": task["slug"], "claimed_at": spec["claim"]["claimed_at"]},
-            )
-            again = await s.command(
-                RELEASE_TASK,
-                {"slug": task["slug"], "claimed_at": spec["claim"]["claimed_at"]},
-            )
+            released = await s.command(RELEASE_TASK, spec["release"])
+            again = await s.command(RELEASE_TASK, spec["release"])
             return ready, spec, mine, released, again
 
     ready, spec, mine, released, again = run(go())

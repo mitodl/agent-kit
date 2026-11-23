@@ -836,6 +836,71 @@ def test_serve_keeps_stdin_away_from_prompts(monkeypatch):
     assert sys.stdin is stdin
 
 
+def test_plugins_see_the_editors_environment_from_before_serve_changed_it(
+    monkeypatch, tmp_path
+):
+    """serve() drops the agent path variables before any plugin runs, so a
+    plugin deciding what a chat-panel agent (which gets the editor's
+    environment) would resolve has to be told what the editor had."""
+    import os
+
+    from pygls.lsp.server import LanguageServer
+
+    from witan_core.lsp import server as server_module
+
+    seen = {}
+
+    class Environ(Plugin):
+        commands = ("witan.environ",)
+
+        def execute_command(self, ctx, command, arguments):
+            return dict(ctx.editor_environ)
+
+    def start_io(self, reader, writer):
+        seen["process"] = {
+            n: n in os.environ for n in ("CLAUDE_PROJECT_DIR", "WITAN_REPO")
+        }
+
+    def host(plugins, **kwargs):
+        seen["host"] = Host(plugins, **kwargs)
+        return seen["host"]
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/me/dots")
+    monkeypatch.setattr(server_module, "discover_plugins", lambda: {"e": Environ()})
+    monkeypatch.setattr(server_module, "Host", host)
+    monkeypatch.setattr(LanguageServer, "start_io", start_io)
+    server_module.serve()
+
+    assert seen["process"] == {"CLAUDE_PROJECT_DIR": False, "WITAN_REPO": False}
+    environ = seen["host"].execute("witan.environ", [])
+    assert environ["CLAUDE_PROJECT_DIR"] == str(tmp_path)
+    assert environ["WITAN_REPO"] == "https://github.com/me/dots"
+
+
+def test_a_host_built_outside_serve_reads_the_live_environment(config, monkeypatch):
+    work, _ = config
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/me/dots")
+
+    class Environ(Plugin):
+        commands = ("witan.environ",)
+
+        def route(self, folder):
+            return Route(key="remote", local=False)
+
+        def open(self, route, folder):
+            return self
+
+        def execute_command(self, ctx, command, arguments):
+            return ctx.editor_environ.get("WITAN_REPO")
+
+    async def go():
+        async with lsp_session(Host({"e": Environ()}), [work]) as session:
+            return await session.command("witan.environ")
+
+    assert run(go()) == "https://github.com/me/dots"
+
+
 def test_plugins_get_columns_in_code_points_whatever_the_encoding(config, monkeypatch):
     """Neovim negotiates UTF-8, VS Code uses UTF-16. Column 2 after `é` is the
     second character either way once the host converts it."""

@@ -14,7 +14,7 @@ and the host turns them into LSP messages, so no plugin imports pygls either.
 from __future__ import annotations
 
 import re
-from collections.abc import Hashable, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import metadata
@@ -172,6 +172,17 @@ class Context(Protocol):
         another repo is checked out in this workspace."""
         ...
 
+    @property
+    def editor_environ(self) -> Mapping[str, str]:
+        """The environment the editor started the server with.
+
+        ``serve()`` removes ``CLAUDE_PROJECT_DIR`` and ``WITAN_REPO``, and sets
+        ``WITAN_TARGET`` from ``--target``, before any plugin runs, so
+        ``os.environ`` no longer shows what the editor has. Anything the editor
+        starts itself (a chat-panel agent) gets this environment instead.
+        """
+        ...
+
     def symbol_at(self, uri: str, line: int, character: int) -> str | None: ...
 
     def text(self, uri: str) -> str:
@@ -184,6 +195,11 @@ class CommandContext(Protocol):
     """What :meth:`Plugin.execute_command` gets: every folder, and their contexts."""
 
     folders: Sequence[Folder]
+
+    @property
+    def editor_environ(self) -> Mapping[str, str]:
+        """As :attr:`Context.editor_environ`."""
+        ...
 
     def context(self, folder: Folder) -> Context | None:
         """``None`` when the folder routes to a local store this process does

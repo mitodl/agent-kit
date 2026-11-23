@@ -65,10 +65,15 @@ class LaunchSpec(TypedDict):
     env: dict[str, str]
     unset_env: list[str]
     handoff: bool
+    """Whether the prompt may go to the editor's own chat panel instead. Never
+    for a spec that took a claim."""
     prompt: str
     agent: str
     model: str | None
     claim: dict | None
+    release: NotRequired[dict]
+    """From the language server, for a spec that took a claim: the arguments
+    to pass ``witan.releaseTask`` verbatim if the launch fails."""
 
 
 class LaunchRefusal(TypedDict):
@@ -695,7 +700,10 @@ def build_launch_spec(
         cwd=str(folder),
         env=env,
         unset_env=unset_env,
-        handoff=_handoff_allowed(workspace_folders, started_with_target),
+        # A handoff never claims: a prefilled prompt nobody submits would hold
+        # the lease for an hour, with no failed launch to release it on.
+        handoff=claim_result is None
+        and _handoff_allowed(workspace_folders, started_with_target),
         prompt=prompt,
         agent=resolved_agent,
         model=resolved_model,

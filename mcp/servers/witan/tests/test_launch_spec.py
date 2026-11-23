@@ -229,11 +229,24 @@ def test_handoff_only_when_the_editor_env_resolves_what_the_spec_does(
     here, there = folders
     fake = _Fake(task=_task(), claim=_CLAIMED)
 
-    assert _spec(fake, folders=[here])["handoff"] is True
-    assert _spec(fake, folders=[here, there])["handoff"] is False
-    assert _spec(fake, folders=[here], started_with_target=True)["handoff"] is False
+    assert _spec(fake, folders=[here], claim=False)["handoff"] is True
+    assert _spec(fake, folders=[here, there], claim=False)["handoff"] is False
+    assert (
+        _spec(fake, folders=[here], claim=False, started_with_target=True)["handoff"]
+        is False
+    )
     monkeypatch.setenv("WITAN_REPO", REPO)
+    assert _spec(fake, folders=[here], claim=False)["handoff"] is False
+
+
+def test_a_spec_that_claimed_is_never_a_handoff(folders):
+    """A prefilled prompt nobody submits would hold the lease for an hour."""
+    here, _ = folders
+    fake = _Fake(task=_task(), claim=_CLAIMED)
+
     assert _spec(fake, folders=[here])["handoff"] is False
+    project = {"slug": "wp-a", "title": "P", "repos": [REPO]}
+    assert _spec(_Fake(project=project), kind="project", folders=[here])["handoff"]
 
 
 def test_the_session_env_is_stripped_before_the_claim(folders, monkeypatch):
