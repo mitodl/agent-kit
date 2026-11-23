@@ -7,9 +7,10 @@
   listed only to witan's CLI, and a failed lookup does not block the launch.
   Each run logs a `witan.memory.surfaced` line with `surface="project_run"`,
   the project, the tasks considered and matched, and the scores.
-- A project launch sets a fresh `WITAN_CLIENT_INSTANCE` in the agent's
-  environment and logs its surfacing under it, so the agent's later reads join
-  to that line.
+- `witan task run` and `witan project run` (and the language server's launch
+  commands) set a fresh `WITAN_CLIENT_INSTANCE` in the launched agent's
+  environment and make the launch claim or memory lookup under it, so the
+  agent's later reads join to the surfaced line logged on its behalf.
 
 ### Changed
 
@@ -20,6 +21,6 @@
   caller passes no `session_id`, so a `memory_get` through the proxy no
   longer logs a null session.
 - `witan.memory.read` lines carry `bulk`, true from the 20th call to one read
-  surface by one actor within a minute, so a scripted sweep can be left out of
-  a measurement without filtering it by hand.
+  surface by one actor's one client process within a minute, so a scripted
+  sweep can be left out of a measurement without filtering it by hand.
 - Requires witan-core 0.61.0 for `witan_core.client_instance`.

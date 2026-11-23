@@ -116,7 +116,7 @@ default = "~/.config/witan/merge-watermarks.json"
 desc = "Where `witan migrate merge` records what each pair of stores looked like when they last agreed, so the next merge can name the nodes both sides have written since. Beside the token cache, and per-machine — losing it costs one merge's divergence report."
 
 [section.vars.WITAN_CLIENT_INSTANCE]
-desc = "Id the remote proxy sends as `X-Witan-Client-Instance`, which the deployment logs on memory surfacing and read lines so they join for one agent. Unset, each process generates its own. `witan project run` sets a fresh one in the environment of the agent it launches; you do not set it yourself."
+desc = "Id the remote proxy sends as `X-Witan-Client-Instance`, which the deployment logs on memory surfacing and read lines so they join for one agent. Unset, each process generates its own. `witan task run` and `witan project run` set a fresh one in the environment of the agent they launch; you do not set it yourself."
 
 [section.vars.WITAN_REMOTE_CALL_BUDGET_SECONDS]
 default = "0"

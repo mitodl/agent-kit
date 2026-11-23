@@ -4175,19 +4175,16 @@ def _request_client_instance() -> str:
     return headers.get(CLIENT_INSTANCE_HEADER) or headers.get(_MCP_SESSION_HEADER) or ""
 
 
-def _log_client_instance(instance: str | None = None) -> str | None:
+def _log_client_instance() -> str | None:
     """The calling client process as the memory log lines name it, or ``None``.
 
     Digested like :func:`_log_session`, and for a further reason: an
     ``Mcp-Session-Id`` names a live MCP session, which a log has no need to.
-
-    :param instance: An id the caller named in place of its own, as
-        ``workflow_project_run_memories`` does for the agent it launches.
     """
-    return _session_suffix(instance or _request_client_instance()) or None
+    return _session_suffix(_request_client_instance()) or None
 
 
-def _log_session(session_id: str | None, instance: str | None = None) -> str | None:
+def _log_session(session_id: str | None) -> str | None:
     """The calling session as the memory log lines name it, or ``None``.
 
     The same 8-hex digest a session-qualified claim holder carries after its
@@ -4203,14 +4200,16 @@ def _log_session(session_id: str | None, instance: str | None = None) -> str | N
     surfaced them only on actor and slug. The client instance is what the two
     lines then share, in ``client_instance`` on both.
     """
-    return _session_suffix(session_state.current_session_id(session_id)) or (
-        _log_client_instance(instance)
+    return (
+        _session_suffix(session_state.current_session_id(session_id))
+        or _log_client_instance()
     )
 
 
-#: One actor calling one memory read surface this often within
+#: One client process calling one memory read surface this often within
 #: :data:`_BULK_READ_WINDOW_SECONDS` is a script sweeping the graph, not an
-#: agent opening what it was shown. On 2026-11-17 a sweep made 1,075
+#: agent opening what it was shown. Counted per client instance as well as per
+#: actor, so one person's parallel agents do not add up to a sweep. On 2026-11-17 a sweep made 1,075
 #: ``memory_get`` calls over 1,068 slugs in about three minutes, and the
 #: measurement of surfaced reads had to drop it by hand. The organic
 #: ``memory_get`` reads in the same 11 days numbered 25.
@@ -4218,19 +4217,20 @@ _BULK_READ_CALLS = 20
 _BULK_READ_WINDOW_SECONDS = 60.0
 # Process memory by design: a lost window after a rollout leaves at most the
 # first `_BULK_READ_CALLS` calls of a sweep untagged, the same as its start.
-_recent_reads: dict[tuple[str, str], deque[float]] = {}
+_recent_reads: dict[tuple[str, str | None, str], deque[float]] = {}
 _recent_reads_lock = threading.Lock()
 
 
 def _bulk_read(surface: str) -> bool:
-    """Count one ``surface`` call by the current actor; whether it is a bulk read.
+    """Count one ``surface`` call by the current client; whether it is a bulk read.
 
     True from the :data:`_BULK_READ_CALLS`-th call within the window on, so the
     first calls of a sweep are untagged; they sit seconds before the tagged ones.
     """
     now = time.monotonic()
     with _recent_reads_lock:
-        calls = _recent_reads.setdefault((_current_author(), surface), deque())
+        key = (_current_author(), _log_client_instance(), surface)
+        calls = _recent_reads.setdefault(key, deque())
         calls.append(now)
         while calls[0] <= now - _BULK_READ_WINDOW_SECONDS:
             calls.popleft()
@@ -4266,7 +4266,6 @@ def _log_surfaced(
     memories: list[dict],
     scores: dict[str, tuple],
     session_id: str | None,
-    instance: str | None = None,
     **fields,
 ) -> None:
     """Log one ``witan.memory.surfaced`` line for ``memories``.
@@ -4282,8 +4281,8 @@ def _log_surfaced(
         "witan.memory.surfaced",
         surface=surface,
         **fields,
-        session=_log_session(session_id, instance),
-        client_instance=_log_client_instance(instance),
+        session=_log_session(session_id),
+        client_instance=_log_client_instance(),
         count=len(memories),
         slugs=slugs,
         content_scores=[scores[s][0] if s in scores else None for s in slugs],
@@ -6386,7 +6385,6 @@ _PROJECT_RUN_MEMORY_TASKS = 5
 def workflow_project_run_memories(
     slug: str,
     task_slugs: list[str],
-    client_instance: str | None = None,
     session_id: str | None = None,
 ) -> list[dict]:
     """
@@ -6408,10 +6406,6 @@ def workflow_project_run_memories(
         The ``wp-`` slug of the project being run.
     task_slugs:
         The ready tasks the prompt lists, in its order.
-    client_instance:
-        The client instance id of the agent being launched (its
-        ``WITAN_CLIENT_INSTANCE``), so the agent's own reads join to the
-        logged line. Defaults to the caller's.
     session_id:
         Your agent session id; only logged.
     """
@@ -6443,7 +6437,6 @@ def workflow_project_run_memories(
         memories,
         scores,
         session_id,
-        client_instance,
         project=slug,
         considered=considered,
         tasks=[m["task"] for m in memories],

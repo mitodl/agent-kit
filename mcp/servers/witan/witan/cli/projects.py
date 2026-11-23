@@ -39,7 +39,9 @@ from .run_helpers import (
     _project_run_prompt,
     _run_project_slug,
     agent_environ,
+    bare_session_env,
     check_emit_spec_args,
+    launched_client_instance,
 )
 from .selected_target import selected_target
 
@@ -748,7 +750,8 @@ def project_run(
         prompts = []
         for p in selected:
             p_tasks = _fn(s.task_ready)(project_slug=p["slug"], limit=20)
-            memories = _project_prompt_memories(s, p["slug"], p_tasks, instance)
+            with bare_session_env(), launched_client_instance(instance):
+                memories = _project_prompt_memories(s, p["slug"], p_tasks)
             prompts.append(_project_run_prompt(p, p_tasks, memories))
         merged = _merge_prompts(prompts, "project")
         _launch_agent(

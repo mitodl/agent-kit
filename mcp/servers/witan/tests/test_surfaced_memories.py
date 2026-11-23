@@ -506,6 +506,19 @@ def test_a_sweep_of_reads_is_tagged_bulk(server, monkeypatch, logged):
     ]
 
 
+@requires_omnigraph
+def test_parallel_clients_of_one_actor_are_not_a_sweep(server, monkeypatch, logged):
+    """One person's parallel agents each read a little; together they are not
+    a script."""
+    monkeypatch.setattr(server._module, "_BULK_READ_CALLS", 3)
+
+    for n in range(4):
+        monkeypatch.setenv("WITAN_CLIENT_INSTANCE", f"agent-{n % 2}")
+        server.memory_get("pat-missing")
+
+    assert not any(f["bulk"] for f in logged["witan.memory.read"])
+
+
 def _project_run(server, task_slugs, **kwargs):
     return server.workflow_project_run_memories(
         slug="wp-p", task_slugs=task_slugs, **kwargs
@@ -513,19 +526,18 @@ def _project_run(server, task_slugs, **kwargs):
 
 
 @requires_omnigraph
-def test_a_project_run_matches_its_first_tasks_and_dedupes(server, no_floor, logged):
+def test_a_project_run_matches_its_first_tasks_and_dedupes(
+    server, no_floor, logged, monkeypatch
+):
     """A memory two tasks match is shown once, under the first."""
+    monkeypatch.setenv("WITAN_CLIENT_INSTANCE", "launched-1")
     frob = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
     grind = _memory(server, "grind gadget queue", "how to grind a gadget")
     first = _task(server)
     second = _task(server, "frobnicate widget cache again")
     third = _task(server, "grind gadget queue")
 
-    memories = _project_run(
-        server,
-        [first["slug"], second["slug"], third["slug"]],
-        client_instance="launched-1",
-    )
+    memories = _project_run(server, [first["slug"], second["slug"], third["slug"]])
 
     assert [(m["slug"], m["task"]) for m in memories] == [
         (frob["slug"], first["slug"]),
@@ -742,39 +754,68 @@ def test_a_failed_project_memory_read_does_not_stop_the_launch():
     assert _project_prompt_memories(Broken(), "wp-p", [{"slug": "tk-a"}]) == []
 
 
-def test_a_project_launch_hands_the_agent_the_instance_it_logged(monkeypatch, tmp_path):
+class _LaunchFake:
+    """The tools ``build_launch_spec`` calls, recording the client instance
+    in this process's environment at each call made on the agent's behalf."""
+
+    def __init__(self):
+        self.instances = {}
+
+    def _seen(self, tool):
+        from witan_core.client_instance import client_instance
+
+        self.instances[tool] = client_instance()
+
+    def task_get(self, slug):
+        return {"slug": slug, "title": "T", "type": "bug"}
+
+    def task_claim(self, slug, force=False, repo=None, branch=None):
+        self._seen("task_claim")
+        return {"claimed": True, "assignee": "me", "memories": [_FROM_CLAIM]}
+
+    def workflow_project_get(self, slug):
+        return {"slug": slug, "title": "P", "repos": []}
+
+    def task_ready(self, project_slug, limit):
+        return [{"slug": "tk-a", "title": "A"}]
+
+    def workflow_project_run_memories(self, slug, task_slugs):
+        self._seen("workflow_project_run_memories")
+        return [{**_FROM_CLAIM, "task": task_slugs[0]}]
+
+
+@pytest.mark.parametrize(
+    ("kind", "slug", "tool"),
+    [
+        ("project", "wp-p", "workflow_project_run_memories"),
+        ("task", "tk-a", "task_claim"),
+    ],
+)
+def test_a_launch_logs_its_surfacing_under_the_agents_instance(
+    monkeypatch, tmp_path, kind, slug, tool
+):
     """The agent's proxy sends WITAN_CLIENT_INSTANCE, so its reads join to the
-    surfaced line the launcher logged under the same id."""
+    surfaced line the launcher logged on its behalf. A long-lived launcher (the
+    language server) must not log every launch under its own id."""
     from witan.cli import run_helpers
     from witan_core.client_instance import CLIENT_INSTANCE_ENV
 
-    asked = {}
-
-    class Fake:
-        def workflow_project_get(self, slug):
-            return {"slug": slug, "title": "P", "repos": []}
-
-        def task_ready(self, project_slug, limit):
-            return [{"slug": "tk-a", "title": "A"}]
-
-        def workflow_project_run_memories(self, **kwargs):
-            asked.update(kwargs)
-            return [{**_FROM_CLAIM, "task": "tk-a"}]
-
-    monkeypatch.setenv(CLIENT_INSTANCE_ENV, "outer-agent")
+    fake = _LaunchFake()
+    monkeypatch.setenv(CLIENT_INSTANCE_ENV, "launcher")
     cfg = type("Cfg", (), {"agent": "claude", "model": None, "target_name": "t"})()
     spec = run_helpers.build_launch_spec(
-        "project",
-        "wp-p",
-        server=Fake(),
+        kind,
+        slug,
+        server=fake,
         cfg=cfg,
         workspace_folders=[tmp_path],
         started_with_target=True,
     )
 
     assert spec["launchable"], spec
-    assert asked["task_slugs"] == ["tk-a"]
-    assert spec["env"][CLIENT_INSTANCE_ENV] == asked["client_instance"]
-    assert asked["client_instance"] not in ("", "outer-agent")
+    assert spec["env"][CLIENT_INSTANCE_ENV] == fake.instances[tool]
+    assert fake.instances[tool] != "launcher"
     assert CLIENT_INSTANCE_ENV in spec["unset_env"]
-    assert "les-a (someone, matches tk-a)" in spec["prompt"]
+    assert "les-a (someone" in spec["prompt"]
+    # The launcher's own id is back for its next call.
+    assert run_helpers.os.environ[CLIENT_INSTANCE_ENV] == "launcher"

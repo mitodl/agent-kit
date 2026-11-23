@@ -202,9 +202,7 @@ def _prompt_memories(s, slug: str, claim: dict | None = None) -> list[dict]:
     ]
 
 
-def _project_prompt_memories(
-    s, slug: str, tasks: list[dict], client_instance: str | None = None
-) -> list[dict]:
+def _project_prompt_memories(s, slug: str, tasks: list[dict]) -> list[dict]:
     """Memories for a project's prompt, matched to its ready tasks server-side.
 
     A failed lookup must not stop the agent launching, for the reason
@@ -213,17 +211,13 @@ def _project_prompt_memories(
     :param s: The server or remote proxy.
     :param slug: The project's slug.
     :param tasks: The ready tasks the prompt lists, in its order.
-    :param client_instance: The launched agent's client instance id, which the
-        surfacing is logged under.
     :returns: Memories with ``slug``, ``title``, ``author``, ``excerpt`` and
         the ``task`` each matched.
     :rtype: list[dict]
     """
     try:
         return _fn(s.workflow_project_run_memories)(
-            slug=slug,
-            task_slugs=[t["slug"] for t in tasks],
-            client_instance=client_instance,
+            slug=slug, task_slugs=[t["slug"] for t in tasks]
         )
     except Exception:  # never block the launch
         logger.warning("witan.launch.memories_skipped", slug=slug, exc_info=True)
@@ -431,6 +425,27 @@ def _project_run_prompt(
 
 
 @contextmanager
+def launched_client_instance(instance: str) -> Iterator[None]:
+    """Make calls inside on behalf of the agent about to launch with ``instance``.
+
+    The proxy reads :data:`CLIENT_INSTANCE_ENV` for each call's
+    ``X-Witan-Client-Instance`` header, and a local server reads it for its
+    own id, so a claim or memory lookup made here is logged under the id the
+    launched agent's reads will carry. Restored on exit for the reason
+    :func:`bare_session_env` gives.
+    """
+    saved = os.environ.get(CLIENT_INSTANCE_ENV)
+    os.environ[CLIENT_INSTANCE_ENV] = instance
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop(CLIENT_INSTANCE_ENV, None)
+        else:
+            os.environ[CLIENT_INSTANCE_ENV] = saved
+
+
+@contextmanager
 def bare_session_env() -> Iterator[None]:
     """Hide every agent-session id variable from this process while inside.
 
@@ -620,12 +635,22 @@ def build_launch_spec(
         refusal["target"] = agent_target
         return refusal
 
+    env, unset_env = launch_env(cfg)
+    # The agent's own proxy sends this id, and the claim or memory lookup made
+    # on its behalf below is logged under it, so the agent's reads join to the
+    # surfacing that preceded them.
+    env[CLIENT_INSTANCE_ENV] = new_client_instance()
+
     claim_result = None
     if kind == "task" and claim:
         # No explicit assignee either: only a defaulted holder is one the
         # launched agent may renew as its own (`_own_claim`). No steal offer:
         # it would print to stdout, and `force` is how a launcher steals.
-        with bare_session_env(), prompts_off():
+        with (
+            bare_session_env(),
+            prompts_off(),
+            launched_client_instance(env[CLIENT_INSTANCE_ENV]),
+        ):
             res = _fn(server.task_claim)(
                 slug=slug, force=force, **_folder_checkout(folder)
             )
@@ -644,7 +669,6 @@ def build_launch_spec(
                 claim_result,
             )
 
-    env, unset_env = launch_env(cfg)
     if kind == "task":
         prompt = _run_prompt(
             record,
@@ -656,13 +680,8 @@ def build_launch_spec(
         tasks = _fn(server.task_ready)(
             project_slug=slug, limit=_PROJECT_PROMPT_TASK_LIMIT
         )
-        # The agent's own proxy sends this id, so its reads join to the line
-        # the surfacing logs here, which no claim ties to a session.
-        env[CLIENT_INSTANCE_ENV] = new_client_instance()
-        with bare_session_env():
-            memories = _project_prompt_memories(
-                server, slug, tasks, env[CLIENT_INSTANCE_ENV]
-            )
+        with bare_session_env(), launched_client_instance(env[CLIENT_INSTANCE_ENV]):
+            memories = _project_prompt_memories(server, slug, tasks)
         prompt = _project_run_prompt(record, tasks, memories)
 
     resolved_agent = agent or cfg.agent

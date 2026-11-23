@@ -56,7 +56,7 @@ token; both `witan` and `witan code` share one cache, so you log in once.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `WITAN_CLIENT_INSTANCE` | — | Id the remote proxy sends as `X-Witan-Client-Instance`, which the deployment logs on memory surfacing and read lines so they join for one agent. Unset, each process generates its own. `witan project run` sets a fresh one in the environment of the agent it launches; you do not set it yourself. |
+| `WITAN_CLIENT_INSTANCE` | — | Id the remote proxy sends as `X-Witan-Client-Instance`, which the deployment logs on memory surfacing and read lines so they join for one agent. Unset, each process generates its own. `witan task run` and `witan project run` set a fresh one in the environment of the agent they launch; you do not set it yourself. |
 | `WITAN_MERGE_WATERMARKS` | `~/.config/witan/merge-watermarks.json` | Where `witan migrate merge` records what each pair of stores looked like when they last agreed, so the next merge can name the nodes both sides have written since. Beside the token cache, and per-machine — losing it costs one merge's divergence report. |
 | `WITAN_OIDC_AUDIENCE` | — | Audience/resource to request, matching the deployment's own `WITAN_OIDC_AUDIENCE`. Sent on the device-auth and token requests so an issuer with an audience mapper stamps the right `aud` claim. |
 | `WITAN_OIDC_CLIENT_ID` | — | OIDC client id presented during the device grant. |
