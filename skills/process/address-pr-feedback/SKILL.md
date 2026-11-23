@@ -549,8 +549,11 @@ Report every item, one line each:
 - **Discussion comments** — every one with `is_viewer: false`, with its disposition:
   fixed (and where), replied, declined with reasoning, or carried to a follow-up
   issue. "Read it, no action needed" is a disposition; silence is not.
-- **Review bodies** — every finding you pulled out of a non-empty
-  `reviews[].body` in Phase 2, with the same dispositions.
+- **Review bodies** — read any new or edited submitted review bodies in the
+  verification fetch, triage their findings under Phase 2, and report a
+  disposition for every finding, including work still open. A review that
+  landed while you were pushing is the easiest finding on the PR to never see,
+  and a disposition list built only from the Phase 2 reading won't contain it.
 
 A channel with nothing in it gets said out loud ("no discussion comments", "no
 findings in the review bodies") rather than omitted — an omitted channel and an
