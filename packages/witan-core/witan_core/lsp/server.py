@@ -10,19 +10,21 @@ cannot receive a custom method and Sublime needs a helper package for each one
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import sys
 from importlib import metadata
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 from pygls.uris import to_fs_path
 
 from .folders import explicit_target, resolve_folder
-from .host import Host
+from .host import Host, disk_text
 from .plugin import Capability, Lens, Location, Note, discover_plugins
 
 __all__ = ["build_server", "serve"]
@@ -46,6 +48,24 @@ def _range(line: int, character: int = 0) -> types.Range:
     return types.Range(start=position, end=position)
 
 
+def _position(ls: LanguageServer, uri: str, position: types.Position):
+    """``position`` in code points. A client counts columns in the encoding
+    it negotiated (UTF-16 by default, UTF-8 for Neovim), and plugins index
+    Python strings, so a multibyte character earlier on the line would
+    otherwise shift every column after it. A document the client has not
+    opened has no text to convert against, and is passed through."""
+    document = _open_document(ls, uri)
+    if document is None:
+        return position
+    return document.position_from_client_units(position)
+
+
+def _open_document(ls: LanguageServer, uri: str):
+    """The client's buffer for ``uri``, or ``None`` when it is not open.
+    pygls keys open documents by the unquoted URI."""
+    return ls.workspace.text_documents.get(unquote(uri))
+
+
 def _location(loc: Location) -> types.Location:
     return types.Location(uri=loc.uri, range=_range(loc.line, loc.character))
 
@@ -59,13 +79,16 @@ def _diagnostic(note: Note) -> types.Diagnostic:
     )
 
 
-def _lens(lens: Lens) -> types.CodeLens:
-    return types.CodeLens(
-        range=_range(lens.line),
-        command=types.Command(
-            title=lens.title, command=lens.command, arguments=list(lens.arguments)
-        ),
+def _command(lens: Lens) -> types.Command:
+    return types.Command(
+        title=lens.title, command=lens.command, arguments=list(lens.arguments)
     )
+
+
+def _lens(lens: Lens) -> types.CodeLens:
+    if not lens.command:
+        return types.CodeLens(range=_range(lens.line), data=lens.data)
+    return types.CodeLens(range=_range(lens.line), command=_command(lens))
 
 
 def _folders(params: types.InitializeParams) -> list[types.WorkspaceFolder]:
@@ -102,6 +125,16 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
     @server.feature(types.INITIALIZE)
     def initialize(ls: LanguageServer, params: types.InitializeParams) -> None:
         pending.extend(_folders(params))
+        document = params.capabilities.text_document
+        host.lens_fallback = document is None or document.code_lens is None
+        # Not workspace.get_text_document(uri).source: for a document the
+        # client has not opened it reads the file itself, and raises when the
+        # file does not exist.
+        host.document_text = lambda uri: (
+            document.source
+            if (document := _open_document(ls, uri)) is not None
+            else disk_text(uri)
+        )
 
     @server.feature(types.INITIALIZED)
     async def initialized(ls: LanguageServer, params: types.InitializedParams) -> None:
@@ -161,7 +194,8 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
 
         @server.feature(types.TEXT_DOCUMENT_HOVER)
         async def hover(ls: LanguageServer, params: types.HoverParams):
-            uri, pos = params.text_document.uri, params.position
+            uri = params.text_document.uri
+            pos = _position(ls, uri, params.position)
             text = await host.run(host.hover, _path(uri), uri, pos.line, pos.character)
             if text is None:
                 return None
@@ -177,11 +211,39 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
             lenses = await host.run(host.code_lenses, _path(uri), uri)
             return [_lens(lens) for lens in lenses]
 
+        @server.feature(types.CODE_LENS_RESOLVE)
+        async def resolve_lens(ls: LanguageServer, params: types.CodeLens):
+            if params.data is None:
+                # Only a lens sent unresolved carries data, and it has its
+                # command already otherwise.
+                return params
+            lens = await host.run(
+                host.resolve_lens,
+                _path(params.data["uri"]),
+                params.range.start.line,
+                params.data,
+            )
+            return types.CodeLens(range=params.range, command=_command(lens))
+
+        # Registered whatever the client, since the client's capabilities
+        # arrive after the handlers are; the host answers with nothing unless
+        # the client has no CodeLens.
+        @server.feature(types.TEXT_DOCUMENT_CODE_ACTION)
+        async def code_action(ls: LanguageServer, params: types.CodeActionParams):
+            uri = params.text_document.uri
+            lenses = await host.run(
+                host.code_actions, _path(uri), uri, params.range.start.line
+            )
+            # Bare commands rather than CodeActions: every client runs one
+            # through workspace/executeCommand, and nothing here edits text.
+            return [_command(lens) for lens in lenses]
+
     if Capability.DEFINITION in capabilities:
 
         @server.feature(types.TEXT_DOCUMENT_DEFINITION)
         async def definition(ls: LanguageServer, params: types.DefinitionParams):
-            uri, pos = params.text_document.uri, params.position
+            uri = params.text_document.uri
+            pos = _position(ls, uri, params.position)
             locs = await host.run(
                 host.definition, _path(uri), uri, pos.line, pos.character
             )
@@ -191,7 +253,8 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
 
         @server.feature(types.TEXT_DOCUMENT_REFERENCES)
         async def references(ls: LanguageServer, params: types.ReferenceParams):
-            uri, pos = params.text_document.uri, params.position
+            uri = params.text_document.uri
+            pos = _position(ls, uri, params.position)
             locs = await host.run(
                 host.references,
                 _path(uri),
@@ -232,12 +295,19 @@ def serve(target: str | None = None) -> None:
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     host = Host(discover_plugins())
     server = build_server(host, target=explicit)
-    protocol_out = sys.stdout.buffer
-    # stdout is the JSON-RPC channel. The writer holds the real stream, and
-    # anything a plugin or a server module prints lands on stderr instead.
-    original, sys.stdout = sys.stdout, sys.stderr
+    protocol_in, protocol_out = sys.stdin.buffer, sys.stdout.buffer
+    # stdin and stdout are the JSON-RPC channel. The reader and writer hold
+    # the real streams. Anything a plugin or a server module prints lands on
+    # stderr, and stdin reads as an empty non-terminal, so no prompt
+    # (`witan_core.elicit.has_terminal`) can read a request as its answer,
+    # even when the server was started by hand in a terminal. Not
+    # os.devnull: on Windows that is the NUL character device, whose
+    # isatty() is True. A TextIOWrapper rather than a StringIO, so code that
+    # reaches for sys.stdin.buffer still finds one.
+    originals = sys.stdin, sys.stdout
+    sys.stdin, sys.stdout = io.TextIOWrapper(io.BytesIO()), sys.stderr
     try:
-        server.start_io(sys.stdin.buffer, protocol_out)
+        server.start_io(protocol_in, protocol_out)
     finally:
-        sys.stdout = original
+        sys.stdin, sys.stdout = originals
         host.close()

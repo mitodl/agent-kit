@@ -59,10 +59,10 @@ mcp = FastMCP(
         "branch, so the id-routed tools follow the same default, reading the "
         "checkout's branch view when the id's repo is the current detected repo "
         "and that store's main view otherwise. code_callers, code_impact and "
-        "code_cross_repo_impact also accept `branch` for the id's repo (pass "
-        "the default branch, e.g. `main`, to read main from a checkout whose "
-        "own branch is indexed — where a symbol the branch removed no longer "
-        "exists); code_find_references takes none.\n\n"
+        "code_cross_repo_impact and code_find_references also accept `branch` "
+        "for the id's repo (pass the default branch, e.g. `main`, to read main "
+        "from a checkout whose own branch is indexed — where a symbol the "
+        "branch removed no longer exists).\n\n"
         "min_precision (`heuristic` default | `precise`) on the interface and "
         "cross-repo tools: `precise` keeps only edges also confirmed by a "
         "canonical-symbol join, suppressing false positives.\n\n"
@@ -125,6 +125,10 @@ _BRANCH_CACHE_TTL = 30.0
 _git_context: dict[str, tuple[float, str | None]] = {}
 _GIT_CONTEXT_TTL = 2.0
 
+# Whether reads that name no repo or branch follow this process's own
+# checkout. See ``use_config(follow_checkout=False)``.
+_follow_checkout = True
+
 
 def _cached_git(key: str, fn) -> str | None:
     cached = _git_context.get(key)
@@ -138,6 +142,8 @@ def _cached_git(key: str, fn) -> str | None:
 
 
 def _cached_detect() -> str | None:
+    if not _follow_checkout:
+        return None
     return _cached_git("detect", lambda: store_module.detect_repo(cfg))
 
 
@@ -440,8 +446,16 @@ def _as_symbol_id(rows: list[dict]) -> list[dict]:
 
 def _file_id(path: str, repo: str) -> str:
     """Build the CodeFile id (`repo#relpath`) for a repo-relative or abs path."""
-    base = repo_module.root() or Path.cwd()
     p = Path(path)
+    if _follow_checkout:
+        base = repo_module.root() or Path.cwd()
+    elif not p.is_absolute():
+        # The cwd's checkout is not the file's (see use_config), so a relative
+        # path is already relative to its repo's root.
+        return f"{repo}#{p.as_posix()}"
+    else:
+        # Nor is an absolute path under the cwd's checkout: use its own.
+        base = repo_module.root(p.parent) or p.parent
     try:
         rel = (
             p.resolve().relative_to(base.resolve()).as_posix()
@@ -545,7 +559,7 @@ async def code_find_definition(
 
 @mcp.tool(annotations=READ)
 async def code_find_references(
-    symbol_id: str, ctx: Context | None = None
+    symbol_id: str, branch: str | None = None, ctx: Context | None = None
 ) -> list[dict]:
     """
     Find symbols that reference or call ``symbol_id`` (incoming edges).
@@ -557,12 +571,15 @@ async def code_find_references(
     ----------
     symbol_id:
         The symbol to start from (a ``symbol_id`` from a name-based tool).
+    branch:
+        Branch or view of ``symbol_id``'s repo to read; see instructions.
     """
-    client = _client_for_symbol(symbol_id)
+    client = _client_for_symbol(symbol_id, branch)
     if client is None:
-        client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
-        if client is None:
+        # As in code_callers: the fallback's client reads the checkout's view.
+        if await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0]) is None:
             return []
+        client = _client_for_symbol(symbol_id, branch)
     refs = client.read("code_read.gq", "referencers", {"id": symbol_id})
     callers = client.read("code_read.gq", "callers", {"id": symbol_id})
     seen = {r["slug"] for r in refs}
@@ -1009,6 +1026,43 @@ async def _bindings_by_role(
 
 
 @mcp.tool(annotations=READ)
+def code_interface_bindings_in_file(
+    path: str, repo: str | None = None, branch: str | None = None
+) -> list[dict]:
+    """
+    List the cross-repo interface bindings in one source file, with their lines.
+
+    Each row is a contract the file provides or consumes: its ``kind``
+    (``env_var``, ``package``, ``service``, ``endpoint``), ``key`` as written,
+    ``key_norm``, ``role``, ``line`` (1-based; null for a binding with no
+    single line), and the enclosing ``symbol_id``. Pass a row's ``kind`` and
+    ``key`` to code_interface_providers / code_interface_consumers to find the
+    other side. Returns ``[]`` when the bridge store does not exist yet.
+
+    Parameters
+    ----------
+    path:
+        Source file path, repo-relative or absolute.
+    repo:
+        Repo the file belongs to. Defaults to the current repo.
+    branch:
+        Branch whose bridge overlay for ``repo`` to read; see instructions. A
+        branch with no overlay reads bridge main.
+    """
+    slug = repo or _cached_detect()
+    if slug is None:
+        return []
+    client = _bridge_client(repo=slug, branch=branch)
+    if client is None:
+        return []
+    return client.read(
+        "bridge.gq",
+        "bindings_in_file",
+        {"repo": slug, "file": _file_id(path, slug).split("#", 1)[1]},
+    )
+
+
+@mcp.tool(annotations=READ)
 async def code_cross_repo_impact(
     symbol_id: str,
     min_precision: PrecisionTier = "heuristic",
@@ -1316,7 +1370,7 @@ def code_store_health() -> dict:
     }
 
 
-def use_config(config: cfg_module.Config) -> None:
+def use_config(config: cfg_module.Config, *, follow_checkout: bool = True) -> None:
     """Read ``config``'s stores from here on, instead of the import-time load.
 
     For the CLI commands that call this module in-process (``doctor``,
@@ -1324,11 +1378,19 @@ def use_config(config: cfg_module.Config) -> None:
     ``--target`` forwarded into :mod:`witan_code.selected_target` never
     reaches it. Clients and branch listings cached under the old config are
     dropped with it.
+
+    ``follow_checkout=False`` is for the language server, which serves several
+    checkouts from one process and names the repo and branch of every read
+    itself. The process's own checkout (its cwd) then means nothing, as on a
+    deployment: a read that names no repo fans out across every store, and one
+    that names no branch reads the store's main view.
     """
-    global cfg
+    global cfg, _follow_checkout
     cfg = config
+    _follow_checkout = follow_checkout
     _clients.clear()
     _store_branches.clear()
+    _git_context.clear()
 
 
 def indexed_file(repo: str, rel_path: str, checkout: Path) -> dict:

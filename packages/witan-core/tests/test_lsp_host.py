@@ -576,3 +576,266 @@ def test_folders_sharing_a_store_get_a_provider_per_guard(config, monkeypatch):
         assert host.context("p", folder) is not None
     assert [route.guard for route, _ in plugin.opened] == ["deliberate", "fallback"]
     host.close()
+
+
+class Lazy(Recorder):
+    """Lenses that cost a read each, so they are sent unresolved."""
+
+    capabilities = frozenset({Capability.HOVER, Capability.CODE_LENS})
+
+    def __init__(self, label: str) -> None:
+        super().__init__(label)
+        self.resolved: list[tuple[int, str]] = []
+
+    def hover(self, ctx, uri, line, character):
+        return None
+
+    def code_lenses(self, ctx, uri):
+        return [
+            Lens(line=1, data={"symbol": "f"}),
+            Lens(line=3, title="cheap *bold*", command="witan.echo", arguments=(3,)),
+        ]
+
+    def resolve_lens(self, ctx, uri, lens):
+        self.resolved.append((lens.line, lens.data["symbol"]))
+        return Lens(
+            line=lens.line,
+            title=f"[{lens.data['symbol']}](https://evil) callers",
+            command="witan.echo",
+            arguments=(lens.data["symbol"],),
+        )
+
+
+def _lens_client() -> types.ClientCapabilities:
+    return types.ClientCapabilities(
+        text_document=types.TextDocumentClientCapabilities(
+            code_lens=types.CodeLensClientCapabilities()
+        )
+    )
+
+
+def _hover(session, uri, line):
+    return session.client.text_document_hover_async(
+        types.HoverParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=line, character=0),
+        )
+    )
+
+
+def _code_actions(session, uri, line):
+    position = types.Position(line=line, character=0)
+    return session.client.text_document_code_action_async(
+        types.CodeActionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            range=types.Range(start=position, end=position),
+            context=types.CodeActionContext(diagnostics=[]),
+        )
+    )
+
+
+def test_a_lens_with_data_is_resolved_only_when_asked(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    plugin = Lazy("lazy")
+    uri = (work / "m.py").as_uri()
+
+    async def go():
+        async with lsp_session(
+            Host({"z": plugin}), [work], client_capabilities=_lens_client()
+        ) as session:
+            assert session.capabilities.code_lens_provider.resolve_provider
+            unresolved, cheap = await session.client.text_document_code_lens_async(
+                types.CodeLensParams(
+                    text_document=types.TextDocumentIdentifier(uri=uri)
+                )
+            )
+            assert unresolved.command is None
+            assert cheap.command.title == "cheap *bold*"
+            assert plugin.resolved == []
+            resolved = await session.client.code_lens_resolve_async(unresolved)
+            assert plugin.resolved == [(1, "f")]
+            assert resolved.range == unresolved.range
+            assert (resolved.command.command, list(resolved.command.arguments)) == (
+                "witan.echo",
+                ["f"],
+            )
+            # A client with CodeLens gets no fallback in hover or code actions.
+            assert await _hover(session, uri, 1) is None
+            assert not await _code_actions(session, uri, 1)
+
+    run(go())
+
+
+def test_without_codelens_the_lenses_move_into_hover_and_code_actions(
+    config, monkeypatch
+):
+    """eglot has no CodeLens, so a hover on a lens's line carries its title,
+    and the lens's command is a code action."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    uri = (work / "m.py").as_uri()
+
+    async def go():
+        async with lsp_session(Host({"z": Lazy("lazy")}), [work]) as session:
+            hover = await _hover(session, uri, 1)
+            # Escaped: a lens title is plain text, and in hover it must stay so.
+            assert hover.contents.value == r"\[f\]\(https\://evil\) callers"
+            assert await _hover(session, uri, 2) is None
+            actions = await _code_actions(session, uri, 3)
+            assert [(a.title, a.command, list(a.arguments)) for a in actions] == [
+                ("cheap *bold*", "witan.echo", [3])
+            ]
+
+    run(go())
+
+
+def test_a_plugin_reads_the_open_buffer_and_every_folder(config, monkeypatch):
+    work, home = config
+    monkeypatch.chdir(work)
+
+    class Reads(Recorder):
+        capabilities = frozenset({Capability.HOVER})
+
+        def hover(self, ctx, uri, line, character):
+            folders = ",".join(f.target for f in ctx.folders)
+            return f"{ctx.text(uri).splitlines()[line]} in {folders}"
+
+    path = work / "m.py"
+    path.write_text("on disk\n")
+
+    async def go():
+        async with lsp_session(Host({"r": Reads("r")}), [work, home]) as session:
+            await session.open(path, "in the buffer\n")
+            return (await _hover(session, path.as_uri(), 0)).contents.value
+
+    assert run(go()) == "in the buffer in work,personal"
+    host = Host({"r": Reads("r")})
+    host.set_folders([resolve_folder(work.as_uri(), work, None)])
+    assert host.hover(path, path.as_uri(), 0, 0) == "on disk in work"
+    host.close()
+
+
+def test_an_unopened_document_reads_from_disk_and_a_missing_one_is_empty(
+    config, monkeypatch
+):
+    """pygls builds an unopened document from disk and raises for a file that
+    is gone; the host reads disk itself and answers empty instead."""
+    work, _ = config
+    monkeypatch.chdir(work)
+
+    class Reads(Recorder):
+        capabilities = frozenset({Capability.HOVER})
+
+        def hover(self, ctx, uri, line, character):
+            return repr(ctx.text(uri))
+
+    present, missing = work / "present.py", work / "missing.py"
+    present.write_text("on disk\n")
+
+    async def go():
+        async with lsp_session(Host({"r": Reads("r")}), [work]) as session:
+            return [
+                (await _hover(session, p.as_uri(), 0)).contents.value
+                for p in (present, missing)
+            ]
+
+    assert run(go()) == ["'on disk\\n'", "''"]
+
+
+def test_resolving_a_lens_that_has_its_command_returns_it(config, monkeypatch):
+    """Only an unresolved lens carries data. A client that resolves one that
+    already has its command gets it back rather than an error."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    lens = types.CodeLens(
+        range=types.Range(start=types.Position(1, 0), end=types.Position(1, 0)),
+        command=types.Command(title="cheap", command="witan.echo", arguments=[3]),
+    )
+
+    async def go():
+        async with lsp_session(
+            Host({"z": Lazy("lazy")}), [work], client_capabilities=_lens_client()
+        ) as session:
+            return await session.client.code_lens_resolve_async(lens)
+
+    resolved = run(go())
+    assert (resolved.command.title, resolved.data) == ("cheap", None)
+
+
+def test_serve_keeps_stdin_away_from_prompts(monkeypatch):
+    """stdin is the JSON-RPC channel. A plugin call that looks for a terminal
+    to prompt on finds none, even when the server was started from one."""
+    import io
+    import sys
+
+    from pygls.lsp.server import LanguageServer
+
+    from witan_core.elicit import has_terminal
+    from witan_core.lsp import server as server_module
+
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    stdin = Terminal("a person's answer\n")
+    stdin.buffer = io.BytesIO()
+    seen = {}
+
+    def start_io(self, reader, writer):
+        seen.update(
+            channel=reader,
+            terminal=has_terminal(),
+            read=sys.stdin.read(),
+            buffer=sys.stdin.buffer.read(),
+        )
+
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(server_module, "discover_plugins", dict)
+    monkeypatch.setattr(LanguageServer, "start_io", start_io)
+    server_module.serve()
+    assert seen == {
+        "channel": stdin.buffer,
+        "terminal": False,
+        "read": "",
+        "buffer": b"",
+    }
+    assert sys.stdin is stdin
+
+
+def test_plugins_get_columns_in_code_points_whatever_the_encoding(config, monkeypatch):
+    """Neovim negotiates UTF-8, VS Code uses UTF-16. Column 2 after `é` is the
+    second character either way once the host converts it."""
+    work, _ = config
+    monkeypatch.chdir(work)
+
+    class Columns(Recorder):
+        capabilities = frozenset({Capability.HOVER})
+
+        def hover(self, ctx, uri, line, character):
+            return ctx.text(uri).splitlines()[line][character]
+
+    path = work / "m.py"
+    utf8 = types.ClientCapabilities(
+        general=types.GeneralClientCapabilities(
+            position_encodings=[types.PositionEncodingKind.Utf8]
+        )
+    )
+
+    async def go(capabilities, column):
+        async with lsp_session(
+            Host({"c": Columns("c")}), [work], client_capabilities=capabilities
+        ) as session:
+            await session.open(path, "é😋ab\n")
+            hover = await session.client.text_document_hover_async(
+                types.HoverParams(
+                    text_document=types.TextDocumentIdentifier(uri=path.as_uri()),
+                    position=types.Position(line=0, character=column),
+                )
+            )
+            return hover.contents.value
+
+    # `a` is after two bytes of `é` and four of `😋` in UTF-8, after one and
+    # two code units in UTF-16.
+    assert run(go(utf8, 6)) == "a"
+    assert run(go(None, 3)) == "a"

@@ -21,6 +21,7 @@ from .plugin import (
     Note,
     Plugin,
     Route,
+    escape_markdown,
 )
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "Note",
     "Plugin",
     "Route",
+    "escape_markdown",
     "run_language_server",
 ]
 
