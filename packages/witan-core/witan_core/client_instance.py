@@ -1,11 +1,12 @@
 """An id for the client process calling witan, for joining its log lines.
 
 A deployed witan cannot tell which agent session a call came from unless the
-agent passes ``session_id``, and on ``memory_get`` and ``recall`` none of them
-do: every read line in the 2026-11-12 to 2026-11-23 production window had a
-null session. Nearly all of those reads came through witan-core's remote proxy,
-which negotiates MCP 2026-07-28, where there is no transport session to fall
-back on either (each request is its own connection).
+agent passes ``session_id``, and on ``memory_get`` and ``recall`` they almost
+never do: in the 2026-11-12 to 2026-11-23 production window, 430 of 435 read
+lines had a null session, and the other 5 were the measuring session's own.
+Nearly all ``memory_get`` calls come through witan-core's remote proxy, which
+negotiates MCP 2026-07-28, where there is no transport session to fall back on
+either (each request is its own connection).
 
 The proxy runs one process per agent session (``witan serve`` under an agent),
 so an id fixed for the process stands in for the session. It travels as a

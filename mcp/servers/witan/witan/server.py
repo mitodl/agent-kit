@@ -4179,7 +4179,7 @@ def _log_client_instance(instance: str | None = None) -> str | None:
     """The calling client process as the memory log lines name it, or ``None``.
 
     Digested like :func:`_log_session`, and for a further reason: an
-    ``Mcp-Session-Id`` is a bearer of its MCP session for as long as it lives.
+    ``Mcp-Session-Id`` names a live MCP session, which a log has no need to.
 
     :param instance: An id the caller named in place of its own, as
         ``workflow_project_run_memories`` does for the agent it launches.
@@ -4198,8 +4198,8 @@ def _log_session(session_id: str | None, instance: str | None = None) -> str | N
     A caller that names no session gets its client instance's digest
     (:func:`_log_client_instance`) instead. Agents pass ``session_id`` on
     ``task_claim`` because the claim prompt tells them to, and almost never on
-    ``memory_get`` or ``recall``: every read line from 2026-11-12 to
-    2026-11-23 had a null session, so reads could be joined to the claim that
+    ``memory_get`` or ``recall``: from 2026-11-12 to 2026-11-23, 430 of 435
+    read lines had a null session, so reads could be joined to the claim that
     surfaced them only on actor and slug. The client instance is what the two
     lines then share, in ``client_instance`` on both.
     """
@@ -4212,8 +4212,8 @@ def _log_session(session_id: str | None, instance: str | None = None) -> str | N
 #: :data:`_BULK_READ_WINDOW_SECONDS` is a script sweeping the graph, not an
 #: agent opening what it was shown. On 2026-11-17 a sweep made 1,075
 #: ``memory_get`` calls over 1,068 slugs in about three minutes, and the
-#: measurement of surfaced reads had to drop it by hand; organic reads came at
-#: a few per claim.
+#: measurement of surfaced reads had to drop it by hand. The organic
+#: ``memory_get`` reads in the same 11 days numbered 25.
 _BULK_READ_CALLS = 20
 _BULK_READ_WINDOW_SECONDS = 60.0
 # Process memory by design: a lost window after a rollout leaves at most the
