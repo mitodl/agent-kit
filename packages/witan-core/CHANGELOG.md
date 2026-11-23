@@ -8,6 +8,28 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.61.0] - 2026-11-23
+
+### Added
+
+- The remote proxy sends an `X-Witan-Client-Instance` header on every request,
+  an id fixed for the proxy process (`witan_core.client_instance`), or the
+  `WITAN_CLIENT_INSTANCE` a launcher set in the agent's environment. A
+  deployed witan logs it on memory surfacing and read lines, so a read can be
+  joined to the surfacing that preceded it when the agent passed no
+  `session_id`. The proxy negotiates MCP 2026-07-28, which has no transport
+  session to fall back on.
+
+### Changed
+
+- `witan setup` installs omnigraph 0.16.0 (tag `v0.16.0`). Its
+  `omnigraph version --json` reports storage format 17, serving 14 to 17, and
+  HTTP contract 0.14, so `_OMNIGRAPH_INTERNAL_SCHEMA` moves to 17 and the
+  contract negotiation is unchanged. An existing format-16 store opens and is
+  written in place and stays at 16, so nothing is rebuilt. A store 0.16
+  creates is born at 17, which 0.15 refuses, so going back to 0.15 after
+  `witan setup` creates a store means rebuilding that store.
+
 ## [0.60.1] - 2026-11-23
 
 ### Fixed
