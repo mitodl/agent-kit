@@ -45,7 +45,6 @@ Nothing here imports pygls, so the module loads without the ``lsp`` extra.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -63,6 +62,7 @@ from witan_core.lsp import (
     Note,
     Plugin,
     Route,
+    escape_markdown,
 )
 from witan_core.observability import get_logger
 from witan_core.repo_key import checkout_branch
@@ -89,8 +89,6 @@ logger = get_logger("witan.lsp_plugin")
 HOVER_LIMIT = 10
 """Tasks, and separately memories, listed in one hover."""
 
-_MD_PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
-
 
 def _store(cfg: cfg_module.Config, folder: Folder) -> str:
     """The graph ``cfg`` names, as ``witan`` run from ``folder`` would open it.
@@ -106,21 +104,6 @@ def _store(cfg: cfg_module.Config, folder: Folder) -> str:
     if uri.startswith("s3://"):
         return uri
     return str(folder.path / uri)
-
-
-def plain(text: Any) -> str:
-    """``text`` as markdown that renders as itself.
-
-    For teammate-written text in a hover: whitespace runs collapse to one
-    space, so a title cannot open a block (a heading, a list, a fence), and
-    every ASCII punctuation character is backslash-escaped, so it cannot form
-    a link, an image, inline HTML, an entity or emphasis.
-
-    :param text: A title, status or slug from the graph.
-    :returns: Markdown source for the literal text.
-    :rtype: str
-    """
-    return _MD_PUNCTUATION.sub(r"\\\1", " ".join(str(text).split()))
 
 
 def _uri_path(uri: str) -> Path:
@@ -328,17 +311,17 @@ class CouncilPlugin(Plugin):
         memories = found["memories"]
         if not tasks and not memories:
             return None
-        lines = [f"**witan**: {plain(symbol.rpartition('::')[2])}"]
+        lines = [f"**witan**: {escape_markdown(symbol.rpartition('::')[2])}"]
         if tasks:
             lines += ["", "Tasks:", ""]
             lines += [
-                f"- {plain(t['slug'])} ({plain(t['status'])}): {plain(t['title'])}"
+                f"- {escape_markdown(t['slug'])} ({escape_markdown(t['status'])}): {escape_markdown(t['title'])}"
                 for t in tasks
             ]
         if memories:
             lines += ["", "Memories:", ""]
             lines += [
-                f"- {plain(m['slug'])} ({plain(m['kind'])}): {plain(m['title'])}"
+                f"- {escape_markdown(m['slug'])} ({escape_markdown(m['kind'])}): {escape_markdown(m['title'])}"
                 for m in memories
             ]
         return "\n".join(lines)

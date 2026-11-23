@@ -26,7 +26,7 @@ from witan_code.lsp_plugin import (
     CodePlugin,
     _word_at,
 )
-from witan_core.lsp import Capability, Folder
+from witan_core.lsp import Capability, Folder, escape_markdown
 from witan_core.lsp.folders import resolve_folder
 from witan_core.lsp.host import Host
 from witan_core.lsp.plugin import discover_plugins
@@ -324,8 +324,10 @@ def test_a_deployment_without_a_login_says_so_and_never_prompts(tmp_path, monkey
     uri = path.as_uri()
     try:
         hover = host.hover(path, uri, 9, 12)
-        assert hover.startswith("witan-code: Not logged in to https\\://witan")
-        assert "witan\\-code login" in hover
+        assert hover.startswith(
+            "witan-code: " + escape_markdown("Not logged in to https://witan")
+        )
+        assert escape_markdown("`witan-code login`") in hover
         [note] = host.diagnostics(path, uri)
         assert note.message.startswith("code features unavailable: Not logged in")
         assert host.code_lenses(path, uri) == []
@@ -437,7 +439,8 @@ def test_hover_on_an_env_var_lists_providers_and_consumers(graph):
             providers, consumers = text.split("Consumers:")
             # infra is not checked out here, so it is named, not linked.
             assert (
-                "- https\\://github\\.com/test/infra Pulumi\\.QA\\.yaml\n" in providers
+                f"- {escape_markdown('https://github.com/test/infra Pulumi.QA.yaml')}\n"
+                in providers
             )
             assert f"]({settings.as_uri()}#L5)" in consumers
             assert await _hover(session, settings, 0) is None
@@ -464,9 +467,12 @@ def test_definition_crosses_repos_and_names_what_is_not_checked_out(graph):
             assert await definition(session) == []
             text = await _hover(session, service, 9, 12)
             assert "Defined in a repo not open here" in text
-            assert "https\\://github\\.com/test/lib lib/maths\\.py\\:1 compute" in text
+            assert (
+                escape_markdown("https://github.com/test/lib lib/maths.py:1 compute")
+                in text
+            )
             assert "Referenced from" in text
-            assert "lib/maths\\.py\\:5 twice" in text
+            assert escape_markdown("lib/maths.py:5 twice") in text
 
     run(go())
 

@@ -252,18 +252,22 @@ class Plugin:
         raise NotImplementedError(command)
 
 
-_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~:])")
+# Every ASCII punctuation character, which is exactly the set CommonMark lets
+# a backslash escape.
+_MARKDOWN_SPECIAL = re.compile(r"([!-/:-@\[-`{-~])")
 
 
 def escape_markdown(text: str) -> str:
-    """``text`` as literal markdown: no link, image, emphasis or HTML.
+    """``text`` as literal markdown: no link, image, emphasis, entity or HTML.
 
     For text a plugin does not control (teammate-written titles, keys and
     paths read from the graph), which ADR 0012 has the server render as plain
-    text inside its markdown. Escaping ``:`` stops a bare URL from autolinking,
-    and a line break becomes a space, so no setext heading or list starts.
+    text inside its markdown. Every ASCII punctuation character is escaped:
+    ``:`` stops a bare URL from autolinking and ``&`` an entity. Whitespace
+    runs collapse to one space, so no line starts a heading, list or fence,
+    and no indent starts a code block.
     """
-    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.splitlines()))
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.split()))
 
 
 def discover_plugins() -> dict[str, Plugin]:
