@@ -14,7 +14,8 @@ platform-specific code.
 See the [User Guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/USER_GUIDE.md)
 for a task-oriented walkthrough (install, setup, day-to-day loop, operating
 modes, troubleshooting) and the [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md)
-for the full `witan` command surface.
+for the full `witan` command surface. [Editor setup](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/editors.md)
+covers `witan lsp`, the language server, in Neovim and Emacs.
 
 ## Quick Start
 

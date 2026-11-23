@@ -699,6 +699,30 @@ def test_without_codelens_the_lenses_move_into_hover_and_code_actions(
     run(go())
 
 
+def test_a_client_advertising_only_workspace_codelens_gets_no_fallback(
+    config, monkeypatch
+):
+    """lsp-mode shows lenses but advertises only `workspace.codeLens`, so the
+    lens text must not also land in its hover and code actions."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    uri = (work / "m.py").as_uri()
+    capabilities = types.ClientCapabilities(
+        workspace=types.WorkspaceClientCapabilities(
+            code_lens=types.CodeLensWorkspaceClientCapabilities(refresh_support=True)
+        )
+    )
+
+    async def go():
+        async with lsp_session(
+            Host({"z": Lazy("lazy")}), [work], client_capabilities=capabilities
+        ) as session:
+            assert await _hover(session, uri, 1) is None
+            assert not await _code_actions(session, uri, 3)
+
+    run(go())
+
+
 def test_a_plugin_reads_the_open_buffer_and_every_folder(config, monkeypatch):
     work, home = config
     monkeypatch.chdir(work)

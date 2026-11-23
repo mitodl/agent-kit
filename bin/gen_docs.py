@@ -845,6 +845,7 @@ def gen_env() -> None:
 MIRRORED: list[tuple[str, str]] = [
     ("mcp/servers/witan/docs/USER_GUIDE.md", "guides/witan-user-guide.md"),
     ("mcp/servers/witan/docs/web-ui.md", "guides/witan-ui.md"),
+    ("mcp/servers/witan/docs/editors.md", "guides/editors.md"),
     ("mcp/servers/witan/docs/write-path-scanning.md", "guides/write-path-scanning.md"),
     ("mcp/servers/witan/docs/migration-runbook.md", "guides/migration-runbook.md"),
     (
