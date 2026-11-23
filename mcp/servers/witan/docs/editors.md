@@ -35,7 +35,9 @@ shows up as the reason in hover and diagnostics, and a command fails with it.
 ## Commands the server answers
 
 A client binds these to its command UI. Each takes one object argument whose
-`uri` names the workspace folder (or any file in it) the command applies to.
+`uri` names the workspace folder (or any file in it) the command applies to,
+except the two lens commands, which a client runs with the arguments the lens
+carries.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
@@ -74,15 +76,22 @@ local function here()
   return vim.uri_from_fname(vim.bo.buftype == '' and name ~= '' and name or vim.fn.getcwd())
 end
 
--- The witan client with a workspace folder holding uri. Neovim starts one
--- client per git root, and a client refuses a folder it does not serve.
+-- The witan client with the innermost workspace folder holding uri. Neovim
+-- starts one client per git root, and a client refuses a folder it does not
+-- serve. A nested checkout (a submodule) is inside its parent's folder too,
+-- so the longest root wins, as it does in the server's own routing.
 local function client(uri)
   local path = vim.uri_to_fname(uri)
+  local best, best_len = nil, -1
   for _, c in ipairs(vim.lsp.get_clients({ name = 'witan' })) do
     for _, folder in ipairs(c.workspace_folders or {}) do
-      if vim.fs.relpath(vim.uri_to_fname(folder.uri), path) then return c end
+      local root = vim.uri_to_fname(folder.uri)
+      if #root > best_len and vim.fs.relpath(root, path) then
+        best, best_len = c, #root
+      end
     end
   end
+  if best then return best end
   error('witan: no witan server has a workspace folder holding ' .. path)
 end
 
@@ -212,6 +221,7 @@ Emacs 30 or later. The helpers below render list results with
 (require 'seq)
 (require 'subr-x)
 (require 'tabulated-list)
+(require 'url-util)
 
 (defconst witan-launch-spec-version 1)
 (defconst witan-list-commands
@@ -228,9 +238,19 @@ for eglot or lsp-mode.")
                  (plist-get object (intern (concat ":" key))))))
     (unless (eq value :json-false) value)))
 
+(defconst witan--uri-path-chars
+  (let ((chars (copy-sequence url-path-allowed-chars)))
+    ;; url-path-allowed-chars passes `%' through, so a literal `%41' in a path
+    ;; would reach the server as `A'.
+    (aset chars ?% nil)
+    chars)
+  "Characters a file URI's path carries unescaped.")
+
 (defun witan--here ()
-  "The folder a command applies to: the current file's, else `default-directory'."
-  (concat "file://" (expand-file-name (or buffer-file-name default-directory))))
+  "The folder a command applies to: the current file's, else `default-directory'.
+Percent-encoded, so a `#' or `%' in a checkout's path stays part of the path."
+  (concat "file://" (url-hexify-string (expand-file-name (or buffer-file-name default-directory))
+                                       witan--uri-path-chars)))
 
 (define-derived-mode witan-list-mode tabulated-list-mode "witan"
   "Rows a witan list command returned. RET visits a row's file."
@@ -241,7 +261,10 @@ for eglot or lsp-mode.")
   (interactive)
   (when-let* ((row (tabulated-list-get-id))
               (uri (witan--get row "uri")))
-    (find-file-other-window (url-unhex-string (string-remove-prefix "file://" uri)))
+    ;; The server percent-encodes the path's UTF-8 bytes.
+    (find-file-other-window (decode-coding-string
+                             (url-unhex-string (string-remove-prefix "file://" uri))
+                             'utf-8))
     (goto-char (point-min))
     (forward-line (1- (or (witan--get row "line") 1)))))
 
@@ -308,8 +331,15 @@ for eglot or lsp-mode.")
     ;; not fail here; look it up on the PATH the terminal gets.
     (if (let ((exec-path (parse-colon-path (getenv "PATH"))))
           (executable-find (car argv)))
-        (pop-to-buffer (apply #'make-term (format "witan %s" (witan--get spec "slug"))
-                              (car argv) nil (cdr argv)))
+        ;; make-term leaves a live process in a same-named buffer alone, so a
+        ;; second run of the same project while the first agent is alive
+        ;; needs a name of its own to start at all.
+        (let* ((base (format "witan %s" (witan--get spec "slug")))
+               (name base)
+               (n 1))
+          (while (get-buffer (format "*%s*" name))
+            (setq name (format "%s<%d>" base (cl-incf n))))
+          (pop-to-buffer (apply #'make-term name (car argv) nil (cdr argv))))
       (when claim
         ;; Don't leave the task held for the lease with no agent behind it.
         (funcall witan-execute-function "witan.releaseTask"
