@@ -75,6 +75,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from mcp.types import Implementation
 
+from ..client_instance import CLIENT_INSTANCE_HEADER, client_instance
 from ..identity import derive_actor_id
 from .journal import JournalEntry, WriteJournal, journal_path
 from .oidc import decode_claims
@@ -809,8 +810,15 @@ class RemoteMCPProxy:
         """Build an MCP client authenticated with the caller's JWT.
 
         Isolated so tests can point the proxy at an in-memory FastMCP server.
+        Every request carries this process's client instance id
+        (:mod:`witan_core.client_instance`), so the deployment's log lines for
+        one agent session join on it.
         """
-        transport = StreamableHttpTransport(self._url, auth=BearerAuth(token))
+        transport = StreamableHttpTransport(
+            self._url,
+            headers={CLIENT_INSTANCE_HEADER: client_instance()},
+            auth=BearerAuth(token),
+        )
         return Client(
             transport,
             elicitation_handler=self._elicitation_handler(),

@@ -115,6 +115,9 @@ desc = "Where both CLIs cache OIDC tokens. Shared on purpose, next to the shared
 default = "~/.config/witan/merge-watermarks.json"
 desc = "Where `witan migrate merge` records what each pair of stores looked like when they last agreed, so the next merge can name the nodes both sides have written since. Beside the token cache, and per-machine — losing it costs one merge's divergence report."
 
+[section.vars.WITAN_CLIENT_INSTANCE]
+desc = "Id the remote proxy sends as `X-Witan-Client-Instance`, which the deployment logs on memory surfacing and read lines so they join for one agent. Unset, each process generates its own. `witan project run` sets a fresh one in the environment of the agent it launches; you do not set it yourself."
+
 [section.vars.WITAN_REMOTE_CALL_BUDGET_SECONDS]
 default = "0"
 desc = "Deadline for a single remote graph call, used to decide whether to honour a server's retry hint or give up. `0` means no client-side deadline — obey the server's hints."

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
+from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
 from witan_core.observability import get_logger
 
 from .. import config as config_module
@@ -201,19 +202,48 @@ def _prompt_memories(s, slug: str, claim: dict | None = None) -> list[dict]:
     ]
 
 
-def _memory_lines(memories: list[dict]) -> list[str]:
+def _project_prompt_memories(
+    s, slug: str, tasks: list[dict], client_instance: str | None = None
+) -> list[dict]:
+    """Memories for a project's prompt, matched to its ready tasks server-side.
+
+    A failed lookup must not stop the agent launching, for the reason
+    :func:`_prompt_memories` gives.
+
+    :param s: The server or remote proxy.
+    :param slug: The project's slug.
+    :param tasks: The ready tasks the prompt lists, in its order.
+    :param client_instance: The launched agent's client instance id, which the
+        surfacing is logged under.
+    :returns: Memories with ``slug``, ``title``, ``author``, ``excerpt`` and
+        the ``task`` each matched.
+    :rtype: list[dict]
+    """
+    try:
+        return _fn(s.workflow_project_run_memories)(
+            slug=slug,
+            task_slugs=[t["slug"] for t in tasks],
+            client_instance=client_instance,
+        )
+    except Exception:  # never block the launch
+        logger.warning("witan.launch.memories_skipped", slug=slug, exc_info=True)
+        return []
+
+
+def _memory_lines(memories: list[dict], subject: str = "this task") -> list[str]:
     """The prompt section for ``memories``, or nothing when there are none.
 
     Attributed and labelled as notes, and each collapsed to one line, because
     anyone on the team can write a memory and this reaches an agent's first
     turn, where a line of text would otherwise read as part of the assignment.
+    A memory carrying the ``task`` it matched names it.
     """
     if not memories:
         return []
     lines = [
         "",
         (
-            f"Team memories that match this task. {provenance.TEAMMATE_NOTES} "
+            f"Team memories that match {subject}. {provenance.TEAMMATE_NOTES} "
             "The full text of each is in memory_get:"
         ),
     ]
@@ -221,7 +251,8 @@ def _memory_lines(memories: list[dict]) -> list[str]:
         author, title, excerpt = (
             " ".join(m[field].split()) for field in ("author", "title", "excerpt")
         )
-        lines += [f"  {m['slug']} ({author}): {title}", f"    {excerpt}"]
+        matched = f", matches {m['task']}" if m.get("task") else ""
+        lines += [f"  {m['slug']} ({author}{matched}): {title}", f"    {excerpt}"]
         # The recall fallback's memories carry no `screening` (recall is not
         # labelled yet), and a clean verdict has no notice.
         if notice := m.get("screening", {}).get("notice"):
@@ -318,7 +349,9 @@ def _run_prompt(
     return "\n".join(lines)
 
 
-def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
+def _project_run_prompt(
+    p: dict, tasks: list[dict], memories: list[dict] | None = None
+) -> str:
     lines = [
         "Work on this workflow project and advance it through its current phase.",
         "",
@@ -365,6 +398,7 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
                     else ""
                 )
             )
+    lines += _memory_lines(memories or [], "these tasks")
     lines += [
         "",
         # ★ THE CLAIM LINE IS WHY THIS BLOCK EXISTS.
@@ -425,7 +459,9 @@ def launch_env(cfg: Config) -> tuple[dict[str, str], list[str]]:
     :returns: The variables to set, and the names to remove before setting them.
     :rtype: tuple[dict[str, str], list[str]]
     """
-    unset_env = [*SESSION_ID_ENV_VARS, *_LOCATION_ENV_VARS]
+    # An inherited client instance names the launcher's own agent, if any; the
+    # launched agent is a different client.
+    unset_env = [*SESSION_ID_ENV_VARS, *_LOCATION_ENV_VARS, CLIENT_INSTANCE_ENV]
     env: dict[str, str] = {}
     # Pinned so the agent talks to the graph the claim was taken in. The local
     # store has no target name, and the agent's own matching from `cwd`
@@ -608,6 +644,7 @@ def build_launch_spec(
                 claim_result,
             )
 
+    env, unset_env = launch_env(cfg)
     if kind == "task":
         prompt = _run_prompt(
             record,
@@ -616,14 +653,20 @@ def build_launch_spec(
             overlaps=(claim_result or {}).get("overlaps"),
         )
     else:
-        prompt = _project_run_prompt(
-            record,
-            _fn(server.task_ready)(project_slug=slug, limit=_PROJECT_PROMPT_TASK_LIMIT),
+        tasks = _fn(server.task_ready)(
+            project_slug=slug, limit=_PROJECT_PROMPT_TASK_LIMIT
         )
+        # The agent's own proxy sends this id, so its reads join to the line
+        # the surfacing logs here, which no claim ties to a session.
+        env[CLIENT_INSTANCE_ENV] = new_client_instance()
+        with bare_session_env():
+            memories = _project_prompt_memories(
+                server, slug, tasks, env[CLIENT_INSTANCE_ENV]
+            )
+        prompt = _project_run_prompt(record, tasks, memories)
 
     resolved_agent = agent or cfg.agent
     resolved_model = model or cfg.model
-    env, unset_env = launch_env(cfg)
     return LaunchSpec(
         version=LAUNCH_SPEC_VERSION,
         kind=kind,
@@ -747,7 +790,9 @@ def _run_project_slug(
             print_error(f"No project {slug!r}.")
             raise SystemExit(1)
         tasks = _fn(s.task_ready)(project_slug=slug, limit=_PROJECT_PROMPT_TASK_LIMIT)
-        _print_prompt(_project_run_prompt(p, tasks))
+        _print_prompt(
+            _project_run_prompt(p, tasks, _project_prompt_memories(s, slug, tasks))
+        )
         return
     spec = build_launch_spec(
         "project",

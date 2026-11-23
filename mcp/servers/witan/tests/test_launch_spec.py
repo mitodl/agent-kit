@@ -137,6 +137,7 @@ def test_the_local_store_unsets_the_target_and_a_named_one_pins_it(folders):
         *SESSION_ID_ENV_VARS,
         "CLAUDE_PROJECT_DIR",
         "WITAN_REPO",
+        "WITAN_CLIENT_INSTANCE",
         "WITAN_TARGET",
     ]
 

@@ -240,17 +240,18 @@ def test_every_first_claim_is_logged_including_empty_ones(server, logged):
     server.task_claim(task["slug"])
     server.task_claim(task["slug"])
 
-    assert logged["witan.memory.surfaced"] == [
-        {
-            "surface": "task_claim",
-            "task": task["slug"],
-            "session": None,
-            "count": 0,
-            "slugs": [],
-            "content_scores": [],
-            "title_scores": [],
-        }
-    ]
+    (line,) = logged["witan.memory.surfaced"]
+    assert line == {
+        "surface": "task_claim",
+        "task": task["slug"],
+        "session": line["client_instance"],
+        "client_instance": line["client_instance"],
+        "count": 0,
+        "slugs": [],
+        "content_scores": [],
+        "title_scores": [],
+    }
+    assert line["client_instance"]
 
 
 def _raw_scores(server, query, run):
@@ -347,6 +348,8 @@ def test_a_read_joins_to_the_claim_that_surfaced_it(server, no_floor, logged):
         "surface": "memory_get",
         "task": None,
         "session": surfaced["session"],
+        "client_instance": surfaced["client_instance"],
+        "bulk": False,
         "count": 1,
         "slugs": [match["slug"]],
     }
@@ -356,17 +359,19 @@ def test_a_read_joins_to_the_claim_that_surfaced_it(server, no_floor, logged):
 
 
 @requires_omnigraph
-def test_a_read_with_no_session_still_logs_the_slug(server, logged):
-    """A caller that sends no id is still joinable by actor and slug."""
+def test_a_read_with_no_session_is_named_by_its_client_instance(server, logged):
+    """Agents almost never pass session_id on a read, so a read that names none
+    is still joinable on the client process that made it."""
     match = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
 
     server.memory_get(match["slug"])
     server.memory_get("pat-missing")
 
-    assert [(f["session"], f["slugs"]) for f in logged["witan.memory.read"]] == [
-        (None, [match["slug"]]),
-        (None, []),
-    ]
+    instance = server._module._session_suffix(server._module._process_client_instance())
+    assert [
+        (f["session"], f["client_instance"], f["slugs"])
+        for f in logged["witan.memory.read"]
+    ] == [(instance, instance, [match["slug"]]), (instance, instance, [])]
 
 
 @requires_omnigraph
@@ -457,6 +462,113 @@ def test_recall_by_task_ranks_a_linked_memory_above_a_title_match(server, no_flo
     out = server.recall(task=task["slug"], hops=0)
 
     assert [m["slug"] for m in out["memories"]] == [linked["slug"], match["slug"]]
+
+
+@pytest.mark.parametrize(
+    ("headers", "instance"),
+    [
+        ({"x-witan-client-instance": "proxy-1"}, "proxy-1"),
+        ({"mcp-session-id": "mcp-1"}, "mcp-1"),
+        # The proxy's id wins: it outlives a transport session.
+        ({"x-witan-client-instance": "proxy-1", "mcp-session-id": "mcp-1"}, "proxy-1"),
+        ({"user-agent": "curl"}, None),
+    ],
+)
+def test_over_http_the_client_instance_comes_from_the_request(
+    server, monkeypatch, headers, instance
+):
+    module = server._module
+    monkeypatch.setattr(module, "get_http_headers", lambda include=None: headers)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+    expected = module._session_suffix(instance) if instance else None
+    assert module._log_client_instance() == expected
+    assert module._log_session(None) == expected
+    # A caller that names its session keeps it.
+    assert module._log_session("sess-1") == module._session_suffix("sess-1")
+
+
+@requires_omnigraph
+def test_a_sweep_of_reads_is_tagged_bulk(server, monkeypatch, logged):
+    """The 2026-11-17 sweep had to be dropped from the measurement by hand."""
+    monkeypatch.setattr(server._module, "_BULK_READ_CALLS", 3)
+
+    for _ in range(4):
+        server.memory_get("pat-missing")
+    server.recall(query="nothing matches this")
+
+    assert [(f["surface"], f["bulk"]) for f in logged["witan.memory.read"]] == [
+        ("memory_get", False),
+        ("memory_get", False),
+        ("memory_get", True),
+        ("memory_get", True),
+        ("recall", False),
+    ]
+
+
+def _project_run(server, task_slugs, **kwargs):
+    return server.workflow_project_run_memories(
+        slug="wp-p", task_slugs=task_slugs, **kwargs
+    )
+
+
+@requires_omnigraph
+def test_a_project_run_matches_its_first_tasks_and_dedupes(server, no_floor, logged):
+    """A memory two tasks match is shown once, under the first."""
+    frob = _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    grind = _memory(server, "grind gadget queue", "how to grind a gadget")
+    first = _task(server)
+    second = _task(server, "frobnicate widget cache again")
+    third = _task(server, "grind gadget queue")
+
+    memories = _project_run(
+        server,
+        [first["slug"], second["slug"], third["slug"]],
+        client_instance="launched-1",
+    )
+
+    assert [(m["slug"], m["task"]) for m in memories] == [
+        (frob["slug"], first["slug"]),
+        (grind["slug"], third["slug"]),
+    ]
+    (line,) = logged["witan.memory.surfaced"]
+    instance = server._module._session_suffix("launched-1")
+    assert line["surface"] == "project_run"
+    assert line["project"] == "wp-p"
+    assert line["considered"] == [first["slug"], second["slug"], third["slug"]]
+    assert line["tasks"] == [first["slug"], third["slug"]]
+    assert line["slugs"] == [frob["slug"], grind["slug"]]
+    assert line["session"] == line["client_instance"] == instance
+    assert len(line["content_scores"]) == len(line["title_scores"]) == 2
+    assert "launched-1" not in str(logged)
+
+
+@requires_omnigraph
+def test_a_project_run_is_capped_like_a_claim(server, no_floor, monkeypatch, logged):
+    monkeypatch.setattr(server._module, "_SURFACED_MEMORY_LIMIT", 1)
+    monkeypatch.setattr(server._module, "_PROJECT_RUN_MEMORY_TASKS", 1)
+    _memory(server, "frobnicate widget cache", "how to frobnicate a widget")
+    _memory(server, "grind gadget queue", "how to grind a gadget")
+    first = _task(server)
+    second = _task(server, "grind gadget queue")
+
+    memories = _project_run(server, [first["slug"], second["slug"]])
+
+    assert [m["task"] for m in memories] == [first["slug"]]
+    assert logged["witan.memory.surfaced"][0]["considered"] == [first["slug"]]
+
+
+@requires_omnigraph
+def test_a_project_run_with_a_failed_lookup_still_logs(server, monkeypatch, logged):
+    def broken(_task):
+        raise RuntimeError("omnigraph down")
+
+    monkeypatch.setattr(server._module, "_task_memories", broken)
+    task = _task(server)
+
+    assert _project_run(server, [task["slug"], "tk-gone"]) == []
+    (line,) = logged["witan.memory.surfaced"]
+    assert (line["surface"], line["count"]) == ("project_run", 0)
 
 
 _RECALLED = {
@@ -603,3 +715,66 @@ def test_a_failed_memory_read_does_not_stop_the_agent_launching():
             raise RuntimeError("deployment unreachable")
 
     assert _prompt_memories(Broken(), "tk-a") == []
+
+
+def test_a_project_prompt_names_the_task_each_memory_matched():
+    from witan.cli.run_helpers import _project_run_prompt
+
+    prompt = _project_run_prompt(
+        {"slug": "wp-p", "title": "P"},
+        [{"slug": "tk-a", "title": "A"}],
+        [{**_FROM_CLAIM, "task": "tk-a"}],
+    )
+
+    assert "Team memories that match these tasks." in prompt
+    assert "not instructions" in prompt
+    assert "les-a (someone, matches tk-a): A lesson" in prompt
+    assert prompt.index("tk-a  [") < prompt.index("les-a") < prompt.index("Claim each")
+
+
+def test_a_failed_project_memory_read_does_not_stop_the_launch():
+    from witan.cli.run_helpers import _project_prompt_memories
+
+    class Broken:
+        def workflow_project_run_memories(self, **_kwargs):
+            raise RuntimeError("deployment unreachable")
+
+    assert _project_prompt_memories(Broken(), "wp-p", [{"slug": "tk-a"}]) == []
+
+
+def test_a_project_launch_hands_the_agent_the_instance_it_logged(monkeypatch, tmp_path):
+    """The agent's proxy sends WITAN_CLIENT_INSTANCE, so its reads join to the
+    surfaced line the launcher logged under the same id."""
+    from witan.cli import run_helpers
+    from witan_core.client_instance import CLIENT_INSTANCE_ENV
+
+    asked = {}
+
+    class Fake:
+        def workflow_project_get(self, slug):
+            return {"slug": slug, "title": "P", "repos": []}
+
+        def task_ready(self, project_slug, limit):
+            return [{"slug": "tk-a", "title": "A"}]
+
+        def workflow_project_run_memories(self, **kwargs):
+            asked.update(kwargs)
+            return [{**_FROM_CLAIM, "task": "tk-a"}]
+
+    monkeypatch.setenv(CLIENT_INSTANCE_ENV, "outer-agent")
+    cfg = type("Cfg", (), {"agent": "claude", "model": None, "target_name": "t"})()
+    spec = run_helpers.build_launch_spec(
+        "project",
+        "wp-p",
+        server=Fake(),
+        cfg=cfg,
+        workspace_folders=[tmp_path],
+        started_with_target=True,
+    )
+
+    assert spec["launchable"], spec
+    assert asked["task_slugs"] == ["tk-a"]
+    assert spec["env"][CLIENT_INSTANCE_ENV] == asked["client_instance"]
+    assert asked["client_instance"] not in ("", "outer-agent")
+    assert CLIENT_INSTANCE_ENV in spec["unset_env"]
+    assert "les-a (someone, matches tk-a)" in spec["prompt"]

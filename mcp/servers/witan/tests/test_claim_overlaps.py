@@ -128,17 +128,19 @@ def test_every_first_claim_is_logged_including_empty_ones(server, logged):
     server.task_claim(task["slug"])
     server.task_claim(lone["slug"])
 
+    # No session_id passed, so the line names the client process instead.
+    instance = server._module._session_suffix(server._module._process_client_instance())
     assert logged["witan.claim.overlaps"][-2:] == [
         {
             "task": task["slug"],
-            "session": None,
+            "session": instance,
             "count": 1,
             "slugs": [live["slug"]],
             "shared_symbols": 1,
         },
         {
             "task": lone["slug"],
-            "session": None,
+            "session": instance,
             "count": 0,
             "slugs": [],
             "shared_symbols": 0,

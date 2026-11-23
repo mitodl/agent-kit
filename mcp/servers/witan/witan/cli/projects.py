@@ -8,6 +8,8 @@ import cyclopts
 from rich.markup import escape
 from rich.prompt import Prompt
 
+from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
+
 from .. import config as cfg_module
 from .. import envelope, live_pr
 from ._common import (
@@ -33,8 +35,10 @@ from .run_helpers import (
     _launch_agent,
     _merge_prompts,
     _pick_items,
+    _project_prompt_memories,
     _project_run_prompt,
     _run_project_slug,
+    agent_environ,
     check_emit_spec_args,
 )
 from .selected_target import selected_target
@@ -739,12 +743,22 @@ def project_run(
     mode = "c" if choice == "1" else "s"
 
     if mode == "c":
+        # One agent for every project, so one client instance its reads join on.
+        instance = new_client_instance()
         prompts = []
         for p in selected:
             p_tasks = _fn(s.task_ready)(project_slug=p["slug"], limit=20)
-            prompts.append(_project_run_prompt(p, p_tasks))
+            memories = _project_prompt_memories(s, p["slug"], p_tasks, instance)
+            prompts.append(_project_run_prompt(p, p_tasks, memories))
         merged = _merge_prompts(prompts, "project")
-        _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
+        _launch_agent(
+            cfg,
+            resolved_agent,
+            resolved_model,
+            merged,
+            dry_run,
+            env=agent_environ({CLIENT_INSTANCE_ENV: instance}, []),
+        )
     else:
         for p in selected:
             console.print(f"\n[bold]── {p['slug']}: {p.get('title', '')} ──[/bold]")
