@@ -64,6 +64,26 @@ export function checkVersion(result: { version: unknown }): void {
 }
 
 /**
+ * The `witan.releaseTask` arguments for a launch that claimed, or `undefined`
+ * when it took no claim. A witan-council before `release` was added to the
+ * spec still claims, so for one of those they are rebuilt from the claim and
+ * `folderUri`, the folder the launch request named, which is the folder a
+ * newer server puts in `release.uri`.
+ */
+export function releaseArgs(
+	result: Pick<LaunchResult, "slug" | "claim"> & { release?: ReleaseArgs },
+	folderUri: string,
+): ReleaseArgs | undefined {
+	if (result.release) {
+		return result.release;
+	}
+	const claimedAt = result.claim?.claimed_at;
+	return typeof claimedAt === "string"
+		? { slug: result.slug, claimed_at: claimedAt, uri: folderUri }
+		: undefined;
+}
+
+/**
  * What the extension hands the launcher (src/launcher.ts) in a file: the spec's
  * fields that would otherwise be terminal arguments, and where to report back.
  */

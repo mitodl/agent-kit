@@ -16,6 +16,7 @@ import {
 	effectiveEnv,
 	findExecutable,
 	type LaunchSpec,
+	releaseArgs,
 	UnsupportedSpecVersion,
 } from "../../src/launch.ts";
 
@@ -156,6 +157,21 @@ test("on Windows the lookup honours PATHEXT and any spelling of PATH", () => {
 			exists,
 		),
 		"C:\\tools\\claude.CMD",
+	);
+});
+
+test("release arguments come from the spec, or from the claim on an older server", () => {
+	const folder = "file:///home/me/other-folder";
+	assert.deepEqual(releaseArgs(spec(), folder), spec().release);
+	// witan-council before `release`: still claimed, so still released.
+	assert.deepEqual(releaseArgs(spec({ release: undefined }), folder), {
+		slug: "tk-a",
+		claimed_at: "2026-11-17T16:20:04.607+00:00",
+		uri: folder,
+	});
+	assert.equal(
+		releaseArgs(spec({ claim: null, release: undefined }), folder),
+		undefined,
 	);
 });
 

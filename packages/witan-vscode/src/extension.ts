@@ -26,6 +26,7 @@ import {
 	type LaunchResult,
 	type LaunchSpec,
 	type LaunchStatus,
+	releaseArgs,
 } from "./launch";
 import {
 	errorMessage,
@@ -163,27 +164,40 @@ export async function activate(
 		try {
 			await openTerminal(result);
 		} catch (err) {
-			await releaseAfterFailure(result, err);
+			await releaseAfterFailure(result, folder, err);
 		} finally {
 			tree.refresh();
 		}
 	};
 
-	const releaseAfterFailure = async (spec: LaunchSpec, err: unknown) => {
-		let note = "";
-		if (spec.release) {
-			try {
-				const released = (await request(RELEASE_TASK, { ...spec.release })) as {
-					released: boolean;
-					reason?: string;
-				};
-				note = released.released
-					? ` Released ${spec.slug}.`
-					: ` ${spec.slug} was not released (${released.reason}).`;
-			} catch (releaseErr) {
-				note = ` Releasing ${spec.slug} failed too: ${errorMessage(releaseErr)}`;
-			}
+	/** Release a launch's claim, and say how that went in one sentence. */
+	const release = async (
+		result: LaunchResult,
+		folder: vscode.WorkspaceFolder,
+	): Promise<string> => {
+		const args = releaseArgs(result, folder.uri.toString());
+		if (args === undefined) {
+			return "";
 		}
+		try {
+			const released = (await request(RELEASE_TASK, { ...args })) as {
+				released: boolean;
+				reason?: string;
+			};
+			return released.released
+				? ` Released ${result.slug}.`
+				: ` ${result.slug} was not released (${released.reason}).`;
+		} catch (releaseErr) {
+			return ` Releasing ${result.slug} failed too: ${errorMessage(releaseErr)}`;
+		}
+	};
+
+	const releaseAfterFailure = async (
+		spec: LaunchSpec,
+		folder: vscode.WorkspaceFolder,
+		err: unknown,
+	) => {
+		const note = await release(spec, folder);
 		output.error(`launch of ${spec.slug} failed: ${errorMessage(err)}${note}`);
 		void vscode.window.showErrorMessage(
 			`witan: could not launch ${spec.slug}: ${errorMessage(err)}.${note}`,
@@ -221,6 +235,16 @@ export async function activate(
 			...(kind === "task" ? { claim: false } : {}),
 		})) as LaunchResult;
 		checkVersion(result);
+		if (result.claim) {
+			// A witan-council before `claim: false` existed claims anyway.
+			const note = await release(result, folder);
+			tree.refresh();
+			throw new Error(
+				`the witan language server claimed ${slug} for a chat-panel handoff, ` +
+					`which a handoff never does, so this witan predates handoffs. ` +
+					`Upgrade witan to hand off.${note}`,
+			);
+		}
 		if (!result.launchable) {
 			void vscode.window.showErrorMessage(`witan: ${result.message}`);
 			return;
