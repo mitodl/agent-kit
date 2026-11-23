@@ -96,18 +96,19 @@ jq '[.[] | .comments.nodes |= map(.author_type = (.author.__typename // "Unknown
   "$threads_file" > "$tmp_file"
 mv "$tmp_file" "$threads_file"
 
-# `--slurp` wraps the pages in one outer array; the `.[][]` flattens it back.
-# Without it, `--paginate` emits each page as a separate top-level JSON array,
-# which concatenate into something --argjson rejects outright ("invalid JSON
-# text") the moment a PR passes 100 comments or 100 reviews — the long-running
-# PRs this script exists for. `--slurp` is refused alongside `--jq`, so the
-# filter moves into a pipe.
-gh api "repos/${repo}/issues/${pr}/comments" --paginate --slurp \
-  | jq '[.[][] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]' \
+# `--paginate` fetches every page but prints each as its own top-level JSON
+# array, so the stream carries N arrays where a reader expects one. Past 100
+# comments or 100 reviews — the long-running PRs this script exists for — that
+# concatenation is no longer a single JSON text and any consumer reading it as
+# one rejects it. `jq -s` collects the whole stream into an outer array, which
+# `.[][]` flattens back; it produces the same shape `gh api --slurp` would,
+# without needing a `gh` new enough to carry that flag.
+gh api "repos/${repo}/issues/${pr}/comments" --paginate \
+  | jq -s '[.[][] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]' \
   > "$discussion_file"
 
-gh api "repos/${repo}/pulls/${pr}/reviews" --paginate --slurp \
-  | jq '[.[][] | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]' \
+gh api "repos/${repo}/pulls/${pr}/reviews" --paginate \
+  | jq -s '[.[][] | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]' \
   > "$reviews_file"
 
 # GitHub shows a pending review only to its author, so this finds the

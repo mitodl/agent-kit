@@ -160,11 +160,13 @@ The REST paths have their own truncation trap, and it is the opposite of the
 GraphQL one above: `--paginate` fetches every page but prints each as its own
 top-level JSON array, so `gh api ... --paginate --jq '[.[] | ...]'` yields
 *N* concatenated arrays rather than one. Nothing warns you — the 100th comment
-is the last one that fits in a single page, and past that the concatenation is
-no longer valid JSON, so `jq --argjson` rejects it with "invalid JSON text" and
-the script dies. `--slurp` wraps the pages into one outer array, which `.[][]`
-flattens; it is refused alongside `--jq`, so the filter has to move into a
-pipe. The same applies to `repos/.../pulls/{n}/reviews`, where a PR with many
+is the last one that fits in a single page, and past that the stream is no
+longer a single JSON text, so anything consuming it as one fails:
+`jq --argjson` rejects it outright with "invalid JSON text". Piping into
+`jq -s '[.[][] | ...]'` collects the pages into an outer array and flattens
+them back, with no `gh` version floor — `gh api --slurp` does the same wrapping
+but only on releases that carry the flag, and it is refused alongside `--jq`
+anyway. The same applies to `repos/.../pulls/{n}/reviews`, where a PR with many
 bot review rounds passes 100 well before its comments do.
 
 A second ceiling sits behind that one. Once the pages are collected, the whole
