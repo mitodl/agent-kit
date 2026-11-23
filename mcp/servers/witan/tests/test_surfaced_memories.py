@@ -477,15 +477,24 @@ def test_recall_by_task_ranks_a_linked_memory_above_a_title_match(server, no_flo
 def test_over_http_the_client_instance_comes_from_the_request(
     server, monkeypatch, headers, instance
 ):
-    module = server._module
-    monkeypatch.setattr(module, "get_http_headers", lambda include=None: headers)
-    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    """Through fastmcp's own header filter, which drops ``mcp-session-id``
+    unless asked for it and must still pass the proxy's header."""
+    from fastmcp.server.http import _current_http_request
+    from starlette.requests import Request
 
-    expected = module._session_suffix(instance) if instance else None
-    assert module._log_client_instance() == expected
-    assert module._log_session(None) == expected
-    # A caller that names its session keeps it.
-    assert module._log_session("sess-1") == module._session_suffix("sess-1")
+    module = server._module
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    raw = [(k.encode(), v.encode()) for k, v in headers.items()]
+    raw.append((b"authorization", b"Bearer t"))
+    token = _current_http_request.set(Request({"type": "http", "headers": raw}))
+    try:
+        expected = module._session_suffix(instance) if instance else None
+        assert module._log_client_instance() == expected
+        assert module._log_session(None) == expected
+        # A caller that names its session keeps it.
+        assert module._log_session("sess-1") == module._session_suffix("sess-1")
+    finally:
+        _current_http_request.reset(token)
 
 
 @requires_omnigraph
