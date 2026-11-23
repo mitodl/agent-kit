@@ -291,7 +291,8 @@ changelog package:
         witan-code)       dir=mcp/servers/witan-code ;;
         agent-config-kit) dir=packages/agent-config-kit ;;
         ol-agent-kit)     dir=packages/agent-kit ;;
-        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit" >&2; exit 1 ;;
+        witan-vscode)     dir=packages/witan-vscode ;;
+        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit witan-vscode" >&2; exit 1 ;;
     esac
     (cd "$dir" && uvx "$SCRIV_TOOL" create)
 
@@ -308,7 +309,8 @@ bump package part:
         witan-code)       dir=mcp/servers/witan-code ;;
         agent-config-kit) dir=packages/agent-config-kit ;;
         ol-agent-kit)     dir=packages/agent-kit ;;
-        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit" >&2; exit 1 ;;
+        witan-vscode)     dir=packages/witan-vscode ;;
+        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit witan-vscode" >&2; exit 1 ;;
     esac
     case "{{ part }}" in
         major|minor|patch) ;;
@@ -378,7 +380,13 @@ bump package part:
     just check-versions
     echo ""
     echo "{{ package }} bumped to ${new}. Commit together:"
-    echo "  $dir/pyproject.toml"
+    # The VS Code extension keeps its version in package.json and its lockfile,
+    # and bump-my-version's config in .bumpversion.toml (packages/witan-vscode).
+    if [[ -f "$dir/package.json" ]]; then
+        echo "  $dir/package.json, $dir/package-lock.json, $dir/.bumpversion.toml"
+    else
+        echo "  $dir/pyproject.toml"
+    fi
     echo "  $dir/CHANGELOG.md"
     echo "  $dir/changelog.d/ (the collected fragments are now gone)"
     # uv.lock records every workspace member's version, so it moves with the
