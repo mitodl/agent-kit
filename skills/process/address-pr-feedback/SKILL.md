@@ -201,6 +201,12 @@ with no thread attached, not metadata. Skip only the entries with
 your own review of someone else's PR. The human-vs-bot rule below applies to
 everything that's left, decided from the same `author_type` field.
 
+`reviews[]` holds submitted reviews only. An unsubmitted draft reaches you
+through `pending_review` alone, and nothing in it is triaged, counted, or
+quoted in a reply — it is private to its author until they submit it, and
+[Editing a pending review comment](#editing-a-pending-review-comment) is the
+only thing that may touch it.
+
 Bot review bodies vary by vendor: `agent-optibot` files findings under a
 `**Risks**` heading inside a `<details>` block, others use `Issues`, `Concerns`,
 or a severity table, and any of them can change shape without notice. Read the

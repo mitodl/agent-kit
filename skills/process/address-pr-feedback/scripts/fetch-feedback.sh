@@ -107,8 +107,12 @@ gh api "repos/${repo}/issues/${pr}/comments" --paginate \
   | jq -s '[.[][] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]' \
   > "$discussion_file"
 
+# A PENDING review is an unsubmitted draft, and this endpoint reports it with
+# the same shape as a submitted one. Its findings belong to the pending_review
+# field below and nowhere else, so dropping it here is what keeps a draft out
+# of the triage queue structurally rather than by whoever happens to author it.
 gh api "repos/${repo}/pulls/${pr}/reviews" --paginate \
-  | jq -s '[.[][] | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]' \
+  | jq -s '[.[][] | select(.state != "PENDING") | {id, html_url, author: .user.login, author_type: .user.type, state, body, submitted_at}]' \
   > "$reviews_file"
 
 # GitHub shows a pending review only to its author, so this finds the

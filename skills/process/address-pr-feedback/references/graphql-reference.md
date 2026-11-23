@@ -177,3 +177,9 @@ how well-formed the JSON is. `fetch-feedback.sh` writes each channel to a file
 under one `mktemp -d` and passes them with `--slurpfile`, which reads from the
 file instead and has no such limit. `--slurpfile` wraps the file's contents in
 an outer array, so each use indexes `[0]`.
+
+`repos/.../pulls/{n}/reviews` also reports the authenticated user's own
+unsubmitted review, with `state: "PENDING"` and no `submitted_at`, shaped
+exactly like a submitted one. `fetch-feedback.sh` drops those from `reviews[]`;
+a draft's findings reach you only through `pending_review`, which is the
+channel with the don't-submit rule attached to it.
