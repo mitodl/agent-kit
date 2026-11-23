@@ -8,6 +8,56 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.53.0] - 2026-11-23
+
+### Added
+
+- `witan project run` prompts carry a "Team memories" section: the memories a
+  first `task_claim` would surface for each of the first five ready tasks the
+  prompt lists, deduplicated and capped at three, each naming the task it
+  matched. The lookup goes through `workflow_project_run_memories`, which is
+  listed only to witan's CLI, and a failed lookup does not block the launch.
+  Each run logs a `witan.memory.surfaced` line with `surface="project_run"`,
+  the project, the tasks considered and matched, and the scores.
+- `witan task run` and `witan project run` (and the language server's launch
+  commands) set a fresh `WITAN_CLIENT_INSTANCE` in the launched agent's
+  environment and make the launch claim or memory lookup under it, so the
+  agent's later reads join to the surfaced line logged on its behalf.
+
+### Changed
+
+- The `witan` and `omnigraph-server` images bake omnigraph 0.16.0 and label
+  storage format 17 (`edu.mit.ol.omnigraph.internal-schema`), still serving
+  from 14. Deployed graphs stay at format 16: 0.16 never stamps an existing
+  graph 17, and `omnigraph upgrade` refuses cluster graphs. A graph a 0.16
+  `cluster apply` creates is born at 17, which a 0.15 image cannot open, so
+  rolling back to 0.15 after one is created strands it. The HTTP contract
+  stays 0.14.
+
+- The Cedar bundles grant `witan-admin` the two actions 0.16 adds,
+  `maintain` (optimize and index builds) and `reclaim` (cleanup), on the
+  memory, code and bridge graphs. 0.16 judges a direct maintenance command on
+  a cluster graph by the graph's applied policy and denies one that names no
+  actor (upstream #1423), so without them the nightly window's every
+  `optimize` and `cleanup` is refused.
+- The maintenance window passes `OMNIGRAPH_MAINTENANCE_ACTOR` to `optimize`
+  and `cleanup` as `--as`, and fails before stopping the server when the
+  config directory holds policy bundles and it is unset. The `omnigraph`
+  stack's maintenance CronJob has to set it to `svc-witan-admin` before this
+  image deploys.
+
+- `witan.memory.surfaced` and `witan.memory.read` lines carry
+  `client_instance`, a digest of the calling client process (the proxy's
+  `X-Witan-Client-Instance` header, a handshake-era client's `Mcp-Session-Id`,
+  or this process under local stdio). `session` falls back to it when the
+  caller passes no `session_id`, so a `memory_get` through the proxy no
+  longer logs a null session.
+- `witan.memory.read` lines carry `bulk`, true from the 20th call to one read
+  surface by one actor's one client process within a minute, or the 100th by
+  one actor across all their clients, so a scripted sweep can be left out of
+  a measurement without filtering it by hand.
+- Requires witan-core 0.61.0 for `witan_core.client_instance`.
+
 ## [0.52.0] - 2026-11-23
 
 ### Added
