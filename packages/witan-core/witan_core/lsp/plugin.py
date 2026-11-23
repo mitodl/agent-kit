@@ -263,9 +263,10 @@ def escape_markdown(text: str) -> str:
     For text a plugin does not control (teammate-written titles, keys and
     paths read from the graph), which ADR 0012 has the server render as plain
     text inside its markdown. Every ASCII punctuation character is escaped:
-    ``:`` stops a bare URL from autolinking and ``&`` an entity. Whitespace
-    runs collapse to one space, so no line starts a heading, list or fence,
-    and no indent starts a code block.
+    ``:`` stops a bare URL from autolinking and ``&`` an entity. Leading and
+    trailing whitespace is dropped and every inner run collapses to one space,
+    so no line starts a heading, list or fence, and no indent starts a code
+    block.
     """
     return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.split()))
 
