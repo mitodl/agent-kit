@@ -166,3 +166,12 @@ the script dies. `--slurp` wraps the pages into one outer array, which `.[][]`
 flattens; it is refused alongside `--jq`, so the filter has to move into a
 pipe. The same applies to `repos/.../pulls/{n}/reviews`, where a PR with many
 bot review rounds passes 100 well before its comments do.
+
+A second ceiling sits behind that one. Once the pages are collected, the whole
+channel has to reach the payload-building `jq`, and Linux caps a single
+command-line argument at 128 KiB — roughly 100 review bodies averaging
+1.5 KiB. Past that, `--argjson` dies with "argument list too long" no matter
+how well-formed the JSON is. `fetch-feedback.sh` writes each channel to a file
+under one `mktemp -d` and passes them with `--slurpfile`, which reads from the
+file instead and has no such limit. `--slurpfile` wraps the file's contents in
+an outer array, so each use indexes `[0]`.
