@@ -1,0 +1,124 @@
+name: Publish witan-vscode to the VS Code Marketplace and Open VSX
+
+# Same trigger as the PyPI packages: a push to main touching the extension's
+# package.json, which `just bump witan-vscode <part>` rewrites, publishes the
+# version if it has no tag yet. 0.0.0 is the unreleased placeholder and never
+# publishes.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "packages/witan-vscode/package.json"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  credentials:
+    # The `mitol` publisher's tokens are repo secrets. Until both exist this
+    # job says so and the publish job is skipped, rather than failing every
+    # push that touches package.json.
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -n "$VSCE_PAT" ] && [ -n "$OVSX_PAT" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::VSCE_PAT and OVSX_PAT are not both set; not publishing."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: credentials
+    if: needs.credentials.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: packages/witan-vscode
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: packages/witan-vscode/.node-version
+          cache: npm
+          cache-dependency-path: packages/witan-vscode/package-lock.json
+
+      - name: Read version from package.json
+        id: version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=witan-vscode-v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check for a new version
+        id: check
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if [ "$VERSION" = "0.0.0" ]; then
+            echo "0.0.0 is the unreleased placeholder; nothing to publish."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          elif git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; nothing new to publish."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.new == 'true'
+        run: npm ci
+
+      - name: Test
+        if: steps.check.outputs.new == 'true'
+        run: npm run typecheck && npm run lint && npm test
+
+      - name: Package
+        if: steps.check.outputs.new == 'true'
+        run: npm run package
+
+      # --skip-duplicate on both, so a re-run after one registry failed
+      # publishes to the other instead of failing on the one that succeeded.
+      - name: Publish to the VS Code Marketplace
+        if: steps.check.outputs.new == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath witan.vsix --skip-duplicate
+
+      - name: Publish to Open VSX
+        if: steps.check.outputs.new == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish witan.vsix --skip-duplicate
+
+      - name: Tag the release
+        # Only after both registries took it, so a tag means "this version is
+        # published", as the PyPI workflows' tags do.
+        if: steps.check.outputs.new == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Attach the .vsix to a GitHub release
+        if: steps.check.outputs.new == 'true'
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: packages/witan-vscode/witan.vsix
+          generate_release_notes: true
