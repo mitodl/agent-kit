@@ -78,17 +78,22 @@ local LISTS = {
   'witan.listStaleRefs', 'witan.listCallers', 'witan.listCrossRepoImpact',
 }
 
--- The witan client serving this buffer. From a buffer it does not serve (the
--- quickfix list), any witan client, and the uri sent picks the folder.
-local function client()
-  return vim.lsp.get_clients({ bufnr = 0, name = 'witan' })[1]
-    or assert(vim.lsp.get_clients({ name = 'witan' })[1], 'witan is not running')
-end
-
 -- The folder a command applies to: the current file's, else the cwd's.
 local function here()
   local name = vim.api.nvim_buf_get_name(0)
   return vim.uri_from_fname(vim.bo.buftype == '' and name ~= '' and name or vim.fn.getcwd())
+end
+
+-- The witan client with a workspace folder holding uri. Neovim starts one
+-- client per git root, and a client refuses a folder it does not serve.
+local function client(uri)
+  local path = vim.uri_to_fname(uri)
+  for _, c in ipairs(vim.lsp.get_clients({ name = 'witan' })) do
+    for _, folder in ipairs(c.workspace_folders or {}) do
+      if vim.fs.relpath(vim.uri_to_fname(folder.uri), path) then return c end
+    end
+  end
+  error('witan: no witan server has a workspace folder holding ' .. path)
 end
 
 -- One quickfix item per row: a file location when the row has one.
@@ -154,7 +159,8 @@ end
 
 local function launch(command)
   return function(opts)
-    local c, uri = client(), here()
+    local uri = here()
+    local c = client(uri)
     exec(c, command, { { slug = opts.args, uri = uri } }, function(spec) run_spec(c, spec, uri) end)
   end
 end
@@ -179,7 +185,8 @@ vim.lsp.codelens.enable(true)
 
 local function list(command)
   return function()
-    exec(client(), command, { { uri = here() } }, function(result) show_list(command, result) end)
+    local uri = here()
+    exec(client(uri), command, { { uri = uri } }, function(result) show_list(command, result) end)
   end
 end
 vim.api.nvim_create_user_command('WitanReady', list('witan.listReadyTasks'), {})
