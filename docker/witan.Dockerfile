@@ -19,9 +19,9 @@
 ARG PYTHON_VERSION=3.14
 # The tag of the node image the UI stage builds in. The exact version is pinned
 # in mcp/servers/witan/ui/.node-version, which the GitHub workflows read; this
-# is the major line that pin lives on (24 = Krypton, the current LTS). Renovate
-# covers both.
-ARG NODE_VERSION=24
+# is the major line that pin lives on (26 = Lithium, the current LTS). Renovate
+# bumps .node-version but not this arg, so a major bump moves it by hand.
+ARG NODE_VERSION=26
 # Keep in lockstep with witan_core's installer pin
 # (packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION)
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
