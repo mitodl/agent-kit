@@ -60,7 +60,7 @@ from pathlib import Path
 #: docs/internals/design/omnigraph-0-14-upgrade-spec.md.
 #:
 #: 0.15.0 (2026-11-09) still writes 16 and serves 14 to 16.
-_OMNIGRAPH_VERSION = "0.15.0"
+_OMNIGRAPH_VERSION = "0.16.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which

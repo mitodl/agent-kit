@@ -35,7 +35,7 @@
 # 0.15 on (upstream #1189, docs/user/operations/s3-cluster-roots.md); 0.14
 # needed a patched build, which this file carried until the 0.15 pin.
 
-ARG OMNIGRAPH_VERSION=0.15.0
+ARG OMNIGRAPH_VERSION=0.16.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
