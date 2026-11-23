@@ -587,7 +587,9 @@ target's graph, at its own checkout branch:
   has no index (reads then show the default branch).
 
 An editor without CodeLens (eglot, Zed by default) gets each lens's text in
-the hover on its line and its command as a code action. A deployment you are
+the hover on its line and its command as a code action. Configuration for
+Neovim, eglot and lsp-mode, and what each shows, is in witan's
+[editor setup guide](../witan/docs/editors.md). A deployment you are
 not logged in to shows `Not logged in ... run witan-code login` in hover and
 diagnostics; the server never prompts.
 
