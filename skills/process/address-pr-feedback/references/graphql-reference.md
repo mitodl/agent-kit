@@ -28,7 +28,11 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           path
           line
           comments(first: 50) {
-            nodes { databaseId body author { login } createdAt }
+            # __typename is the Actor type (User/Bot/Organization/Mannequin);
+            # the script normalizes it into author_type, which is the field
+            # Phase 2 classifies from. Select it here too or a hand-run debug
+            # query can't answer the question the skill asks of the output.
+            nodes { databaseId body author { login __typename } createdAt }
           }
         }
       }
