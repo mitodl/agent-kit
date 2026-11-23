@@ -52,7 +52,6 @@ def test_only_the_council_plugin_is_installed_here():
     plugins = discover_plugins()
     assert list(plugins) == ["council"]
     assert isinstance(plugins["council"], CouncilPlugin)
-    assert not plugins["council"].capabilities
 
 
 def test_witan_lsp_starts_and_reports_one_plugin(folders):
@@ -64,8 +63,11 @@ def test_witan_lsp_starts_and_reports_one_plugin(folders):
         )
     )
     assert init.server_info.name == "witan"
-    assert init.capabilities.hover_provider is None
-    assert list(init.capabilities.execute_command_provider.commands) == ["witan.status"]
+    assert init.capabilities.hover_provider
+    assert list(init.capabilities.execute_command_provider.commands) == [
+        "witan.status",
+        *CouncilPlugin.commands,
+    ]
     assert [p["name"] for p in status["plugins"]] == ["council"]
     assert [f["target"] for f in status["folders"]] == ["work", "personal"]
 

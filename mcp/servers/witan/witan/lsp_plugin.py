@@ -1,21 +1,95 @@
 """witan-council's plugin for the witan language server (ADR 0012).
 
-Registered under the ``witan.lsp.plugins`` entry-point group. It provides no
-features yet; it routes each workspace folder through the CLI's own dispatch,
-so the council features that follow read the same graph ``witan`` would from
-that folder: a ``RemoteServerProxy`` when the folder's target names a
-deployment, else the in-process server behind ``local_server``'s guard.
+Registered under the ``witan.lsp.plugins`` entry-point group. It routes each
+workspace folder through the CLI's own dispatch, so the features read the same
+graph ``witan`` would from that folder: a ``RemoteServerProxy`` when the
+folder's target names a deployment, else the in-process server behind
+``local_server``'s guard.
+
+The features, per ADR 0012's feature map:
+
+- an Information diagnostic on the first line of a file a memory's stale
+  ``symbol_refs`` names (``memory_stale_refs``);
+- a hover section on a symbol listing the tasks and memories whose
+  ``symbol_refs`` name it (``recall(symbol_id=...)``), only when another
+  plugin resolves positions to symbols;
+- the ``witan.*`` commands below, whose results are JSON a client renders.
+
+Every command takes at most one argument, an object. Its ``uri`` names the
+workspace folder the command applies to, or any file in one (the innermost
+folder holding it wins); without it the first folder is used. The list
+commands answer ``{"repo": ..., <list>: [...]}`` for that folder's repo:
+
+- ``witan.listStaleRefs``: ``refs``, one row per ref that is not live, with
+  ``uri`` ``null`` when the file it names is gone.
+- ``witan.listReadyTasks``: ``ready`` (``task_ready``), ``for_branch``
+  (``task_for_branch`` on the folder's branch) and ``branch``.
+- ``witan.listProjects``: ``projects`` (``workflow_project_list``).
+- ``witan.listMyWork``: ``tasks``, the caller's ``in_progress`` tasks.
+- ``witan.runTask`` / ``witan.runProject`` take ``slug`` and optional
+  ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal, with
+  ``handoff`` always false (see ``_launch``).
+- ``witan.releaseTask`` takes ``slug`` and ``claimed_at`` (the spec's
+  ``claim.claimed_at``, plus the ``uri`` the launch was run with) and answers
+  ``task_release``'s result.
+
+Every tool call passes the folder's own repo, so nothing falls back to the
+process's cwd or asks. Every call also runs inside :func:`prompts_off`: stdin
+is the JSON-RPC channel, so a tool must never put a question to it. A missing
+or expired ``witan login`` token does not prompt either: the token provider
+raises ``NeedsLogin``, which fails the request with its message.
 
 Nothing here imports pygls, so the module loads without the ``lsp`` extra.
 """
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
+import time
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
-from witan_core.lsp import Folder, Plugin, Route
+from witan_core.lsp import (
+    Capability,
+    CommandContext,
+    Context,
+    Folder,
+    Note,
+    Plugin,
+    Route,
+)
+from witan_core.observability import get_logger
+from witan_core.repo_key import checkout_branch
 
 from . import config as cfg_module
+from .prompts import prompts_off
+from .repo import normalise
+
+LIST_STALE_REFS = "witan.listStaleRefs"
+LIST_READY_TASKS = "witan.listReadyTasks"
+LIST_PROJECTS = "witan.listProjects"
+LIST_MY_WORK = "witan.listMyWork"
+RUN_TASK = "witan.runTask"
+RUN_PROJECT = "witan.runProject"
+RELEASE_TASK = "witan.releaseTask"
+
+STALE_REFS_TTL_SECONDS = 60
+"""How long one folder's ``memory_stale_refs`` result serves its diagnostics.
+The review resolves every ref in the repo against witan-code, and an editor
+publishes diagnostics on every open and save."""
+
+logger = get_logger("witan.lsp_plugin")
+
+HOVER_LIMIT = 10
+"""Tasks, and separately memories, listed in one hover."""
+
+_MD_PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
 
 
 def _store(cfg: cfg_module.Config, folder: Folder) -> str:
@@ -34,7 +108,121 @@ def _store(cfg: cfg_module.Config, folder: Folder) -> str:
     return str(folder.path / uri)
 
 
+def plain(text: Any) -> str:
+    """``text`` as markdown that renders as itself.
+
+    For teammate-written text in a hover: whitespace runs collapse to one
+    space, so a title cannot open a block (a heading, a list, a fence), and
+    every ASCII punctuation character is backslash-escaped, so it cannot form
+    a link, an image, inline HTML, an entity or emphasis.
+
+    :param text: A title, status or slug from the graph.
+    :returns: Markdown source for the literal text.
+    :rtype: str
+    """
+    return _MD_PUNCTUATION.sub(r"\\\1", " ".join(str(text).split()))
+
+
+def _uri_path(uri: str) -> Path:
+    return Path(url2pathname(urlsplit(uri).path))
+
+
+def _checkout_root(folder: Path) -> Path | None:
+    """The top of the checkout ``folder`` is in; symbol ids are relative to it.
+
+    git answers with the physical path, so a folder opened through a symlink
+    is compared with it only after resolving.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return Path(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def _ref_file(root: Path, folder: Folder, ref_path: str) -> Path | None:
+    """The file a ref's path names in this checkout, as the editor sees it.
+
+    ``None`` when the file is gone, or when the path leaves the checkout: a
+    ref is teammate-written, and must not point the editor at any other file
+    on this machine. Under the folder, the path is spelled through the folder
+    the editor opened (symlink and all), so it matches the open document.
+    """
+    file = (root / ref_path).resolve()
+    if not file.is_relative_to(root) or not file.is_file():
+        return None
+    real = folder.path.resolve()
+    return folder.path / file.relative_to(real) if file.is_relative_to(real) else file
+
+
+def _split_ref(ref: str) -> tuple[str, str, str] | None:
+    """``repo#path::Name`` as its three parts, or ``None`` for any other shape."""
+    repo, _, rest = ref.partition("#")
+    path, _, name = rest.rpartition("::")
+    return (normalise(repo), path, name) if repo and path and name else None
+
+
+@contextmanager
+def _tool_calls() -> Iterator[None]:
+    """Run tool calls with prompts off, and a guard refusal as an error.
+
+    The local-store guard refuses a write by exiting, after printing why to
+    stderr, which an editor shows nobody. Re-raised as an ordinary error, the
+    explanation becomes the failed request's message.
+    """
+    from .cli.local_dispatch import LocalWriteRefused
+
+    with prompts_off():
+        try:
+            yield
+        except LocalWriteRefused as exc:
+            raise RuntimeError(exc.message) from None
+
+
+def _required(args: Mapping[str, Any], key: str, command: str) -> Any:
+    if not args.get(key):
+        raise ValueError(f"{command} needs a {key!r} argument.")
+    return args[key]
+
+
 class CouncilPlugin(Plugin):
+    capabilities = frozenset({Capability.HOVER, Capability.DIAGNOSTICS})
+    commands = (
+        LIST_STALE_REFS,
+        LIST_READY_TASKS,
+        LIST_PROJECTS,
+        LIST_MY_WORK,
+        RUN_TASK,
+        RUN_PROJECT,
+        RELEASE_TASK,
+    )
+    tools = frozenset(
+        {
+            "memory_stale_refs",
+            "recall",
+            "task_ready",
+            "task_for_branch",
+            "workflow_project_list",
+            "task_list",
+            "task_get",
+            "workflow_project_get",
+            "task_claim",
+            "task_release",
+        }
+    )
+
+    def __init__(self) -> None:
+        # Only the host's one worker thread touches these.
+        self._stale_refs: dict[str, tuple[float, dict]] = {}
+        self._roots: dict[Path, Path | None] = {}
+
+    # ── routing ───────────────────────────────────────────────────────────
+
     def route(self, folder: Folder) -> Route:
         remote = cfg_module.load_remote_config(
             target=folder.target, project_path=folder.path
@@ -58,3 +246,237 @@ class CouncilPlugin(Plugin):
         from .cli.local_dispatch import local_server
 
         return local_server(route.guard)
+
+    # ── stale-ref diagnostics ─────────────────────────────────────────────
+
+    def _root(self, folder: Folder) -> Path | None:
+        if folder.path not in self._roots:
+            self._roots[folder.path] = _checkout_root(folder.path)
+        return self._roots[folder.path]
+
+    def _stale(self, ctx: Context, *, fresh: bool = False) -> dict:
+        cached = self._stale_refs.get(ctx.folder.uri)
+        if (
+            not fresh
+            and cached
+            and time.monotonic() - cached[0] < STALE_REFS_TTL_SECONDS
+        ):
+            return cached[1]
+        result = ctx.tools.memory_stale_refs(repo=ctx.folder.repo)
+        self._stale_refs[ctx.folder.uri] = (time.monotonic(), result)
+        return result
+
+    def diagnostics(self, ctx: Context, uri: str) -> list[Note]:
+        folder = ctx.folder
+        if folder.repo is None or (root := self._root(folder)) is None:
+            return []
+        path = _uri_path(uri).resolve()
+        if not path.is_relative_to(root):
+            return []
+        relative = path.relative_to(root).as_posix()
+        try:
+            with _tool_calls():
+                stale = self._stale(ctx)
+        except Exception as exc:  # any read failure: a login, the network, the store
+            # A request would fail with this message. A pushed diagnostic has
+            # no request to fail, and raising would drop every other note the
+            # host publishes for this file, so the reason goes on it instead.
+            logger.warning("witan.lsp.stale_refs_failed", uri=uri, exc_info=True)
+            return [Note(line=0, message=f"Could not check stale memory refs: {exc}")]
+        notes = []
+        for memory in stale["memories"]:
+            for ref in memory["refs"]:
+                parts = _split_ref(ref["symbol_ref"])
+                if (
+                    parts is None
+                    or ref["status"] != "missing"
+                    or parts[:2] != (folder.repo, relative)
+                ):
+                    continue
+                candidates = ref.get("candidates") or []
+                found = (
+                    f"Candidates: {', '.join(candidates)}."
+                    if candidates
+                    else "No symbol of that name is indexed in the repo."
+                )
+                notes.append(
+                    Note(
+                        line=0,
+                        message=(
+                            f"{memory['kind']} {memory['slug']} "
+                            f"({memory['title']}) names {parts[2]} in this file, "
+                            f"which the code graph no longer has. {found}"
+                        ),
+                    )
+                )
+        return notes
+
+    # ── hover ─────────────────────────────────────────────────────────────
+
+    def hover(self, ctx: Context, uri: str, line: int, character: int) -> str | None:
+        with _tool_calls():
+            symbol = ctx.symbol_at(uri, line, character)
+            if symbol is None:
+                return None
+            found = ctx.tools.recall(
+                symbol_id=symbol,
+                repo=symbol.partition("#")[0],
+                hops=0,
+                limit=HOVER_LIMIT,
+            )
+        tasks = found["symbol"]["tasks"][:HOVER_LIMIT]
+        memories = found["memories"]
+        if not tasks and not memories:
+            return None
+        lines = [f"**witan**: {plain(symbol.rpartition('::')[2])}"]
+        if tasks:
+            lines += ["", "Tasks:", ""]
+            lines += [
+                f"- {plain(t['slug'])} ({plain(t['status'])}): {plain(t['title'])}"
+                for t in tasks
+            ]
+        if memories:
+            lines += ["", "Memories:", ""]
+            lines += [
+                f"- {plain(m['slug'])} ({plain(m['kind'])}): {plain(m['title'])}"
+                for m in memories
+            ]
+        return "\n".join(lines)
+
+    # ── commands ──────────────────────────────────────────────────────────
+
+    def execute_command(
+        self, ctx: CommandContext, command: str, arguments: Sequence[Any]
+    ) -> Any:
+        args: Mapping[str, Any] = arguments[0] if arguments else {}
+        folder = self._folder(ctx, args.get("uri"))
+        fctx = ctx.context(folder)
+        if fctx is None:
+            raise ValueError(
+                f"witan serves no graph for {folder.path} in this language "
+                "server; the diagnostics on any file in it say why."
+            )
+        with _tool_calls():
+            if command in (RUN_TASK, RUN_PROJECT):
+                return self._launch(ctx, fctx, command, args)
+            if command == RELEASE_TASK:
+                return fctx.tools.task_release(
+                    slug=_required(args, "slug", command),
+                    if_claimed_at=_required(args, "claimed_at", command),
+                )
+            if folder.repo is None:
+                raise ValueError(
+                    f"{folder.path} has no git remote, so there is no repo to "
+                    f"scope {command} to."
+                )
+            return {"repo": folder.repo, **self._list(fctx, command)}
+
+    def _folder(self, ctx: CommandContext, uri: str | None) -> Folder:
+        """The innermost folder holding ``uri`` (a folder or a file in one),
+        or the first folder when the command names none."""
+        if not ctx.folders:
+            raise ValueError("No workspace folder is open.")
+        if uri is None:
+            return ctx.folders[0]
+        # Resolved on both sides: a client may spell the uri through a
+        # symlink the folder was not opened through, or the other way round.
+        path = _uri_path(uri).resolve()
+        real = {f.uri: f.path.resolve() for f in ctx.folders}
+        containing = [f for f in ctx.folders if path.is_relative_to(real[f.uri])]
+        if not containing:
+            raise ValueError(f"{uri} is in no open workspace folder.")
+        return max(containing, key=lambda f: len(real[f.uri].parts))
+
+    def _list(self, ctx: Context, command: str) -> dict[str, Any]:
+        tools, folder = ctx.tools, ctx.folder
+        if command == LIST_READY_TASKS:
+            # Read now: `folder.branch` is what was checked out when the
+            # folder was added, and the person may have switched since.
+            branch = checkout_branch(folder.path)
+            return {
+                "branch": branch,
+                "ready": tools.task_ready(repo=folder.repo),
+                "for_branch": tools.task_for_branch(branch=branch, repo=folder.repo)
+                if branch
+                else [],
+            }
+        if command == LIST_PROJECTS:
+            return {"projects": tools.workflow_project_list(repo=folder.repo)}
+        if command == LIST_MY_WORK:
+            # task_ready leaves out a task with a live claim, which is exactly
+            # the person's own work in flight.
+            return {
+                "tasks": tools.task_list(
+                    status="in_progress", assignee="@me", repo=folder.repo
+                )
+            }
+        if command == LIST_STALE_REFS:
+            return {"refs": self._stale_ref_rows(ctx)}
+        raise NotImplementedError(command)
+
+    def _stale_ref_rows(self, ctx: Context) -> list[dict[str, Any]]:
+        """Every ref of the folder's repo that is not live, one row each.
+
+        ``uri`` is the file the ref names in this checkout, or ``None`` when
+        that file is gone (no document to put a diagnostic on) or the ref
+        names another repo.
+        """
+        root = self._root(ctx.folder)
+        rows = []
+        for memory in self._stale(ctx, fresh=True)["memories"]:
+            for ref in memory["refs"]:
+                if ref["status"] == "live":
+                    continue
+                parts = _split_ref(ref["symbol_ref"])
+                file = (
+                    _ref_file(root, ctx.folder, parts[1])
+                    if root is not None and parts and parts[0] == ctx.folder.repo
+                    else None
+                )
+                rows.append(
+                    {
+                        "memory": memory["slug"],
+                        "kind": memory["kind"],
+                        "title": memory["title"],
+                        "symbol_ref": ref["symbol_ref"],
+                        "status": ref["status"],
+                        "reason": ref.get("reason"),
+                        "candidates": ref.get("candidates") or [],
+                        "uri": file.as_uri() if file else None,
+                    }
+                )
+        return rows
+
+    def _launch(
+        self,
+        ctx: CommandContext,
+        fctx: Context,
+        command: str,
+        args: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """The launch spec for a task or project, in-process (ADR 0012, "3. The
+        launch contract"). The client runs it; this process never spawns it."""
+        from .cli.run_helpers import build_launch_spec
+
+        folder = fctx.folder
+        spec = build_launch_spec(
+            "task" if command == RUN_TASK else "project",
+            _required(args, "slug", command),
+            server=fctx.tools,
+            cfg=cfg_module.load(target=folder.target, project_path=folder.path),
+            workspace_folders=[
+                folder.path,
+                *(f.path for f in ctx.folders if f != folder),
+            ],
+            # `witan lsp --target` reaches this process as WITAN_TARGET.
+            started_with_target="WITAN_TARGET" in os.environ,
+            agent=args.get("agent"),
+            model=args.get("model"),
+        )
+        if spec["launchable"]:
+            # `serve()` drops CLAUDE_PROJECT_DIR and WITAN_REPO before any
+            # plugin runs, so the handoff check cannot see that the editor,
+            # whose environment a chat-panel agent inherits, still has them.
+            # Never offer a handoff until the host can say what it removed.
+            spec["handoff"] = False
+        return spec

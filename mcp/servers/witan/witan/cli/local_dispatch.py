@@ -36,6 +36,7 @@ from ._common import esc, print_error, stderr_console
 __all__ = [
     "CLIENT_READ_ATTRS",
     "READ_TOOLS",
+    "LocalWriteRefused",
     "local_server",
     "local_store_notice",
     "local_write_refused",
@@ -52,6 +53,7 @@ READ_TOOLS = frozenset(
         "task_get",
         "task_list",
         "task_ready",
+        "task_for_branch",
         "task_search",
         "workflow_project_get",
         "workflow_project_status",
@@ -135,6 +137,19 @@ def local_write_refused(tool: str, diagnosis: LocalDispatch) -> str:
         f"  name the deployment:  WITAN_TARGET={diagnosis.deployed_targets[0]} witan …\n"
         "  write locally on purpose:  WITAN_MEMORY_URI=<path> witan …"
     )
+
+
+class LocalWriteRefused(SystemExit):
+    """The guard refused a call. Exits the CLI with status 1, as before.
+
+    Carries the explanation as ``message`` for a caller with no terminal to
+    have printed it on: the language server fails the editor's request with
+    it, where a bare ``SystemExit`` would reach the editor as an exit code.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(1)
+        self.message = message
 
 
 def local_store_notice(diagnosis: LocalDispatch) -> str:
@@ -221,8 +236,9 @@ class _LocalStoreGuard:
         return self._inner
 
     def _refuse(self, what: str) -> None:
-        print_error(local_write_refused(what, self._diagnosis))
-        raise SystemExit(1)
+        message = local_write_refused(what, self._diagnosis)
+        print_error(message)
+        raise LocalWriteRefused(message)
 
     def __getattr__(self, name: str):
         # Dunders are protocol, not tools. Raise rather than delegate: reaching
