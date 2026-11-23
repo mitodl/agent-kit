@@ -195,13 +195,15 @@ export async function activate(
 	const handoffs = async () =>
 		availableHandoffs([
 			...(await vscode.commands.getCommands(true)),
-			...vscode.extensions.all.flatMap(
-				(e) =>
-					(
-						e.packageJSON?.contributes?.commands as
-							| Array<{ command: string }>
-							| undefined
-					)?.map((c) => c.command) ?? [],
+			...vscode.extensions.all.flatMap((e) =>
+				// The manifest schema takes one command object or an array of them.
+				[
+					(e.packageJSON?.contributes?.commands ?? []) as
+						| { command: string }
+						| Array<{ command: string }>,
+				]
+					.flat()
+					.map((c) => c.command),
 			),
 		]);
 
@@ -344,6 +346,8 @@ export async function activate(
 		fs.writeFileSync(file, JSON.stringify(launchFile), { mode: 0o600 });
 		const terminal = vscode.window.createTerminal({
 			name: `witan: ${spec.slug}`,
+			// Reviving it after a restart would rerun a launch file already gone.
+			isTransient: true,
 			// The editor's own runtime as plain node: the extension host's binary,
 			// which in desktop VS Code is Electron.
 			shellPath: process.execPath,

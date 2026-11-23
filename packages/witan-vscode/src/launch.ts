@@ -109,9 +109,11 @@ export function findExecutable(
 	isExecutable: (file: string) => boolean,
 ): string | undefined {
 	const lib = platform === "win32" ? path.win32 : path.posix;
+	// On Windows a bare name runs only with a PATHEXT extension: npm puts an
+	// extensionless sh script for Git Bash next to every `.cmd` shim.
 	const extensions =
-		platform === "win32"
-			? ["", ...(pathValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";")]
+		platform === "win32" && lib.extname(command) === ""
+			? (pathValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";")
 			: [""];
 	const candidates =
 		command.includes(lib.sep) || command.includes("/")

@@ -95,7 +95,7 @@ test("the agent is looked up on the launched env's PATH", () => {
 });
 
 test("on Windows the lookup honours PATHEXT and any spelling of PATH", () => {
-	const present = new Set(["C:\\tools\\claude.CMD"]);
+	const present = new Set(["C:\\tools\\claude", "C:\\tools\\claude.CMD"]);
 	const exists = (file: string) => present.has(file);
 	assert.equal(
 		findExecutable(
