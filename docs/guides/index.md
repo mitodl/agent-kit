@@ -18,6 +18,12 @@ started](../getting-started/index.md) instead.
     The board, project rollups, dependency waves, the timeline and the
     contradictions inbox, for a person rather than an agent.
 
+-   **[Editor setup: Neovim and Emacs](editors.md)**
+
+    `witan lsp` in Neovim and in Emacs (eglot or lsp-mode): diagnostics,
+    hover, lenses, ready work and launching an agent, without leaving the
+    editor.
+
 -   **[witan-code user guide](witan-code-user-guide.md)**
 
     Indexing, querying, and the cross-repo bridge, in depth.
@@ -69,6 +75,7 @@ started](../getting-started/index.md) instead.
 | Change where the graph is stored | [`WITAN_MEMORY_URI`](../reference/environment.md#store-and-attribution) |
 | Move my local graph onto the team's shared store | [Migration runbook](migration-runbook.md) — never by copying the directory |
 | See what is ready, blocked or held by a stale claim | [The witan web UI](witan-ui.md) |
+| See callers, ready work and stale memory refs in my editor | [Editor setup](editors.md) |
 | Point my CLI and agent at a deployed witan | [Using a deployed witan](deployed-witan.md) |
 | Route work repos and personal repos at different stores | [Named targets](witan-user-guide.md) |
 | Stop a detector flagging a false positive | [Write-path scanning](write-path-scanning.md) |
