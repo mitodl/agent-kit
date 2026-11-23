@@ -194,8 +194,9 @@ no feature depends on that default.
 The host holds the tool binding as an enumerated list, as ADR-0011 does for the
 UI: the tools named in the feature map below, plus `task_list`, `task_get`,
 `workflow_project_get`, `task_ready`, `recall`, `task_claim` and `task_release`,
-which the launch contract uses. A plugin that needs a tool outside the list
-amends this ADR.
+which the launch contract uses, and `workflow_project_run_memories`, which a
+project launch's prompt uses for its team memories (added after acceptance). A
+plugin that needs a tool outside the list amends this ADR.
 
 #### Feature map
 
@@ -249,8 +250,8 @@ object; neither parses CLI output.
   "launchable": true,
   "argv": ["claude", "--model", "opus", "<prompt>"],
   "cwd": "/home/me/code/repo",
-  "env": {"WITAN_TARGET": "prod"},
-  "unset_env": ["CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO"],
+  "env": {"WITAN_TARGET": "prod", "WITAN_CLIENT_INSTANCE": "<fresh id>"},
+  "unset_env": ["CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO", "WITAN_CLIENT_INSTANCE"],
   "handoff": false,
   "prompt": "<prompt>",
   "agent": "claude",
@@ -276,6 +277,13 @@ object; neither parses CLI output.
   would otherwise drive (`witan_core/target_config.py:42`, `witan/repo.py`).
   So `unset_env` always lists every name in `SESSION_ID_ENV_VARS` plus
   `CLAUDE_PROJECT_DIR` and `WITAN_REPO`.
+- `env` sets `WITAN_CLIENT_INSTANCE` to an id minted for this launch, and
+  `unset_env` lists it so an inherited one never survives. The agent's remote
+  proxy sends it as `X-Witan-Client-Instance`, and the launcher makes its claim
+  or memory lookup under the same id, so the deployment's log joins the
+  memories surfaced for the agent to the ones it later reads. Added after this
+  ADR was accepted. It adds a key to `env` and changes no field's meaning, so
+  the spec's `version` stays 1.
 - `env` pins the target. It sets `WITAN_TARGET` to the target the folder
   resolved to, whether that came from `--target`, `WITAN_TARGET` or the
   folder's `match_*` rules. When the folder resolved to the local store, which

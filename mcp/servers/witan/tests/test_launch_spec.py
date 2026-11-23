@@ -76,6 +76,18 @@ def session_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+#: What every launch in these tests hands its agent as WITAN_CLIENT_INSTANCE.
+INSTANCE = "instance-1"
+
+
+@pytest.fixture(autouse=True)
+def fixed_client_instance(monkeypatch):
+    """A launch mints a fresh id; pinned so two specs compare equal."""
+    from witan.cli import run_helpers
+
+    monkeypatch.setattr(run_helpers, "new_client_instance", lambda: INSTANCE)
+
+
 @pytest.fixture
 def folders(tmp_path, monkeypatch):
     """Two open folders: `here` is a checkout of REPO, `there` of OTHER_REPO."""
@@ -132,18 +144,19 @@ def test_the_local_store_unsets_the_target_and_a_named_one_pins_it(folders):
     fake = _Fake(task=_task(), claim=_CLAIMED)
 
     local = _spec(fake, folders=[here])
-    assert local["env"] == {}
+    assert local["env"] == {"WITAN_CLIENT_INSTANCE": INSTANCE}
     assert local["unset_env"] == [
         *SESSION_ID_ENV_VARS,
         "CLAUDE_PROJECT_DIR",
         "WITAN_REPO",
+        "WITAN_CLIENT_INSTANCE",
         "WITAN_TARGET",
     ]
 
     cfg = _Cfg()
     cfg.target_name = "prod"
     named = _spec(fake, folders=[here], cfg=cfg)
-    assert named["env"] == {"WITAN_TARGET": "prod"}
+    assert named["env"] == {"WITAN_TARGET": "prod", "WITAN_CLIENT_INSTANCE": INSTANCE}
     assert "WITAN_TARGET" not in named["unset_env"]
 
 
@@ -207,7 +220,7 @@ def test_a_named_target_is_pinned_whatever_the_folder_matches(folders, config_to
     spec = _spec(_Fake(task=_task(), claim=_CLAIMED), folders=[here], cfg=cfg)
 
     assert spec["launchable"] is True
-    assert spec["env"] == {"WITAN_TARGET": "qa"}
+    assert spec["env"] == {"WITAN_TARGET": "qa", "WITAN_CLIENT_INSTANCE": INSTANCE}
 
 
 def test_handoff_only_when_the_editor_env_resolves_what_the_spec_does(
@@ -534,12 +547,20 @@ def test_the_pickers_consolidated_launch_gets_the_launch_env(folders, monkeypatc
     from witan.cli import run_helpers, tasks
 
     here, _ = folders
+    claimed_under = []
 
     class Picker(_Fake):
         def task_ready(self, **_kwargs):
             return [_task(), {**_task(), "slug": "tk-b"}]
 
+        def task_claim(self, slug, **kwargs):
+            from witan_core.client_instance import client_instance
+
+            claimed_under.append(client_instance())
+            return super().task_claim(slug, **kwargs)
+
     _cli(monkeypatch, Picker(claim=_CLAIMED), here)
+    monkeypatch.setattr(tasks, "new_client_instance", lambda: INSTANCE)
     monkeypatch.setattr(tasks, "_pick_items", lambda items, _render: items)
     monkeypatch.setattr(tasks.Prompt, "ask", lambda *a, **kw: "1")
     monkeypatch.setenv("CLAUDE_SESSION_ID", "outer")
@@ -554,6 +575,9 @@ def test_the_pickers_consolidated_launch_gets_the_launch_env(folders, monkeypatc
     for name in ("CLAUDE_SESSION_ID", "WITAN_REPO", "WITAN_TARGET"):
         assert name not in kw["env"]
     assert os.environ["CLAUDE_SESSION_ID"] == "outer"
+    # Both claims and the agent carry the one id its reads will join on.
+    assert claimed_under == [INSTANCE, INSTANCE]
+    assert kw["env"]["WITAN_CLIENT_INSTANCE"] == INSTANCE
 
 
 # ── task_release's if_claimed_at fence ────────────────────────────────

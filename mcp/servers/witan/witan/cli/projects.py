@@ -8,6 +8,8 @@ import cyclopts
 from rich.markup import escape
 from rich.prompt import Prompt
 
+from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
+
 from .. import config as cfg_module
 from .. import envelope, live_pr
 from ._common import (
@@ -33,9 +35,14 @@ from .run_helpers import (
     _launch_agent,
     _merge_prompts,
     _pick_items,
+    _project_prompt_memories,
     _project_run_prompt,
     _run_project_slug,
+    agent_environ,
+    bare_session_env,
     check_emit_spec_args,
+    launch_env,
+    launched_client_instance,
 )
 from .selected_target import selected_target
 
@@ -739,12 +746,26 @@ def project_run(
     mode = "c" if choice == "1" else "s"
 
     if mode == "c":
+        # One agent for every project, so one client instance its reads join on.
+        instance = new_client_instance()
         prompts = []
         for p in selected:
             p_tasks = _fn(s.task_ready)(project_slug=p["slug"], limit=20)
-            prompts.append(_project_run_prompt(p, p_tasks))
+            with bare_session_env(), launched_client_instance(instance):
+                memories = _project_prompt_memories(s, p["slug"], p_tasks)
+            prompts.append(_project_run_prompt(p, p_tasks, memories))
         merged = _merge_prompts(prompts, "project")
-        _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
+        # The same environment a launch spec gives its agent: the target pinned,
+        # and no inherited session id or location override.
+        env, unset_env = launch_env(cfg)
+        _launch_agent(
+            cfg,
+            resolved_agent,
+            resolved_model,
+            merged,
+            dry_run,
+            env=agent_environ({**env, CLIENT_INSTANCE_ENV: instance}, unset_env),
+        )
     else:
         for p in selected:
             console.print(f"\n[bold]── {p['slug']}: {p.get('title', '')} ──[/bold]")

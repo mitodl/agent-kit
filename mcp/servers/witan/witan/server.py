@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -26,7 +26,7 @@ import anyio.to_thread
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.dependencies import get_access_token, get_http_headers
 from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl
@@ -34,6 +34,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from witan_core import caching, chunking, normalise, now_iso, omnigraph_install
+from witan_core.client_instance import CLIENT_INSTANCE_HEADER
+from witan_core.client_instance import client_instance as _process_client_instance
 from witan_core.export_rows import (
     edge_key,
     edge_rank,
@@ -4153,6 +4155,35 @@ def _task_memories(task: dict) -> tuple[list[dict], dict[str, tuple]]:
     return memories, scores
 
 
+_MCP_SESSION_HEADER = "mcp-session-id"
+
+
+def _request_client_instance() -> str:
+    """The calling client process's id, or ``""`` when none is known.
+
+    Over HTTP, the ``X-Witan-Client-Instance`` header witan-core's remote proxy
+    sends (``witan_core.client_instance``), else the ``Mcp-Session-Id`` a
+    handshake-era MCP client sends, which is stable for its MCP session. A
+    client on MCP 2026-07-28 that is not the proxy has neither, since that era
+    has no transport session. With no HTTP request (local stdio, or the CLI's
+    in-process server) the server runs inside the client, so it is this
+    process's own id.
+    """
+    headers = get_http_headers(include={_MCP_SESSION_HEADER})
+    if not headers:
+        return _process_client_instance()
+    return headers.get(CLIENT_INSTANCE_HEADER) or headers.get(_MCP_SESSION_HEADER) or ""
+
+
+def _log_client_instance() -> str | None:
+    """The calling client process as the memory log lines name it, or ``None``.
+
+    Digested like :func:`_log_session`, and for a further reason: an
+    ``Mcp-Session-Id`` names a live MCP session, which a log has no need to.
+    """
+    return _session_suffix(_request_client_instance()) or None
+
+
 def _log_session(session_id: str | None) -> str | None:
     """The calling session as the memory log lines name it, or ``None``.
 
@@ -4160,8 +4191,74 @@ def _log_session(session_id: str | None) -> str | None:
     ``#`` (``readiness.session_suffix``), so a surfaced line, a read line and a
     task's ``assignee`` all join on one value, and the raw id stays out of the
     logs.
+
+    A caller that names no session gets its client instance's digest
+    (:func:`_log_client_instance`) instead. Agents pass ``session_id`` on
+    ``task_claim`` because the claim prompt tells them to, and almost never on
+    ``memory_get`` or ``recall``: from 2026-11-12 to 2026-11-23, 430 of 435
+    read lines had a null session, so reads could be joined to the claim that
+    surfaced them only on actor and slug. The client instance is what the two
+    lines then share, in ``client_instance`` on both.
     """
-    return _session_suffix(session_state.current_session_id(session_id)) or None
+    return (
+        _session_suffix(session_state.current_session_id(session_id))
+        or _log_client_instance()
+    )
+
+
+#: One client process calling one memory read surface this often within
+#: :data:`_BULK_READ_WINDOW_SECONDS` is a script sweeping the graph, not an
+#: agent opening what it was shown. Counted per client instance as well as per
+#: actor, so one person's parallel agents do not add up to a sweep. On 2026-11-17 a sweep made 1,075
+#: ``memory_get`` calls over 1,068 slugs in about three minutes, and the
+#: measurement of surfaced reads had to drop it by hand. The organic
+#: ``memory_get`` reads in the same 11 days numbered 25.
+_BULK_READ_CALLS = 20
+#: The same, counted per actor across all their clients, for a sweep that does
+#: not keep one client id (a new process or MCP session per call). Well above
+#: what one person's parallel agents read together.
+_BULK_READ_CALLS_PER_ACTOR = 100
+_BULK_READ_WINDOW_SECONDS = 60.0
+# Process memory by design: a lost window after a rollout leaves at most the
+# first `_BULK_READ_CALLS` calls of a sweep untagged, the same as its start.
+# Bounded two ways: each window keeps no more timestamps than its threshold
+# needs, and a key idle for a whole window is dropped, because a sweep that
+# changes client id per call would otherwise leave one key behind per call.
+_recent_reads: dict[tuple, deque[float]] = {}
+_recent_reads_swept = 0.0
+_recent_reads_lock = threading.Lock()
+
+
+def _bulk_read(surface: str) -> bool:
+    """Count one ``surface`` call by the current client; whether it is a bulk read.
+
+    True from the :data:`_BULK_READ_CALLS`-th call by one client within the
+    window on, or the :data:`_BULK_READ_CALLS_PER_ACTOR`-th by one actor, so the
+    first calls of a sweep are untagged; they sit seconds before the tagged ones.
+    """
+    global _recent_reads_swept
+    now = time.monotonic()
+    expired = now - _BULK_READ_WINDOW_SECONDS
+    actor = _current_author()
+    windows = (
+        ((actor, _log_client_instance(), surface), _BULK_READ_CALLS),
+        ((actor, surface), _BULK_READ_CALLS_PER_ACTOR),
+    )
+    with _recent_reads_lock:
+        if _recent_reads_swept <= expired:
+            for key in [
+                k for k, calls in _recent_reads.items() if calls[-1] <= expired
+            ]:
+                del _recent_reads[key]
+            _recent_reads_swept = now
+        full = False
+        for key, threshold in windows:
+            calls = _recent_reads.setdefault(key, deque(maxlen=threshold))
+            calls.append(now)
+            while calls[0] <= expired:
+                calls.popleft()
+            full = full or len(calls) >= threshold
+    return full
 
 
 def _log_memory_read(
@@ -4170,17 +4267,50 @@ def _log_memory_read(
     """Log the memories a read returned, in the ``witan.memory.surfaced`` shape.
 
     The read side of the join that says whether a surfaced memory got read:
-    ``session`` (or the ``actor_id`` every tool call's lines carry) and a slug
-    tie this line to the ``witan.memory.surfaced`` line that preceded it.
-    Slugs only, never content or the query text.
+    ``session``, ``client_instance`` (or the ``actor_id`` every tool call's
+    lines carry) and a slug tie this line to the ``witan.memory.surfaced`` line
+    that preceded it. ``bulk`` marks a call from a sweep (:func:`_bulk_read`),
+    which a measurement of what agents read should leave out. Slugs only, never
+    content or the query text.
     """
     logger.info(
         "witan.memory.read",
         surface=surface,
         task=task,
         session=_log_session(session_id),
+        client_instance=_log_client_instance(),
+        bulk=_bulk_read(surface),
         count=len(slugs),
         slugs=slugs,
+    )
+
+
+def _log_surfaced(
+    surface: str,
+    memories: list[dict],
+    scores: dict[str, tuple],
+    session_id: str | None,
+    **fields,
+) -> None:
+    """Log one ``witan.memory.surfaced`` line for ``memories``.
+
+    ``content_scores`` and ``title_scores`` run parallel to ``slugs``: the raw
+    BM25 scores the floors in :func:`_title_matches` were applied to, ``None``
+    for a linked memory the title did not match. Without them a reader of the
+    production lines can judge a surfaced memory off-topic but not what floor
+    would have dropped it.
+    """
+    slugs = [m["slug"] for m in memories]
+    logger.info(
+        "witan.memory.surfaced",
+        surface=surface,
+        **fields,
+        session=_log_session(session_id),
+        client_instance=_log_client_instance(),
+        count=len(memories),
+        slugs=slugs,
+        content_scores=[scores[s][0] if s in scores else None for s in slugs],
+        title_scores=[scores[s][1] if s in scores else None for s in slugs],
     )
 
 
@@ -4193,29 +4323,13 @@ def _surfaced_for_claim(task: dict, session_id: str | None) -> list[dict]:
     Logs every first claim, including the ones with nothing to show and the ones
     whose lookup failed, because the share of claims that carried a memory is the
     number that says whether this works, and it needs the denominator.
-
-    ``content_scores`` and ``title_scores`` run parallel to ``slugs``: the raw
-    BM25 scores the floors in :func:`_title_matches` were applied to, ``None``
-    for a linked memory the title did not match. Without them a reader of the
-    production lines can judge a surfaced memory off-topic but not what floor
-    would have dropped it.
     """
     try:
         memories, scores = _task_memories(task)
     except Exception:
         logger.warning("witan.memory.surface_failed", task=task["slug"], exc_info=True)
         memories, scores = [], {}
-    slugs = [m["slug"] for m in memories]
-    logger.info(
-        "witan.memory.surfaced",
-        surface="task_claim",
-        task=task["slug"],
-        session=_log_session(session_id),
-        count=len(memories),
-        slugs=slugs,
-        content_scores=[scores[s][0] if s in scores else None for s in slugs],
-        title_scores=[scores[s][1] if s in scores else None for s in slugs],
-    )
+    _log_surfaced("task_claim", memories, scores, session_id, task=task["slug"])
     return memories
 
 
@@ -6283,6 +6397,75 @@ def workflow_project_memories(
         "memories": list(merged.values()),
         "by_session": by_session,
     }
+
+
+#: How many of a project run's ready tasks its memories are matched against.
+#: The prompt lists up to 20, an agent starts on the first few, and each task
+#: costs two BM25 reads.
+_PROJECT_RUN_MEMORY_TASKS = 5
+
+
+@_tool(READ)
+def workflow_project_run_memories(
+    slug: str,
+    task_slugs: list[str],
+    session_id: str | None = None,
+) -> list[dict]:
+    """
+    Memories for a ``witan project run`` prompt, matched to its first ready tasks.
+
+    Listed only to witan's CLI (``witan.cli_only``). A project run claims
+    nothing before it launches, so no ``task_claim`` surfaces memories for it.
+    This applies the rule a first claim uses (``_task_memories``) to each of the
+    first few tasks in order, keeps a memory two tasks match under the first,
+    and stops at the claim's cap. Each memory carries the ``task`` it matched.
+
+    Logs one ``witan.memory.surfaced`` line with ``surface="project_run"``,
+    empty or failed lookups included, for the reason ``_surfaced_for_claim``
+    gives. ``tasks`` runs parallel to ``slugs``.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the project being run.
+    task_slugs:
+        The ready tasks the prompt lists, in its order.
+    session_id:
+        Your agent session id; only logged.
+    """
+    considered = list(dict.fromkeys(task_slugs))[:_PROJECT_RUN_MEMORY_TASKS]
+    memories: list[dict] = []
+    scores: dict[str, tuple] = {}
+    try:
+        rows = {
+            row["slug"]: row for row in _read_by_slugs("get_tasks_by_slugs", considered)
+        }
+        for task_slug in considered:
+            if len(memories) >= _SURFACED_MEMORY_LIMIT:
+                break
+            if task_slug not in rows:
+                continue
+            found, task_scores = _task_memories(rows[task_slug])
+            for memory in found:
+                if any(m["slug"] == memory["slug"] for m in memories):
+                    continue
+                memories.append({**memory, "task": task_slug})
+                if memory["slug"] in task_scores:
+                    scores[memory["slug"]] = task_scores[memory["slug"]]
+    except Exception:
+        logger.warning("witan.memory.surface_failed", project=slug, exc_info=True)
+        memories, scores = [], {}
+    memories = memories[:_SURFACED_MEMORY_LIMIT]
+    _log_surfaced(
+        "project_run",
+        memories,
+        scores,
+        session_id,
+        project=slug,
+        considered=considered,
+        tasks=[m["task"] for m in memories],
+    )
+    return memories
 
 
 # ── Workflow Traces (corpus) ───────────────────────────────────────

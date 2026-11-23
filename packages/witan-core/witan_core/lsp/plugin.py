@@ -64,6 +64,8 @@ BOUND_TOOLS = frozenset(
         "workflow_project_get",
         "task_claim",
         "task_release",
+        # A project launch's prompt memories (``witan.cli_only``).
+        "workflow_project_run_memories",
     }
 )
 """Every tool the language server may call, as ADR 0012 enumerates them.

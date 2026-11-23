@@ -260,6 +260,9 @@ def logged(server, monkeypatch):
             return lambda *_args, **_fields: None
 
     monkeypatch.setattr(server._module, "logger", Recorder())
+    # The bulk-read window counts across tests otherwise, and one actor makes
+    # every call in the suite.
+    monkeypatch.setattr(server._module, "_recent_reads", {})
     return events
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import cyclopts
 from rich.prompt import Prompt
 
+from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
+
 from .. import config as cfg_module
 from .. import live_pr
 from ._common import (
@@ -41,6 +43,7 @@ from .run_helpers import (
     bare_session_env,
     check_emit_spec_args,
     launch_env,
+    launched_client_instance,
 )
 from .selected_target import selected_target
 
@@ -864,6 +867,9 @@ def task_run(
     mode = "c" if choice == "1" else "s"
 
     if mode == "c":
+        # One agent for every task, so one client instance its reads join on,
+        # and the claims below are made under it (`launched_client_instance`).
+        instance = new_client_instance()
         claimable = list(selected)
         claims: dict[str, dict] = {}
         if claim and not dry_run:
@@ -872,7 +878,7 @@ def task_run(
                 # No explicit assignee, and bare (the session env is hidden): a
                 # task one of this person's sessions holds reads as held, and
                 # the launched agent may renew the bare claim as its own.
-                with bare_session_env():
+                with bare_session_env(), launched_client_instance(instance):
                     res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
@@ -902,13 +908,15 @@ def task_run(
         )
         # The same environment a launch spec gives its agent, so it neither
         # inherits a session id nor a location override that outranks its cwd.
+        env, unset_env = launch_env(cfg)
+        env[CLIENT_INSTANCE_ENV] = instance
         _launch_agent(
             cfg,
             resolved_agent,
             resolved_model,
             merged,
             dry_run,
-            env=agent_environ(*launch_env(cfg)),
+            env=agent_environ(env, unset_env),
         )
     else:
         for t in selected:
