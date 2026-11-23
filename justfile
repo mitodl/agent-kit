@@ -284,7 +284,7 @@ check-core-floor *args:
 changelog package:
     #!/usr/bin/env bash
     set -euo pipefail
-    SCRIV_TOOL="scriv@1.8.1"   # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.2"   # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
@@ -301,7 +301,7 @@ bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
     BUMP_TOOL="bump-my-version@1.8.1"   # keep in step with AGENTS.md
-    SCRIV_TOOL="scriv@1.8.1"            # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.2"            # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
