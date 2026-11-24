@@ -49,8 +49,19 @@ _EXCEPTION_RENDERER = structlog.processors.ExceptionRenderer(
 )
 
 # Libraries that log at INFO on every call and would drown the signal. Matches
-# the reference package's list, minus its Django/Celery entries.
-_NOISY_LOGGERS = ("botocore", "boto3", "urllib3", "httpx", "httpcore", "hpack")
+# the reference package's list, minus its Django/Celery entries, plus the
+# httpx2 fork the mcp client and witan's remote proxy use, whose loggers are
+# named for it rather than for httpx.
+_NOISY_LOGGERS = (
+    "botocore",
+    "boto3",
+    "urllib3",
+    "httpx",
+    "httpcore",
+    "httpx2",
+    "httpcore2",
+    "hpack",
+)
 
 
 def _wrap_for_formatter_preserving_exc_info(

@@ -282,6 +282,30 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
     return server
 
 
+_OWN_LEVEL_LOGGERS = ("fastmcp",)
+"""Loggers that do not inherit the root's level. fastmcp gives its logger an
+INFO level and its own stderr handler when it is imported, which the witan
+launcher has already done by the time :func:`serve` runs."""
+
+
+def _set_log_levels() -> None:
+    """Log at WARNING unless ``WITAN_LOG_LEVEL`` asks for more.
+
+    vscode-languageclient labels every line a server writes to stderr
+    ``[error]``, and pygls's ``json_rpc`` logger records each message body it
+    sends at INFO, so the launcher's INFO default turned a healthy start into
+    a page of errors and wrote hover text and task titles to the editor's log
+    files. Only ``WITAN_LOG_LEVEL`` opts back in, not the bare ``LOG_LEVEL`` a
+    shell may export for every service. The startup line reaches the editor
+    as ``window/logMessage`` at Info, not through logging.
+    """
+    level = os.environ.get("WITAN_LOG_LEVEL", "").upper() or "WARNING"
+    # A no-op under the witan launchers, which configured logging already.
+    logging.basicConfig(stream=sys.stderr)
+    for name in (None, *_OWN_LEVEL_LOGGERS):
+        logging.getLogger(name).setLevel(level)
+
+
 def serve(target: str | None = None) -> None:
     """Run the language server on stdio until the client exits.
 
@@ -300,7 +324,7 @@ def serve(target: str | None = None) -> None:
     for name in _AGENT_PATH_ENV_VARS:
         os.environ.pop(name, None)
 
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    _set_log_levels()
     host = Host(discover_plugins(), editor_environ=editor_environ)
     server = build_server(host, target=explicit)
     protocol_in, protocol_out = sys.stdin.buffer, sys.stdout.buffer

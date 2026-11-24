@@ -170,6 +170,12 @@ def test_level_filters_below_threshold(capsys):
     assert "kept" in err
 
 
+def test_http_client_request_logs_are_quiet_at_info():
+    configure_logging(log_format="json", level="INFO")
+    for name in ("httpx", "httpx2", "httpcore2.http11"):
+        assert logging.getLogger(name).getEffectiveLevel() == logging.WARNING
+
+
 def test_contextvars_are_merged(capsys):
     # How per-tool-call actor binding reaches every downstream log line without
     # threading a logger through the call stack.

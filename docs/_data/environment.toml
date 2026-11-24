@@ -432,7 +432,7 @@ desc = "`0` turns off the live linked-PR lookups: the `live_pr` field `task_get`
 
 [section.vars.WITAN_LOG_LEVEL]
 default = "INFO"
-desc = "Log level. Takes precedence over the bare `LOG_LEVEL`, which is also honoured for deployments that set it org-wide."
+desc = "Log level. Takes precedence over the bare `LOG_LEVEL`, which is also honoured for deployments that set it org-wide. Under `witan lsp` and `witan-code lsp` the default is `WARNING` and only this variable raises it, since VS Code labels a language server's stderr as errors."
 
 [section.vars.WITAN_LOG_FORMAT]
 desc = "Log rendering: `console` or `json`. Defaults to `console` when stderr is a TTY and `json` when it is not — a deployed pod gets structured logs and a developer gets colours, neither having to pass a flag."
