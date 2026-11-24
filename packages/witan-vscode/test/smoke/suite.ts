@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { Relayed } from "../../src/board";
 import type { WitanApi } from "../../src/extension";
 // Types only: the suite is its own bundle, so the extension's node classes
 // are not the ones `instanceof` would see here.
@@ -227,6 +228,42 @@ const checks: Array<[string, (api: WitanApi, smoke: Smoke) => Promise<void>]> =
 					references.some((r) => r.uri.path.endsWith("app/main.py")),
 					`no reference from main.py: ${JSON.stringify(references)}`,
 				);
+			},
+		],
+		[
+			"the board and Bridge tabs read through the language server",
+			async (api) => {
+				// The page posting a request at all means the bundle loaded and its
+				// scripts ran under the panel's policy; each answer means the read
+				// crossed the relay and the server on the folder's route.
+				const relayed: Relayed[] = [];
+				const watching = api.boards.onDidRelay((r) => relayed.push(r));
+				const seen = (tool: string) => () =>
+					relayed.some((r) => r.tool === tool) ? true : undefined;
+				const wait = (what: string, tool: string) =>
+					until(what, seen(tool)).catch((err: Error) => {
+						throw new Error(
+							`${err.message}; relayed so far: ${JSON.stringify(relayed)}`,
+						);
+					});
+				try {
+					const folder = vscode.workspace.workspaceFolders?.[0];
+					assert.ok(folder, "no workspace folder");
+					await api.boards.open(folder, "#board");
+					await wait("the board's ready read", "task_ready");
+					await api.boards.open(folder, "#bridge");
+					await wait(
+						"the Bridge tab's repo graph read",
+						"code_repo_dependencies",
+					);
+					assert.ok(relayed.some((r) => r.kind === "tools"));
+					assert.deepEqual(
+						relayed.filter((r) => r.error),
+						[],
+					);
+				} finally {
+					watching.dispose();
+				}
 			},
 		],
 	];

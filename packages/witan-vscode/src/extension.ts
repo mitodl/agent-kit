@@ -13,6 +13,7 @@ import {
 	type LanguageClientOptions,
 	type ServerOptions,
 } from "vscode-languageclient/node";
+import { Boards } from "./board";
 import {
 	availableHandoffs,
 	HANDOFF_COMMANDS,
@@ -49,6 +50,7 @@ const STATUS_POLL_MS = 100;
 export interface WitanApi {
 	request: ServerCommand;
 	tree: WorkTreeProvider;
+	boards: Boards;
 	launch(
 		kind: LaunchKind,
 		folder: vscode.WorkspaceFolder,
@@ -134,6 +136,29 @@ export async function activate(
 	};
 
 	const tree = new WorkTreeProvider(request);
+
+	const boards = new Boards(
+		request,
+		async () =>
+			(await running()).initializeResult?.capabilities.executeCommandProvider
+				?.commands ?? [],
+	);
+
+	const openBoard = async () => {
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		if (folders.length === 0) {
+			throw new Error("open a folder first; the board reads through one.");
+		}
+		const folder =
+			folders.length === 1
+				? folders[0]
+				: await vscode.window.showWorkspaceFolderPick({
+						placeHolder: "Open the witan board for which folder?",
+					});
+		if (folder) {
+			await boards.open(folder);
+		}
+	};
 
 	const restart = async () => {
 		const previous = client;
@@ -310,6 +335,11 @@ export async function activate(
 			tree.refresh(),
 		),
 		vscode.commands.registerCommand("witanClient.restartServer", restart),
+		boards,
+		vscode.commands.registerCommand(
+			"witanClient.openBoard",
+			reportFailure(openBoard),
+		),
 		vscode.commands.registerCommand(
 			"witanClient.showStatus",
 			reportFailure(async () => {
@@ -348,7 +378,7 @@ export async function activate(
 	await updateHandoffContext();
 	void running().catch(() => undefined);
 
-	return { request, tree, launch, handoff, handoffs };
+	return { request, tree, boards, launch, handoff, handoffs };
 
 	/**
 	 * Run `spec` in a new terminal through the launcher (src/launcher.ts), and
