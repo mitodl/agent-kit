@@ -662,6 +662,21 @@ def test_a_folder_with_no_remote_lists_every_repo_or_a_project(
     assert tools.called("task_for_branch") == []
 
 
+def test_a_folder_with_no_remote_lists_a_projects_waves(tmp_path):
+    """A project names no repo, so its waves list in a folder with no remote."""
+    bare = _checkout(tmp_path / "bare", remote=None)
+    tools = FakeTools(task_list=[_row("tk-a")], task_ready=[{"slug": "tk-a"}])
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [bare]) as s:
+            return await s.command(LIST_PROJECT_TASKS, {"project": "wp-p"})
+
+    result = run(go())
+    assert (result["repo"], result["project"], result["waves"]) == (None, "wp-p", 1)
+    assert [t["slug"] for t in result["tasks"]] == ["tk-a"]
+    assert tools.called("task_list") == [{"project_slug": "wp-p"}]
+
+
 # ── launch and release ────────────────────────────────────────────────────
 
 _CLAIM = {

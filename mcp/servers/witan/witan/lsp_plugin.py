@@ -56,7 +56,8 @@ folder's own. They answer with the scope applied, ``scope`` (``"project"``
 under a project) and ``project`` (the slug, or ``null``), so a client can
 label what it shows. A folder with no git remote has no repo, so it answers
 ``repo`` ``null`` and only the ``all`` and ``project`` scopes, with an empty
-``for_branch``; the repo scopes and ``witan.listStaleRefs`` refuse it.
+``for_branch``, and ``witan.listProjectTasks``; the repo scopes and
+``witan.listStaleRefs`` refuse it.
 
 Every tool call names its scope outright (the folder's own repo, every repo or
 one project), so nothing falls back to the process's cwd or asks. Every call
@@ -515,6 +516,18 @@ class CouncilPlugin(Plugin):
                     slug=_required(args, "slug", command),
                     if_claimed_at=_required(args, "claimed_at", command),
                 )
+            # A project names no repo, so it lists without a remote.
+            if command == LIST_PROJECT_TASKS:
+                project = _required(args, "project", command)
+                if not isinstance(project, str) or not project.startswith("wp-"):
+                    raise ValueError(
+                        f"{command}'s 'project' argument must be a wp- slug."
+                    )
+                return {
+                    "repo": folder.repo,
+                    "project": project,
+                    **_project_waves(fctx, project),
+                }
             scope, project = (
                 _work_scope(args, command) if command in WORK_LISTS else (None, None)
             )
@@ -532,17 +545,6 @@ class CouncilPlugin(Plugin):
                     "scope": scope,
                     "project": project,
                     **self._work_list(fctx, command, scope, project),
-                }
-            if command == LIST_PROJECT_TASKS:
-                project = _required(args, "project", command)
-                if not isinstance(project, str) or not project.startswith("wp-"):
-                    raise ValueError(
-                        f"{command}'s 'project' argument must be a wp- slug."
-                    )
-                return {
-                    "repo": folder.repo,
-                    "project": project,
-                    **_project_waves(fctx, project),
                 }
             if command == LIST_STALE_REFS:
                 return {"repo": folder.repo, "refs": self._stale_ref_rows(fctx)}
