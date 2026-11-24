@@ -51,6 +51,13 @@ MEMBERS = (
 # package.json, `just bump`'s copy in .bumpversion.toml, and a scriv CHANGELOG.
 NODE_MEMBERS = ("packages/witan-vscode",)
 
+# Images whose version label tracks a workspace member's release: the
+# Dockerfile, the ARG that feeds org.opencontainers.image.version, and the
+# member. `just bump` rewrites the ARG through that member's
+# [[tool.bumpversion.files]]. The witan image's label sat at 0.8.0 through
+# witan-council 0.53.0 because the bump never touched it and nothing looked.
+IMAGE_LABELS = (("docker/witan.Dockerfile", "WITAN_VERSION", "mcp/servers/witan"),)
+
 # A node member's version until its first `just bump`. Nothing has shipped, so
 # there is no CHANGELOG heading for it to match; its publish workflow refuses it.
 UNRELEASED = "0.0.0"
@@ -183,6 +190,32 @@ def check_release(
     return problems
 
 
+def check_image_label(
+    root: Path, dockerfile: str, arg: str, member: str
+) -> list[Problem]:
+    """Return a problem when ``dockerfile``'s ``ARG arg=`` default isn't ``member``'s version."""
+    project = tomllib.loads((root / member / "pyproject.toml").read_text())["project"]
+    found = re.search(
+        rf"^ARG {arg}=(?P<version>\S+)$", (root / dockerfile).read_text(), re.MULTILINE
+    )
+    if found is None:
+        return [
+            Problem(
+                project["name"],
+                f"{dockerfile} has no `ARG {arg}=<version>` default to label the image with",
+            )
+        ]
+    if found.group("version") != project["version"]:
+        return [
+            Problem(
+                project["name"],
+                f"{dockerfile} labels the image {found.group('version')} "
+                f"(ARG {arg}) but [project].version is {project['version']}.",
+            )
+        ]
+    return []
+
+
 @app.default
 def check(root: str = ".") -> None:
     """Check every workspace member.
@@ -193,9 +226,11 @@ def check(root: str = ".") -> None:
         Repo root. Defaults to the working directory.
     """
     base = Path(root).resolve()
-    problems = [p for member in MEMBERS for p in check_member(base, member)] + [
-        p for member in NODE_MEMBERS for p in check_node_member(base, member)
-    ]
+    problems = (
+        [p for member in MEMBERS for p in check_member(base, member)]
+        + [p for member in NODE_MEMBERS for p in check_node_member(base, member)]
+        + [p for label in IMAGE_LABELS for p in check_image_label(base, *label)]
+    )
 
     if not problems:
         print(f"versions consistent across {len(MEMBERS) + len(NODE_MEMBERS)} packages")
