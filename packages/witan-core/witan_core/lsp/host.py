@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 from .plugin import (
+    UI_READ_TOOLS,
     Capability,
     Folder,
     Lens,
@@ -34,12 +35,26 @@ from .plugin import (
     validate_plugins,
 )
 
-__all__ = ["HOST_COMMANDS", "STATUS_COMMAND", "Host", "PluginExit", "disk_text"]
+__all__ = [
+    "HOST_COMMANDS",
+    "STATUS_COMMAND",
+    "UI_READ_COMMAND",
+    "UI_TOOLS_COMMAND",
+    "Host",
+    "PluginExit",
+    "disk_text",
+]
 
 STATUS_COMMAND = "witan.status"
+UI_TOOLS_COMMAND = "witan.uiTools"
+"""The web UI reads one folder's routes serve, each with its argument names:
+what the page reads off ``tools/list`` when it speaks MCP itself."""
+UI_READ_COMMAND = "witan.uiRead"
+"""One web UI read, for an editor webview that hosts the page (ADR 0012's
+amendment on the webview relay). Only :data:`UI_READ_TOOLS`, never a write."""
 HOVER_SECTION_SEPARATOR = "\n\n---\n\n"
 """A markdown rule between two plugins' hover sections."""
-HOST_COMMANDS = (STATUS_COMMAND,)
+HOST_COMMANDS = (STATUS_COMMAND, UI_TOOLS_COMMAND, UI_READ_COMMAND)
 
 T = TypeVar("T")
 
@@ -86,6 +101,40 @@ class BoundTools:
             return asyncio.run(result) if inspect.iscoroutine(result) else result
 
         return call
+
+    def parameters(self, names: frozenset[str]) -> dict[str, list[str]]:
+        """Each of ``names`` the provider serves, with its argument names.
+
+        A deployment answers from its own tool list, which is the authority
+        on what it serves. An in-process server answers from each tool's
+        signature, leaving out the ``Context`` fastmcp injects, as its
+        ``tools/list`` would. A name the provider lacks is left out: a
+        deployment mounts witan-code only when it is installed there.
+        """
+        names = names & self._names
+        # Looked up on the class: a RemoteServerProxy answers any instance
+        # attribute as a tool, and the local-store guard refuses one that is
+        # not a read.
+        if inspect.getattr_static(type(self._provider), "remote_tools", None):
+            listed = asyncio.run(self._provider.remote_tools())
+            return {
+                tool.name: list((tool.input_schema or {}).get("properties", {}))
+                for tool in listed
+                if tool.name in names
+            }
+        served = {}
+        for name in sorted(names):
+            tool = getattr(self._provider, name, None)
+            if tool is None:
+                continue
+            served[name] = [
+                param
+                for param, spec in inspect.signature(
+                    getattr(tool, "fn", tool)
+                ).parameters.items()
+                if "Context" not in str(spec.annotation)
+            ]
+        return served
 
 
 class _Workspace:
@@ -456,10 +505,78 @@ class Host:
     def execute(self, command: str, arguments: Sequence[Any]) -> Any:
         owner = self.commands[command]
         if owner is None:
+            args: Mapping[str, Any] = arguments[0] if arguments else {}
+            if command == UI_TOOLS_COMMAND:
+                return self.ui_tools(args)
+            if command == UI_READ_COMMAND:
+                return self.ui_read(args)
             return self.status()
         return self.plugins[owner].execute_command(
             _CommandContext(owner, self), command, arguments
         )
+
+    # ── the web UI's reads, for a webview ─────────────────────────────────
+
+    def _ui_folder(self, args: Mapping[str, Any]) -> Folder:
+        """The open folder ``args["uri"]`` names, exactly.
+
+        Required, with no first-folder default and no containing-folder
+        fallback: the folder decides which graph a webview shows. A board
+        stays open after its folder is removed, and the folder holding that
+        path can route to another graph, so its reads are refused instead.
+        """
+        uri = args.get("uri")
+        if not uri:
+            raise ValueError("A web UI read needs a 'uri' naming the folder.")
+        folder = self.folders.get(uri)
+        if folder is None:
+            raise ValueError(f"{uri} is not an open workspace folder.")
+        return folder
+
+    def _ui_providers(
+        self, folder: Folder
+    ) -> list[tuple[Plugin, frozenset[str], _Context]]:
+        """Each plugin serving ``folder`` that declared web UI reads, with
+        those reads, in plugin order."""
+        return [
+            (plugin, reads, ctx)
+            for name, plugin in self.plugins.items()
+            if (reads := plugin.tools & UI_READ_TOOLS)
+            and (ctx := self.context(name, folder)) is not None
+        ]
+
+    def ui_tools(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        """What ``witan.uiTools`` answers: the folder's repo, and the web UI
+        reads its routes serve, each with its argument names. A read two
+        plugins serve is the first one's, as in :meth:`ui_read`."""
+        folder = self._ui_folder(args)
+        tools: dict[str, list[str]] = {}
+        for plugin, reads, ctx in self._ui_providers(folder):
+            with plugin.tool_calls():
+                tools.update(ctx.tools.parameters(reads - tools.keys()))
+        return {"repo": folder.repo, "tools": tools}
+
+    def ui_read(self, args: Mapping[str, Any]) -> Any:
+        """Run one web UI read for ``args["uri"]``'s folder, through the first
+        plugin that declares the tool and serves the folder.
+
+        The webview is the web UI, so ADR 0011's bound set is the whole of
+        what it may call: anything else is refused here, whatever a plugin
+        declares. The result is the tool's own value, as an in-process call
+        returns it and as the remote proxy unwraps it from the MCP result.
+        """
+        folder = self._ui_folder(args)
+        tool = args.get("tool")
+        if tool not in UI_READ_TOOLS:
+            raise ValueError(f"{tool!r} is not one of the web UI's reads (ADR 0011).")
+        arguments = args.get("arguments") or {}
+        if not isinstance(arguments, Mapping):
+            raise TypeError("A web UI read's 'arguments' must be an object.")
+        for plugin, reads, ctx in self._ui_providers(folder):
+            if tool in reads:
+                with plugin.tool_calls():
+                    return getattr(ctx.tools, tool)(**arguments)
+        raise ValueError(f"No witan plugin serves {tool} for {folder.path}.")
 
     def status(self) -> dict[str, Any]:
         """What ``witan.status`` returns: the plugins found and how each

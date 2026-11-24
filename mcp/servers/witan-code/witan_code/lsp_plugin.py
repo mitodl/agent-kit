@@ -55,6 +55,7 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 from witan_core.lsp import (
+    BOUND_TOOLS,
     Capability,
     CommandContext,
     Context,
@@ -196,6 +197,12 @@ class CodePlugin(Plugin):
             "code_find_references",
             "code_indexed_branches",
         }
+    ) | (
+        # The web UI's bridge explorer reads, which the host relays for a
+        # webview (ADR 0012's amendment on it); the other two are above. Only
+        # if the installed witan-core binds it: one from before the relay
+        # refuses to load a plugin that names a tool outside its binding.
+        frozenset({"code_repo_dependencies"}) & BOUND_TOOLS
     )
 
     def __init__(self) -> None:

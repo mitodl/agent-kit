@@ -13,11 +13,14 @@ import "@fontsource/alegreya-sans/latin-700.css";
 import "@fontsource/alegreya/latin-500.css";
 import "@fontsource/alegreya/latin-700.css";
 import "./style.css";
+import { inWebview, routeInWebview } from "./webview.js";
 
 // Before anything else touches the URL: a login redirect lands here with the
 // authorization code in the fragment, where the router would read it as a
-// route.
-const shouldStart = earlyInit(mountBase(document.baseURI));
+// route. An editor webview never logs in, because its reads go through the
+// editor, so it has no login response to take out.
+const shouldStart = inWebview() || earlyInit(mountBase(document.baseURI));
+routeInWebview();
 
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) {

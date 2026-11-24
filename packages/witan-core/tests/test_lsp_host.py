@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from lsprotocol import types
@@ -13,6 +15,7 @@ from markdown_it import MarkdownIt
 
 from witan_core.lsp import (
     BOUND_TOOLS,
+    UI_READ_TOOLS,
     Capability,
     Lens,
     Location,
@@ -22,7 +25,7 @@ from witan_core.lsp import (
     escape_markdown,
 )
 from witan_core.lsp.folders import explicit_target, resolve_folder
-from witan_core.lsp.host import Host, PluginExit
+from witan_core.lsp.host import UI_READ_COMMAND, UI_TOOLS_COMMAND, Host, PluginExit
 from witan_core.lsp.testing import lsp_session
 
 
@@ -94,7 +97,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_empty_host_advertises_only_its_own_command(config):
+def test_empty_host_advertises_only_its_own_commands(config):
     work, _ = config
 
     async def go():
@@ -103,7 +106,11 @@ def test_empty_host_advertises_only_its_own_command(config):
             assert caps.hover_provider is None
             assert caps.code_lens_provider is None
             assert caps.definition_provider is None
-            assert list(caps.execute_command_provider.commands) == ["witan.status"]
+            assert list(caps.execute_command_provider.commands) == [
+                "witan.status",
+                "witan.uiTools",
+                "witan.uiRead",
+            ]
             assert (await session.status())["plugins"] == []
             assert session.initialize_result.server_info.name == "witan"
 
@@ -204,6 +211,8 @@ def test_commands_are_advertised_and_dispatched(config, monkeypatch):
             assert sorted(session.capabilities.execute_command_provider.commands) == [
                 "witan.echo",
                 "witan.status",
+                "witan.uiRead",
+                "witan.uiTools",
             ]
             assert await session.command("witan.echo", 1, "x") == {
                 "plugin": "one",
@@ -1119,3 +1128,230 @@ def test_escaped_text_cannot_leave_a_link_the_plugin_built(text):
 )
 def test_escape_markdown_escapes_only_what_could_start_markup(text, markdown):
     assert escape_markdown(text) == markdown
+
+
+# ── the web UI's reads, relayed for a webview ─────────────────────────────
+
+
+class Context:
+    """Stands in for fastmcp's ``Context``, which a tool's signature names."""
+
+
+class CouncilReads:
+    """An in-process server: plain functions, one taking an injected context."""
+
+    def __init__(self):
+        self.calls = []
+
+    def task_get(self, slug: str, ctx: Context | None = None):
+        self.calls.append(("task_get", {"slug": slug}))
+        return {"slug": slug}
+
+    def task_claim(self, slug: str):
+        raise AssertionError("a webview must never reach a write")
+
+
+class Deployment:
+    """A RemoteServerProxy: any attribute is a tool, and the tool list is its own."""
+
+    def __init__(self, listed):
+        self.listed = listed
+
+    async def remote_tools(self):
+        return [SimpleNamespace(name=n, input_schema=s) for n, s in self.listed]
+
+    def __getattr__(self, name):
+        def call(**kwargs):
+            return {"tool": name, **kwargs}
+
+        return call
+
+
+class Serves(Recorder):
+    capabilities = frozenset()
+
+    def __init__(self, label, provider, tools):
+        super().__init__(label)
+        self.provider = provider
+        self.tools = frozenset(tools)
+
+    def open(self, route, folder):
+        return self.provider
+
+
+def _ui_host(work, plugins):
+    host = Host(plugins)
+    host.set_folders([resolve_folder(work.as_uri(), work, None)])
+    return host
+
+
+def test_the_ui_read_set_is_bound_and_has_no_write():
+    assert UI_READ_TOOLS <= BOUND_TOOLS
+    assert not UI_READ_TOOLS & {"task_claim", "task_release"}
+
+
+def test_a_ui_read_reaches_the_plugin_that_declares_it(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    council = CouncilReads()
+    host = _ui_host(
+        work,
+        {
+            "code": Serves(
+                "code",
+                Deployment([("code_repo_dependencies", {"properties": {"kind": {}}})]),
+                {"code_repo_dependencies", "code_callers"},
+            ),
+            "council": Serves("council", council, {"task_get", "task_claim"}),
+        },
+    )
+    uri = work.as_uri()
+    assert host.execute(
+        UI_READ_COMMAND, [{"uri": uri, "tool": "task_get", "arguments": {"slug": "x"}}]
+    ) == {"slug": "x"}
+    assert host.execute(
+        UI_READ_COMMAND,
+        [{"uri": uri, "tool": "code_repo_dependencies", "arguments": {"repo": ""}}],
+    ) == {"tool": "code_repo_dependencies", "repo": ""}
+    assert council.calls == [("task_get", {"slug": "x"})]
+    host.close()
+
+
+@pytest.mark.parametrize("tool", ["task_claim", "code_callers", "witan.status", None])
+def test_a_ui_read_refuses_anything_outside_adr_0011s_set(config, monkeypatch, tool):
+    """Declared by a plugin and bound for the editor is not enough: the
+    webview is the web UI, and ADR 0011 binds it to reads."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    host = _ui_host(
+        work,
+        {"council": Serves("council", CouncilReads(), {"task_get", "task_claim"})},
+    )
+    with pytest.raises(ValueError, match="not one of the web UI's reads"):
+        host.execute(UI_READ_COMMAND, [{"uri": work.as_uri(), "tool": tool}])
+    host.close()
+
+
+def test_a_ui_read_names_its_folder_and_a_served_tool(config, monkeypatch, tmp_path):
+    work, _ = config
+    monkeypatch.chdir(work)
+    host = _ui_host(work, {"council": Serves("council", CouncilReads(), {"task_get"})})
+    with pytest.raises(ValueError, match="needs a 'uri'"):
+        host.execute(UI_READ_COMMAND, [{"tool": "task_get"}])
+    with pytest.raises(ValueError, match="is not an open workspace folder"):
+        host.execute(UI_READ_COMMAND, [{"uri": tmp_path.as_uri(), "tool": "task_get"}])
+    with pytest.raises(ValueError, match="No witan plugin serves memory_get"):
+        host.execute(UI_READ_COMMAND, [{"uri": work.as_uri(), "tool": "memory_get"}])
+    with pytest.raises(TypeError, match="must be an object"):
+        host.execute(
+            UI_READ_COMMAND,
+            [{"uri": work.as_uri(), "tool": "task_get", "arguments": ["x"]}],
+        )
+    host.close()
+
+
+def test_ui_tools_lists_what_each_route_serves_with_its_arguments(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    host = _ui_host(
+        work,
+        {
+            "code": Serves(
+                "code",
+                Deployment(
+                    [
+                        ("code_repo_dependencies", {"properties": {"kind": {}}}),
+                        ("code_callers", {"properties": {"symbol_id": {}}}),
+                    ]
+                ),
+                # Declared, but this deployment does not mount it.
+                {"code_repo_dependencies", "code_interface_providers"},
+            ),
+            # Declared, but the in-process server has no such function.
+            "council": Serves("council", CouncilReads(), {"task_get", "memory_get"}),
+        },
+    )
+    assert host.execute(UI_TOOLS_COMMAND, [{"uri": work.as_uri()}]) == {
+        "repo": "https://github.com/work/app",
+        "tools": {"code_repo_dependencies": ["kind"], "task_get": ["slug"]},
+    }
+    host.close()
+
+
+def test_ui_reads_go_over_json_rpc(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    host = Host({"council": Serves("council", CouncilReads(), {"task_get"})})
+
+    async def go():
+        async with lsp_session(host, [work]) as session:
+            tools = await session.command(UI_TOOLS_COMMAND, {"uri": work.as_uri()})
+            task = await session.command(
+                UI_READ_COMMAND,
+                {"uri": work.as_uri(), "tool": "task_get", "arguments": {"slug": "x"}},
+            )
+            return tools, task
+
+    tools, task = run(go())
+    assert tools["tools"] == {"task_get": ["slug"]}
+    assert task == {"slug": "x"}
+
+
+def test_a_ui_read_for_a_closed_folder_does_not_fall_back_to_its_parent(
+    config, monkeypatch
+):
+    """A board stays open after its folder is removed. Its reads are refused
+    rather than served from whichever open folder holds that path, which can
+    route to another graph."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    nested = work / "pkg"
+    nested.mkdir()
+    host = _ui_host(work, {"council": Serves("council", CouncilReads(), {"task_get"})})
+    host.change_folders([resolve_folder(nested.as_uri(), nested, None)], ())
+    read = {"uri": nested.as_uri(), "tool": "task_get", "arguments": {"slug": "x"}}
+    assert host.execute(UI_READ_COMMAND, [read]) == {"slug": "x"}
+    host.change_folders((), [nested.as_uri()])
+    with pytest.raises(ValueError, match="is not an open workspace folder"):
+        host.execute(UI_READ_COMMAND, [read])
+    with pytest.raises(ValueError, match="is not an open workspace folder"):
+        host.execute(UI_TOOLS_COMMAND, [{"uri": nested.as_uri()}])
+    host.close()
+
+
+class Wrapped(Serves):
+    """A plugin that wraps its tool calls, recording what ran inside."""
+
+    def __init__(self, label, provider, tools):
+        super().__init__(label, provider, tools)
+        self.inside = False
+        self.seen: list[tuple[str, bool]] = []
+
+    @contextmanager
+    def tool_calls(self):
+        self.inside = True
+        try:
+            yield
+        finally:
+            self.inside = False
+
+
+def test_relayed_ui_calls_run_inside_the_plugins_tool_call_wrapper(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    reads = CouncilReads()
+    plugin = Wrapped("council", reads, {"task_get"})
+    original = reads.task_get
+
+    def task_get(slug, ctx: Context | None = None):
+        plugin.seen.append(("task_get", plugin.inside))
+        return original(slug)
+
+    reads.task_get = task_get
+    host = _ui_host(work, {"council": plugin})
+    host.execute(
+        UI_READ_COMMAND,
+        [{"uri": work.as_uri(), "tool": "task_get", "arguments": {"slug": "x"}}],
+    )
+    assert plugin.seen == [("task_get", True)]
+    host.close()

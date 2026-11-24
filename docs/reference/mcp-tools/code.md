@@ -163,7 +163,7 @@ or call an API endpoint. Spans every indexed repo.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | `env_var` \| `package` \| `service` \| `endpoint` | **required** | ``env_var``, ``package``, ``service``, or ``endpoint``. |
+| `kind` | `env_var` \| `endpoint` \| `package` \| `service` | **required** | ``env_var``, ``package``, ``service``, or ``endpoint``. |
 | `key` | str | **required** | The contract value (``endpoint`` paths are normalized). |
 | `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 | `in_repo` | str? | `null` | Keep only the bindings in this exact repo URI. Omitted, every repo. |
@@ -181,7 +181,7 @@ returns the Django/OpenAPI route that serves it.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | `env_var` \| `package` \| `service` \| `endpoint` | **required** | ``env_var``, ``package``, ``service``, or ``endpoint``. |
+| `kind` | `env_var` \| `endpoint` \| `package` \| `service` | **required** | ``env_var``, ``package``, ``service``, or ``endpoint``. |
 | `key` | str | **required** | The contract value. For ``endpoint`` a raw path is accepted and<br>normalized (path params collapse to ``{}``). |
 | `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 | `in_repo` | str? | `null` | Keep only the bindings in this exact repo URI. Omitted, every repo. |

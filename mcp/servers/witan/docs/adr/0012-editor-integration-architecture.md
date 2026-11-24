@@ -484,3 +484,59 @@ editor's language-server process, which every editor restarts at will.
   one is written, registers the language server only.
 - The implementation tasks in this project are checked against this ADR and
   amended where they disagree.
+
+## Amendment (2026-11-24): the language server relays the web UI's reads for a webview
+
+The VS Code client hosts the web UI's own bundle in a webview rather than
+rebuilding its views (task
+`tk-vs-code-client-webview-hosting-the-web-ui-s-boar-d14608`). A webview page
+has no origin a witan server serves, so it cannot speak MCP to a same-origin
+`/mcp` as ADR 0011's topology has it, and giving it a token would put a
+credential in a page, which section 1 rules out for a client. So its reads go
+through the language server, which already resolves each folder's target and
+`witan login` token:
+
+- `witan.uiRead` takes `uri` (the folder), `tool` and `arguments`, and runs the
+  tool through the first plugin that declares it and serves the folder, on that
+  folder's route: in-process against the local store, or the plugin's
+  `RemoteServerProxy`. It answers the tool's own value, which is what the page
+  unwraps from an MCP result.
+- `witan.uiTools` takes `uri` and answers the folder's repo and the web UI
+  reads its routes serve, each with its argument names: what the page
+  otherwise reads off `tools/list`.
+- `witan.uiBundle` (witan-council) answers the path of the bundle the
+  installed witan ships.
+
+The first two are host commands rather than one plugin's because the reads
+span both packages: the bridge explorer's `code_*` reads go through
+witan-code's plugin and its store, as the editor's code features do.
+
+The webview is the web UI, so ADR 0011 still binds what it reads. The host
+refuses any tool outside `UI_READ_TOOLS`, which is ADR 0011's bound set
+(witan-council's `witan.ui_access.READ_TOOLS`; a test holds the two equal),
+whatever a plugin declares. `task_claim` and `task_release`, which this server
+binds for launches, are not reachable from the page. The set joins this
+server's binding, adding `task_search`, `workflow_project_status`,
+`workflow_session_list`, `memory_get`, `memory_list`, `memory_search`,
+`memory_contradictions` and `code_repo_dependencies` to the list in section 2;
+the rest were already in it.
+
+The client forwards only these reads. The webview posts a tool listing or one
+read, and the extension sends `witan.uiTools` or `witan.uiRead` with the
+panel's own folder, so the page never names a command or a folder.
+
+The bundle is the installed witan's, not a copy in the client. The page and
+the tools it reads are released together in one wheel, and the page checks
+its recorded result shapes against the server it reads; a copy in the `.vsix`
+would follow the extension's releases instead and drift from the server's.
+The cost is that a source checkout has to build the bundle before the board
+opens, which `witan.uiBundle` says when it is missing.
+
+A plugin declares its part of the set intersected with the installed
+witan-core's `BOUND_TOOLS`, because a witan-core from before this amendment
+refuses to load a plugin naming a tool outside its binding. Against that
+witan-core the relay commands do not exist, and the client says so instead of
+opening the panel.
+
+Editors without a webview keep the fallback in section 5: the web UI from
+`witan ui` or the deployment's `/ui/`, in a browser.

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { Relayed } from "../../src/board";
 import type { WitanApi } from "../../src/extension";
 // Types only: the suite is its own bundle, so the extension's node classes
 // are not the ones `instanceof` would see here.
@@ -63,6 +64,42 @@ async function sectionSlugs(api: WitanApi, label: string): Promise<string[]> {
 	return (await api.tree.getChildren(section))
 		.filter((n): n is TaskNode => "task" in n)
 		.map((n) => n.task.slug);
+}
+
+/** The open board panels' tabs, across every editor group. */
+function boardTabs(): vscode.Tab[] {
+	return vscode.window.tabGroups.all
+		.flatMap((g) => g.tabs)
+		.filter((t) => {
+			// Read by shape: the suite is its own bundle, so `instanceof` against
+			// its TabInputWebview does not see the editor's.
+			const viewType = (t.input as { viewType?: unknown } | undefined)
+				?.viewType;
+			return typeof viewType === "string" && viewType.endsWith("witan.board");
+		});
+}
+
+function allTabs(): string {
+	return JSON.stringify(
+		vscode.window.tabGroups.all
+			.flatMap((g) => g.tabs)
+			.map((t) => [t.label, (t.input as { viewType?: unknown })?.viewType]),
+	);
+}
+
+/** Collect relayed requests until disposed, and wait for one of a tool. */
+function watchRelay(api: WitanApi) {
+	const relayed: Relayed[] = [];
+	const watching = api.boards.onDidRelay((r) => relayed.push(r));
+	const wait = (what: string, tool: string) =>
+		until(what, () =>
+			relayed.some((r) => r.tool === tool) ? true : undefined,
+		).catch((err: Error) => {
+			throw new Error(
+				`${err.message}; relayed so far: ${JSON.stringify(relayed)}`,
+			);
+		});
+	return { relayed, wait, dispose: () => watching.dispose() };
 }
 
 const checks: Array<[string, (api: WitanApi, smoke: Smoke) => Promise<void>]> =
@@ -227,6 +264,81 @@ const checks: Array<[string, (api: WitanApi, smoke: Smoke) => Promise<void>]> =
 					references.some((r) => r.uri.path.endsWith("app/main.py")),
 					`no reference from main.py: ${JSON.stringify(references)}`,
 				);
+			},
+		],
+		[
+			"the board and Bridge tabs read through the language server",
+			async (api) => {
+				// The page posting a request at all means the bundle loaded and its
+				// scripts ran under the panel's policy; each answer means the read
+				// crossed the relay and the server on the folder's route.
+				const { relayed, wait, dispose } = watchRelay(api);
+				try {
+					const folder = vscode.workspace.workspaceFolders?.[0];
+					assert.ok(folder, "no workspace folder");
+					// Two clicks before the first panel exists still open one.
+					await Promise.all([
+						api.boards.open(folder, "#board"),
+						api.boards.open(folder, "#board"),
+					]);
+					await wait("the board's ready read", "task_ready");
+					// The editor's tab model reaches the extension host after the
+					// panel does.
+					await until("the board's tab", () =>
+						boardTabs().length > 0 ? true : undefined,
+					);
+					assert.equal(boardTabs().length, 1, allTabs());
+					await api.boards.open(folder, "#bridge");
+					await wait(
+						"the Bridge tab's repo graph read",
+						"code_repo_dependencies",
+					);
+					assert.ok(relayed.some((r) => r.kind === "tools"));
+					assert.deepEqual(
+						relayed.filter((r) => r.error),
+						[],
+					);
+				} finally {
+					dispose();
+				}
+			},
+		],
+		[
+			"a navigation sent while the board is hidden lands once it reloads",
+			async (api, smoke) => {
+				// Hiding a webview unloads its page; revealing it loads a new one,
+				// which restores the last route (#bridge) unless the navigation is
+				// held for it.
+				const folder = vscode.workspace.workspaceFolders?.[0];
+				assert.ok(folder, "no workspace folder");
+				const [board] = boardTabs();
+				assert.ok(board, `the board check left no panel: ${allTabs()}`);
+				const doc = await vscode.workspace.openTextDocument(
+					path.join(smoke.repo, "app", "svc.py"),
+				);
+				await vscode.window.showTextDocument(doc, {
+					viewColumn: board.group.viewColumn,
+					preview: false,
+				});
+				await until("the board to be hidden", () =>
+					boardTabs()[0]?.isActive ? undefined : true,
+				);
+				const { relayed, wait, dispose } = watchRelay(api);
+				try {
+					await api.boards.open(folder, "#memory");
+					await wait("the memory view's read", "memory_list");
+					// A new page lists its tools first, so this is the reloaded one.
+					assert.ok(
+						relayed.some((r) => r.kind === "tools"),
+						`the page did not reload: ${JSON.stringify(relayed)}`,
+					);
+					assert.deepEqual(
+						relayed.filter((r) => r.error),
+						[],
+					);
+				} finally {
+					dispose();
+				}
 			},
 		],
 	];

@@ -88,6 +88,12 @@
 				"icon": "$(refresh)"
 			},
 			{
+				"command": "witanClient.openBoard",
+				"title": "Open Board",
+				"category": "witan",
+				"icon": "$(project)"
+			},
+			{
 				"command": "witanClient.pickScope",
 				"title": "Choose What to Show…",
 				"category": "witan",
@@ -140,6 +146,11 @@
 					"command": "witanClient.pickScope",
 					"when": "view == witan.work",
 					"group": "navigation@1"
+				},
+				{
+					"command": "witanClient.openBoard",
+					"when": "view == witan.work",
+					"group": "navigation"
 				},
 				{
 					"command": "witanClient.refresh",

@@ -16,6 +16,8 @@ on:
       - "mcp/servers/witan/queries/**"
       - "mcp/servers/witan/schema/**"
       - "mcp/servers/witan-code/witan_code/**"
+      # The board panel loads the web UI bundle the server ships.
+      - "mcp/servers/witan/ui/**"
       - "uv.lock"
   pull_request:
     paths: *vscode_paths
@@ -101,6 +103,12 @@ jobs:
 
       - name: Package
         run: npm run package
+
+      - name: Build the web UI bundle
+        # The smoke venv's witan is this checkout, installed editable, and the
+        # board panel opens the bundle it ships, which git does not carry.
+        working-directory: mcp/servers/witan/ui
+        run: npm ci && npm run build
 
       - name: Smoke test
         # The pinned VS Code release is in test/smoke/run.mjs (VSCODE_VERSION),
