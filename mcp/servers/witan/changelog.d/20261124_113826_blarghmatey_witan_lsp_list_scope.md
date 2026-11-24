@@ -6,8 +6,10 @@
 - `witan lsp`'s `witan.listReadyTasks`, `witan.listProjects` and
   `witan.listMyWork` take `scope` (`repo`, `repo+unfiled` or `all`) or
   `project` (a `wp-` slug, in any repo), and answer with the scope they
-  applied. The editor guide's Neovim commands take it as an argument, and its
-  Emacs commands ask for it under a prefix argument.
+  applied. A folder with no git remote answers the `all` and `project`
+  scopes (with no tasks for its branch) and refuses the repo scopes. The
+  editor guide's Neovim commands take it as an argument, and its Emacs
+  commands ask for it under a prefix argument.
 
 ### Changed
 

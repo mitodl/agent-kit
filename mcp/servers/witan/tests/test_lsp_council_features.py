@@ -595,17 +595,70 @@ def test_any_other_refusal_of_the_repo_scope_is_not_retried(checkout):
     assert len(tools.called("task_ready")) == 1
 
 
-def test_a_folder_with_no_remote_is_refused_with_a_reason(tmp_path):
+@pytest.mark.parametrize(
+    ("command", "arguments"),
+    [
+        (LIST_READY_TASKS, {}),
+        (LIST_READY_TASKS, {"scope": "repo+unfiled"}),
+        (LIST_MY_WORK, {"scope": "repo"}),
+        (LIST_PROJECTS, {"scope": "repo+unfiled"}),
+        (LIST_STALE_REFS, {}),
+    ],
+)
+def test_a_folder_with_no_remote_refuses_a_repo_scope_with_a_reason(
+    tmp_path, command, arguments
+):
     bare = _checkout(tmp_path / "bare", remote=None)
     tools = FakeTools()
 
     async def go():
         async with lsp_session(Host({"council": Council(tools)}), [bare]) as s:
             with pytest.raises(Exception, match="has no git remote"):
-                await s.command(LIST_READY_TASKS)
+                await s.command(command, arguments)
 
     run(go())
     assert tools.calls == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "applied", "task_args"),
+    [
+        ({"scope": "all"}, ("all", None), {"all_repos": True}),
+        ({"project": "wp-p"}, ("project", "wp-p"), {"project_slug": "wp-p"}),
+    ],
+)
+def test_a_folder_with_no_remote_lists_every_repo_or_a_project(
+    tmp_path, arguments, applied, task_args
+):
+    """A graph needs no remote, so the scopes that name no repo still list;
+    only the branch's tasks, which are found by repo, come back empty."""
+    bare = _checkout(tmp_path / "bare", remote=None)
+    project = {"slug": "wp-p", "repos": None}
+    tools = FakeTools(
+        task_ready=[{"slug": "tk-r"}],
+        task_list=[{"slug": "tk-mine"}],
+        workflow_project_list=[project],
+        workflow_project_get=project,
+    )
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [bare]) as s:
+            return (
+                await s.command(LIST_READY_TASKS, arguments),
+                await s.command(LIST_PROJECTS, arguments),
+                await s.command(LIST_MY_WORK, arguments),
+            )
+
+    ready, projects, mine = run(go())
+    for listed in (ready, projects, mine):
+        assert (listed["repo"], listed["scope"], listed["project"]) == (None, *applied)
+    assert ready["ready"] == [{"slug": "tk-r"}]
+    assert ready["branch"] == "main"
+    assert ready["for_branch"] == []
+    assert projects["projects"] == [project]
+    assert mine["tasks"] == [{"slug": "tk-mine"}]
+    assert tools.called("task_ready") == [task_args]
+    assert tools.called("task_for_branch") == []
 
 
 # ── launch and release ────────────────────────────────────────────────────

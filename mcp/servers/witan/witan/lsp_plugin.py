@@ -44,7 +44,9 @@ filed under no repo) or ``all`` (every repo). ``project``, a ``wp-`` slug,
 narrows them to that one project in any repo instead; ``for_branch`` stays the
 folder's own. They answer with the scope applied, ``scope`` (``"project"``
 under a project) and ``project`` (the slug, or ``null``), so a client can
-label what it shows.
+label what it shows. A folder with no git remote has no repo, so it answers
+``repo`` ``null`` and only the ``all`` and ``project`` scopes, with an empty
+``for_branch``; the repo scopes and ``witan.listStaleRefs`` refuse it.
 
 Every tool call names its scope outright (the folder's own repo, every repo or
 one project), so nothing falls back to the process's cwd or asks. Every call
@@ -217,7 +219,7 @@ def _work_scope(args: Mapping[str, Any], command: str) -> tuple[str, str | None]
     return scope, None
 
 
-def _task_scope(scope: str, project: str | None, repo: str) -> dict[str, Any]:
+def _task_scope(scope: str, project: str | None, repo: str | None) -> dict[str, Any]:
     """``task_ready``'s and ``task_list``'s arguments for a work-list scope."""
     if scope == SCOPE_PROJECT:
         return {"project_slug": project}
@@ -231,7 +233,7 @@ def _task_scope(scope: str, project: str | None, repo: str) -> dict[str, Any]:
 
 
 def _scoped_tasks(
-    call: Any, scope: str, project: str | None, repo: str, **kwargs: Any
+    call: Any, scope: str, project: str | None, repo: str | None, **kwargs: Any
 ) -> tuple[list[dict[str, Any]], str]:
     """``call`` (``task_ready`` or ``task_list``) in ``scope``, and the scope
     it was answered in.
@@ -434,13 +436,17 @@ class CouncilPlugin(Plugin):
                     slug=_required(args, "slug", command),
                     if_claimed_at=_required(args, "claimed_at", command),
                 )
-            if folder.repo is None:
+            scope, project = (
+                _work_scope(args, command) if command in WORK_LISTS else (None, None)
+            )
+            # Every repo and one project name no repo, so a folder with a
+            # graph but no remote can still list them.
+            if folder.repo is None and scope not in (SCOPE_ALL, SCOPE_PROJECT):
                 raise ValueError(
                     f"{folder.path} has no git remote, so there is no repo to "
                     f"scope {command} to."
                 )
             if command in WORK_LISTS:
-                scope, project = _work_scope(args, command)
                 # `_work_list` names the scope itself when it had to fall back.
                 return {
                     "repo": folder.repo,
@@ -484,7 +490,7 @@ class CouncilPlugin(Plugin):
                 "branch": branch,
                 "ready": ready,
                 "for_branch": tools.task_for_branch(branch=branch, repo=folder.repo)
-                if branch
+                if branch and folder.repo
                 else [],
             }
         if command == LIST_PROJECTS:
