@@ -25,7 +25,7 @@ Run `witan login` first if your work routes to a deployment; the server never pr
 
 | setting | default | what it does |
 |---|---|---|
-| `witan.server.command` | `["witan", "lsp"]` | The argv that starts the language server. Add `--target <name>` to pin a deployment. |
+| `witan.server.command` | `["witan", "lsp"]` | The argv that starts the language server, one argument per item. To pin every folder to one target, add the option and its value as two items: `["witan", "lsp", "--target", "<name>"]`. Without it, each folder routes to its own target. |
 | `witan.agent` | `""` | The agent CLI a launch starts. Empty uses the `agent` in witan's own config. |
 
 Both are machine settings, so a workspace's `.vscode/settings.json` cannot change which programs the extension runs.

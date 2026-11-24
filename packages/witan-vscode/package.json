@@ -53,7 +53,7 @@
 						"lsp"
 					],
 					"scope": "machine",
-					"markdownDescription": "The command that starts the witan language server, as argv. `witan-code lsp` works too when only witan-code is installed."
+					"markdownDescription": "The command that starts the witan language server, as argv: each item is one argument, so an option and its value are separate items (`[\"witan\", \"lsp\", \"--target\", \"production\"]`, not `\"--target production\"`). `--target` pins every folder to one target; leave it out to route each folder by its own. `[\"witan-code\", \"lsp\"]` works too when only witan-code is installed."
 				},
 				"witan.agent": {
 					"type": "string",
