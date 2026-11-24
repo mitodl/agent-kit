@@ -79,6 +79,7 @@ and reopen; ``claimed_at`` is the current lease.
 | `assignee` | str? | `null` | Filter to one holder; ``"@me"`` is you (every session). |
 | `limit` | int? | `null` | Max rows, 1 to 10,000. Omitted: 50 unscoped, all when scoped by repo,<br>project or parent. On the default repo scope, rows are this repo's<br>then the unscoped ones, so a limit may drop the unscoped ones. |
 | `all_repos` | bool | `False` | List every repo's tasks, in one ``updated_at`` order. |
+| `include_unfiled` | bool | `True` | On the repo scope, also list tasks filed under no repo (the default).<br>``false`` keeps to the repo's own tasks. |
 
 ## `task_search`
 
@@ -121,6 +122,7 @@ Ordered by priority, ``p0`` first.
 | `assignee` | str? | `null` | Filter to one holder. |
 | `limit` | int | `20` | Maximum tasks to return. |
 | `all_repos` | bool | `False` | Return every repo's ready tasks. |
+| `include_unfiled` | bool | `True` | On the repo scope, also return tasks filed under no repo (the<br>default). ``false`` keeps to the repo's own tasks. |
 
 ## `task_update`
 

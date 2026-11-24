@@ -386,7 +386,7 @@ def test_a_uri_spelled_through_a_symlink_names_its_folder(checkout, tmp_path):
                 LIST_MY_WORK, {"uri": (link / "app" / "svc.py").as_uri()}
             )
 
-    assert run(go()) == {"repo": REPO, "tasks": []}
+    assert run(go()) == {"repo": REPO, "scope": "repo", "project": None, "tasks": []}
 
 
 def test_list_commands_scope_every_call_to_the_folders_repo(checkout, tmp_path):
@@ -416,18 +416,132 @@ def test_list_commands_scope_every_call_to_the_folders_repo(checkout, tmp_path):
     assert ready["ready"][0]["slug"] == "tk-r"
     assert ready["for_branch"][0]["slug"] == "tk-b"
     assert ready["repo"] == "https://github.com/test/other"
-    assert projects == {"repo": REPO, "projects": [{"slug": "wp-p"}]}
-    assert mine == {"repo": REPO, "tasks": [{"slug": "tk-mine"}]}
+    assert projects == {
+        "repo": REPO,
+        "scope": "repo",
+        "project": None,
+        "projects": [{"slug": "wp-p"}],
+    }
+    assert mine == {
+        "repo": REPO,
+        "scope": "repo",
+        "project": None,
+        "tasks": [{"slug": "tk-mine"}],
+    }
     assert tools.calls == [
-        ("task_ready", {"repo": "https://github.com/test/other"}),
+        (
+            "task_ready",
+            {"repo": "https://github.com/test/other", "include_unfiled": False},
+        ),
         (
             "task_for_branch",
             {"branch": "feature", "repo": "https://github.com/test/other"},
         ),
         ("workflow_project_list", {"repo": REPO}),
-        ("task_list", {"status": "in_progress", "assignee": "@me", "repo": REPO}),
+        (
+            "task_list",
+            {
+                "status": "in_progress",
+                "assignee": "@me",
+                "repo": REPO,
+                "include_unfiled": False,
+            },
+        ),
     ]
     assert not any(tools.prompts_allowed)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "applied", "task_args", "my_work_args"),
+    [
+        (
+            {"scope": "repo+unfiled"},
+            ("repo+unfiled", None),
+            {"repo": REPO},
+            {"repo": REPO},
+        ),
+        (
+            {"scope": "all"},
+            ("all", None),
+            {"all_repos": True},
+            {"all_repos": True, "limit": 10_000},
+        ),
+        (
+            # A project outranks a scope.
+            {"scope": "all", "project": "wp-p"},
+            ("project", "wp-p"),
+            {"project_slug": "wp-p"},
+            {"project_slug": "wp-p"},
+        ),
+    ],
+)
+def test_each_scope_reaches_the_tools_as_their_own_arguments(
+    checkout, arguments, applied, task_args, my_work_args
+):
+    tools = FakeTools(task_ready=[], task_for_branch=[], task_list=[])
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            return (
+                await s.command(LIST_READY_TASKS, arguments),
+                await s.command(LIST_MY_WORK, arguments),
+            )
+
+    ready, mine = run(go())
+    assert (ready["scope"], ready["project"]) == applied
+    assert (mine["scope"], mine["project"]) == applied
+    assert tools.called("task_ready") == [task_args]
+    assert tools.called("task_list") == [
+        {"status": "in_progress", "assignee": "@me", **my_work_args}
+    ]
+    # The branch is the checkout's own whatever the scope.
+    assert tools.called("task_for_branch") == [{"branch": "main", "repo": REPO}]
+
+
+def test_list_projects_per_scope(checkout):
+    floating = {"slug": "wp-floating", "repos": None}
+    here = {"slug": "wp-here", "repos": [REPO]}
+    elsewhere = {"slug": "wp-elsewhere", "repos": ["https://github.com/test/b"]}
+    tools = FakeTools(
+        workflow_project_list=lambda **kw: (
+            [here] if "repo" in kw else [floating, here, elsewhere]
+        ),
+        workflow_project_get=lambda slug: elsewhere if slug == "wp-elsewhere" else None,
+    )
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            listed = {
+                scope: await s.command(LIST_PROJECTS, {"scope": scope})
+                for scope in ("repo", "repo+unfiled", "all")
+            }
+            listed["project"] = await s.command(
+                LIST_PROJECTS, {"project": "wp-elsewhere"}
+            )
+            with pytest.raises(Exception, match="No project 'wp-gone'"):
+                await s.command(LIST_PROJECTS, {"project": "wp-gone"})
+            return listed
+
+    listed = run(go())
+    slugs = {k: [p["slug"] for p in v["projects"]] for k, v in listed.items()}
+    assert slugs == {
+        "repo": ["wp-here"],
+        "repo+unfiled": ["wp-floating", "wp-here"],
+        "all": ["wp-floating", "wp-here", "wp-elsewhere"],
+        "project": ["wp-elsewhere"],
+    }
+
+
+def test_an_unknown_scope_is_refused_with_the_choices(checkout):
+    tools = FakeTools()
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            with pytest.raises(Exception, match="one of repo, repo\\+unfiled, all"):
+                await s.command(LIST_READY_TASKS, {"scope": "everything"})
+
+    run(go())
+    assert tools.calls == []
 
 
 def test_a_folder_with_no_remote_is_refused_with_a_reason(tmp_path):
@@ -694,3 +808,53 @@ def test_launch_list_and_release_against_a_local_store(server, checkout, monkeyp
     assert released["released"] is True
     assert again["released"] is False and again["reason"] == "claim_changed"
     assert server.task_get(task["slug"])["status"] == "open"
+
+
+@requires_omnigraph
+def test_each_scope_returns_its_rows_from_a_local_store(
+    server, checkout, tmp_path, monkeypatch
+):
+    # Out of any repo, so project_create adds none to the repos it is given.
+    monkeypatch.delenv("WITAN_REPO")
+    monkeypatch.chdir(tmp_path)
+    other = "https://github.com/test/other"
+    project = server.workflow_project_create(
+        title="Elsewhere", description="d", repos=[other]
+    )
+    floating = server.workflow_project_create(title="Floating", description="d")
+    monkeypatch.chdir(checkout)
+    here = server.task_create(title="Here", description="x", repo=REPO)
+    unfiled = server.task_create(title="Unfiled", description="x", all_repos=True)
+    away = server.task_create(
+        title="Away", description="x", repo=other, project_slug=project["slug"]
+    )
+    arguments = {
+        "repo": {"scope": "repo"},
+        "repo+unfiled": {"scope": "repo+unfiled"},
+        "all": {"scope": "all"},
+        "project": {"project": project["slug"]},
+    }
+
+    async def lists(command, key):
+        async with lsp_session(Host({"council": LocalCouncil()}), [checkout]) as s:
+            return {
+                name: {row["slug"] for row in (await s.command(command, args))[key]}
+                for name, args in arguments.items()
+            }
+
+    expected = {
+        "repo": {here["slug"]},
+        "repo+unfiled": {here["slug"], unfiled["slug"]},
+        "all": {here["slug"], unfiled["slug"], away["slug"]},
+        "project": {away["slug"]},
+    }
+    assert run(lists(LIST_READY_TASKS, "ready")) == expected
+    for task in (here, unfiled, away):
+        assert server.task_claim(task["slug"])["claimed"] is True
+    assert run(lists(LIST_MY_WORK, "tasks")) == expected
+    assert run(lists(LIST_PROJECTS, "projects")) == {
+        "repo": set(),
+        "repo+unfiled": {floating["slug"]},
+        "all": {project["slug"], floating["slug"]},
+        "project": {project["slug"]},
+    }

@@ -7946,6 +7946,17 @@ def task_comment(slug: str, body: str) -> dict:
     }
 
 
+def _unfiled_rows(
+    all_rows: list[dict], repo_rows: list[dict], include: bool
+) -> list[dict]:
+    """The rows of ``all_rows`` filed under no repo and not in ``repo_rows``,
+    or none when ``include`` is false: a repo-scoped task read's second half."""
+    if not include:
+        return []
+    seen = {r["slug"] for r in repo_rows}
+    return [r for r in all_rows if not r.get("repo") and r["slug"] not in seen]
+
+
 @_tool(READ, app=ui_widgets.app_for("task_list"))
 def task_list(
     repo: str | None = None,
@@ -7955,6 +7966,7 @@ def task_list(
     assignee: str | None = None,
     limit: int | None = None,
     all_repos: bool = False,
+    include_unfiled: bool = True,
 ) -> list[dict]:
     """
     List tasks, filtered by repo, status, project, parent, and/or assignee.
@@ -7982,6 +7994,9 @@ def task_list(
         then the unscoped ones, so a limit may drop the unscoped ones.
     all_repos:
         List every repo's tasks, in one ``updated_at`` order.
+    include_unfiled:
+        On the repo scope, also list tasks filed under no repo (the default).
+        ``false`` keeps to the repo's own tasks.
     """
     # `limit` is nullable rather than `int = 50` because a plain default would
     # either cap the scoped reads (uncapped today) or make an explicit
@@ -8010,9 +8025,7 @@ def task_list(
             {"repo": detected, "status": status or None},
         )
         all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
-        seen = {r["slug"] for r in repo_rows}
-        unscoped = [r for r in all_rows if not r.get("repo") and r["slug"] not in seen]
-        rows = repo_rows + unscoped
+        rows = repo_rows + _unfiled_rows(all_rows, repo_rows, include_unfiled)
     else:
         # The all-repos read is the only one capped in the query, at 50
         # rows — which is why "all repos" silently truncated. An explicit
@@ -8795,6 +8808,7 @@ def task_ready(
     assignee: str | None = None,
     limit: int = 20,
     all_repos: bool = False,
+    include_unfiled: bool = True,
 ) -> list[dict]:
     """
     Return ready-to-work tasks: pickable tasks whose blockers are all closed.
@@ -8818,6 +8832,9 @@ def task_ready(
         Maximum tasks to return.
     all_repos:
         Return every repo's ready tasks.
+    include_unfiled:
+        On the repo scope, also return tasks filed under no repo (the
+        default). ``false`` keeps to the repo's own tasks.
     """
     # Pickability is readiness.status_pickable.
     # The candidate set and the blocker-status lookup are built from different
@@ -8838,9 +8855,7 @@ def task_ready(
             "read.gq", "list_tasks_by_repo", {"repo": detected, "status": None}
         )
         all_rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})
-        seen = {r["slug"] for r in repo_rows}
-        unscoped = [r for r in all_rows if not r.get("repo") and r["slug"] not in seen]
-        rows = repo_rows + unscoped
+        rows = repo_rows + _unfiled_rows(all_rows, repo_rows, include_unfiled)
         known = all_rows
     else:
         rows = client.read("read.gq", "list_tasks_uncapped", {"status": None})

@@ -3,6 +3,7 @@
 // own in_progress tasks (`witan.listMyWork`), not what a launch picked up.
 
 import * as vscode from "vscode";
+import { type Applied, DEFAULT_SCOPE, type Scope, scopeArgs } from "./scope";
 
 export type ServerCommand = (
 	command: string,
@@ -26,6 +27,7 @@ export interface ProjectRow {
 }
 
 interface Lists {
+	applied: Applied;
 	repo: string;
 	branch: string | null;
 	ready: TaskRow[];
@@ -79,13 +81,24 @@ export type WorkNode =
 export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 	private readonly changed = new vscode.EventEmitter<WorkNode | undefined>();
 	readonly onDidChangeTreeData = this.changed.event;
+	private readonly applied = new vscode.EventEmitter<Applied>();
+	/** The scope the server answered it applied, on each folder's load. */
+	readonly onDidApplyScope = this.applied.event;
 	private folders = new Map<string, FolderNode>();
 
-	constructor(private readonly request: ServerCommand) {}
+	constructor(
+		private readonly request: ServerCommand,
+		public scope: Scope = DEFAULT_SCOPE,
+	) {}
 
 	refresh(): void {
 		this.folders.clear();
 		this.changed.fire(undefined);
+	}
+
+	setScope(scope: Scope): void {
+		this.scope = scope;
+		this.refresh();
 	}
 
 	async getChildren(node?: WorkNode): Promise<WorkNode[]> {
@@ -187,6 +200,7 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			node.lists = undefined;
 			return [new MessageNode(errorMessage(err), true)];
 		}
+		this.applied.fire(lists.applied);
 		const { folder } = node;
 		const sections: WorkNode[] = [
 			new SectionNode(folder, "In progress (mine)", lists.mine, "task"),
@@ -204,13 +218,13 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 	}
 
 	private async load(folder: vscode.WorkspaceFolder): Promise<Lists> {
-		const args = { uri: folder.uri.toString() };
+		const args = { uri: folder.uri.toString(), ...scopeArgs(this.scope) };
 		const [ready, mine, projects] = (await Promise.all([
 			this.request("witan.listReadyTasks", args),
 			this.request("witan.listMyWork", args),
 			this.request("witan.listProjects", args),
 		])) as [
-			{
+			Applied & {
 				repo: string;
 				branch: string | null;
 				ready: TaskRow[];
@@ -220,6 +234,7 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			{ projects: ProjectRow[] },
 		];
 		return {
+			applied: { scope: ready.scope, project: ready.project },
 			repo: ready.repo,
 			branch: ready.branch,
 			ready: ready.ready,

@@ -201,6 +201,20 @@ def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
 
 
 @requires_omnigraph
+def test_include_unfiled_false_keeps_a_repo_read_to_its_own_tasks(server):
+    repo = "https://github.com/test/a"
+    scoped = server.task_create(title="in a", description="x", repo=repo)
+    unfiled = server.task_create(title="unfiled", description="x", all_repos=True)
+    server.task_create(title="in b", description="x", repo="https://github.com/test/b")
+
+    for tool in (server.task_ready, server.task_list):
+        assert {t["slug"] for t in tool(repo=repo)} == {scoped["slug"], unfiled["slug"]}
+        assert [t["slug"] for t in tool(repo=repo, include_unfiled=False)] == [
+            scoped["slug"]
+        ]
+
+
+@requires_omnigraph
 def test_task_search_unscoped_matches_outlast_other_repos_ranking(server):
     """The unscoped half of a repo-scoped search reads unscoped tasks alone, so
     more higher-ranked matches in other repos than the 20-row cap cannot push

@@ -28,6 +28,13 @@ import {
 	type LaunchStatus,
 	releaseArgs,
 } from "./launch";
+import {
+	appliedLabel,
+	REPO_SCOPES,
+	restoreScope,
+	type Scope,
+	scopeArgs,
+} from "./scope";
 import { describeServerCommand } from "./serverCommand";
 import {
 	errorMessage,
@@ -40,7 +47,9 @@ import {
 const RUN_TASK = "witan.runTask";
 const RUN_PROJECT = "witan.runProject";
 const RELEASE_TASK = "witan.releaseTask";
+const LIST_PROJECTS = "witan.listProjects";
 const STATUS = "witan.status";
+const SCOPE_STATE_KEY = "witan.scope";
 
 const PROCESS_START_TIMEOUT_MS = 15_000;
 const STATUS_POLL_MS = 100;
@@ -133,7 +142,60 @@ export async function activate(
 		});
 	};
 
-	const tree = new WorkTreeProvider(request);
+	const tree = new WorkTreeProvider(
+		request,
+		restoreScope(context.workspaceState.get(SCOPE_STATE_KEY)),
+	);
+	const treeView = vscode.window.createTreeView("witan.work", {
+		treeDataProvider: tree,
+		showCollapseAll: true,
+	});
+	tree.onDidApplyScope((applied) => {
+		treeView.description = appliedLabel(applied, tree.scope);
+	});
+
+	const pickScope = async (): Promise<void> => {
+		const current = scopeArgs(tree.scope);
+		const mark = (on: boolean) => (on ? "current" : undefined);
+		const pick = await vscode.window.showQuickPick(
+			[
+				...REPO_SCOPES.map((s) => ({
+					label: s.label,
+					description: mark(current.scope === s.scope),
+					choose: async (): Promise<Scope> => ({ scope: s.scope }),
+				})),
+				{
+					label: "A project…",
+					description: mark("project" in current),
+					choose: pickProject,
+				},
+			],
+			{ title: "witan: show work from" },
+		);
+		const scope = await pick?.choose();
+		if (scope === undefined) {
+			return;
+		}
+		await context.workspaceState.update(SCOPE_STATE_KEY, scope);
+		tree.setScope(scope);
+	};
+
+	const pickProject = async (): Promise<Scope | undefined> => {
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		const { projects } = (await request(LIST_PROJECTS, {
+			...(folder ? { uri: folder.uri.toString() } : {}),
+			scope: "all",
+		})) as { projects: Array<{ slug: string; title: string; phase?: string }> };
+		const pick = await vscode.window.showQuickPick(
+			projects.map((p) => ({
+				label: p.title,
+				description: [p.phase, p.slug].filter(Boolean).join(" · "),
+				slug: p.slug,
+			})),
+			{ title: "witan: show one project's work", matchOnDescription: true },
+		);
+		return pick && { project: pick.slug, title: pick.label };
+	};
 
 	const restart = async () => {
 		const previous = client;
@@ -302,12 +364,13 @@ export async function activate(
 		};
 
 	context.subscriptions.push(
-		vscode.window.createTreeView("witan.work", {
-			treeDataProvider: tree,
-			showCollapseAll: true,
-		}),
+		treeView,
 		vscode.commands.registerCommand("witanClient.refresh", () =>
 			tree.refresh(),
+		),
+		vscode.commands.registerCommand(
+			"witanClient.pickScope",
+			reportFailure(pickScope),
 		),
 		vscode.commands.registerCommand("witanClient.restartServer", restart),
 		vscode.commands.registerCommand(
