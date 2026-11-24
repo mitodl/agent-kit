@@ -233,7 +233,10 @@ def check(root: str = ".") -> None:
     )
 
     if not problems:
-        print(f"versions consistent across {len(MEMBERS) + len(NODE_MEMBERS)} packages")
+        print(
+            f"versions consistent across {len(MEMBERS) + len(NODE_MEMBERS)} packages "
+            f"and {len(IMAGE_LABELS)} image label(s)"
+        )
         return
 
     print("VERSION / CHANGELOG DRIFT\n", file=sys.stderr)
