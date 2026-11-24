@@ -25,7 +25,7 @@ from pygls.lsp.server import LanguageServer
 from pygls.uris import to_fs_path
 
 from .folders import explicit_target, resolve_folder
-from .host import Host, disk_text
+from .host import HOVER_SECTION_SEPARATOR, Host, disk_text
 from .plugin import Capability, Lens, Location, Note, discover_plugins
 
 __all__ = ["build_server", "serve"]
@@ -93,11 +93,13 @@ def _lens(lens: Lens) -> types.CodeLens:
 
 
 # The markdown a hover is built from: what `escape_markdown` writes (an escape,
-# `&lt;` or `&amp;`), a link the plugin built around escaped text, and `**` around a
-# heading word. Plugins write nothing else, and anything else passes through as
-# written.
+# `&lt;` or `&amp;`), a link the plugin built around escaped text, `**` around a
+# heading word, and the rule the host puts between two plugins' sections. Plugins
+# write nothing else, and anything else passes through as written.
 _HOVER_MARKDOWN = re.compile(
-    r"\\([!-/:-@\[-`{-~])|\[((?:\\.|[^\\\]])*)\]\([^)\s]*\)|\*\*|&(lt|amp);"
+    r"\\([!-/:-@\[-`{-~])|\[((?:\\.|[^\\\]])*)\]\([^)\s]*\)|\*\*|&(lt|amp);|("
+    + re.escape(HOVER_SECTION_SEPARATOR)
+    + ")"
 )
 
 
@@ -111,6 +113,8 @@ def _plaintext(markdown: str) -> str:
             return m[1]
         if m[2] is not None:
             return _plaintext(m[2])
+        if m[4] is not None:
+            return "\n\n"
         return {"lt": "<", "amp": "&"}.get(m[3], "")
 
     return _HOVER_MARKDOWN.sub(plain, markdown)

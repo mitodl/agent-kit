@@ -12,4 +12,5 @@
   escaped too, so no autolink carries a backslash.
 - A client that lists plain text first in `hover.contentFormat` (eglot without
   markdown-mode) now gets a plain-text hover, with the escapes, `**` and the
-  link syntax of the markdown taken out, instead of markdown it shows raw.
+  link syntax of the markdown taken out and a blank line in place of the `---`
+  rule between two plugins' sections, instead of markdown it shows raw.

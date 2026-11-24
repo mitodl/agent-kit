@@ -756,6 +756,28 @@ def test_hover_is_plain_text_for_a_client_that_prefers_it(
     )
 
 
+def test_a_plain_text_hover_separates_sections_with_a_blank_line(config, monkeypatch):
+    """The markdown rule between two plugins' sections is not plain text."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    capabilities = types.ClientCapabilities(
+        text_document=types.TextDocumentClientCapabilities(
+            hover=types.HoverClientCapabilities(
+                content_format=[types.MarkupKind.PlainText]
+            )
+        )
+    )
+    host = Host({"a": Recorder("first"), "b": Recorder("second")})
+
+    async def go():
+        async with lsp_session(
+            host, [work], client_capabilities=capabilities
+        ) as session:
+            return (await _hover(session, (work / "m.py").as_uri(), 0)).contents
+
+    assert run(go()).value == "first on work\n\nsecond on work"
+
+
 def test_a_client_advertising_only_workspace_codelens_gets_no_fallback(
     config, monkeypatch
 ):
