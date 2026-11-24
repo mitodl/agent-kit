@@ -201,28 +201,49 @@ re.compile(
     r"|".join(  # noqa: FLY002 - one alternative per line
 ```
 
-and the shape the original `ol-github-workflows` miss should have had from the
-start:
+The `ol-github-workflows` miss is the longer worked example, and the first thing
+to notice about it is that most of it was never a suppression problem at all.
+The file shelled out through a wrapper:
 
 ```python
-# Every caller passes literal subcommands (see main), so S603 has no
-# attacker-controlled argument to worry about. S607 is right that "git" is
-# resolved from PATH: on a hosted runner the image owns that path, so there is
-# no absolute one to pin that stays correct across images.
-return subprocess.run(["git", *args], capture_output=True, check=False)  # noqa: S603, S607
+def git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", *args], capture_output=True, check=False)
 ```
 
-The two codes are there for different reasons, and the reason says which is
-which. `S603`'s premise fails - the arguments are not attacker-controlled, and
-the reason names where a reader checks that. `S607`'s premise holds: the
-executable really is resolved from `PATH`, and the reason says why the fix the
-rule wants is not available rather than pretending the finding is wrong. Those
-are the second and third outcomes from section 1, and a reason that blurs them
-is a reason that has not been thought through.
+`S603` and `S607` both fire on that call, and a `# noqa: S603, S607` on it makes
+them both go away. It also silences every future caller of `git()`, whatever
+they pass - the "covers code nobody has written yet" failure this skill opens
+with, written at rung 1 so that it does not look like one.
+
+**`S603` had a code fix.** The rule fires because the argument list holds a
+variable, not because the arguments are in a list at all:
+`subprocess.run(["/usr/bin/git", x])` is reported and
+`subprocess.run(["/usr/bin/git", "status"])` is clean. (Passing a list instead
+of a string is the fix for `S602`, the `shell=True` rule - a different finding,
+and the one this gets confused with.) That wrapper had a single caller, passing
+literal subcommands, so inlining it makes the list literal and `S603` stops
+firing with nothing suppressed:
+
+```python
+head = subprocess.run(
+    # The runner image decides where git lives, so there is no absolute path to
+    # pin that stays correct across images.
+    ["git", "rev-parse", "HEAD"],  # noqa: S607
+    capture_output=True,
+    check=False,
+)
+```
+
+One code, on one line, for the one reason that survives checking. `S607`'s
+premise holds - the executable really is resolved from `PATH` - so the reason
+says why the fix the rule wants is unavailable rather than pretending the
+finding is wrong. That is the second outcome from section 1, and it is the only
+one of the two findings that ever reached section 2.
 
 Note what the reason does **not** do: it does not say "fixed arguments" and
 leave a reader staring at `*args`. A claim a reader cannot check from the code
-in front of them is the same as no reason at all.
+in front of them is the same as no reason at all - and once the arguments really
+are literal, that half of the reason has no finding left to justify.
 
 ## 3. Prove the narrowing
 

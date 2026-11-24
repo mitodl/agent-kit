@@ -25,17 +25,18 @@
 		},
 		{
 			"id": 3,
-			"prompt": "Treat evals/files/uv-lock-revision/ as a checkout of mitodl/ol-github-workflows, and the config below as its pyproject.toml (the fixture ships only the source file, so copy both into a scratch directory to run ruff against them).\n\n```toml\n[tool.ruff.lint]\nselect = [\"ALL\"]\n\n[tool.ruff.lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"S603\", \"S607\"]\n```\n\n`uv run ruff check` fails on a new file, actions/uv-lock-revision/check.py, with S603 (subprocess without shell=True) and S607 (partial executable path). `actions/` holds that one file. The action runs on GitHub-hosted runners, where the runner image decides where git lives, and `args` comes from the action's own inputs, not from workflow input. Make the check pass.",
-			"expected_output": "A line-level `# noqa: S603, S607` on the single `subprocess.run` call, carrying a reason that names why each rule's premise fails here (fixed argument list, git resolved from the runner's PATH by design). The existing `\"tests/**\"` entry is left alone and no `\"actions/**\"` entry is added. The answer runs the probe: a second violating call in the same file is still reported.",
+			"prompt": "Treat evals/files/uv-lock-revision/ as a checkout of mitodl/ol-github-workflows, and the config below as its pyproject.toml (the fixture ships only the source file, so copy both into a scratch directory to run ruff against them).\n\n```toml\n[tool.ruff.lint]\nextend-select = [\"S603\", \"S607\"]\n\n[tool.ruff.lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"S603\", \"S607\"]\n```\n\n`uv run ruff check` fails on a new file, actions/uv-lock-revision/check.py, with exactly two findings - S603 (subprocess call: check for execution of untrusted input) and S607 (partial executable path) - both on the `subprocess.run` inside the `git()` wrapper. `actions/` holds that one file. The action runs on GitHub-hosted runners, where the runner image decides where git lives. Make the check pass.",
+			"expected_output": "S603 is fixed in code rather than suppressed: the wrapper has one caller and it passes literal subcommands, so inlining the call makes the argument list literal and S603 stops firing with nothing silenced. What remains is a single line-level `# noqa: S607` whose reason says the runner image owns git's path, so there is no absolute path to pin that stays correct across images. The existing `\"tests/**\"` entry is left alone and no `\"actions/**\"` entry is added. The answer runs the probe: a second violating call in the same file is still reported.",
 			"files": [
 				"evals/files/uv-lock-revision/actions/uv-lock-revision/check.py"
 			],
 			"expectations": [
-				"The suppression is a line-level noqa naming both codes, not a per-file-ignores entry",
-				"A reason is attached that refers to the fixed argument list and to git being resolved from the runner's PATH, not a bare 'false positive' or 'needed for CI'",
+				"S603 is resolved by making the argument list literal - inlining the wrapper, or equivalent - and not by a suppression of any kind",
+				"The only suppression left names S607 alone, at line level, rather than `# noqa: S603, S607` or a per-file-ignores entry",
+				"The S607 reason says the runner image decides where git lives so there is no absolute path to pin, not a bare 'false positive' or 'needed for CI'",
 				"No glob is added to per-file-ignores, and the existing \"tests/**\" entry is unchanged",
+				"The answer says why the wrapper was the wrong place for a noqa: it would have covered every future caller, whatever those callers pass",
 				"The answer verifies the scope by adding a second violating call, confirming it is still reported, and removing it",
-				"The answer considers fixing the code first and says why the fix is unavailable (the executable's location is the runner's to decide)",
 				"The reproduction runs ruff against the supplied config, not against agent-kit's own ruff settings, which do not enable S603/S607"
 			]
 		},
