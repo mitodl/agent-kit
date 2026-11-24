@@ -29,7 +29,7 @@ export interface Relayed {
 
 interface Panel {
 	panel: vscode.WebviewPanel;
-	/** The page has sent a request, so its listeners are up. */
+	/** The page loaded now has sent a request, so its listeners are up. */
 	ready: boolean;
 	/** Where to send the page once it is ready. */
 	hash?: string;
@@ -54,7 +54,10 @@ export class Boards implements vscode.Disposable {
 	 */
 	async open(folder: vscode.WorkspaceFolder, hash?: string): Promise<void> {
 		const key = folder.uri.toString();
-		const open = this.panels.get(key) ?? (await this.opening.get(key));
+		const pending = this.opening.get(key);
+		// Only a panel being opened is awaited. Awaiting nothing still yields,
+		// and a second call in that gap would open a second panel.
+		const open = this.panels.get(key) ?? (pending && (await pending));
 		if (open) {
 			open.panel.reveal();
 			if (hash) {
@@ -105,14 +108,27 @@ export class Boards implements vscode.Disposable {
 		const entry: Panel = { panel, ready: false, hash };
 		this.panels.set(key, entry);
 		panel.onDidDispose(() => this.panels.delete(key));
+		// Hiding the panel unloads its page and showing it loads a new one, so
+		// a navigation is held again until that page is up.
+		panel.onDidChangeViewState(() => {
+			if (!panel.visible) {
+				entry.ready = false;
+			}
+		});
 		panel.webview.onDidReceiveMessage((message: unknown) =>
 			this.answer(entry, key, message),
 		);
-		panel.webview.html = webviewHtml(
-			index,
-			panel.webview.asWebviewUri(root).toString(),
-			contentSecurityPolicy(panel.webview.cspSource),
-		);
+		try {
+			panel.webview.html = webviewHtml(
+				index,
+				panel.webview.asWebviewUri(root).toString(),
+				contentSecurityPolicy(panel.webview.cspSource),
+			);
+		} catch (err) {
+			// Left open, the blank panel would be what every later open reveals.
+			panel.dispose();
+			throw err;
+		}
 		return entry;
 	}
 
@@ -134,7 +150,9 @@ export class Boards implements vscode.Disposable {
 		if (request === undefined) {
 			return;
 		}
-		if (!entry.ready) {
+		// A request arriving while the panel is hidden is from the page being
+		// unloaded, not the one that will load when it is shown again.
+		if (!entry.ready && entry.panel.visible) {
 			// Held until now so it is not posted into a page still loading.
 			entry.ready = true;
 			if (entry.hash) {
