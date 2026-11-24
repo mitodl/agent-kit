@@ -247,19 +247,19 @@ are literal, that half of the reason has no finding left to justify.
 
 ## 3. Prove the narrowing
 
-Do not assert that a suppression is correctly scoped. Two checks, both cheap:
+Do not assert that a suppression is correctly scoped. Three checks, all cheap.
+The first two use the same technique to answer different questions, which is why
+one probe is not enough.
 
-**Is it wider than the violation?**
+**Does it reach past the scope you wrote?**
 
 > Add a second, deliberately-violating line **just outside the scope you meant
 > to exempt**. Re-run the linter. If the probe is **not** flagged, the
-> suppression reaches further than you intended. Narrow it. Remove the probe.
+> suppression reaches further than its text says. Narrow it. Remove the probe.
 
-"Just outside" is the whole check, and it is different per rung. A probe inside
-the scope is *supposed* to be silent, so putting one there proves nothing and
-will talk you into narrowing a scope that was correct:
+"Just outside" is different per rung:
 
-| Rung | Where the probe goes |
+| Rung | Where the outside probe goes |
 | --- | --- |
 | 1, the line | The next line |
 | 2, the block | After the `enable`, or outside the disabled region |
@@ -267,11 +267,26 @@ will talk you into narrowing a scope that was correct:
 | 4, a glob | A path the glob should not match - a sibling directory, or a file one level up |
 | 5, off for the project | Nowhere; instead confirm a *different* enabled rule still fires, so you know the config edit did not take the whole rule set with it |
 
-In the `ol-github-workflows` case the probe was a second `subprocess.run` in the
-same file. Under `"actions/**"` it was silent - the glob covered the file, not
-the call - and under the line-level `noqa` it was flagged immediately. Same
-probe, same rule, and only one of the two scopes was actually the size of the
-violation.
+This check catches a scope that is wider than it reads. It cannot catch a scope
+that is exactly as wide as written and still the wrong rung: an `"actions/**"`
+glob probed from a sibling directory passes it cleanly.
+
+**Is the scope bigger than the violation?** (rungs 3 and up)
+
+> Add a second, deliberately-violating line **inside** the scope, at a site the
+> suppression was not written for - a second call in the same file, a second
+> file under the same glob. Re-run. If the probe is **silent**, the scope covers
+> more than the violation you set out to exempt and the rung is too high.
+
+This is section 2's "will the next file deserve this too" question made
+executable, and it is the one the outside probe cannot answer. Expect the probe
+to be silent: that silence is the finding, not a pass.
+
+In the `ol-github-workflows` case the inside probe was a second
+`subprocess.run` in the same file. Under `"actions/**"` it was silent - the glob
+covered the file, not the call - and under the line-level `noqa` it was flagged
+immediately. Same probe, same rule, and only one of the two scopes was the size
+of the violation.
 
 **Is it needed at all?**
 
@@ -280,9 +295,10 @@ violation.
 A suppression that changes nothing is a suppression that was copied, and it will
 outlive whatever once justified it.
 
-Both checks also apply to a config-level change: after editing `exclude`,
-`ignore`, or a glob, put a violating file under the new pattern and confirm the
-tool still has something to say about everything you did not intend to exempt.
+All three apply to a config-level change as well. After editing `exclude`,
+`ignore`, or a glob, the inside probe is a violating file under the new pattern
+and the outside probe is one just beyond it. Run both: a pattern can be too
+broad for the violation and no broader than it reads at the same time.
 
 ## 4. Editing a lint config
 
