@@ -93,11 +93,11 @@ def _lens(lens: Lens) -> types.CodeLens:
 
 
 # The markdown a hover is built from: what `escape_markdown` writes (an escape,
-# or `&lt;`), a link the plugin built around escaped text, and `**` around a
+# `&lt;` or `&amp;`), a link the plugin built around escaped text, and `**` around a
 # heading word. Plugins write nothing else, and anything else passes through as
 # written.
 _HOVER_MARKDOWN = re.compile(
-    r"\\([!-/:-@\[-`{-~])|\[((?:\\.|[^\\\]])*)\]\([^)\s]*\)|\*\*|(&lt;)"
+    r"\\([!-/:-@\[-`{-~])|\[((?:\\.|[^\\\]])*)\]\([^)\s]*\)|\*\*|&(lt|amp);"
 )
 
 
@@ -111,7 +111,7 @@ def _plaintext(markdown: str) -> str:
             return m[1]
         if m[2] is not None:
             return _plaintext(m[2])
-        return "<" if m[3] else ""
+        return {"lt": "<", "amp": "&"}.get(m[3], "")
 
     return _HOVER_MARKDOWN.sub(plain, markdown)
 

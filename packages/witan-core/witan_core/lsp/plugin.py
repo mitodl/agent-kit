@@ -291,11 +291,15 @@ _AUTOLINK = re.compile(r"(?<=[A-Za-z0-9]):(?=//)|(?i:www)\.")
 _MARKDOWN_LEADING = re.compile(r"^(?:[#+\-=>]|\d{1,9}[.)](?!\S))")
 
 
+# `<` and `&` as entities, not `\<` and `\&`: Python-Markdown (behind Sublime
+# LSP's older mdpopups) escapes neither, so it would pass a tag through and
+# show the backslash before `&`. Neovim's hover float shows `&lt;` and `&amp;`
+# as `<` and `&`, where it would show the backslash.
+_ENTITIES = {"<": "&lt;", "&": "&amp;"}
+
+
 def _escape_char(m: re.Match[str]) -> str:
-    # `<` as an entity, not `\<`: Python-Markdown (behind Sublime LSP's older
-    # mdpopups) has no `\<` escape and would pass a tag through. Neovim's hover
-    # float conceals `&lt;` as `<`.
-    return "&lt;" if m[0] == "<" else "\\" + m[0]
+    return _ENTITIES.get(m[0], "\\" + m[0])
 
 
 def _escape_last(m: re.Match[str]) -> str:

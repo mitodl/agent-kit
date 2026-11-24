@@ -704,7 +704,7 @@ class PluginShaped(Recorder):
     """A hover built the way the plugins build theirs, around hostile text."""
 
     capabilities = frozenset({Capability.HOVER})
-    text = "[evil](https://evil) *x* <b>hi</b> snake_case a/b:1"
+    text = "[evil](https://evil) *x* <b>hi</b> &amp; a?b=1&c snake_case a/b:1"
 
     def hover(self, ctx, uri, line, character):
         e = escape_markdown(self.text)
@@ -1089,7 +1089,8 @@ def test_escaped_text_cannot_leave_a_link_the_plugin_built(text):
         ),
         ("www.x.example/_a", r"www\.x.example/\_a"),
         ("pkg/__init__.py", r"pkg/\_\_init\_\_.py"),
-        ("&amp;", r"\&amp;"),
+        ("&amp;", "&amp;amp;"),
+        ("a=1&b=2", "a=1&amp;b=2"),
         ("1. one", r"1\. one"),
         ("_y_ a__b", r"\_y\_ a\_\_b"),
     ],
