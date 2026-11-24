@@ -32,8 +32,8 @@ export interface HostRelay {
 
 /** A message the extension sends back for one request. */
 type Response =
-	| { witan: "response"; id: number; result: unknown }
-	| { witan: "response"; id: number; error: string };
+	| { witan: "response"; id: string; result: unknown }
+	| { witan: "response"; id: string; error: string };
 
 let api: WebviewApi | null | undefined;
 
@@ -72,7 +72,7 @@ function isResponse(data: unknown): data is Response {
 		typeof data === "object" &&
 		data !== null &&
 		(data as { witan?: unknown }).witan === "response" &&
-		typeof (data as { id?: unknown }).id === "number"
+		typeof (data as { id?: unknown }).id === "string"
 	);
 }
 
@@ -84,9 +84,8 @@ export function createRelay(
 	host: Pick<WebviewApi, "postMessage">,
 	target: Pick<Window, "addEventListener">,
 ): HostRelay {
-	let next = 0;
 	const pending = new Map<
-		number,
+		string,
 		{ resolve(value: unknown): void; reject(error: Error): void }
 	>();
 
@@ -109,9 +108,12 @@ export function createRelay(
 
 	const request = (body: Record<string, unknown>): Promise<unknown> =>
 		new Promise((resolve, reject) => {
-			next += 1;
-			pending.set(next, { resolve, reject });
-			host.postMessage({ witan: "request", id: next, ...body });
+			// Unique across page loads, not a counter: hiding the panel reloads
+			// the page, and an answer to the previous load's request would
+			// otherwise resolve whichever new request reused its number.
+			const id = crypto.randomUUID();
+			pending.set(id, { resolve, reject });
+			host.postMessage({ witan: "request", id, ...body });
 		});
 
 	return {

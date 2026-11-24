@@ -38,6 +38,8 @@ interface Panel {
 /** One panel per workspace folder, each reading through that folder. */
 export class Boards implements vscode.Disposable {
 	private readonly panels = new Map<string, Panel>();
+	/** A panel being opened, so a second click waits for it. */
+	private readonly opening = new Map<string, Promise<Panel>>();
 	private readonly relayed = new vscode.EventEmitter<Relayed>();
 	readonly onDidRelay = this.relayed.event;
 
@@ -52,7 +54,7 @@ export class Boards implements vscode.Disposable {
 	 */
 	async open(folder: vscode.WorkspaceFolder, hash?: string): Promise<void> {
 		const key = folder.uri.toString();
-		const open = this.panels.get(key);
+		const open = this.panels.get(key) ?? (await this.opening.get(key));
 		if (open) {
 			open.panel.reveal();
 			if (hash) {
@@ -60,6 +62,20 @@ export class Boards implements vscode.Disposable {
 			}
 			return;
 		}
+		const opening = this.create(folder, key, hash);
+		this.opening.set(key, opening);
+		try {
+			await opening;
+		} finally {
+			this.opening.delete(key);
+		}
+	}
+
+	private async create(
+		folder: vscode.WorkspaceFolder,
+		key: string,
+		hash: string | undefined,
+	): Promise<Panel> {
 		const served = await this.advertised();
 		const missing = BOARD_COMMANDS.filter((c) => !served.includes(c));
 		if (missing.length > 0) {
@@ -93,6 +109,7 @@ export class Boards implements vscode.Disposable {
 			panel.webview.asWebviewUri(root).toString(),
 			contentSecurityPolicy(panel.webview.cspSource),
 		);
+		return entry;
 	}
 
 	/** Send a page that is ready to `hash`; hold it for one that is not. */

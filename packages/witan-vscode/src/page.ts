@@ -11,8 +11,8 @@ export const BOARD_COMMANDS = [UI_BUNDLE, UI_TOOLS, UI_READ] as const;
 
 /** A page message turned into the server command it asks for. */
 export type RelayRequest =
-	| { id: number; command: string; args: Record<string, unknown> }
-	| { id: number; error: string };
+	| { id: string; command: string; args: Record<string, unknown> }
+	| { id: string; error: string };
 
 /**
  * The webview's policy: the bundle's own scripts, styles, fonts and images,
@@ -77,7 +77,7 @@ export function relayRequest(
 		return undefined;
 	}
 	const { witan, id, kind, tool, args } = message as Record<string, unknown>;
-	if (witan !== "request" || typeof id !== "number") {
+	if (witan !== "request" || typeof id !== "string") {
 		return undefined;
 	}
 	if (kind === "tools") {

@@ -14,7 +14,7 @@ const ALL_TOOLS = Object.fromEntries(
 
 interface Request {
 	witan: string;
-	id: number;
+	id: string;
 	kind: "tools" | "read";
 	tool?: string;
 	args?: Record<string, unknown>;
@@ -221,7 +221,11 @@ describe("createRelay", () => {
 		const send = (data: unknown) =>
 			target.dispatchEvent(new MessageEvent("message", { data }));
 		send("unrelated");
-		send({ witan: "response", id: 99, result: "nobody asked" });
+		send({
+			witan: "response",
+			id: "from-a-previous-load",
+			result: "nobody asked",
+		});
 		send({ witan: "response", id: posted[1]?.id, result: "b" });
 		send({ witan: "response", id: posted[0]?.id, result: "a" });
 

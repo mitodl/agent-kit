@@ -63,9 +63,9 @@ test("a bundle of another shape is refused rather than served broken", () => {
 
 test("the page asks for tools or one read, and the folder is the panel's", () => {
 	assert.deepEqual(
-		relayRequest({ witan: "request", id: 1, kind: "tools" }, URI),
+		relayRequest({ witan: "request", id: "r1", kind: "tools" }, URI),
 		{
-			id: 1,
+			id: "r1",
 			command: UI_TOOLS,
 			args: { uri: URI },
 		},
@@ -74,7 +74,7 @@ test("the page asks for tools or one read, and the folder is the panel's", () =>
 		relayRequest(
 			{
 				witan: "request",
-				id: 2,
+				id: "r2",
 				kind: "read",
 				tool: "task_get",
 				args: { slug: "tk-a" },
@@ -85,7 +85,7 @@ test("the page asks for tools or one read, and the folder is the panel's", () =>
 			URI,
 		),
 		{
-			id: 2,
+			id: "r2",
 			command: UI_READ,
 			args: { uri: URI, tool: "task_get", arguments: { slug: "tk-a" } },
 		},
@@ -94,19 +94,31 @@ test("the page asks for tools or one read, and the folder is the panel's", () =>
 
 test("anything else from the page is answered with an error or ignored", () => {
 	for (const kind of ["run", "release", undefined]) {
-		assert.deepEqual(relayRequest({ witan: "request", id: 3, kind }, URI), {
-			id: 3,
+		assert.deepEqual(relayRequest({ witan: "request", id: "r3", kind }, URI), {
+			id: "r3",
 			error: "witan: the page sent a request this extension does not relay.",
 		});
 	}
 	assert.ok(
 		"error" in
 			(relayRequest(
-				{ witan: "request", id: 4, kind: "read", tool: "task_get", args: [] },
+				{
+					witan: "request",
+					id: "r4",
+					kind: "read",
+					tool: "task_get",
+					args: [],
+				},
 				URI,
 			) ?? {}),
 	);
-	for (const message of [null, "x", { witan: "request" }, { id: 1 }]) {
+	for (const message of [
+		null,
+		"x",
+		{ witan: "request" },
+		{ id: "r1" },
+		{ witan: "request", id: 1, kind: "tools" },
+	]) {
 		assert.equal(relayRequest(message, URI), undefined);
 	}
 });

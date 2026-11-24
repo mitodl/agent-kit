@@ -170,7 +170,9 @@ async function connectRelay(relay: HostRelay): Promise<Connection> {
 	if (missing.length > 0) {
 		throw new Error(
 			`The witan language server serves none of ${missing.join(", ")} for ` +
-				"this folder; the page needs witan-council installed beside it.",
+				"this folder. Either witan-council is not installed beside it, or " +
+				"the folder does not route to a graph (witan: Show Server Status " +
+				"says why).",
 		);
 	}
 	served = listed;
