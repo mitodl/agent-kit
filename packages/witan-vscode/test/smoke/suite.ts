@@ -192,7 +192,7 @@ const checks: Array<[string, (api: WitanApi, smoke: Smoke) => Promise<void>]> =
 					return value.includes("witan") ? value : undefined;
 				});
 				assert.ok(
-					text.includes(smoke.symbolTask.replaceAll("-", "\\-")),
+					text.includes(smoke.symbolTask),
 					`hover has no ${smoke.symbolTask}: ${text}`,
 				);
 			},
