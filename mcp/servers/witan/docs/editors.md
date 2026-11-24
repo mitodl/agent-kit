@@ -495,5 +495,5 @@ own repo only, in every editor, because the code graph records no
 symbol-level use across repos. Text from the graph in a hover is escaped
 only where it could form markup (a link, image, HTML, entity or emphasis), so
 Neovim's hover float, which shows every backslash, shows one only in text like
-`\[docs\](https://example.org)`. eglot without markdown-mode asks for plain
+`\[docs\]\(https\://example.org)`. eglot without markdown-mode asks for plain
 text and gets it, with no markdown syntax at all.

@@ -700,11 +700,11 @@ def test_without_codelens_the_lenses_move_into_hover_and_code_actions(
     run(go())
 
 
-class Marked(Recorder):
+class PluginShaped(Recorder):
     """A hover built the way the plugins build theirs, around hostile text."""
 
     capabilities = frozenset({Capability.HOVER})
-    text = "[evil](https://evil) *x* snake_case a/b:1"
+    text = "[evil](https://evil) *x* <b>hi</b> snake_case a/b:1"
 
     def hover(self, ctx, uri, line, character):
         e = escape_markdown(self.text)
@@ -734,7 +734,7 @@ def test_hover_is_plain_text_for_a_client_that_prefers_it(
 ):
     work, _ = config
     monkeypatch.chdir(work)
-    plugin = Marked("m")
+    plugin = PluginShaped("m")
     capabilities = types.ClientCapabilities(
         text_document=types.TextDocumentClientCapabilities(
             hover=types.HoverClientCapabilities(content_format=content_format)
@@ -750,7 +750,9 @@ def test_hover_is_plain_text_for_a_client_that_prefers_it(
     contents = run(go())
     assert contents.kind == kind
     assert contents.value == (
-        plugin.hover(None, "", 0, 0) if value is None else value.format(t=Marked.text)
+        plugin.hover(None, "", 0, 0)
+        if value is None
+        else value.format(t=PluginShaped.text)
     )
 
 
@@ -1038,6 +1040,8 @@ _INJECTIONS = [
     "back\\slash \\* end\\",
     "    indented\tcode",
     "see https://x.example and ann@x.example",
+    "https://x.example<img src=https://evil.example/p.png>",
+    "endpoint /api/![x](https://evil.example/p.png)",
 ]
 
 
@@ -1075,8 +1079,16 @@ def test_escaped_text_cannot_leave_a_link_the_plugin_built(text):
         ("MITOL_APP_BASE_URL", "MITOL_APP_BASE_URL"),
         ("tk-make-helper-configurable-0a1b2c", "tk-make-helper-configurable-0a1b2c"),
         ("Fix x -> y (and z!) & ship 1.5", "Fix x -> y (and z!) & ship 1.5"),
-        ("[a](b)", r"\[a\](b)"),
-        ("<img src=x>", r"\<img src=x>"),
+        # marked unescapes `\[` `\]` in link text, so `](` must not survive.
+        ("![i](u)", r"!\[i\]\(u)"),
+        ("<img src=x>", "&lt;img src=x>"),
+        # A URL that needs an escape is kept from autolinking with it.
+        (
+            "https://x.example/_static/a.css",
+            r"https\://x.example/\_static/a.css",
+        ),
+        ("www.x.example/_a", r"www\.x.example/\_a"),
+        ("pkg/__init__.py", r"pkg/\_\_init\_\_.py"),
         ("&amp;", r"\&amp;"),
         ("1. one", r"1\. one"),
         ("_y_ a__b", r"\_y\_ a\_\_b"),

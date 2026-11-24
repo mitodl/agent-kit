@@ -239,8 +239,10 @@ editor through hover and lens titles, and through a launch into an agent's
 prompt. The server renders it as escaped plain text inside its markdown, so a
 title cannot inject a link or an image; the only links in a hover whose text
 differs from their target are ones the server builds (`ui_url`). A bare URL in
-the text is not escaped, because Neovim's hover float shows every backslash,
-so a GFM client may autolink it to exactly the address it shows. Read-side
+the text that needs no escape is left bare, because Neovim's hover float shows
+every backslash, so a GFM client may autolink it to exactly the address it
+shows. One that does need an escape gets its `://` or `www.` escaped as well,
+so no autolink carries a backslash into its address. Read-side
 screening follows whatever
 `tk-screen-untrusted-content-returned-by-witan-tools-043ff5` settles.
 
