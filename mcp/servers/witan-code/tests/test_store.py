@@ -7,6 +7,7 @@ store, an unreadable one, a dangling symlink) worth pinning explicitly.
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -337,6 +338,36 @@ def test_a_bridge_whose_apply_fails_for_another_reason_is_kept(tmp_path, monkeyp
     store_module.ensure_bridge_store(cfg)
 
     assert marker.exists()
+
+
+@requires_stack
+def test_a_bridge_from_before_external_use_takes_the_new_node(tmp_path, monkeypatch):
+    """ExternalUse ships before any writer, so every bridge built from the
+    previous schema has to take it as a supported change: the omnigraph-server
+    boot applies it to `code-bridge`, and a writer's load would fail on a graph
+    without it. A branch view must not block the apply, as with any bridge
+    schema change."""
+    from witan_code import config as cfg_mod
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+    current = cfg.bridge_schema_file.read_text()
+    old, removed = re.subn(
+        r"node ExternalUse \{.*?\n\}\n", "", current, flags=re.DOTALL
+    )
+    assert removed == 1
+    old_schema = tmp_path / "bridge-before-external-use.pg"
+    old_schema.write_text(old)
+    store = cfg_mod.bridge_store_path(cfg.code_dir)
+    _init_with_a_view(old_schema, store)
+    plan = _plan(cfg.bridge_schema_file, store)
+    assert plan["supported"] is True
+    assert plan["step_count"] > 0
+
+    store_module.ensure_bridge_store(cfg)
+
+    assert _plan(cfg.bridge_schema_file, store)["step_count"] == 0
+    assert _branches(cfg, store) == ["main"]
 
 
 def _code_store_with_a_view(tmp_path, monkeypatch, old: str, new: str):

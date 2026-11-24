@@ -84,6 +84,47 @@ writers never touch the same row (same argument as InterfaceBinding).
 | `line` | `I32?` |  |
 | `indexed_at` | `DateTime` |  |
 
+### `ExternalUse`
+
+One row per use of a name imported from another repo's package namespace
+(today `mitol.*`, the namespaces package consumers are extracted for): where
+a repo loads e.g. `now_in_utc` from `mitol.common.utils.datetime`. A package
+consumer InterfaceBinding records only the package (`mitol.common`) and one
+row per enclosing symbol, so it cannot say which library symbol is used, or
+every place it is. These rows back cross-repo find-references on a library
+definition.
+
+A separate node, not an InterfaceBinding kind: those rows are what
+code_interface_consumers, the impact lens and the visualizations count, and
+each package consumer would multiply into one row per use. Repo- and
+file-scoped like InterfaceBinding, so concurrent writers never touch the same
+row, and a reindex purges a file's rows by (repo, file).
+
+`target` is the full dotted name as imported, e.g.
+`mitol.common.utils.datetime.now_in_utc`. A reader matches a definition's
+module path and, where the parent package re-exports it, the parent's
+(`mitol.common.utils.now_in_utc`).
+
+Id convention:
+ExternalUse.slug = repo|file|line|target
+e.g. https://github.com/mitodl/mitxonline|courses/models.py|12|
+mitol.common.models.TimestampedModel
+
+Several uses of one name on one line are therefore one row. A writer dedupes its
+records by slug before loading, because a load with the same slug twice is
+refused whole (and the bridge write shares one load with the bindings).
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `slug` | `String @key` |  |
+| `repo` | `String @index` | canonical HTTPS repo URI of the using repo |
+| `file` | `String @index` | repo-relative path of the use |
+| `line` | `I32` | 1-based line of the use |
+| `symbol_id` | `String?` | enclosing Symbol id (repo#path::Qn) |
+| `target` | `String @index` | full dotted name as imported |
+| `language` | `String` |  |
+| `indexed_at` | `DateTime` |  |
+
 ### `PackageMap`
 
 One row per indexed repo: its declared (or fallback) package identity from
