@@ -535,6 +535,10 @@ class CouncilPlugin(Plugin):
                 }
             if command == LIST_PROJECT_TASKS:
                 project = _required(args, "project", command)
+                if not isinstance(project, str) or not project.startswith("wp-"):
+                    raise ValueError(
+                        f"{command}'s 'project' argument must be a wp- slug."
+                    )
                 return {
                     "repo": folder.repo,
                     "project": project,

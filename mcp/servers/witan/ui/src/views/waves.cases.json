@@ -1,0 +1,590 @@
+{
+	"defaults": {
+		"status": "open",
+		"priority": "p2",
+		"project_slug": "wp-waves",
+		"blocked_by": null
+	},
+	"cases": [
+		{
+			"name": "a project with no dependencies is a single wave",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-b"
+				},
+				{
+					"slug": "tk-c"
+				}
+			],
+			"ready": ["tk-a", "tk-b", "tk-c"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-b", "tk-c"],
+				"wave": {
+					"tk-a": 0,
+					"tk-b": 0,
+					"tk-c": 0
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": [],
+				"downstream": {
+					"tk-a": 0,
+					"tk-b": 0,
+					"tk-c": 0
+				},
+				"ready": ["tk-a", "tk-b", "tk-c"],
+				"waves": 1,
+				"critical": [],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "each task sits one wave past its deepest open blocker",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				},
+				{
+					"slug": "tk-c",
+					"blocked_by": ["tk-b"]
+				},
+				{
+					"slug": "tk-d",
+					"blocked_by": ["tk-a", "tk-c"]
+				},
+				{
+					"slug": "tk-e"
+				}
+			],
+			"ready": ["tk-a", "tk-e"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-e", "tk-b", "tk-c", "tk-d"],
+				"wave": {
+					"tk-a": 0,
+					"tk-e": 0,
+					"tk-b": 1,
+					"tk-c": 2,
+					"tk-d": 3
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": ["tk-a", "tk-b", "tk-c", "tk-d"],
+				"downstream": {
+					"tk-a": 3,
+					"tk-e": 0,
+					"tk-b": 2,
+					"tk-c": 1,
+					"tk-d": 0
+				},
+				"ready": ["tk-a", "tk-e"],
+				"waves": 4,
+				"critical": ["tk-a", "tk-b", "tk-c", "tk-d"],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "the longest chain is traced",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				},
+				{
+					"slug": "tk-c",
+					"blocked_by": ["tk-b"]
+				},
+				{
+					"slug": "tk-d",
+					"blocked_by": ["tk-a"]
+				}
+			],
+			"ready": ["tk-a"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-b", "tk-d", "tk-c"],
+				"wave": {
+					"tk-a": 0,
+					"tk-b": 1,
+					"tk-d": 1,
+					"tk-c": 2
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": ["tk-a", "tk-b", "tk-c"],
+				"downstream": {
+					"tk-a": 3,
+					"tk-b": 1,
+					"tk-d": 0,
+					"tk-c": 0
+				},
+				"ready": ["tk-a"],
+				"waves": 3,
+				"critical": ["tk-a", "tk-b", "tk-c"],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "downstream counts what waits, directly or transitively",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				},
+				{
+					"slug": "tk-c",
+					"blocked_by": ["tk-b"]
+				},
+				{
+					"slug": "tk-x"
+				},
+				{
+					"slug": "tk-y",
+					"blocked_by": ["tk-x"]
+				}
+			],
+			"ready": ["tk-a", "tk-x"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-x", "tk-b", "tk-y", "tk-c"],
+				"wave": {
+					"tk-a": 0,
+					"tk-x": 0,
+					"tk-b": 1,
+					"tk-y": 1,
+					"tk-c": 2
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": ["tk-a", "tk-b", "tk-c"],
+				"downstream": {
+					"tk-a": 2,
+					"tk-x": 1,
+					"tk-b": 1,
+					"tk-y": 0,
+					"tk-c": 0
+				},
+				"ready": ["tk-a", "tk-x"],
+				"waves": 3,
+				"critical": ["tk-a", "tk-b", "tk-c"],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "a closed blocker holds nothing back",
+			"tasks": [
+				{
+					"slug": "tk-a",
+					"status": "closed"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				}
+			],
+			"ready": ["tk-b"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-b"],
+				"wave": {
+					"tk-b": 0
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": [],
+				"downstream": {
+					"tk-b": 0
+				},
+				"ready": ["tk-b"],
+				"waves": 1,
+				"critical": [],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "a blocker that no longer exists holds nothing back",
+			"tasks": [
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-gone"]
+				}
+			],
+			"ready": ["tk-b"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-b"],
+				"wave": {
+					"tk-b": 0
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": [],
+				"downstream": {
+					"tk-b": 0
+				},
+				"ready": ["tk-b"],
+				"waves": 1,
+				"critical": [],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "an open blocker from another project is a stub",
+			"tasks": [
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-elsewhere"]
+				}
+			],
+			"ready": [],
+			"outside": [
+				{
+					"slug": "tk-elsewhere",
+					"project_slug": "wp-other"
+				}
+			],
+			"expect": {
+				"order": ["tk-elsewhere", "tk-b"],
+				"wave": {
+					"tk-elsewhere": 0,
+					"tk-b": 1
+				},
+				"outside": ["tk-elsewhere"],
+				"cycle": [],
+				"critical_nodes": ["tk-elsewhere", "tk-b"],
+				"downstream": {
+					"tk-elsewhere": 1,
+					"tk-b": 0
+				},
+				"ready": [],
+				"waves": 2,
+				"critical": ["tk-elsewhere", "tk-b"],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "a cycle is reported instead of looped on",
+			"tasks": [
+				{
+					"slug": "tk-a",
+					"blocked_by": ["tk-b"]
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				},
+				{
+					"slug": "tk-c",
+					"blocked_by": ["tk-b"]
+				},
+				{
+					"slug": "tk-d"
+				}
+			],
+			"ready": ["tk-d"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-b", "tk-a", "tk-d", "tk-c"],
+				"wave": {
+					"tk-b": 0,
+					"tk-a": 0,
+					"tk-d": 0,
+					"tk-c": 1
+				},
+				"outside": [],
+				"cycle": ["tk-b", "tk-a"],
+				"critical_nodes": ["tk-b", "tk-c"],
+				"downstream": {
+					"tk-b": 2,
+					"tk-a": 2,
+					"tk-d": 0,
+					"tk-c": 0
+				},
+				"ready": ["tk-d"],
+				"waves": 2,
+				"critical": ["tk-b", "tk-c"],
+				"cycles": [["tk-a", "tk-b"]],
+				"disagree": []
+			}
+		},
+		{
+			"name": "the critical path names the cycle member it leaves through",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-c"]
+				},
+				{
+					"slug": "tk-c",
+					"blocked_by": ["tk-a", "tk-b"]
+				},
+				{
+					"slug": "tk-d",
+					"blocked_by": ["tk-b"]
+				}
+			],
+			"ready": ["tk-a"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-b", "tk-c", "tk-d"],
+				"wave": {
+					"tk-a": 0,
+					"tk-b": 1,
+					"tk-c": 1,
+					"tk-d": 2
+				},
+				"outside": [],
+				"cycle": ["tk-b", "tk-c"],
+				"critical_nodes": ["tk-a", "tk-b", "tk-c", "tk-d"],
+				"downstream": {
+					"tk-a": 3,
+					"tk-b": 2,
+					"tk-c": 2,
+					"tk-d": 0
+				},
+				"ready": ["tk-a"],
+				"waves": 3,
+				"critical": ["tk-a", "tk-c", "tk-b", "tk-d"],
+				"cycles": [["tk-b", "tk-c"]],
+				"disagree": []
+			}
+		},
+		{
+			"name": "the critical path walks every member between entering a cycle and leaving it",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-x",
+					"blocked_by": ["tk-a", "tk-y"]
+				},
+				{
+					"slug": "tk-z",
+					"blocked_by": ["tk-x"]
+				},
+				{
+					"slug": "tk-y",
+					"blocked_by": ["tk-z"]
+				},
+				{
+					"slug": "tk-d",
+					"blocked_by": ["tk-y"]
+				}
+			],
+			"ready": ["tk-a"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-x", "tk-y", "tk-z", "tk-d"],
+				"wave": {
+					"tk-a": 0,
+					"tk-x": 1,
+					"tk-y": 1,
+					"tk-z": 1,
+					"tk-d": 2
+				},
+				"outside": [],
+				"cycle": ["tk-x", "tk-y", "tk-z"],
+				"critical_nodes": ["tk-a", "tk-x", "tk-y", "tk-z", "tk-d"],
+				"downstream": {
+					"tk-a": 4,
+					"tk-x": 3,
+					"tk-y": 3,
+					"tk-z": 3,
+					"tk-d": 0
+				},
+				"ready": ["tk-a"],
+				"waves": 3,
+				"critical": ["tk-a", "tk-x", "tk-z", "tk-y", "tk-d"],
+				"cycles": [["tk-x", "tk-y", "tk-z"]],
+				"disagree": []
+			}
+		},
+		{
+			"name": "a task that blocks itself is a cycle",
+			"tasks": [
+				{
+					"slug": "tk-a",
+					"blocked_by": ["tk-a"]
+				}
+			],
+			"ready": [],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a"],
+				"wave": {
+					"tk-a": 0
+				},
+				"outside": [],
+				"cycle": ["tk-a"],
+				"critical_nodes": [],
+				"downstream": {
+					"tk-a": 0
+				},
+				"ready": [],
+				"waves": 1,
+				"critical": [],
+				"cycles": [["tk-a"]],
+				"disagree": []
+			}
+		},
+		{
+			"name": "a held wave-0 task agrees with task_ready",
+			"tasks": [
+				{
+					"slug": "tk-held",
+					"status": "in_progress",
+					"assignee": "someone@mit.edu#abc",
+					"lease_expired": false
+				},
+				{
+					"slug": "tk-lapsed",
+					"status": "in_progress",
+					"lease_expired": true
+				}
+			],
+			"ready": ["tk-lapsed"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-held", "tk-lapsed"],
+				"wave": {
+					"tk-held": 0,
+					"tk-lapsed": 0
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": [],
+				"downstream": {
+					"tk-held": 0,
+					"tk-lapsed": 0
+				},
+				"ready": ["tk-lapsed"],
+				"waves": 1,
+				"critical": [],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
+			"name": "task_ready and wave 0 disagree in both directions",
+			"tasks": [
+				{
+					"slug": "tk-a"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				}
+			],
+			"ready": ["tk-b"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-b"],
+				"wave": {
+					"tk-a": 0,
+					"tk-b": 1
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": ["tk-a", "tk-b"],
+				"downstream": {
+					"tk-a": 1,
+					"tk-b": 0
+				},
+				"ready": ["tk-b"],
+				"waves": 2,
+				"critical": ["tk-a", "tk-b"],
+				"cycles": [],
+				"disagree": ["tk-a", "tk-b"]
+			}
+		},
+		{
+			"name": "a ready task the layout has closed disagrees",
+			"tasks": [
+				{
+					"slug": "tk-a",
+					"status": "closed"
+				}
+			],
+			"ready": ["tk-a"],
+			"outside": [],
+			"expect": {
+				"order": [],
+				"wave": {},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": [],
+				"downstream": {},
+				"ready": [],
+				"waves": 0,
+				"critical": [],
+				"cycles": [],
+				"disagree": ["tk-a"]
+			}
+		},
+		{
+			"name": "rows go by wave, the critical path first, then priority",
+			"tasks": [
+				{
+					"slug": "tk-z",
+					"priority": "p0"
+				},
+				{
+					"slug": "tk-a",
+					"priority": "p3"
+				},
+				{
+					"slug": "tk-b",
+					"blocked_by": ["tk-a"]
+				}
+			],
+			"ready": ["tk-z", "tk-a"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-a", "tk-z", "tk-b"],
+				"wave": {
+					"tk-a": 0,
+					"tk-z": 0,
+					"tk-b": 1
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": ["tk-a", "tk-b"],
+				"downstream": {
+					"tk-a": 1,
+					"tk-z": 0,
+					"tk-b": 0
+				},
+				"ready": ["tk-a", "tk-z"],
+				"waves": 2,
+				"critical": ["tk-a", "tk-b"],
+				"cycles": [],
+				"disagree": []
+			}
+		}
+	]
+}

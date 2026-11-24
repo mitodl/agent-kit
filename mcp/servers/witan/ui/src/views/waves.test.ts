@@ -9,6 +9,7 @@ import projectListFixture from "../../fixtures/workflow_project_list.json" with 
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import type { TaskRow, WorkflowProjectSummary } from "../types.js";
 import { unwrap } from "../unwrap.js";
+import shared from "./waves.cases.json" with { type: "json" };
 import { components, layout, type Waves, waves, wavesPicker } from "./waves.js";
 
 /**
@@ -364,6 +365,52 @@ describe("layout", () => {
 			"tk-b",
 		]);
 	});
+});
+
+/**
+ * The cases `waves.cases.json` shares with witan-council's twin of `layout`
+ * (`witan/waves.py`, whose `tests/test_waves.py` runs the same file). The
+ * expectations are what the Python answers, so a rule changed on one side
+ * only fails here or there.
+ */
+describe("layout, on the cases shared with witan/waves.py", () => {
+	for (const c of shared.cases) {
+		it(c.name, () => {
+			const row = (patch: Record<string, unknown>): TaskRow =>
+				task(
+					patch.slug as string,
+					{
+						...shared.defaults,
+						...patch,
+					} as Partial<TaskRow>,
+				);
+			const tasks = c.tasks.map(row);
+			const bySlug = new Map(tasks.map((t) => [t.slug, t]));
+			const plan = layout({
+				tasks,
+				ready: c.ready.map((slug) => bySlug.get(slug) ?? task(slug)),
+				outside: c.outside.map(row),
+			});
+			const slugs = (keep: (node: (typeof plan.nodes)[number]) => boolean) =>
+				plan.nodes.filter(keep).map((node) => node.task.slug);
+
+			expect({
+				order: slugs(() => true),
+				wave: waveOf(plan),
+				outside: slugs((node) => node.outside),
+				cycle: slugs((node) => node.cycle),
+				critical_nodes: slugs((node) => node.critical),
+				downstream: Object.fromEntries(
+					plan.nodes.map((node) => [node.task.slug, node.downstream]),
+				),
+				ready: slugs((node) => node.ready),
+				waves: plan.waves,
+				critical: plan.critical,
+				cycles: plan.cycles,
+				disagree: plan.disagree.map((t) => t.slug).sort(),
+			}).toEqual(c.expect);
+		});
+	}
 });
 
 describe("waves", () => {

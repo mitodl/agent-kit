@@ -5,8 +5,9 @@ The editor-neutral twin of the web UI's waves view
 from one read in the browser. An editor client cannot hold the rule (ADR 0012
 keeps logic in the language server), so ``witan lsp``'s
 ``witan.listProjectTasks`` lays a project out with this module.
-``tests/test_waves.py`` runs the cases of ``waves.test.ts``, so a change to one
-copy that the other does not follow fails there.
+``ui/src/views/waves.cases.json`` holds the shared ``layout`` cases with this
+module's answers, and both ``tests/test_waves.py`` and ``waves.test.ts`` run
+every one, so a rule changed in one copy only fails the other's tests.
 
 A task with no open blocker is wave 0, and every other task sits one wave past
 its deepest open blocker. Blocker status follows ``task_ready``'s resolver: a

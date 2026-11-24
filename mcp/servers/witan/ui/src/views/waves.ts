@@ -27,9 +27,10 @@ import type {
  *
  * ★ THE LANGUAGE SERVER HAS A TWIN of `components` and `layout` (minus
  * `unblocksMost` and the edges), in witan-council's `witan/waves.py`, because
- * an editor client cannot hold the rule (ADR 0012). Its `tests/test_waves.py`
- * repeats this file's `components` and `layout` cases, so a change here needs
- * the same change there.
+ * an editor client cannot hold the rule (ADR 0012). `waves.cases.json` holds
+ * the `layout` cases the two share, with the Python's answers, and both
+ * `waves.test.ts` and its `tests/test_waves.py` run every one, so a change
+ * here needs the same change there and in the case file.
  *
  * ★ SVG GEOMETRY IN PERCENTAGES, for the reason the timeline's is: `/ui/`'s
  * CSP blocks inline `style=`. `<line>` takes percentage coordinates, which is

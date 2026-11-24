@@ -1002,6 +1002,8 @@ def test_list_project_tasks_reads_each_outside_blocker_once_and_drops_closed_one
         async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
             with pytest.raises(Exception, match="needs a 'project' argument"):
                 await s.command(LIST_PROJECT_TASKS)
+            with pytest.raises(Exception, match="must be a wp- slug"):
+                await s.command(LIST_PROJECT_TASKS, {"project": "tk-a"})
             return await s.command(LIST_PROJECT_TASKS, {"project": "wp-p"})
 
     result = run(go())
