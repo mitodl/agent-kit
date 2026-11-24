@@ -24,7 +24,7 @@ in the skill applies unchanged.
 | | |
 | --- | --- |
 | Line | `# noqa: S603, S607` - trailing prose after the codes is allowed and is the house style: `# noqa: FLY002 - one alternative per line` |
-| File | `# ruff: noqa: S603` at the top of the file |
+| File | `# ruff: noqa: S603` - honoured anywhere in the file, not only at the top |
 | Config | `[tool.ruff.lint.per-file-ignores]`, a glob to a list of codes |
 | Unused | `RUF100` - enable it |
 | Rule docs | `ruff rule S603` |
@@ -41,9 +41,9 @@ every rule on the line, present and future; never write one.
 | Config | `[[tool.mypy.overrides]]` with `module = "..."` and `disable_error_code = [...]` |
 | Unused | `warn_unused_ignores` - reports `[unused-ignore]` |
 
-**The reason must be its own comment.** Prose written directly after the bracket
-makes the whole directive invalid, and the error it was meant to suppress fires
-anyway:
+**The reason must be its own comment, and for the file-level form its own
+line.** Prose written directly after the bracket makes the line directive
+invalid, and the error it was meant to suppress fires anyway:
 
 ```python
 a = takes_int("no")  # type: ignore[arg-type] upstream stub is wrong
@@ -51,8 +51,18 @@ a = takes_int("no")  # type: ignore[arg-type] upstream stub is wrong
 # error: Argument 1 to "takes_int" has incompatible type "str"; expected "int"
 ```
 
-The habit carried over from ruff, where trailing prose is fine, produces a
-suppression that silently is not one.
+A second comment on the same line is the fix there, as in the Line row above.
+The file-level form takes no trailing comment at all, though: mypy parses the
+rest of the line as part of the code list.
+
+```python
+# mypy: disable-error-code="arg-type"  # upstream stubs wrong
+# error: disable_error_code: Invalid error code(s): arg-type  # upstream stubs wrong
+# error: Argument 1 to "takes_int" has incompatible type "str"; expected "int"
+```
+
+Put that reason on the line below. The habit carried over from ruff, where
+trailing prose is fine, produces a suppression that silently is not one.
 
 ## JavaScript / TypeScript
 
@@ -66,7 +76,7 @@ can come from any of them, and each has a different escape.
 | | |
 | --- | --- |
 | Line | `// biome-ignore lint/suspicious/noExplicitAny: reason` |
-| File | `// biome-ignore-all lint/suspicious/noExplicitAny: reason` |
+| File | `// biome-ignore-all lint/suspicious/noExplicitAny: reason`, which has to be the first thing in the file |
 | Config | `overrides` in `biome.json`, keyed by `includes` globs |
 | Unused | `suppressions/unused` - on by default, no configuration needed |
 | Rule docs | `biome explain noExplicitAny` |
@@ -80,6 +90,9 @@ suppressions/parse  × Unexpected token, expected one of ':', '(' or whitespace
 
 The rule identifier is the full path (`lint/<group>/<rule>`), not the bare rule
 name that appears in the diagnostic's right-hand column.
+
+`biome-ignore-all` placed after any code is reported as `suppressions/incorrect`
+and suppresses nothing - including the findings below it, which keep firing.
 
 ### eslint
 
@@ -101,13 +114,26 @@ code added inside a region later is silently covered too.
 | --- | --- |
 | Line | `// @ts-expect-error reason` - prose goes straight after the directive |
 | File | `// @ts-nocheck` |
-| Config | `exclude` in `tsconfig.json` - rung 3 for named files, rung 4 for a glob, and it drops them from typechecking entirely rather than silencing one diagnostic |
+| Config | `exclude` in `tsconfig.json` - it filters `include`, and is not a suppression at all for a file something else imports |
 | Unused | built in to `@ts-expect-error`: `TS2578: Unused '@ts-expect-error' directive` |
 
 **Use `@ts-expect-error`, not `@ts-ignore`.** They suppress the same way, but the
 first fails the build once the underlying error is gone, and the second sits
 there silently forever. There is no rule identifier for either, so both are
 broad: they cover every error on the next line. Keep the line they guard small.
+
+**`exclude` does not take a file out of typechecking.** It only narrows the set
+of files `include` seeds the program with. A file that an included file imports
+is pulled back in and its errors are still reported, named against the excluded
+path:
+
+```text
+src/bad.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.
+```
+
+Only an orphan - a file nothing imports - actually goes quiet, which is the case
+where excluding it changes nothing worth having. Reach for `@ts-expect-error` on
+the line instead.
 
 ## Shell
 
@@ -148,20 +174,35 @@ around it.
 
 | | |
 | --- | --- |
-| Line | `# zizmor: ignore[template-injection]`, **on the same line as the finding** |
-| Config | `.github/zizmor.yml`: `rules:` → the rule name → `ignore:` → a list of filenames |
+| Line | `# zizmor: ignore[template-injection]`, **inside the span the finding points at** |
+| Config | `.github/zizmor.yml`: `rules:` → the rule name → `ignore:` → entries of `file.yml`, `file.yml:line`, or `file.yml:line:col` (base filename, not a path) |
 | Unused | none. The run summary counts ignored findings in aggregate, which will not tell you that *your* directive stopped matching |
 
-Placement is the trap. The comment on the line *above* the flagged line parses
-fine, suppresses nothing, and looks exactly like a working suppression:
+Placement is the trap, and it has two halves. The comment goes on any line
+within the finding's span - not only the one the diagnostic underlines - and a
+comment *above* the span parses fine, suppresses nothing, and looks exactly like
+a working suppression:
 
 ```yaml
 name: label
 on: [pull_request_target] # zizmor: ignore[dangerous-triggers] - labels only, never checks out the head
 ```
 
-One line higher - above `on:` - and the finding is still reported. Confirm it
-took: the summary line reads `N findings (1 ignored, ...)`.
+One line higher - above `on:` - and the finding is still reported.
+
+The second half is block scalars, where the reported line is the wrong place by
+construction. For a `template-injection` finding inside a `run: |`, a comment on
+the flagged line becomes part of the shell script, and zizmor never sees a
+directive at all:
+
+```yaml
+      - run: |  # zizmor: ignore[template-injection]
+          echo "${{ github.event.comment.body }}"
+```
+
+The directive has to sit outside the scalar - on the `run: |` line, as above.
+On the `echo` line the run reports the finding unchanged, with `0 ignored`.
+Either way, confirm it took: the summary line reads `N findings (1 ignored, ...)`.
 
 The rule in that example is one a suppression can be right about: a
 `pull_request_target` workflow that only labels a PR, and never checks out or
@@ -184,33 +225,48 @@ and leaves the lint green while it does.
 
 | | |
 | --- | --- |
-| Line | **none** - there is no inline escape |
-| Config | `.github/actionlint.yaml`, `paths:` mapping a glob to `ignore:` regexes matched against the message text |
+| Line | **none for actionlint's own rules.** A `[shellcheck]` finding takes shellcheck's own `# shellcheck disable=SCxxxx` inside the `run:` script |
+| Config | `.github/actionlint.yaml`, `paths:` mapping a glob to `ignore:` regexes matched against the message text (v1.7.4 and later) |
 | CLI | a repeatable `-ignore <regex>`, which applies to every file the run covers - broader than the config, so prefer `paths:` |
 | Unused | none |
 
-With no inline form, the smallest available suppression is a config entry keyed
-to one path and one message. That is still narrow if the regex is specific:
+Findings tagged `[shellcheck]` are shellcheck's, forwarded, so they take
+shellcheck's inline escape and the next-complete-command scope that comes with
+it. That is a rung 1 or 2 suppression where `paths:` would have been rung 3:
+
+```yaml
+      - run: |
+          files="a b"
+          # shellcheck disable=SC2086
+          ls $files    # suppressed
+          cp $files /tmp  # still reported
+```
+
+For actionlint's own rules there is no inline form, so the smallest available
+suppression is a config entry keyed to one path and one message. That is still
+narrow if the regex is specific:
 
 ```yaml
 paths:
   .github/workflows/probe.yml:
     ignore:
-      - 'input "nosuchinput" is not defined'
+      - 'property "nosuchinput" is not defined'
 ```
 
 Other findings in the same file keep firing, including other occurrences of the
 same rule with a different message. A regex like `'is not defined'` would not -
 write the longest pattern that matches the one message.
 
-actionlint resolves the config relative to the repository root, so it is read
-only when the tool runs inside the checkout.
+actionlint resolves `paths:` keys relative to the repository root and matches
+them against the path it was handed, so the config applies only when the tool
+runs from the root. The same file linted from a subdirectory reports every
+finding the config was meant to silence.
 
 ### gitleaks
 
 | | |
 | --- | --- |
-| Line | `gitleaks:allow` anywhere in a comment on the line |
+| Line | `gitleaks:allow` anywhere on the line - it is matched as text, so it does not have to be inside a comment |
 | Config | `.gitleaksignore`, which takes fingerprints from the report - see gitleaks' own docs for its shape |
 
 A test fixture that must contain a credential-shaped string is the legitimate
@@ -245,6 +301,19 @@ when a filename will do.
 | File | `<!-- markdownlint-disable-file MD034 -->` |
 | Config | `.markdownlint.yaml` |
 
+**No form has a reason slot.** Everything after the directive is parsed as more
+rule names, aliases and tags, so prose silently widens the suppression instead
+of annotating it. `<!-- markdownlint-disable-next-line MD034 - code links stay
+bare -->` also disables every rule tagged `links`, which takes MD042 with it;
+the same directive without the prose reports MD042 as normal. Nothing warns.
+
+Put the reason in its own comment on the line above:
+
+```markdown
+<!-- Code references in this file are deliberately bare. -->
+<!-- markdownlint-disable-next-line MD034 -->
+```
+
 agent-kit's `.markdownlint.yaml` is the model for a rung-5 entry: every
 disabled rule carries a comment saying what about that repository's Markdown
 makes the rule wrong, not that it was noisy.
@@ -258,18 +327,17 @@ makes the rule wrong, not that it was noisy.
 | File | `# yamllint disable-file`, **alone on the first line of the file** |
 | Config | `.yamllint` |
 
-Placement is the trap, as it is for zizmor, and here there are two rules.
-Breaking either one is silent - no error, no warning, and the finding still
-reported:
+**No yamllint directive can carry a reason**, at any scope. The parser anchors
+each one at end-of-line, so trailing text - including a second `# comment` -
+stops it matching, silently: no error, no warning, and the finding still
+reported. That holds for `disable-line`, for the `disable`/`enable` pair, and
+for `disable-file`.
 
-- `disable-file` is honoured only as the very first line, so it goes *above*
-  the `---` that opens most workflow and config YAML. One line lower and it
-  does nothing.
-- That line has to be the directive and nothing else. Trailing text on it,
-  including a reason, makes it do nothing.
+`disable-file` has a second rule on top of it: it is honoured only as the very
+first line, so it goes *above* the `---` that opens most workflow and config
+YAML. One line lower and it does nothing.
 
-So this is the one file-level form in this document that cannot carry its
-reason inline. Put the reason on the line below:
+Put the reason on the line below the directive:
 
 ```yaml
 # yamllint disable-file

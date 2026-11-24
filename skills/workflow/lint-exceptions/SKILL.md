@@ -77,7 +77,7 @@ produces it.
 
 | Finding | The fix that was available |
 | --- | --- |
-| Shelling out with interpolated arguments (`S603`/`S607`, `SC2086`) | Pass an argument list instead of a string, quote the expansion, resolve the binary explicitly |
+| Shelling out with interpolated arguments (`S603`/`S607`, `SC2086`) | Make the arguments literal, quote the expansion, resolve the binary explicitly |
 | A naive timestamp (`DTZ005`) | Pass the timezone the call already accepts |
 | An escape-hatch type (`noExplicitAny`, `no-explicit-any`) | Use the unknown-equivalent and narrow, or write the type the value actually has |
 | An unawaited async call (`no-floating-promises`) | Await it, or mark it discarded in the way the rule documents |
