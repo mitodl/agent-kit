@@ -4,7 +4,11 @@
 
 export type RepoScope = "repo" | "repo+unfiled" | "all";
 
-export type Scope = { scope: RepoScope } | { project: string; title: string };
+/** `folder` is the workspace folder uri the project was picked from: its
+ * route is the graph that holds the project. */
+export type Scope =
+	| { scope: RepoScope }
+	| { project: string; title: string; folder: string };
 
 /** The scope a list command answers it applied, `undefined` from a server
  * older than scopes. */
@@ -52,14 +56,36 @@ export function appliedLabel(applied: Applied, picked: Scope): string {
 	return REPO_SCOPES.find((s) => s.scope === scope)?.label ?? scope;
 }
 
+/** One choice per project across each folder's `witan.listProjects`, kept
+ * with the first folder that listed it. Folders that route to one graph list
+ * the same projects, so a project shows once; one only another folder's graph
+ * holds is still offered, with that folder. */
+export function projectChoices<P extends { slug: string }>(
+	lists: ReadonlyArray<{ folder: string; projects: P[] }>,
+): Array<P & { folder: string }> {
+	const choices = new Map<string, P & { folder: string }>();
+	for (const { folder, projects } of lists) {
+		for (const p of projects) {
+			if (!choices.has(p.slug)) {
+				choices.set(p.slug, { ...p, folder });
+			}
+		}
+	}
+	return [...choices.values()];
+}
+
 /** A scope read back from workspace state, or the default when it is not one. */
 export function restoreScope(stored: unknown): Scope {
 	if (typeof stored !== "object" || stored === null) {
 		return DEFAULT_SCOPE;
 	}
 	const value = stored as Record<string, unknown>;
-	if (typeof value.project === "string" && typeof value.title === "string") {
-		return { project: value.project, title: value.title };
+	if (
+		typeof value.project === "string" &&
+		typeof value.title === "string" &&
+		typeof value.folder === "string"
+	) {
+		return { project: value.project, title: value.title, folder: value.folder };
 	}
 	const repo = REPO_SCOPES.find((s) => s.scope === value.scope);
 	return repo ? { scope: repo.scope } : DEFAULT_SCOPE;

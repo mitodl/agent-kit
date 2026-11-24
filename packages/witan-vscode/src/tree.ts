@@ -103,7 +103,7 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 
 	async getChildren(node?: WorkNode): Promise<WorkNode[]> {
 		if (node === undefined) {
-			const folders = vscode.workspace.workspaceFolders ?? [];
+			const folders = this.listedFolders();
 			if (folders.length === 0) {
 				return [new MessageNode("Open a folder to see its witan work.", false)];
 			}
@@ -178,6 +178,20 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 		const item = new vscode.TreeItem(node.message);
 		item.iconPath = new vscode.ThemeIcon(node.error ? "error" : "info");
 		return item;
+	}
+
+	/** The folders whose work the view lists. A project is listed once,
+	 * through the folder it was picked from: a folder on the same graph would
+	 * list the same rows, and one on another graph none. If that folder is no
+	 * longer open, each open folder asks its own route. */
+	private listedFolders(): readonly vscode.WorkspaceFolder[] {
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		const { scope } = this;
+		if (!("project" in scope)) {
+			return folders;
+		}
+		const source = folders.find((f) => f.uri.toString() === scope.folder);
+		return source ? [source] : folders;
 	}
 
 	private folderNode(folder: vscode.WorkspaceFolder): FolderNode {

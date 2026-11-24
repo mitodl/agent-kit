@@ -31,6 +31,7 @@ import {
 import {
 	type Applied,
 	appliedLabel,
+	projectChoices,
 	REPO_SCOPES,
 	requested,
 	restoreScope,
@@ -41,6 +42,7 @@ import { describeServerCommand } from "./serverCommand";
 import {
 	errorMessage,
 	type ProjectNode,
+	type ProjectRow,
 	type ServerCommand,
 	TaskNode,
 	WorkTreeProvider,
@@ -186,20 +188,51 @@ export async function activate(
 	};
 
 	const pickProject = async (): Promise<Scope | undefined> => {
-		const folder = vscode.workspace.workspaceFolders?.[0];
-		const { projects } = (await request(LIST_PROJECTS, {
-			...(folder ? { uri: folder.uri.toString() } : {}),
-			scope: "all",
-		})) as { projects: Array<{ slug: string; title: string; phase?: string }> };
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		if (folders.length === 0) {
+			throw new Error("open a folder to pick one of its projects.");
+		}
+		// Every folder: in a multi-root workspace each can route to its own graph.
+		const listed = await Promise.allSettled(
+			folders.map(async (f) => {
+				const folder = f.uri.toString();
+				const { projects } = (await request(LIST_PROJECTS, {
+					uri: folder,
+					scope: "all",
+				})) as { projects: ProjectRow[] };
+				return { folder, projects };
+			}),
+		);
+		const lists = listed.flatMap((r, i) => {
+			if (r.status === "fulfilled") {
+				return [r.value];
+			}
+			output.warn(
+				`listing ${folders[i]?.name}'s projects failed: ${errorMessage(r.reason)}`,
+			);
+			return [];
+		});
+		const [first] = listed;
+		if (lists.length === 0 && first?.status === "rejected") {
+			throw first.reason;
+		}
+		const names = new Map(folders.map((f) => [f.uri.toString(), f.name]));
 		const pick = await vscode.window.showQuickPick(
-			projects.map((p) => ({
+			projectChoices(lists).map((p) => ({
 				label: p.title,
 				description: [p.phase, p.slug].filter(Boolean).join(" · "),
-				slug: p.slug,
+				detail: folders.length > 1 ? names.get(p.folder) : undefined,
+				choice: p,
 			})),
 			{ title: "witan: show one project's work", matchOnDescription: true },
 		);
-		return pick && { project: pick.slug, title: pick.label };
+		return (
+			pick && {
+				project: pick.choice.slug,
+				title: pick.choice.title,
+				folder: pick.choice.folder,
+			}
+		);
 	};
 
 	const restart = async () => {
