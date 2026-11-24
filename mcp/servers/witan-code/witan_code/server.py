@@ -908,7 +908,7 @@ def code_search_symbol(
     return result
 
 
-BindingKind = Literal["env_var", "package", "service", "endpoint"]
+BindingKind = Literal["env_var", "endpoint", "package", "service"]
 PrecisionTier = Literal["precise", "heuristic", "fuzzy"]
 
 

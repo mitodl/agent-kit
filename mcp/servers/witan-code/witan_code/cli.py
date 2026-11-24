@@ -49,7 +49,7 @@ app = make_app(
     version_dist="witan-code",
 )
 
-BindingKind = Literal["env_var", "package", "service", "endpoint"]
+BindingKind = Literal["env_var", "endpoint", "package", "service"]
 
 _server = None
 
