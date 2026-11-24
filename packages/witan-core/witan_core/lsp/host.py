@@ -37,6 +37,8 @@ from .plugin import (
 __all__ = ["HOST_COMMANDS", "STATUS_COMMAND", "Host", "PluginExit", "disk_text"]
 
 STATUS_COMMAND = "witan.status"
+HOVER_SECTION_SEPARATOR = "\n\n---\n\n"
+"""A markdown rule between two plugins' hover sections."""
 HOST_COMMANDS = (STATUS_COMMAND,)
 
 T = TypeVar("T")
@@ -368,7 +370,7 @@ class Host:
         ]
         if self.lens_fallback and (lenses := self._lenses_on(path, uri, line)):
             sections.append("\n\n".join(escape_markdown(lens.title) for lens in lenses))
-        return "\n\n---\n\n".join(sections) or None
+        return HOVER_SECTION_SEPARATOR.join(sections) or None
 
     def code_lenses(self, path: Path | None, uri: str) -> list[Lens]:
         """Every plugin's lenses. An unresolved one carries the plugin and

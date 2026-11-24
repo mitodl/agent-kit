@@ -395,7 +395,7 @@ def test_hover_on_an_env_var_lists_providers_and_consumers(graph):
     async def go():
         async with lsp_session(_host(), [graph.app]) as session:
             text = await _hover(session, settings, 4, 30)
-            assert text.startswith("**env_var** MITOL\\_APP\\_BASE\\_URL")
+            assert text.startswith("**env_var** MITOL_APP_BASE_URL")
             providers, consumers = text.split("Consumers:")
             # infra is not checked out here, so it is named, not linked.
             assert (

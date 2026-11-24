@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -24,7 +25,7 @@ from pygls.lsp.server import LanguageServer
 from pygls.uris import to_fs_path
 
 from .folders import explicit_target, resolve_folder
-from .host import Host, disk_text
+from .host import HOVER_SECTION_SEPARATOR, Host, disk_text
 from .plugin import Capability, Lens, Location, Note, discover_plugins
 
 __all__ = ["build_server", "serve"]
@@ -89,6 +90,46 @@ def _lens(lens: Lens) -> types.CodeLens:
     if not lens.command:
         return types.CodeLens(range=_range(lens.line), data=lens.data)
     return types.CodeLens(range=_range(lens.line), command=_command(lens))
+
+
+# The markdown a hover is built from: what `escape_markdown` writes (an escape,
+# `&lt;` or `&amp;`), a link the plugin built around escaped text, `**` around a
+# heading word, and the rule the host puts between two plugins' sections. Plugins
+# write nothing else, and anything else passes through as written.
+_HOVER_MARKDOWN = re.compile(
+    r"\\([!-/:-@\[-`{-~])|\[((?:\\.|[^\\\]])*)\]\([^)\s]*\)|\*\*|&(lt|amp);|("
+    + re.escape(HOVER_SECTION_SEPARATOR)
+    + ")"
+)
+
+
+def _plaintext(markdown: str) -> str:
+    """A hover's markdown as the text it renders to, for a client that asked
+    for plain text: eglot without markdown-mode shows markdown raw. A link
+    keeps its text, which names the repo, path and line it points at."""
+
+    def plain(m: re.Match[str]) -> str:
+        if m[1] is not None:
+            return m[1]
+        if m[2] is not None:
+            return _plaintext(m[2])
+        if m[4] is not None:
+            return "\n\n"
+        return {"lt": "<", "amp": "&"}.get(m[3], "")
+
+    return _HOVER_MARKDOWN.sub(plain, markdown)
+
+
+def _hover_markup(ls: LanguageServer, markdown: str) -> types.MarkupContent:
+    """Markdown unless the client lists another format first in
+    ``hover.contentFormat``."""
+    document = ls.client_capabilities.text_document
+    formats = document and document.hover and document.hover.content_format
+    if formats and formats[0] != types.MarkupKind.Markdown:
+        return types.MarkupContent(
+            kind=types.MarkupKind.PlainText, value=_plaintext(markdown)
+        )
+    return types.MarkupContent(kind=types.MarkupKind.Markdown, value=markdown)
 
 
 def _folders(params: types.InitializeParams) -> list[types.WorkspaceFolder]:
@@ -204,9 +245,7 @@ def build_server(host: Host, *, target: str | None = None) -> LanguageServer:
             text = await host.run(host.hover, _path(uri), uri, pos.line, pos.character)
             if text is None:
                 return None
-            return types.Hover(
-                contents=types.MarkupContent(kind=types.MarkupKind.Markdown, value=text)
-            )
+            return types.Hover(contents=_hover_markup(ls, text))
 
     if Capability.CODE_LENS in capabilities:
 
