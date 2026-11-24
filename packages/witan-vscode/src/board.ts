@@ -94,7 +94,11 @@ export class Boards implements vscode.Disposable {
 			{
 				enableScripts: true,
 				enableCommandUris: false,
-				enableForms: false,
+				// The page's search boxes are forms it handles itself (a submit
+				// listener that prevents the default); without this the sandbox
+				// never fires that event. The policy's `form-action 'none'`
+				// still stops any form from navigating.
+				enableForms: true,
 				localResourceRoots: [root],
 			},
 		);

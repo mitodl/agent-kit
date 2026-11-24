@@ -30,6 +30,8 @@ test("the policy allows the bundle's own files and nothing inline or remote", ()
 	assert.match(csp, /^default-src 'none'/);
 	assert.match(csp, /script-src https:\/\/\*\.vscode-cdn\.net(;|$)/);
 	assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|connect-src|\*\s|data:/);
+	// The panel enables forms for the page's search boxes; none may navigate.
+	assert.match(csp, /form-action 'none'(;|$)/);
 });
 
 test("the html loads its two assets from the webview and carries the policy", () => {
