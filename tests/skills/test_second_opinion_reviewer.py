@@ -1,4 +1,4 @@
-"""Tests for skills/workflow/feature-loop/scripts/reviewer.py.
+"""Tests for skills/workflow/second-opinion/scripts/reviewer.py.
 
 The script runs as a subprocess against stub ``codex``/``claude``/``pi``
 binaries: PATH holds only the stub directory, and HOME and XDG_CONFIG_HOME are
@@ -21,7 +21,7 @@ from pathlib import Path
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
-    / "skills/workflow/feature-loop/scripts/reviewer.py"
+    / "skills/workflow/second-opinion/scripts/reviewer.py"
 )
 
 # No __pycache__ beside the script: agent-kit copies the whole skill directory.
@@ -163,7 +163,7 @@ class ReviewerTest(unittest.TestCase):
         }
 
     def write_config(self, text: str = CONFIG) -> None:
-        path = self.xdg / "feature-loop" / "reviewers"
+        path = self.xdg / "second-opinion" / "reviewers"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
@@ -222,7 +222,7 @@ class ReviewerTest(unittest.TestCase):
         out = self.run_script("show", "--caller", "claude")
         self.assertEqual(out.returncode, 2)
         self.assertIn("claude    codex:", out.stderr)
-        self.assertIn("FEATURE_LOOP_REVIEWER", out.stderr)
+        self.assertIn("SECOND_OPINION_REVIEWER", out.stderr)
 
     def test_family_line_wins_then_catch_all(self) -> None:
         self.write_config()
@@ -245,7 +245,7 @@ class ReviewerTest(unittest.TestCase):
     def test_env_overrides_file(self) -> None:
         self.write_config()
         out = self.run_script(
-            "show", "--caller", "claude", FEATURE_LOOP_REVIEWER="codex:other"
+            "show", "--caller", "claude", SECOND_OPINION_REVIEWER="codex:other"
         )
         self.assertEqual(out.stdout.splitlines()[0], "reviewer: codex:other")
 
@@ -275,7 +275,7 @@ class ReviewerTest(unittest.TestCase):
                 args = ["show", "--caller", "any"]
                 if caller_model:
                     args += ["--caller-model", caller_model]
-                out = self.run_script(*args, FEATURE_LOOP_REVIEWER=reviewer_value)
+                out = self.run_script(*args, SECOND_OPINION_REVIEWER=reviewer_value)
                 self.assertEqual(out.returncode, 0, out.stderr)
                 self.assertEqual(
                     "same model as the main session" in out.stderr, warns, out.stderr
@@ -292,7 +292,7 @@ class ReviewerTest(unittest.TestCase):
                 out = self.start(
                     "--caller-model",
                     caller_model,
-                    FEATURE_LOOP_REVIEWER=value,
+                    SECOND_OPINION_REVIEWER=value,
                     STUB_MODEL=stub_model,
                 )
                 self.assertEqual(out.returncode, 0, out.stderr)
@@ -303,7 +303,7 @@ class ReviewerTest(unittest.TestCase):
         out = self.start(
             "--caller-model",
             "claude-opus-5-5",
-            FEATURE_LOOP_REVIEWER="claude:opus",
+            SECOND_OPINION_REVIEWER="claude:opus",
             STUB_MODEL="claude-sonnet-5-5",
         )
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -357,9 +357,11 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(claude[claude.index("--tools") + 1], "Read,Grep,Glob")
 
     def test_claude_reads_anywhere_unless_confined(self) -> None:
-        env = {"FEATURE_LOOP_REVIEWER": "claude:m"}
+        env = {"SECOND_OPINION_REVIEWER": "claude:m"}
         self.assert_reply(self.start(**env), "claude")
-        self.assert_reply(self.start(FEATURE_LOOP_CLAUDE_CONFINED="1", **env), "claude")
+        self.assert_reply(
+            self.start(SECOND_OPINION_CLAUDE_CONFINED="1", **env), "claude"
+        )
         for call, expected in zip(
             self.calls("claude"), ["/", str(self.topic.resolve())]
         ):
@@ -377,7 +379,7 @@ class ReviewerTest(unittest.TestCase):
         self.write_config()
         for bad in [
             "nope",
-            "fl1.!!!",
+            "so1.!!!",
             reviewer.encode_token("codex", "m", "../../etc"),
             reviewer.encode_token("codex", "m", "--last"),
             reviewer.encode_token("codex", "m", "abc\n"),
@@ -391,7 +393,7 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         lines = out.stdout.splitlines()
         self.assertTrue(lines[0].startswith(f"reviewer: {backend}:"), lines)
-        self.assertTrue(lines[1].startswith("reviewer-session: fl1."), lines)
+        self.assertTrue(lines[1].startswith("reviewer-session: so1."), lines)
         self.assertIn(f"LGTM from {backend}", lines)
         self.assertTrue(lines[-1].startswith("reviewer-reply: "), lines)
         reply = Path(lines[-1].split(": ", 1)[1])
@@ -399,7 +401,7 @@ class ReviewerTest(unittest.TestCase):
         return reply
 
     def test_claude_start_then_resume(self) -> None:
-        env = {"FEATURE_LOOP_REVIEWER": "claude:opus-test"}
+        env = {"SECOND_OPINION_REVIEWER": "claude:opus-test"}
         first = self.start(**env)
         reply1 = self.assert_reply(first, "claude")
         token = self.token_of(first.stdout)
@@ -415,7 +417,7 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(start_call["prompt"], self.prompt.read_text())
 
     def test_codex_start_then_resume(self) -> None:
-        env = {"FEATURE_LOOP_REVIEWER": "codex:gpt-test"}
+        env = {"SECOND_OPINION_REVIEWER": "codex:gpt-test"}
         first = self.start(**env)
         self.assert_reply(first, "codex")
         token = self.token_of(first.stdout)
@@ -428,7 +430,7 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(resume_call["argv"][-2:], [tid, "-"])
 
     def test_pi_start_then_resume_by_file(self) -> None:
-        env = {"FEATURE_LOOP_REVIEWER": "pi:prov/model-test"}
+        env = {"SECOND_OPINION_REVIEWER": "pi:prov/model-test"}
         first = self.start(**env)
         self.assert_reply(first, "pi")
         token = self.token_of(first.stdout)
@@ -470,7 +472,7 @@ class ReviewerTest(unittest.TestCase):
             ("no MCP field", {"STUB_MODE": "nomcp"}, "MCP servers None"),
         ]:
             with self.subTest(name):
-                out = self.start(FEATURE_LOOP_REVIEWER="claude:m", **env)
+                out = self.start(SECOND_OPINION_REVIEWER="claude:m", **env)
                 self.assertEqual(out.returncode, 1, out.stdout)
                 self.assertIn(message, out.stderr)
                 self.assertEqual(list(self.topic.glob("reply-*")), [])
@@ -500,7 +502,7 @@ class ReviewerTest(unittest.TestCase):
                 stderr, elapsed = self.start_until_killed(
                     "20",
                     self.root / f"pid-{backend}",
-                    FEATURE_LOOP_REVIEWER=f"{backend}:m",
+                    SECOND_OPINION_REVIEWER=f"{backend}:m",
                     **env,
                 )
                 self.assertIn("could not read the reviewer's output", stderr)
@@ -514,19 +516,19 @@ class ReviewerTest(unittest.TestCase):
                 stderr, _ = self.start_until_killed(
                     "1",
                     self.root / f"pid-{backend}",
-                    FEATURE_LOOP_REVIEWER=f"{backend}:m",
+                    SECOND_OPINION_REVIEWER=f"{backend}:m",
                     STUB_MODE=mode,
                 )
                 self.assertIn("did not finish", stderr)
 
     def test_codex_reconnect_before_a_completed_turn_is_not_a_failure(self) -> None:
-        out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE="reconnect")
+        out = self.start(SECOND_OPINION_REVIEWER="codex:m", STUB_MODE="reconnect")
         self.assert_reply(out, "codex")
 
     def test_codex_error_without_a_completed_turn_fails(self) -> None:
         for mode in ("turnfailed", "errorlast"):
             with self.subTest(mode=mode):
-                out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE=mode)
+                out = self.start(SECOND_OPINION_REVIEWER="codex:m", STUB_MODE=mode)
                 self.assertEqual(out.returncode, 1)
                 self.assertIn("stream ended", out.stderr)
                 self.assertNotIn("LGTM", out.stdout)
@@ -543,21 +545,21 @@ class ReviewerTest(unittest.TestCase):
             "~/topic",
             "--prompt-file",
             "~/prompt.md",
-            FEATURE_LOOP_REVIEWER="codex:m",
+            SECOND_OPINION_REVIEWER="codex:m",
         )
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertTrue((home / "topic" / "reviewer-sessions").exists())
         self.assertFalse((self.root / "~").exists())
 
     def test_failed_start_is_not_session_gone(self) -> None:
-        out = self.start(FEATURE_LOOP_REVIEWER="codex:m", STUB_MODE="fail")
+        out = self.start(SECOND_OPINION_REVIEWER="codex:m", STUB_MODE="fail")
         self.assertEqual(out.returncode, 1)
         self.assertIn("never started", out.stderr)
         self.assertEqual(list(self.topic.glob(".reply-*")), [])
 
     def test_cli_missing_exits_1(self) -> None:
         (self.bin / "codex").unlink()
-        out = self.start(FEATURE_LOOP_REVIEWER="codex:m")
+        out = self.start(SECOND_OPINION_REVIEWER="codex:m")
         self.assertEqual(out.returncode, 1)
         self.assertIn("not installed", out.stderr)
 
@@ -566,7 +568,7 @@ class ReviewerTest(unittest.TestCase):
         self.topic.mkdir()
         self.topic.chmod(0o500)
         self.addCleanup(self.topic.chmod, 0o700)
-        out = self.start(FEATURE_LOOP_REVIEWER="claude:m")
+        out = self.start(SECOND_OPINION_REVIEWER="claude:m")
         self.assertEqual(out.returncode, 1)
         self.assertIn("escalated permissions", out.stderr)
         self.assertEqual(self.calls("claude"), [])
@@ -601,7 +603,7 @@ class ReviewerTest(unittest.TestCase):
         return proc, child
 
     def test_lock_outlives_a_killed_script(self) -> None:
-        token = self.token_of(self.start(FEATURE_LOOP_REVIEWER="claude:m").stdout)
+        token = self.token_of(self.start(SECOND_OPINION_REVIEWER="claude:m").stdout)
         proc, child = self._hanging_resume(token, self.root / "pid")
         # SIGKILL leaves the script no chance to clean up; only the child,
         # through the fd it inherited, still holds the lock.
@@ -615,7 +617,7 @@ class ReviewerTest(unittest.TestCase):
         self.assertEqual(self.resume(token).returncode, 0)
 
     def test_sigterm_kills_the_reviewer(self) -> None:
-        token = self.token_of(self.start(FEATURE_LOOP_REVIEWER="claude:m").stdout)
+        token = self.token_of(self.start(SECOND_OPINION_REVIEWER="claude:m").stdout)
         proc, child = self._hanging_resume(token, self.root / "pid")
         proc.send_signal(signal.SIGTERM)
         self.assertEqual(proc.wait(5), 1)

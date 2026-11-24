@@ -83,7 +83,6 @@ django-api-benchmark            = "skills/python/django-api-benchmark/SKILL.md"
 docker-uv-image-builds          = "skills/containers/docker-uv-image-builds/SKILL.md"
 drf-api-performance             = "skills/python/drf-api-performance/SKILL.md"
 extract-style-profile           = "skills/workflow/extract-style-profile/SKILL.md"
-feature-loop                    = "skills/workflow/feature-loop/SKILL.md"
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
@@ -92,6 +91,7 @@ pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/
 renovate-security-triage        = "skills/process/renovate-security-triage/SKILL.md"
 run-canary-locally              = "skills/process/run-canary-locally/SKILL.md"
 screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
+second-opinion                  = "skills/workflow/second-opinion/SKILL.md"
 session-preflight               = "skills/workflow/session-preflight/SKILL.md"
 uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
 validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.md"
@@ -172,9 +172,9 @@ skills = [
     "dependency-updates",
     "deploy-verification",
     "extract-style-profile",
-    "feature-loop",
     "github-issue-triage",
     "github-pr-triage",
     "renovate-security-triage",
     "screenshot-pr",
+    "second-opinion",
 ]

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Start or resume a read-only reviewer through the codex, claude or pi CLI.
 
-The feature-loop skill calls this for its plan and code reviews. The reviewer
-comes from ``FEATURE_LOOP_REVIEWER`` or ``$XDG_CONFIG_HOME/feature-loop/reviewers``
+The second-opinion skill calls this for its plan and code reviews. The reviewer
+comes from ``SECOND_OPINION_REVIEWER`` or ``$XDG_CONFIG_HOME/second-opinion/reviewers``
 (``<caller family> <backend:model>`` per line, ``*`` as the catch-all); nothing
 is shipped as a default. ``restriction_flags`` holds each backend's read-only
 flags, shared by start and resume.
@@ -38,7 +38,7 @@ from pathlib import Path
 DEFAULT_TIMEOUT_SECONDS = 30 * 60
 BACKENDS = ("codex", "claude", "pi")
 EXIT_FAIL, EXIT_CONFIG, EXIT_GONE, EXIT_BUSY = 1, 2, 3, 4
-TOKEN_PREFIX = "fl1."
+TOKEN_PREFIX = "so1."
 # No leading `-`: the id is passed to the CLI as an argument.
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 EXAMPLE_CONFIG = """\
@@ -53,7 +53,7 @@ GONE_MESSAGES = {
     "pi": "No session found matching",
 }
 CLAUDE_TOOLS = ["Read", "Grep", "Glob"]
-CLAUDE_CONFINED = "FEATURE_LOOP_CLAUDE_CONFINED"
+CLAUDE_CONFINED = "SECOND_OPINION_CLAUDE_CONFINED"
 
 _child: list[subprocess.Popen] = []
 
@@ -69,7 +69,7 @@ class Fail(Exception):
 
 def config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "feature-loop" / "reviewers"
+    return Path(base) / "second-opinion" / "reviewers"
 
 
 def parse_value(value: str, where: str) -> tuple[str, str]:
@@ -109,15 +109,15 @@ def warn_if_same_model(caller_model: str | None, model: str) -> bool:
 
 
 def resolve(caller: str) -> tuple[str, str]:
-    env = os.environ.get("FEATURE_LOOP_REVIEWER", "").strip()
+    env = os.environ.get("SECOND_OPINION_REVIEWER", "").strip()
     if env:
-        return parse_value(env, "FEATURE_LOOP_REVIEWER")
+        return parse_value(env, "SECOND_OPINION_REVIEWER")
     path = config_path()
     if not path.is_file():
         raise Fail(
             EXIT_CONFIG,
             f"no reviewer configured. Create {path} with lines like:\n\n"
-            f"{EXAMPLE_CONFIG}\n\nor set FEATURE_LOOP_REVIEWER=<backend:model>.",
+            f"{EXAMPLE_CONFIG}\n\nor set SECOND_OPINION_REVIEWER=<backend:model>.",
         )
     table: dict[str, str] = {}
     for n, raw in enumerate(path.read_text().splitlines(), 1):
@@ -591,7 +591,10 @@ def main(argv: list[str] | None = None) -> int:
         # A quoted `~` reaches us unexpanded and would make a `~` directory
         # in the caller's working directory.
         p.add_argument(
-            "--dir", required=True, type=_user_path, help="the loop's topic directory"
+            "--dir",
+            required=True,
+            type=_user_path,
+            help="the review's working directory",
         )
         p.add_argument("--prompt-file", required=True, type=_user_path)
         p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)

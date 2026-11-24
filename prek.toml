@@ -186,7 +186,7 @@ pass_filenames = false
 files = "^(skills/.*\\.md|agent-config\\.toml|bin/check_skill_portability\\.py)$"
 priority = 10
 
-# ── Skills: session-preflight and feature-loop script tests (priority 10) ─────
+# ── Skills: session-preflight and second-opinion script tests (priority 10) ─────
 # The scripts ship inside their skills and run under plain `python3`, so their
 # tests are stdlib unittest too: no env to build, and they run here because no
 # package's pytest suite covers files under skills/.
@@ -201,5 +201,5 @@ name = "skill script tests (python 3.11)"
 entry = "uv run --no-project --python 3.11 python -m unittest discover -s tests/skills"
 language = "system"
 pass_filenames = false
-files = "^(skills/workflow/(session-preflight|feature-loop)/|tests/skills/)"
+files = "^(skills/workflow/(session-preflight|second-opinion)/|tests/skills/)"
 priority = 10
