@@ -272,8 +272,9 @@ query delete_external_uses_in_file($repo: String, $file: String) {
 // Every use of any name in `$targets`, across all repos. A reader passes each
 // dotted name a definition can be imported as (its module path, and its parent
 // package's when that package re-exports it), so one read covers both. The
-// limit is a ceiling, not a page: the reader caps what it shows, and a result
-// of exactly 10000 rows means some were cut, whole repos last in repo order.
+// limit is a ceiling, not a page: the reader caps what it shows. A result of
+// exactly 10000 rows may have been cut, and a cut drops the alphabetically
+// last repos.
 
 query external_uses_by_targets($targets: [String]) {
     match {
