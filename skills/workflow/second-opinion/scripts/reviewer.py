@@ -186,7 +186,10 @@ def restriction_flags(backend: str, model: str, topic_dir: Path) -> list[str]:
             # --restricted keeps the file tools to the working directory and
             # --add-dir. `/` lets claude read what a codex or pi reviewer can.
             "--add-dir",
-            str(topic_dir) if os.environ.get(CLAUDE_CONFINED) == "1" else "/",
+            # Any value but 0 confines: `=true` must not quietly open `/`.
+            str(topic_dir)
+            if os.environ.get(CLAUDE_CONFINED, "0") not in ("", "0")
+            else "/",
             "--output-format",
             "stream-json",
             "--verbose",
@@ -248,6 +251,8 @@ def decode_token(token: str) -> tuple[str, str, str]:
         backend, model, session_id = data["b"], data["m"], data["id"]
     except (binascii.Error, ValueError, KeyError, TypeError):
         raise bad from None
+    if not isinstance(backend, str) or not isinstance(model, str):
+        raise bad
     parse_value(f"{backend}:{model}", "session token")
     if not isinstance(session_id, str) or not SAFE_ID.match(session_id):
         raise bad
@@ -562,6 +567,8 @@ def review(
                 raise Fail(EXIT_GONE, f"{backend} has no session {resume_id}")
             lines = stderr.strip().splitlines()
             detail = collect.error or (lines[-1] if lines else f"exit {returncode}")
+            if returncode == 0 and not collect.error and collect.started:
+                detail = "it finished without a reply"
             if not collect.started:
                 detail += " (the reviewer never started; is the CLI logged in?)"
             raise Fail(EXIT_FAIL, f"{backend} reviewer failed: {detail}")
@@ -623,8 +630,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     args = parser.parse_args(argv)
 
-    signal.signal(signal.SIGTERM, _on_signal)
-    signal.signal(signal.SIGINT, _on_signal)
+    # Replies, the session log and the CLI's own session files hold what was
+    # reviewed.
+    os.umask(0o077)
+    # SIGHUP too: a closed terminal must not leave the reviewer running.
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
     try:
         if args.command == "show":
             return show(args.caller, args.caller_model)

@@ -32,7 +32,8 @@ _spec.loader.exec_module(reviewer)
 
 # One stub serves all three CLIs; it branches on its own file name and
 # STUB_MODE (ok, noinit, nomcp, gone, fail, hang, closeout, reconnect,
-# turnfailed, errorlast, baditem). STUB_TOOLS (JSON) overrides claude's tools.
+# turnfailed, errorlast, baditem, empty, exitcode). STUB_TOOLS and STUB_MCP
+# (JSON) override claude's tools and MCP servers.
 STUB = r"""
 import json, os, sys, time, uuid
 name = os.path.basename(sys.argv[0])
@@ -51,7 +52,7 @@ def out(ev):
 def flag(f):
     return args[args.index(f) + 1] if f in args else None
 
-reply = "LGTM from " + name
+reply = "" if mode == "empty" else "LGTM from " + name
 if mode == "gone":
     print({
         "claude": "No conversation found with session ID: x",
@@ -68,7 +69,7 @@ if mode == "closeout":
     time.sleep(60)
 if name == "claude":
     sid = flag("--session-id") or flag("--resume")
-    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": json.loads(os.environ.get("STUB_TOOLS") or '["Glob", "Grep", "Read"]'), "mcp_servers": [], "model": os.environ.get("STUB_MODEL") or "stub-model"}
+    init = {"type": "system", "subtype": "init", "session_id": sid, "tools": json.loads(os.environ.get("STUB_TOOLS") or '["Glob", "Grep", "Read"]'), "mcp_servers": json.loads(os.environ.get("STUB_MCP") or "[]"), "model": os.environ.get("STUB_MODEL") or "stub-model"}
     if mode == "nomcp":
         del init["mcp_servers"]
     if mode != "noinit":
@@ -108,6 +109,8 @@ else:
         {"role": "user", "content": prompt},
         {"role": "assistant", "content": [{"type": "text", "text": reply}]},
     ]})
+if mode == "exitcode":
+    sys.exit(3)
 """
 
 CONFIG = """\
@@ -334,13 +337,24 @@ class ReviewerTest(unittest.TestCase):
     def test_start_and_resume_share_the_restrictions(self) -> None:
         topic = Path("/t")
         required = {
-            "codex": [
-                'sandbox_mode="read-only"',
-                "--ignore-user-config",
-                "--ignore-rules",
+            "codex": ["--json", "--ignore-user-config", "--ignore-rules"],
+            "claude": ["-p", "--restricted", "--strict-mcp-config"],
+            "pi": ["-p", "--no-extensions", "--no-mcp", "--no-approve"],
+        }
+        # Flag and value together: a value alone proves nothing about its flag.
+        pairs = {
+            "codex": [("-m", "m"), ("-c", 'sandbox_mode="read-only"')],
+            "claude": [
+                ("--model", "m"),
+                ("--permission-prompts", "none"),
+                ("--output-format", "stream-json"),
             ],
-            "claude": ["--restricted", "--strict-mcp-config", "--permission-prompts"],
-            "pi": ["--no-extensions", "--no-mcp", "--no-approve", "read,grep,find,ls"],
+            "pi": [
+                ("--provider", "p"),
+                ("--model", "m"),
+                ("--tools", "read,grep,find,ls"),
+                ("--mode", "json"),
+            ],
         }
         models = {"codex": "m", "claude": "m", "pi": "p/m"}
         for backend, model in models.items():
@@ -348,6 +362,9 @@ class ReviewerTest(unittest.TestCase):
                 flags = reviewer.restriction_flags(backend, model, topic)
                 for flag in required[backend]:
                     self.assertIn(flag, flags)
+                for flag, value in pairs[backend]:
+                    self.assertIn(flag, flags)
+                    self.assertEqual(flags[flags.index(flag) + 1], value)
                 for argv in (
                     reviewer.start_argv(backend, model, topic, "id"),
                     reviewer.resume_argv(backend, model, topic, "id", "/t/f.jsonl"),
@@ -363,12 +380,14 @@ class ReviewerTest(unittest.TestCase):
     def test_claude_reads_anywhere_unless_confined(self) -> None:
         env = {"SECOND_OPINION_REVIEWER": "claude:m"}
         self.assert_reply(self.start(**env), "claude")
-        self.assert_reply(
-            self.start(SECOND_OPINION_CLAUDE_CONFINED="1", **env), "claude"
-        )
-        for call, expected in zip(
-            self.calls("claude"), ["/", str(self.topic.resolve())]
-        ):
+        confined = str(self.topic.resolve())
+        # Any value but 0 confines, so a typo such as `true` does not open `/`.
+        values = {"0": "/", "1": confined, "true": confined}
+        for value in values:
+            self.assert_reply(
+                self.start(SECOND_OPINION_CLAUDE_CONFINED=value, **env), "claude"
+            )
+        for call, expected in zip(self.calls("claude"), ["/", *values.values()]):
             with self.subTest(expected=expected):
                 argv = call["argv"]
                 self.assertIn("--restricted", argv)
@@ -387,6 +406,7 @@ class ReviewerTest(unittest.TestCase):
             reviewer.encode_token("codex", "m", "../../etc"),
             reviewer.encode_token("codex", "m", "--last"),
             reviewer.encode_token("codex", "m", "abc\n"),
+            reviewer.encode_token("codex", 5, "abc"),
         ]:
             with self.subTest(token=bad):
                 self.assertEqual(self.resume(bad).returncode, 2)
@@ -474,6 +494,11 @@ class ReviewerTest(unittest.TestCase):
             ("missing tool", {"STUB_TOOLS": '["Read"]'}, "started with tools ['Read']"),
             ("no init event", {"STUB_MODE": "noinit"}, "never started"),
             ("no MCP field", {"STUB_MODE": "nomcp"}, "MCP servers None"),
+            (
+                "an MCP server",
+                {"STUB_MCP": '[{"name": "x", "status": "connected"}]'},
+                "MCP servers [{'name': 'x'",
+            ),
         ]:
             with self.subTest(name):
                 out = self.start(SECOND_OPINION_REVIEWER="claude:m", **env)
@@ -583,6 +608,26 @@ class ReviewerTest(unittest.TestCase):
         self.assertTrue((home / "topic" / "reviewer-sessions").exists())
         self.assertFalse((self.root / "~").exists())
 
+    def test_no_reply_or_a_nonzero_exit_fails(self) -> None:
+        for backend, model in [("claude", "m"), ("codex", "m"), ("pi", "p/m")]:
+            for mode, message in [("empty", "without a reply"), ("exitcode", "exit 3")]:
+                with self.subTest(backend=backend, mode=mode):
+                    out = self.start(
+                        SECOND_OPINION_REVIEWER=f"{backend}:{model}", STUB_MODE=mode
+                    )
+                    self.assertEqual(out.returncode, 1, out.stdout)
+                    self.assertIn(message, out.stderr)
+                    self.assertEqual(list(self.topic.glob("reply-*")), [])
+
+    def test_working_files_are_private(self) -> None:
+        self.assert_reply(self.start(SECOND_OPINION_REVIEWER="claude:m"), "claude")
+        for path in [
+            self.topic,
+            self.topic / "reviewer-sessions",
+            *self.topic.glob("reply-*"),
+        ]:
+            self.assertEqual(path.stat().st_mode & 0o077, 0, path)
+
     def test_failed_start_is_not_session_gone(self) -> None:
         out = self.start(SECOND_OPINION_REVIEWER="codex:m", STUB_MODE="fail")
         self.assertEqual(out.returncode, 1)
@@ -648,13 +693,18 @@ class ReviewerTest(unittest.TestCase):
         self.assertTrue(_wait_dead(child))
         self.assertEqual(self.resume(token).returncode, 0)
 
-    def test_sigterm_kills_the_reviewer(self) -> None:
-        token = self.token_of(self.start(SECOND_OPINION_REVIEWER="claude:m").stdout)
-        proc, child = self._hanging_resume(token, self.root / "pid")
-        proc.send_signal(signal.SIGTERM)
-        self.assertEqual(proc.wait(5), 1)
-        self.assertTrue(_wait_dead(child))
-        self.assertEqual(list(self.topic.glob(".reply-*")), [])
+    def test_a_signal_kills_the_reviewer(self) -> None:
+        # SIGHUP is what a closed terminal sends.
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig.name):
+                token = self.token_of(
+                    self.start(SECOND_OPINION_REVIEWER="claude:m").stdout
+                )
+                proc, child = self._hanging_resume(token, self.root / f"pid-{sig.name}")
+                proc.send_signal(sig)
+                self.assertEqual(proc.wait(5), 1)
+                self.assertTrue(_wait_dead(child))
+                self.assertEqual(list(self.topic.glob(".reply-*")), [])
 
 
 if __name__ == "__main__":
