@@ -194,10 +194,15 @@ def check_image_label(
     root: Path, dockerfile: str, arg: str, member: str
 ) -> list[Problem]:
     """Return a problem when ``dockerfile``'s ``ARG arg=`` default isn't ``member``'s version."""
-    project = tomllib.loads((root / member / "pyproject.toml").read_text())["project"]
-    found = re.search(
-        rf"^ARG {arg}=(?P<version>\S+)$", (root / dockerfile).read_text(), re.MULTILINE
-    )
+    pyproject = root / member / "pyproject.toml"
+    # check_member already reports a missing member; a second line would only repeat it.
+    if not pyproject.exists():
+        return []
+    project = tomllib.loads(pyproject.read_text())["project"]
+    image = root / dockerfile
+    if not image.exists():
+        return [Problem(project["name"], f"no {dockerfile} — image moved or renamed?")]
+    found = re.search(rf"^ARG {arg}=(?P<version>\S+)$", image.read_text(), re.MULTILINE)
     if found is None:
         return [
             Problem(
