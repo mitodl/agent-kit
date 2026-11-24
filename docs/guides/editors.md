@@ -42,6 +42,15 @@ local store, or a deployment the folder's target names. Run `witan login`
 first for a deployment. The server never prompts: a missing or expired login
 shows up as the reason in hover and diagnostics, and a command fails with it.
 
+The server logs only warnings and errors to stderr, because VS Code labels a
+server's stderr as error output and pygls logs every message it sends at
+info. The startup line naming the plugins and each folder's target arrives as
+a `window/logMessage` instead. To debug the server, start it with
+`WITAN_LOG_LEVEL=info` (or `debug`) in its environment, e.g. a VS Code
+`witan.server.command` of `["env", "WITAN_LOG_LEVEL=info", "witan", "lsp"]`.
+That log includes message bodies (hover text, task titles), so turn it back
+off afterwards.
+
 ## Commands the server answers
 
 A client binds these to its command UI. Each takes one object argument whose
