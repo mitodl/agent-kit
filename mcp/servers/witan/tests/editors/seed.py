@@ -25,53 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from testsupport.checkout import git_checkout
 from testsupport.mcp_tools import tool_fn
+from testsupport.sample_repos import COMPUTE, PULUMI, SERVICE, SETTINGS
 
 APP = "https://github.com/test/app"
 
 FILES = {
-    "app": {
-        "app/service.py": """\
-from lib.maths import compute
-
-
-class Service:
-    def run(self):
-        return helper()
-
-
-def helper():
-    return compute()
-
-
-def main():
-    s = Service()
-    return s.run()
-""",
-        "app/settings.py": """\
-import os
-
-
-def base_url():
-    return os.environ["MITOL_APP_BASE_URL"]
-""",
-    },
-    "infra": {
-        "Pulumi.QA.yaml": """\
-config:
-  app:env_vars:
-    MITOL_APP_BASE_URL: "https://app-qa.example.org"
-""",
-    },
-    "lib": {
-        "lib/maths.py": """\
-def compute():
-    return 1
-
-
-def twice():
-    return compute() + compute()
-""",
-    },
+    "app": {"app/service.py": SERVICE, "app/settings.py": SETTINGS},
+    "infra": {"Pulumi.QA.yaml": PULUMI},
+    "lib": {"lib/maths.py": COMPUTE},
     "stray": {"m.py": "x = 1\n"},
 }
 INDEXED = ("app", "infra", "lib")

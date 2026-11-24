@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from lsprotocol import types
+from testsupport.sample_repos import COMPUTE, PULUMI, SERVICE, SETTINGS
 
 from witan_code import config as cfg_module
 from witan_code.lsp_plugin import (
@@ -37,47 +38,6 @@ from .conftest import git, git_checkout, requires_stack
 RA = "https://github.com/test/app"
 RI = "https://github.com/test/infra"
 RL = "https://github.com/test/lib"
-
-SERVICE = """\
-from lib.maths import compute
-
-
-class Service:
-    def run(self):
-        return helper()
-
-
-def helper():
-    return compute()
-
-
-def main():
-    s = Service()
-    return s.run()
-"""
-
-SETTINGS = """\
-import os
-
-
-def base_url():
-    return os.environ["MITOL_APP_BASE_URL"]
-"""
-
-PULUMI = """\
-config:
-  app:env_vars:
-    MITOL_APP_BASE_URL: "https://app-qa.example.org"
-"""
-
-COMPUTE = """\
-def compute():
-    return 1
-
-
-def twice():
-    return compute() + compute()
-"""
 
 ADDED = SERVICE + "\n\ndef added():\n    return helper()\n"
 
