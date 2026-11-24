@@ -33,7 +33,8 @@ end
 local function qf_wait(title)
   wait(60000, function() return vim.fn.getqflist({ title = 1 }).title == title end)
   local items = qf()
-  vim.fn.setqflist({}, 'r', { title = '' })
+  -- Items too, so a command that posts no list cannot pass on the last one.
+  vim.fn.setqflist({}, 'r', { title = '', items = {} })
   vim.cmd.cclose()
   return items
 end
@@ -111,12 +112,15 @@ for _, case in ipairs({
   rec(case[3], qf_wait(case[2]))
 end
 
--- Rewrites the next response the witan client gets, for a launch spec the
--- local store would not produce on its own.
+-- Rewrites the next executeCommand response the witan client gets, for a
+-- launch spec the local store would not produce on its own.
 local real_request = c().request
 local function patch_once(mutate)
   local cl = c()
   cl.request = function(self, method, params, handler, b)
+    if method ~= 'workspace/executeCommand' then
+      return real_request(self, method, params, handler, b)
+    end
     cl.request = real_request
     return real_request(self, method, params, function(err, result, ...)
       if result then mutate(result) end
