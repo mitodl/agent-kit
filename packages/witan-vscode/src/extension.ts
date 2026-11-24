@@ -105,7 +105,7 @@ export async function activate(
 					.showErrorMessage(
 						`witan: the language server did not start: ${errorMessage(err)}. ` +
 							`witan.server.command is ${describeServerCommand([command, ...args])} ` +
-							"The witan output shows the server's own error. Install the server with " +
+							"If the server ran and exited, the witan output has its own error. Install the server with " +
 							"`uv tool install ol-agent-kit`, or correct witan.server.command.",
 						"Open Settings",
 					)

@@ -17,12 +17,24 @@ test("an option folded together with its value is named, with the fix", () => {
 		text,
 		/"--target production" reaches the server as a single argument/,
 	);
-	assert.match(text, /separate items/);
+	assert.match(text, /one item per argument/);
 });
 
-test("a path with a space is not mistaken for a folded option", () => {
-	assert.equal(
-		describeServerCommand(["/opt/my tools/witan", "lsp"]),
-		'["/opt/my tools/witan","lsp"].',
-	);
+test("a fold anywhere in an item is named, not only at its start", () => {
+	for (const arg of ["lsp --target production", " --target production"]) {
+		assert.match(
+			describeServerCommand(["witan", arg]),
+			/reaches the server as a single argument/,
+			arg,
+		);
+	}
+});
+
+test("a path with a space, or one --opt=value argument, is not flagged", () => {
+	for (const argv of [
+		["/opt/my tools/witan", "lsp"],
+		["witan", "lsp", "--target=my target"],
+	]) {
+		assert.equal(describeServerCommand(argv), `${JSON.stringify(argv)}.`);
+	}
 });
