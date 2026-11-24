@@ -1073,7 +1073,7 @@ def test_a_ui_read_names_its_folder_and_a_served_tool(config, monkeypatch, tmp_p
     host = _ui_host(work, {"council": Serves("council", CouncilReads(), {"task_get"})})
     with pytest.raises(ValueError, match="needs a 'uri'"):
         host.execute(UI_READ_COMMAND, [{"tool": "task_get"}])
-    with pytest.raises(ValueError, match="in no open workspace folder"):
+    with pytest.raises(ValueError, match="is not an open workspace folder"):
         host.execute(UI_READ_COMMAND, [{"uri": tmp_path.as_uri(), "tool": "task_get"}])
     with pytest.raises(ValueError, match="No witan plugin serves memory_get"):
         host.execute(UI_READ_COMMAND, [{"uri": work.as_uri(), "tool": "memory_get"}])
@@ -1130,3 +1130,25 @@ def test_ui_reads_go_over_json_rpc(config, monkeypatch):
     tools, task = run(go())
     assert tools["tools"] == {"task_get": ["slug"]}
     assert task == {"slug": "x"}
+
+
+def test_a_ui_read_for_a_closed_folder_does_not_fall_back_to_its_parent(
+    config, monkeypatch
+):
+    """A board stays open after its folder is removed. Its reads are refused
+    rather than served from whichever open folder holds that path, which can
+    route to another graph."""
+    work, _ = config
+    monkeypatch.chdir(work)
+    nested = work / "pkg"
+    nested.mkdir()
+    host = _ui_host(work, {"council": Serves("council", CouncilReads(), {"task_get"})})
+    host.change_folders([resolve_folder(nested.as_uri(), nested, None)], ())
+    read = {"uri": nested.as_uri(), "tool": "task_get", "arguments": {"slug": "x"}}
+    assert host.execute(UI_READ_COMMAND, [read]) == {"slug": "x"}
+    host.change_folders((), [nested.as_uri()])
+    with pytest.raises(ValueError, match="is not an open workspace folder"):
+        host.execute(UI_READ_COMMAND, [read])
+    with pytest.raises(ValueError, match="is not an open workspace folder"):
+        host.execute(UI_TOOLS_COMMAND, [{"uri": nested.as_uri()}])
+    host.close()

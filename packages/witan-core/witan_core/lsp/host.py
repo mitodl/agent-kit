@@ -516,19 +516,19 @@ class Host:
     # ── the web UI's reads, for a webview ─────────────────────────────────
 
     def _ui_folder(self, args: Mapping[str, Any]) -> Folder:
-        """The folder ``args["uri"]`` names, or the innermost one holding it.
+        """The open folder ``args["uri"]`` names, exactly.
 
-        Required, with no first-folder default: the folder decides which graph
-        a webview shows.
+        Required, with no first-folder default and no containing-folder
+        fallback: the folder decides which graph a webview shows. A board
+        stays open after its folder is removed, and the folder holding that
+        path can route to another graph, so its reads are refused instead.
         """
         uri = args.get("uri")
         if not uri:
             raise ValueError("A web UI read needs a 'uri' naming the folder.")
-        folder = self.folders.get(uri) or self.folder_for(
-            Path(url2pathname(urlparse(uri).path))
-        )
+        folder = self.folders.get(uri)
         if folder is None:
-            raise ValueError(f"{uri} is in no open workspace folder.")
+            raise ValueError(f"{uri} is not an open workspace folder.")
         return folder
 
     def _ui_providers(self, folder: Folder) -> list[tuple[frozenset[str], _Context]]:
