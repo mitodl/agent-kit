@@ -126,3 +126,23 @@ def test_every_council_read_the_page_makes_crosses_json_rpc(
     assert answers["task_get"]["slug"] == task["slug"]
     assert [m["slug"] for m in answers["memory_list"]] == [memory["slug"]]
     assert answers["workflow_project_status"]["project"]["slug"] == project["slug"]
+
+
+def test_a_relayed_read_cannot_prompt(checkout):
+    """stdin is the JSON-RPC channel, so a relayed read runs with prompts off,
+    as every other council call the editor makes does."""
+    tools = FakeTools(task_get={"slug": "x"})
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            return await s.command(
+                UI_READ_COMMAND,
+                {
+                    "uri": checkout.as_uri(),
+                    "tool": "task_get",
+                    "arguments": {"slug": "x"},
+                },
+            )
+
+    assert run(go()) == {"slug": "x"}
+    assert tools.prompts_allowed == [False]

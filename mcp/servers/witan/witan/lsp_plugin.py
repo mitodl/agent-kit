@@ -57,7 +57,7 @@ import os
 import subprocess
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -267,6 +267,9 @@ class CouncilPlugin(Plugin):
         from .cli.local_dispatch import local_server
 
         return local_server(route.guard)
+
+    def tool_calls(self) -> AbstractContextManager[None]:
+        return _tool_calls()
 
     # ── stale-ref diagnostics ─────────────────────────────────────────────
 

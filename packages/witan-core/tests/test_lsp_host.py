@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1151,4 +1152,42 @@ def test_a_ui_read_for_a_closed_folder_does_not_fall_back_to_its_parent(
         host.execute(UI_READ_COMMAND, [read])
     with pytest.raises(ValueError, match="is not an open workspace folder"):
         host.execute(UI_TOOLS_COMMAND, [{"uri": nested.as_uri()}])
+    host.close()
+
+
+class Wrapped(Serves):
+    """A plugin that wraps its tool calls, recording what ran inside."""
+
+    def __init__(self, label, provider, tools):
+        super().__init__(label, provider, tools)
+        self.inside = False
+        self.seen: list[tuple[str, bool]] = []
+
+    @contextmanager
+    def tool_calls(self):
+        self.inside = True
+        try:
+            yield
+        finally:
+            self.inside = False
+
+
+def test_relayed_ui_calls_run_inside_the_plugins_tool_call_wrapper(config, monkeypatch):
+    work, _ = config
+    monkeypatch.chdir(work)
+    reads = CouncilReads()
+    plugin = Wrapped("council", reads, {"task_get"})
+    original = reads.task_get
+
+    def task_get(slug, ctx: Context | None = None):
+        plugin.seen.append(("task_get", plugin.inside))
+        return original(slug)
+
+    reads.task_get = task_get
+    host = _ui_host(work, {"council": plugin})
+    host.execute(
+        UI_READ_COMMAND,
+        [{"uri": work.as_uri(), "tool": "task_get", "arguments": {"slug": "x"}}],
+    )
+    assert plugin.seen == [("task_get", True)]
     host.close()

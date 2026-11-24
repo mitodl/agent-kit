@@ -531,11 +531,13 @@ class Host:
             raise ValueError(f"{uri} is not an open workspace folder.")
         return folder
 
-    def _ui_providers(self, folder: Folder) -> list[tuple[frozenset[str], _Context]]:
+    def _ui_providers(
+        self, folder: Folder
+    ) -> list[tuple[Plugin, frozenset[str], _Context]]:
         """Each plugin serving ``folder`` that declared web UI reads, with
         those reads, in plugin order."""
         return [
-            (reads, ctx)
+            (plugin, reads, ctx)
             for name, plugin in self.plugins.items()
             if (reads := plugin.tools & UI_READ_TOOLS)
             and (ctx := self.context(name, folder)) is not None
@@ -547,8 +549,9 @@ class Host:
         plugins serve is the first one's, as in :meth:`ui_read`."""
         folder = self._ui_folder(args)
         tools: dict[str, list[str]] = {}
-        for reads, ctx in self._ui_providers(folder):
-            tools.update(ctx.tools.parameters(reads - tools.keys()))
+        for plugin, reads, ctx in self._ui_providers(folder):
+            with plugin.tool_calls():
+                tools.update(ctx.tools.parameters(reads - tools.keys()))
         return {"repo": folder.repo, "tools": tools}
 
     def ui_read(self, args: Mapping[str, Any]) -> Any:
@@ -567,9 +570,10 @@ class Host:
         arguments = args.get("arguments") or {}
         if not isinstance(arguments, Mapping):
             raise TypeError("A web UI read's 'arguments' must be an object.")
-        for reads, ctx in self._ui_providers(folder):
+        for plugin, reads, ctx in self._ui_providers(folder):
             if tool in reads:
-                return getattr(ctx.tools, tool)(**arguments)
+                with plugin.tool_calls():
+                    return getattr(ctx.tools, tool)(**arguments)
         raise ValueError(f"No witan plugin serves {tool} for {folder.path}.")
 
     def status(self) -> dict[str, Any]:

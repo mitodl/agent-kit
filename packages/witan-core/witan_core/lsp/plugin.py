@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Hashable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import metadata
@@ -303,6 +304,12 @@ class Plugin:
         self, ctx: CommandContext, command: str, arguments: Sequence[Any]
     ) -> Any:
         raise NotImplementedError(command)
+
+    def tool_calls(self) -> AbstractContextManager[None]:
+        """What the host runs its own calls to this plugin's tools inside (a
+        relayed web UI read), so they get the same guard the plugin puts
+        around its own calls (e.g. prompts off)."""
+        return nullcontext()
 
 
 # Every ASCII punctuation character, which is exactly the set CommonMark lets
