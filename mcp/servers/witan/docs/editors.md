@@ -50,13 +50,21 @@ carries.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `witan.listReadyTasks` | `uri` | `{repo, branch, ready, for_branch}` |
-| `witan.listProjects` | `uri` | `{repo, projects}` |
-| `witan.listMyWork` | `uri` | `{repo, tasks}`, your `in_progress` tasks |
+| `witan.listReadyTasks` | `uri`, optional `scope` or `project` | `{repo, scope, project, branch, ready, for_branch}` |
+| `witan.listProjects` | `uri`, optional `scope` or `project` | `{repo, scope, project, projects}` |
+| `witan.listMyWork` | `uri`, optional `scope` or `project` | `{repo, scope, project, tasks}`, your `in_progress` tasks |
 | `witan.listStaleRefs` | `uri` | `{repo, refs}`, every memory ref that no longer resolves, with the file's `uri` when it still exists |
 | `witan.listCallers`, `witan.listCrossRepoImpact` | the lens's own arguments | `[{title, repo, path, line, uri}]` |
 | `witan.runTask`, `witan.runProject` | `uri`, `slug`, optional `agent` and `model` | a launch spec, or a refusal with `launchable: false`, `reason` and `message` |
 | `witan.releaseTask` | `uri`, `slug`, `claimed_at` | `task_release`'s result |
+
+The three work lists scope what they read with `scope`: `repo`, the folder's
+repo only (the default), `repo+unfiled`, which adds the tasks and projects filed
+under no repo, or `all`, every repo. `project`, a `wp-` slug, lists that one
+project's work in any repo instead. Each answers with the scope it applied
+(`scope` is `project` under a project, and `project` is the slug or `null`), so
+a client can label the list. `for_branch` is the checked-out branch's tasks
+whatever the scope.
 
 `witan.runTask` claims the task before it answers. A client runs the spec's
 `argv` in a terminal at `cwd`, starting from its own environment, removing each
@@ -191,15 +199,29 @@ vim.lsp.config('witan', {
 vim.lsp.enable('witan')
 vim.lsp.codelens.enable(true)
 
+-- A work list's optional argument: a scope, or a wp- slug for one project.
+local SCOPES = { 'repo', 'repo+unfiled', 'all' }
 local function list(command)
-  return function()
+  return function(opts)
     local uri = here()
-    exec(client(uri), command, { { uri = uri } }, function(result) show_list(command, result) end)
+    local args = { uri = uri }
+    if vim.startswith(opts.args, 'wp-') then
+      args.project = opts.args
+    elseif opts.args ~= '' then
+      args.scope = opts.args
+    end
+    exec(client(uri), command, { args }, function(result) show_list(command, result) end)
   end
 end
-vim.api.nvim_create_user_command('WitanReady', list('witan.listReadyTasks'), {})
-vim.api.nvim_create_user_command('WitanProjects', list('witan.listProjects'), {})
-vim.api.nvim_create_user_command('WitanMyWork', list('witan.listMyWork'), {})
+local scoped = {
+  nargs = '?',
+  complete = function(lead)
+    return vim.tbl_filter(function(s) return vim.startswith(s, lead) end, SCOPES)
+  end,
+}
+vim.api.nvim_create_user_command('WitanReady', list('witan.listReadyTasks'), scoped)
+vim.api.nvim_create_user_command('WitanProjects', list('witan.listProjects'), scoped)
+vim.api.nvim_create_user_command('WitanMyWork', list('witan.listMyWork'), scoped)
 vim.api.nvim_create_user_command('WitanStaleRefs', list('witan.listStaleRefs'), {})
 vim.api.nvim_create_user_command('WitanRunTask', launch('witan.runTask'), { nargs = 1 })
 vim.api.nvim_create_user_command('WitanRunProject', launch('witan.runProject'), { nargs = 1 })
@@ -209,7 +231,9 @@ CodeLens shows above each function, method and class (`vim.lsp.codelens.run()`
 runs the one under the cursor), and the hover is `K`. Stock
 `vim.lsp.buf.definition()` and `vim.lsp.buf.references()` give the cross-repo
 definition and references. `:WitanReady`, `:WitanProjects`, `:WitanMyWork` and
-`:WitanStaleRefs` fill the quickfix list, as does running a lens.
+`:WitanStaleRefs` fill the quickfix list, as does running a lens. The first
+three take an optional scope (`:WitanReady all`, completed with `<Tab>`) or a
+project's slug (`:WitanReady wp-...`).
 `:WitanRunTask <slug>` and `:WitanRunProject <slug>` open the agent in a
 terminal tab.
 
@@ -310,13 +334,32 @@ Percent-encoded, so a `#' or `%' in a checkout's path stays part of the path."
       (tabulated-list-print)
       (pop-to-buffer (current-buffer)))))
 
-(defun witan-list (command)
+(defun witan-list (command &optional scope)
+  "Run a list COMMAND and show its rows. SCOPE is a scope or a wp- slug."
   (witan-show-list command (funcall witan-execute-function command
-                                    (vector (list :uri (witan--here))))))
+                                    (vector (append (list :uri (witan--here))
+                                                    (witan--scope-args scope))))))
 
-(defun witan-ready () (interactive) (witan-list "witan.listReadyTasks"))
-(defun witan-projects () (interactive) (witan-list "witan.listProjects"))
-(defun witan-my-work () (interactive) (witan-list "witan.listMyWork"))
+(defun witan--scope-args (scope)
+  (cond ((member scope '(nil "")) nil)
+        ((string-prefix-p "wp-" scope) (list :project scope))
+        (t (list :scope scope))))
+
+(defun witan--read-scope ()
+  "With a prefix argument, read a work list's scope or a project's wp- slug."
+  (and current-prefix-arg
+       (completing-read "witan scope (or a wp- project slug): "
+                        '("repo" "repo+unfiled" "all"))))
+
+(defun witan-ready (&optional scope)
+  (interactive (list (witan--read-scope)))
+  (witan-list "witan.listReadyTasks" scope))
+(defun witan-projects (&optional scope)
+  (interactive (list (witan--read-scope)))
+  (witan-list "witan.listProjects" scope))
+(defun witan-my-work (&optional scope)
+  (interactive (list (witan--read-scope)))
+  (witan-list "witan.listMyWork" scope))
 (defun witan-stale-refs () (interactive) (witan-list "witan.listStaleRefs"))
 
 (defun witan-run-spec (spec uri)
@@ -466,7 +509,8 @@ server as another workspace folder, so a definition there opens as a file.
 
 In both clients, `M-x witan-ready`, `witan-projects`, `witan-my-work` and
 `witan-stale-refs` list work, and `M-x witan-run-task` and `witan-run-project`
-open the agent in a terminal buffer.
+open the agent in a terminal buffer. With a prefix argument (`C-u M-x
+witan-ready`), the first three ask for a scope or a project's slug.
 
 ## What each editor shows
 

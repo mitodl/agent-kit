@@ -88,6 +88,12 @@
 				"icon": "$(refresh)"
 			},
 			{
+				"command": "witanClient.pickScope",
+				"title": "Choose What to Show…",
+				"category": "witan",
+				"icon": "$(filter)"
+			},
+			{
 				"command": "witanClient.restartServer",
 				"title": "Restart Language Server",
 				"category": "witan"
@@ -130,6 +136,11 @@
 				}
 			],
 			"view/title": [
+				{
+					"command": "witanClient.pickScope",
+					"when": "view == witan.work",
+					"group": "navigation@1"
+				},
 				{
 					"command": "witanClient.refresh",
 					"when": "view == witan.work",
