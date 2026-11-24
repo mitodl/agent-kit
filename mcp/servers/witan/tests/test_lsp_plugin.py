@@ -13,6 +13,7 @@ import pytest
 from witan import config as cfg_module
 from witan.lsp_plugin import CouncilPlugin
 from witan_core.lsp import Folder
+from witan_core.lsp.host import HOST_COMMANDS
 from witan_core.lsp.plugin import discover_plugins
 from witan_core.lsp.testing import spawned_status
 
@@ -65,7 +66,7 @@ def test_witan_lsp_starts_and_reports_one_plugin(folders):
     assert init.server_info.name == "witan"
     assert init.capabilities.hover_provider
     assert list(init.capabilities.execute_command_provider.commands) == [
-        "witan.status",
+        *HOST_COMMANDS,
         *CouncilPlugin.commands,
     ]
     assert [p["name"] for p in status["plugins"]] == ["council"]

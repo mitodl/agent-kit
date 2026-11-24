@@ -37,6 +37,10 @@ commands answer ``{"repo": ..., <list>: [...]}`` for that folder's repo:
   ``uri`` is required and names the folder the launch was invoked from, not
   the spec's ``cwd``: the claim was taken through that folder's route, and
   ``cwd`` can be another open folder that routes to a different graph.
+- ``witan.uiBundle`` takes no argument and answers ``{"path": ...}``, the
+  web UI bundle this install ships, for an editor webview to load. The
+  webview's reads go through the host's ``witan.uiRead``, to the web UI
+  reads this plugin declares.
 
 Every tool call passes the folder's own repo, so nothing falls back to the
 process's cwd or asks. Every call also runs inside :func:`prompts_off`: stdin
@@ -60,6 +64,7 @@ from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
 from witan_core.lsp import (
+    BOUND_TOOLS,
     Capability,
     CommandContext,
     Context,
@@ -75,6 +80,7 @@ from witan_core.repo_key import checkout_branch
 from . import config as cfg_module
 from .prompts import prompts_off
 from .repo import normalise
+from .ui_access import OPTIONAL_READ_TOOLS, READ_TOOLS
 
 LIST_STALE_REFS = "witan.listStaleRefs"
 LIST_READY_TASKS = "witan.listReadyTasks"
@@ -83,6 +89,7 @@ LIST_MY_WORK = "witan.listMyWork"
 RUN_TASK = "witan.runTask"
 RUN_PROJECT = "witan.runProject"
 RELEASE_TASK = "witan.releaseTask"
+UI_BUNDLE = "witan.uiBundle"
 
 STALE_REFS_TTL_SECONDS = 60
 """How long one folder's ``memory_stale_refs`` result serves its diagnostics.
@@ -172,6 +179,24 @@ def _tool_calls() -> Iterator[None]:
             raise RuntimeError(exc.message) from None
 
 
+def _ui_bundle() -> dict[str, str]:
+    """Where this install's web UI bundle is, for a webview to load.
+
+    The installed bundle rather than a copy in each editor client: the page
+    and the server it reads are released together, so the page always speaks
+    to the tools it was built against.
+    """
+    from .ui_routes import BUNDLE_DIR, bundle_exists
+
+    if not bundle_exists():
+        raise RuntimeError(
+            f"This witan install has no web UI bundle ({BUNDLE_DIR} has no "
+            "index.html). A release from PyPI ships one; a source checkout "
+            "builds it with `npm ci && npm run build` in mcp/servers/witan/ui."
+        )
+    return {"path": str(BUNDLE_DIR)}
+
+
 def _required(args: Mapping[str, Any], key: str, command: str) -> Any:
     if not args.get(key):
         raise ValueError(f"{command} needs a {key!r} argument.")
@@ -188,6 +213,7 @@ class CouncilPlugin(Plugin):
         RUN_TASK,
         RUN_PROJECT,
         RELEASE_TASK,
+        UI_BUNDLE,
     )
     tools = frozenset(
         {
@@ -203,6 +229,12 @@ class CouncilPlugin(Plugin):
             "task_release",
             "workflow_project_run_memories",
         }
+    ) | (
+        # The web UI's reads, which the host relays for a webview (ADR 0012's
+        # amendment on it). witan-code's are its own plugin's. Only those the
+        # installed witan-core binds: one from before the relay refuses to
+        # load a plugin that names a tool outside its binding.
+        (READ_TOOLS - OPTIONAL_READ_TOOLS) & BOUND_TOOLS
     )
 
     def __init__(self) -> None:
@@ -338,6 +370,8 @@ class CouncilPlugin(Plugin):
         self, ctx: CommandContext, command: str, arguments: Sequence[Any]
     ) -> Any:
         args: Mapping[str, Any] = arguments[0] if arguments else {}
+        if command == UI_BUNDLE:
+            return _ui_bundle()
         if command == RELEASE_TASK:
             # No first-folder default: only the launch's own folder routes to
             # the graph the claim was taken in.
