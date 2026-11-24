@@ -25,11 +25,11 @@ report the result. The request is the user's message that invoked this skill.
 **Debate cap:** 5 rounds per debate.
 **Working files:** `<dir>` = `${SECOND_OPINION_DIR:-~/.second-opinion}/<repo>/<topic>/`,
 with the repository's name and a short kebab-case topic. Resolve it to an
-absolute path once, before the first call, create it with `mkdir -p`, and write
-that literal path everywhere `<dir>` appears below. Everything this skill writes for itself goes
+absolute path once, before the first call, create it with
+`mkdir -p "<dir>" && chmod 700 "<dir>"` before writing anything into it, and
+write that literal path everywhere `<dir>` appears below. Everything this skill writes for itself goes
 there, never in the repo: `debate.md`, prompt files, diffs and the reviewer's
-replies. Never commit them. The script sets the directory to mode 700 on its
-first call.
+replies. Never commit them. The script sets the same mode on every call.
 
 ## Setup (once per user)
 
@@ -116,8 +116,11 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <m
 - A call takes minutes. If your shell tool can run a command in the background,
   run it that way and wait for it; otherwise use the longest timeout the tool
   allows. Either way, send stdout to a file in `<dir>` so the token and the
-  reply file's name are not lost. If the call is killed anyway, the token is already in
-  `<dir>/reviewer-sessions`: resume with it and ask again.
+  reply file's name are not lost. If a call is killed anyway: after a
+  `resume`, send the prompt again with the same token. After a `start`, take
+  the token from the stdout file or `<dir>/reviewer-sessions` if that call
+  wrote one, and start a fresh reviewer if it did not (codex logs its token
+  only once it has named the session).
 - **In codex:** a sandboxed session blocks the network and writes outside the
   workspace. There, request escalated permissions for every `reviewer.py` call
   and every write under `<dir>`, and if escalation is unavailable (approvals
