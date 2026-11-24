@@ -19,6 +19,7 @@ from lsprotocol import types
 
 from witan.lsp_plugin import (
     LIST_MY_WORK,
+    LIST_PROJECT_TASKS,
     LIST_PROJECTS,
     LIST_READY_TASKS,
     LIST_STALE_REFS,
@@ -962,3 +963,113 @@ def test_each_scope_returns_its_rows_from_a_local_store(
         "all": {project["slug"], floating["slug"]},
         "project": {project["slug"]},
     }
+
+
+# ── project waves ─────────────────────────────────────────────────────────
+
+
+def _row(slug, **patch):
+    return {
+        "slug": slug,
+        "title": slug,
+        "status": "open",
+        "priority": "p2",
+        "blocked_by": None,
+        **patch,
+    }
+
+
+def test_list_project_tasks_reads_each_outside_blocker_once_and_drops_closed_ones(
+    checkout,
+):
+    tasks = [
+        _row("tk-a", blocked_by=["tk-away", "tk-done-away", "tk-gone"]),
+        _row("tk-b", blocked_by=["tk-away", "tk-a"]),
+        # A closed task's blockers are not read: nothing waits on them.
+        _row("tk-c", status="closed", blocked_by=["tk-old"]),
+    ]
+    away = {
+        "tk-away": _row("tk-away", project_slug="wp-other"),
+        "tk-done-away": _row("tk-done-away", status="closed"),
+    }
+    tools = FakeTools(
+        task_list=tasks,
+        task_ready=[],
+        task_get=lambda slug: away.get(slug),
+    )
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            with pytest.raises(Exception, match="needs a 'project' argument"):
+                await s.command(LIST_PROJECT_TASKS)
+            return await s.command(LIST_PROJECT_TASKS, {"project": "wp-p"})
+
+    result = run(go())
+    assert tools.called("task_list") == [{"project_slug": "wp-p"}]
+    assert tools.called("task_ready") == [{"project_slug": "wp-p", "limit": 10_000}]
+    assert sorted(c["slug"] for c in tools.called("task_get")) == [
+        "tk-away",
+        "tk-done-away",
+        "tk-gone",
+    ]
+    assert (result["repo"], result["project"], result["waves"]) == (REPO, "wp-p", 3)
+    placed = {
+        t["slug"]: (t["wave"], t["outside"], t["open_blockers"])
+        for t in result["tasks"]
+    }
+    assert placed == {
+        "tk-away": (0, True, []),
+        "tk-a": (1, False, ["tk-away"]),
+        "tk-b": (2, False, ["tk-away", "tk-a"]),
+    }
+
+
+@requires_omnigraph
+def test_list_project_tasks_matches_the_waves_view_on_a_local_store(
+    server, checkout, monkeypatch
+):
+    """The cases the done-when names, from a real store: a cycle, a blocker in
+    another project, and a claimed wave-0 task, which task_ready leaves out."""
+    monkeypatch.chdir(checkout)
+    project = server.workflow_project_create(title="Waves", description="d")
+    other = server.workflow_project_create(title="Other", description="d")
+
+    def make(title, project_slug=project["slug"]):
+        return server.task_create(
+            title=title, description="x", repo=REPO, project_slug=project_slug
+        )["slug"]
+
+    held, first, second = make("Held"), make("First"), make("Second")
+    loop_a, loop_b = make("Loop A"), make("Loop B")
+    away = make("Away", other["slug"])
+    waits = make("Waits")
+    for blocker, blocked in [
+        (first, second),
+        (loop_a, loop_b),
+        (loop_b, loop_a),
+        (away, waits),
+    ]:
+        server.task_link(from_slug=blocker, to_slug=blocked, kind="blocks")
+    assert server.task_claim(held)["claimed"] is True
+
+    async def go():
+        async with lsp_session(Host({"council": LocalCouncil()}), [checkout]) as s:
+            return await s.command(LIST_PROJECT_TASKS, {"project": project["slug"]})
+
+    result = run(go())
+    placed = {
+        t["slug"]: (t["wave"], t["outside"], t["cycle"], t["ready"])
+        for t in result["tasks"]
+    }
+    assert placed == {
+        held: (0, False, False, False),
+        first: (0, False, False, True),
+        second: (1, False, False, False),
+        loop_a: (0, False, True, False),
+        loop_b: (0, False, True, False),
+        away: (0, True, False, False),
+        waits: (1, False, False, False),
+    }
+    assert result["cycles"] == [sorted([loop_a, loop_b])]
+    assert result["waves"] == 2
+    assert result["disagree"] == []

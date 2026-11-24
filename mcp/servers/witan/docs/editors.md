@@ -53,6 +53,7 @@ carries.
 | `witan.listReadyTasks` | `uri`, optional `scope` or `project` | `{repo, scope, project, branch, ready, for_branch}` |
 | `witan.listProjects` | `uri`, optional `scope` or `project` | `{repo, scope, project, projects}` |
 | `witan.listMyWork` | `uri`, optional `scope` or `project` | `{repo, scope, project, tasks}`, your `in_progress` tasks |
+| `witan.listProjectTasks` | `uri`, `project` | `{repo, project, waves, critical, cycles, disagree, tasks}`, the project's open tasks by dependency wave |
 | `witan.listStaleRefs` | `uri` | `{repo, refs}`, every memory ref that no longer resolves, with the file's `uri` when it still exists |
 | `witan.listCallers`, `witan.listCrossRepoImpact` | the lens's own arguments | `[{title, repo, path, line, uri}]` |
 | `witan.runTask`, `witan.runProject` | `uri`, `slug`, optional `agent` and `model` | a launch spec, or a refusal with `launchable: false`, `reason` and `message` |
@@ -65,6 +66,16 @@ project's work in any repo instead. Each answers with the scope it applied
 (`scope` is `project` under a project, and `project` is the slug or `null`), so
 a client can label the list. `for_branch` is the checked-out branch's tasks
 whatever the scope.
+
+`witan.listProjectTasks` lays a project out as the web UI's waves view does:
+a task with no open blocker is wave 0, and every other task sits one wave past
+its deepest open blocker. Each row in `tasks` is the task with `wave`,
+`open_blockers`, `cycle` (in a `Blocks` cycle, so it can never become ready),
+`critical` (on the longest chain), `downstream` (how many open tasks wait on
+it) and `ready` (`task_ready` returned it; a claimed wave-0 task is not). An
+open blocker from another project is a row with `outside` true. `disagree`
+names the tasks `task_ready` and wave 0 place differently, which a refresh
+settles.
 
 `witan.runTask` claims the task before it answers. A client runs the spec's
 `argv` in a terminal at `cwd`, starting from its own environment, removing each
@@ -118,6 +129,11 @@ local function qf_item(row)
   local text = get('slug') and ('%s (%s) %s'):format(row.slug, get('status') or get('phase') or '', row.title)
     or get('memory') and ('%s %s: %s [%s]'):format(row.memory, row.title, row.symbol_ref, row.status)
     or ('%s  %s %s:%s'):format(row.title, row.repo, row.path, get('line') or '')
+  if get('wave') then
+    -- A project's task by dependency wave (witan.listProjectTasks).
+    local waits = #row.open_blockers > 0 and (' (waits on %s)'):format(table.concat(row.open_blockers, ', ')) or ''
+    text = ('wave %d | %s%s%s'):format(row.wave, text, row.outside and ' [another project]' or '', waits)
+  end
   local item = { text = text }
   if get('uri') then
     item.filename = vim.uri_to_fname(row.uri)
@@ -223,6 +239,11 @@ vim.api.nvim_create_user_command('WitanReady', list('witan.listReadyTasks'), sco
 vim.api.nvim_create_user_command('WitanProjects', list('witan.listProjects'), scoped)
 vim.api.nvim_create_user_command('WitanMyWork', list('witan.listMyWork'), scoped)
 vim.api.nvim_create_user_command('WitanStaleRefs', list('witan.listStaleRefs'), {})
+vim.api.nvim_create_user_command('WitanWaves', function(opts)
+  local uri = here()
+  exec(client(uri), 'witan.listProjectTasks', { { uri = uri, project = opts.args } },
+    function(result) show_list('witan.listProjectTasks', result) end)
+end, { nargs = 1 })
 vim.api.nvim_create_user_command('WitanRunTask', launch('witan.runTask'), { nargs = 1 })
 vim.api.nvim_create_user_command('WitanRunProject', launch('witan.runProject'), { nargs = 1 })
 ```
@@ -233,7 +254,9 @@ runs the one under the cursor), and the hover is `K`. Stock
 definition and references. `:WitanReady`, `:WitanProjects`, `:WitanMyWork` and
 `:WitanStaleRefs` fill the quickfix list, as does running a lens. The first
 three take an optional scope (`:WitanReady all`, completed with `<Tab>`) or a
-project's slug (`:WitanReady wp-...`).
+project's slug (`:WitanReady wp-...`). `:WitanWaves wp-...` lists a project's
+open tasks by dependency wave, each line starting with its wave and ending
+with what it waits on.
 `:WitanRunTask <slug>` and `:WitanRunProject <slug>` open the agent in a
 terminal tab.
 
@@ -311,6 +334,19 @@ Percent-encoded, so a `#' or `%' in a checkout's path stays part of the path."
                  (witan--get row "symbol_ref") (witan--get row "status")))
         (t (witan--get row "title"))))
 
+(defun witan--columns (row)
+  "ROW's columns: a project wave's, or a list row's item and file."
+  (if (witan--get row "wave")
+      (vector (format "%s" (witan--get row "wave"))
+              (concat (witan--row-text row)
+                      (if (witan--get row "outside") " [another project]" ""))
+              (string-join (append (witan--get row "open_blockers") nil) ", "))
+    (vector (witan--row-text row)
+            (if (witan--get row "path")
+                (format "%s %s:%s" (witan--get row "repo") (witan--get row "path")
+                        (or (witan--get row "line") ""))
+              ""))))
+
 (defun witan-show-list (command result)
   "Render a list COMMAND's RESULT in a `tabulated-list-mode' buffer."
   ;; An array is a vector (eglot) or a list (lsp-mode); an object is a plist,
@@ -321,15 +357,11 @@ Percent-encoded, so a `#' or `%' in a checkout's path stays part of the path."
                          append (append (witan--get result key) nil)))))
     (with-current-buffer (get-buffer-create (format "*%s*" command))
       (witan-list-mode)
+      (when (and rows (witan--get (car rows) "wave"))
+        ;; A project's tasks by wave, in the server's order.
+        (setq tabulated-list-format [("Wave" 5 nil) ("Item" 70 t) ("Waits on" 0 t)]))
       (setq tabulated-list-entries
-            (mapcar (lambda (row)
-                      (list row (vector (witan--row-text row)
-                                        (if (witan--get row "path")
-                                            (format "%s %s:%s" (witan--get row "repo")
-                                                    (witan--get row "path")
-                                                    (or (witan--get row "line") ""))
-                                          ""))))
-                    rows))
+            (mapcar (lambda (row) (list row (witan--columns row))) rows))
       (tabulated-list-init-header)
       (tabulated-list-print)
       (pop-to-buffer (current-buffer)))))
@@ -361,6 +393,12 @@ Percent-encoded, so a `#' or `%' in a checkout's path stays part of the path."
   (interactive (list (witan--read-scope)))
   (witan-list "witan.listMyWork" scope))
 (defun witan-stale-refs () (interactive) (witan-list "witan.listStaleRefs"))
+(defun witan-waves (project)
+  "List PROJECT's open tasks by dependency wave."
+  (interactive "sProject (wp- slug): ")
+  (witan-show-list "witan.listProjectTasks"
+                   (funcall witan-execute-function "witan.listProjectTasks"
+                            (vector (list :uri (witan--here) :project project)))))
 
 (defun witan-run-spec (spec uri)
   "Run a launch SPEC in a `make-term' buffer, per ADR 0012's launch contract."
@@ -508,7 +546,8 @@ Opening a file from a second repo with `M-x lsp` adds that repo to the same
 server as another workspace folder, so a definition there opens as a file.
 
 In both clients, `M-x witan-ready`, `witan-projects`, `witan-my-work` and
-`witan-stale-refs` list work, and `M-x witan-run-task` and `witan-run-project`
+`witan-stale-refs` list work, `M-x witan-waves` lists a project's open tasks
+with a Wave column and what each waits on, and `M-x witan-run-task` and `witan-run-project`
 open the agent in a terminal buffer. With a prefix argument (`C-u M-x
 witan-ready`), the first three ask for a scope or a project's slug.
 
