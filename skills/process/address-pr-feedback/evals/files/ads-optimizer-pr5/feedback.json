@@ -1,0 +1,141 @@
+{
+	"repo": "mitodl/ads-optimizer",
+	"pr": 5,
+	"viewer": "rhysyngsun",
+	"review_threads": [
+		{
+			"id": "PRRT_kwDOVwyDts65sJ97",
+			"isResolved": false,
+			"isOutdated": false,
+			"path": "src/ads_optimizer/features/data_processing.py",
+			"line": 400,
+			"comments": {
+				"nodes": [
+					{
+						"databaseId": 4634387315,
+						"body": "---\nUsing the last date after campaign exclusions truncates zero-click history for included campaigns whenever only excluded campaigns have rows at the end of the pull; if every reported row is excluded, zero-filling an included open campaign raises because there is no end date. Capture the pull end before exclusions and handle an empty source pull explicitly rather than passing a missing date into `_fill_zero_click_days`.\n\n**[Bug]**\n<!-- optibot:blocker -->\n\nSolve it in [vscode](https://agents.getoptimal.ai/redirect/open-in-editor?protocol=vscode&text=Rml4IHRoaXMgaXNzdWUgaW4gc3JjL2Fkc19vcHRpbWl6ZXIvZmVhdHVyZXMvZGF0YV9wcm9jZXNzaW5nLnB5OjM3Mi0zNzMKClJldmlldyBjb21tZW50OgotLS0KVXNpbmcgdGhlIGxhc3QgZGF0ZSBhZnRlciBjYW1wYWlnbiBleGNsdXNpb25zIHRydW5jYXRlcyB6ZXJvLWNsaWNrIGhpc3RvcnkgZm9yIGluY2x1ZGVkIGNhbXBhaWducyB3aGVuZXZlciBvbmx5IGV4Y2x1ZGVkIGNhbXBhaWducyBoYXZlIHJvd3MgYXQgdGhlIGVuZCBvZiB0aGUgcHVsbDsgaWYgZXZlcnkgcmVwb3J0ZWQgcm93IGlzIGV4Y2x1ZGVkLCB6ZXJvLWZpbGxpbmcgYW4gaW5jbHVkZWQgb3BlbiBjYW1wYWlnbiByYWlzZXMgYmVjYXVzZSB0aGVyZSBpcyBubyBlbmQgZGF0ZS4gQ2FwdHVyZSB0aGUgcHVsbCBlbmQgYmVmb3JlIGV4Y2x1c2lvbnMgYW5kIGhhbmRsZSBhbiBlbXB0eSBzb3VyY2UgcHVsbCBleHBsaWNpdGx5IHJhdGhlciB0aGFuIHBhc3NpbmcgYSBtaXNzaW5nIGRhdGUgaW50byBgX2ZpbGxfemVyb19jbGlja19kYXlzYC4KCioqW0J1Z10qKgo8IS0tIG9wdGlib3Q6YmxvY2tlciAtLT4&file=src%2Fads_optimizer%2Ffeatures%2Fdata_processing.py&line=372) or [cursor](https://agents.getoptimal.ai/redirect/open-in-editor?protocol=cursor&text=Rml4IHRoaXMgaXNzdWUgaW4gc3JjL2Fkc19vcHRpbWl6ZXIvZmVhdHVyZXMvZGF0YV9wcm9jZXNzaW5nLnB5OjM3Mi0zNzMKClJldmlldyBjb21tZW50OgotLS0KVXNpbmcgdGhlIGxhc3QgZGF0ZSBhZnRlciBjYW1wYWlnbiBleGNsdXNpb25zIHRydW5jYXRlcyB6ZXJvLWNsaWNrIGhpc3RvcnkgZm9yIGluY2x1ZGVkIGNhbXBhaWducyB3aGVuZXZlciBvbmx5IGV4Y2x1ZGVkIGNhbXBhaWducyBoYXZlIHJvd3MgYXQgdGhlIGVuZCBvZiB0aGUgcHVsbDsgaWYgZXZlcnkgcmVwb3J0ZWQgcm93IGlzIGV4Y2x1ZGVkLCB6ZXJvLWZpbGxpbmcgYW4gaW5jbHVkZWQgb3BlbiBjYW1wYWlnbiByYWlzZXMgYmVjYXVzZSB0aGVyZSBpcyBubyBlbmQgZGF0ZS4gQ2FwdHVyZSB0aGUgcHVsbCBlbmQgYmVmb3JlIGV4Y2x1c2lvbnMgYW5kIGhhbmRsZSBhbiBlbXB0eSBzb3VyY2UgcHVsbCBleHBsaWNpdGx5IHJhdGhlciB0aGFuIHBhc3NpbmcgYSBtaXNzaW5nIGRhdGUgaW50byBgX2ZpbGxfemVyb19jbGlja19kYXlzYC4KCioqW0J1Z10qKgo8IS0tIG9wdGlib3Q6YmxvY2tlciAtLT4&file=src%2Fads_optimizer%2Ffeatures%2Fdata_processing.py&line=372).",
+						"author": {
+							"login": "agent-optibot",
+							"__typename": "Bot"
+						},
+						"createdAt": "2026-11-19T20:05:09Z",
+						"author_type": "Bot"
+					},
+					{
+						"databaseId": 4647488964,
+						"body": "Split this one: the crash is fixed here, the truncation is tracked as mitodl/ads-optimizer#12.\n\nFixed in `6295f93` — an empty source pull no longer passes `NaT` into `_fill_zero_click_days`. A version still running is filled up to the last day of the pull, so with no rows there is nothing to fill it to and `date_range(start, NaT)` raised; a version that already closed carries its own end date and still fills. Both degenerate pulls now return an empty panel, and both are tests.\n\nNot fixing the truncation in this PR, and the reason is that you are right about it. Confirmed on this branch: an included campaign with a row on 05-10 and an excluded Product Page campaign with one on 05-20 loses the ten days between them. But this path works rather than raising — it returns a shorter panel — and zero-click days are the denominator the budget curve is fitted on, so moving the window changes fitted output on real data. This port's contract is that behaviour does not change, and a one-line fix here would break that silently in the one direction nobody would check.\n\n#12 carries the repro, the suggested fix (capture the pull end before the exclusion filter) and the differential against real course panels needed to size it. Leaving this thread open if you would rather it land here instead.\n",
+						"author": {
+							"login": "rhysyngsun",
+							"__typename": "User"
+						},
+						"createdAt": "2026-11-20T20:44:20Z",
+						"author_type": "User"
+					}
+				]
+			}
+		}
+	],
+	"discussion_comments": [
+		{
+			"id": 7048965644,
+			"author": "rachellougee",
+			"author_type": "User",
+			"body": " The panel-building parts of data_processing probably can move out of the optimizer code. https://github.com/mitodl/ol-data-platform/pull/3446 builds the five panels as dbt intermediate models, one for each [schemas](https://github.com/mitodl/ads-optimizer/blob/main/src/ads_optimizer/schemas.py) you had in this repo, with a course column. \r\n\r\nIn production, Dagster would read those five tables, filter to one course, rename the columns, validate, and call this library to plan. \r\n\r\nThe keyword helpers (`clean_keyword_text` and `existing_panel_keywords`) are likely used by the planner's own feature code, so they're good to keep here. We can work out the detail later; not a blocker",
+			"created_at": "2026-11-20T19:42:40Z",
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#issuecomment-7048965644",
+			"is_viewer": false
+		},
+		{
+			"id": 7052323195,
+			"author": "rhysyngsun",
+			"author_type": "User",
+			"body": "You're right, and the dependency graph puts it more strongly than \"probably\". Counting consumers inside `src/`, excluding `data_processing` itself:\n\n| Symbol | Consumers in `src/` |\n| --- | --- |\n| `generate_campaign_day_panel` | **0** (one test) |\n| `clean_campaign_summary` | **0** anywhere |\n| `_fill_zero_click_days`, `_attach_impression_share` | 0 — internal helpers |\n| `clean_kw_day_panel` | 1, and it is `generate_campaign_day_panel` itself |\n\nSo the whole panel-building subtree has no planner entry point — nothing the model or planner does reaches it, and it is live only from tests.\n\nYour keep-list is the opposite, and all three are in use: `clean_keyword_text` in `keyword_allowlist`, `clean_keyword_series` in `gkp_features`, `clean_keyword_sets_dataframe` in `campaign_features`.\n\nOne thing I checked because it would have been easy to lose: `int__google_ads__campaign_day_panel.sql` says it emits \"zero rows for serving days that had no cost\", so the zero-fill is reproduced on your side. That is the part I would have worried about — a zero-click day and a day the campaign was off have to stay distinguishable, because the budget curve is fitted on that denominator.\n\nNot changing it in this PR, since it is under review with five PRs stacked on it and this is the only place those builders are compared against the prototype. Tracked as #16 for once #3446 lands and the Dagster wiring exists.\n\nRelated: #12 is a bug in that zero-fill window — it ends at the *post-exclusion* pull date, so an excluded campaign holding the latest rows truncates history for the included ones. Worth checking whether the dbt model derives its window the same way, since if so the bug moved rather than disappeared.",
+			"created_at": "2026-11-20T22:37:58Z",
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#issuecomment-7052323195",
+			"is_viewer": true
+		}
+	],
+	"reviews": [
+		{
+			"id": 5928924500,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5928924500",
+			"author": "agent-optibot[bot]",
+			"author_type": "Bot",
+			"state": "COMMENTED",
+			"body": "### Summary\n\nPorts configuration and feature processing into frame-based library modules.\n\n- **Adds:** frame-based cleaning and campaign-day panel generation without file path lookups.\n- **Adds:** frozen `CourseConfig` loading with layered deep merges and preserved unknown settings.\n- **Adds:** calendar features that accept explicit start dates instead of loading configuration by course.\n\n<details>\n<summary>Details for reviewers</summary>\n\n**Risks**\n- `clean_keyword_text()` converts `pd.NA` values to the literal string `<na>` because its null check only handles `None` and floats.\n- `get_holiday_calendars()` imports `holidays` at runtime, so calendar feature calls fail if that dependency is unavailable.\n\n**Core files:** `src/ads_optimizer/config.py`, `src/ads_optimizer/features/data_processing.py`, `src/ads_optimizer/features/date_features.py`\n\n**More changes**\n- **Adds:** Keyword Planner parsing and keyword-set aggregation from caller-provided frames. (`gkp_features.py`)\n- **Adds:** conversion lag calculations that receive the pull timing through caller inputs. (`conversion_lag.py`)\n- **Adds:** tests covering configuration, data processing, calendar features, Keyword Planner parsing, and conversion lag behavior. (`test_config.py`, `test_data_processing.py`, `test_date_features.py` and 1 more)\n\n**Unchanged**\n- Keeps deep-merge precedence and wholesale list replacement from the prototype.\n- Keeps keyword and campaign aggregation behavior for identical inputs.\n\n</details>\n\n<!-- optibot:summary-footer -->\n\n---\n\n<sub>Summary of `b83216a` · React 👍 or 👎 on my comments to tune what I raise · [Commands](https://getoptimal.ai/docs/agentic-code-reviews/optibot-features) · [Review config](https://agents.getoptimal.ai/dashboard/advanced-config)</sub>\n\n- [ ] 🔄 re-review this PR <!-- optibot:re-review -->\n\n<!-- optibot:summary-head:b83216a52b6e05824eeb355d5803215b3a33d312 -->",
+			"submitted_at": "2026-11-16T22:26:30Z",
+			"is_viewer": false
+		},
+		{
+			"id": 5982373496,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5982373496",
+			"author": "agent-optibot[bot]",
+			"author_type": "Bot",
+			"state": "COMMENTED",
+			"body": "### Summary\n\nPorts configuration and feature processing into frame-based library modules.\n\n- **Adds:** frame-based campaign cleaning and panel generation without file path lookup.\n- **Adds:** frozen `CourseConfig` loading with layered deep merges and preserved unknown settings.\n- **Adds:** calendar features that accept explicit run dates instead of loading configuration.\n\n<details>\n<summary>Details for reviewers</summary>\n\n**Risks**\n- `get_holiday_calendars()` defaults to the current year when callers omit `years`, so results vary with the system clock.\n- `_latest_searches_column()` orders columns by year only and depends on export column order for months within one year.\n\n**Core files:** `src/ads_optimizer/features/data_processing.py`, `src/ads_optimizer/config.py`, `src/ads_optimizer/features/date_features.py`\n\n**More changes**\n- **Adds:** Keyword Planner parsing and keyword-set aggregation without export file discovery. (`gkp_features.py`)\n- **Adds:** conversion lag calculations that accept caller-provided timing inputs. (`conversion_lag.py`)\n- **Adds:** constants shared by the ported feature and model modules. (`constants.py`, `__init__.py`)\n- **Adds:** tests covering configuration, data processing, Keyword Planner parsing, conversion lag, and calendar features. (`test_data_processing.py`, `test_gkp_and_lag.py`, `test_date_features.py` and 1 more)\n\n**Unchanged**\n- Deep-merge precedence remains later layers overriding earlier layers.\n- Keyword Planner exports without a `Keyword` column still produce no features.\n\n</details>\n\n<!-- optibot:summary-footer -->\n\n---\n\n<sub>Summary of `977aafa` · React 👍 or 👎 on my comments to tune what I raise · [Commands](https://getoptimal.ai/docs/agentic-code-reviews/optibot-features) · [Review config](https://agents.getoptimal.ai/dashboard/advanced-config)</sub>\n\n<!-- optibot:summary-head:977aafaa1b64077e3b9ee58d63b3bb981cdb963b -->",
+			"submitted_at": "2026-11-19T20:01:36Z",
+			"is_viewer": false
+		},
+		{
+			"id": 5982430311,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5982430311",
+			"author": "agent-optibot[bot]",
+			"author_type": "Bot",
+			"state": "COMMENTED",
+			"body": "**Status**: Needs Changes 🔧\n\n**Blocking Issues**:\n- Preserve the campaign-day schema when no spend rows match.\n- Keep the report cutoff independent of campaign exclusions.\n- Return keyword-day dates in the timestamp dtype required by the panel schema.\n- Accept parsed YAML dates at the configuration boundary.\n- Keep pandas nulls from becoming literal keywords.\n\n📌 Reviewed up to the latest commit · ⏱️ Review completed in 4 minutes\n\n- [ ] 🔄 re-review this PR <!-- optibot:re-review -->",
+			"submitted_at": "2026-11-19T20:05:08Z",
+			"is_viewer": false
+		},
+		{
+			"id": 5999101527,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5999101527",
+			"author": "rhysyngsun",
+			"author_type": "User",
+			"state": "COMMENTED",
+			"body": "",
+			"submitted_at": "2026-11-20T20:43:20Z",
+			"is_viewer": true
+		},
+		{
+			"id": 5999102285,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5999102285",
+			"author": "rhysyngsun",
+			"author_type": "User",
+			"state": "COMMENTED",
+			"body": "",
+			"submitted_at": "2026-11-20T20:43:23Z",
+			"is_viewer": true
+		},
+		{
+			"id": 5999103040,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5999103040",
+			"author": "rhysyngsun",
+			"author_type": "User",
+			"state": "COMMENTED",
+			"body": "",
+			"submitted_at": "2026-11-20T20:43:27Z",
+			"is_viewer": true
+		},
+		{
+			"id": 5999103613,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5999103613",
+			"author": "rhysyngsun",
+			"author_type": "User",
+			"state": "COMMENTED",
+			"body": "",
+			"submitted_at": "2026-11-20T20:43:30Z",
+			"is_viewer": true
+		},
+		{
+			"id": 5999114219,
+			"html_url": "https://github.com/mitodl/ads-optimizer/pull/5#pullrequestreview-5999114219",
+			"author": "rhysyngsun",
+			"author_type": "User",
+			"state": "COMMENTED",
+			"body": "",
+			"submitted_at": "2026-11-20T20:44:20Z",
+			"is_viewer": true
+		}
+	],
+	"pending_review": null
+}

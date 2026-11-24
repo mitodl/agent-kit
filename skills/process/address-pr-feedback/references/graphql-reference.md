@@ -28,7 +28,11 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           path
           line
           comments(first: 50) {
-            nodes { databaseId body author { login } createdAt }
+            # __typename is the Actor type (User/Bot/Organization/Mannequin);
+            # the script normalizes it into author_type, which is the field
+            # Phase 2 classifies from. Select it here too or a hand-run debug
+            # query can't answer the question the skill asks of the output.
+            nodes { databaseId body author { login __typename } createdAt }
           }
         }
       }
@@ -155,3 +159,31 @@ yes, PR discussion comments live under the *issues* REST endpoint, not
 `pulls`) have no thread/resolution concept at all. You can only reply to
 them with a new top-level comment (`reply-comment.sh`, i.e. `gh pr comment`);
 there's nothing to mark resolved.
+
+The REST paths have their own truncation trap, and it is the opposite of the
+GraphQL one above: `--paginate` fetches every page but prints each as its own
+top-level JSON array, so `gh api ... --paginate --jq '[.[] | ...]'` yields
+*N* concatenated arrays rather than one. Nothing warns you — the 100th comment
+is the last one that fits in a single page, and past that the stream is no
+longer a single JSON text, so anything consuming it as one fails:
+`jq --argjson` rejects it outright with "invalid JSON text". Piping into
+`jq -s '[.[][] | ...]'` collects the pages into an outer array and flattens
+them back, with no `gh` version floor — `gh api --slurp` does the same wrapping
+but only on releases that carry the flag, and it is refused alongside `--jq`
+anyway. The same applies to `repos/.../pulls/{n}/reviews`, where a PR with many
+bot review rounds passes 100 well before its comments do.
+
+A second ceiling sits behind that one. Once the pages are collected, the whole
+channel has to reach the payload-building `jq`, and Linux caps a single
+command-line argument at 128 KiB — roughly 100 review bodies averaging
+1.5 KiB. Past that, `--argjson` dies with "argument list too long" no matter
+how well-formed the JSON is. `fetch-feedback.sh` writes each channel to a file
+under one `mktemp -d` and passes them with `--slurpfile`, which reads from the
+file instead and has no such limit. `--slurpfile` wraps the file's contents in
+an outer array, so each use indexes `[0]`.
+
+`repos/.../pulls/{n}/reviews` also reports the authenticated user's own
+unsubmitted review, with `state: "PENDING"` and no `submitted_at`, shaped
+exactly like a submitted one. `fetch-feedback.sh` drops those from `reviews[]`;
+a draft's findings reach you only through `pending_review`, which is the
+channel with the don't-submit rule attached to it.
