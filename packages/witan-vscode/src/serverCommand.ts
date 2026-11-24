@@ -5,14 +5,17 @@
  * Whether `arg` holds more than one argument with an option among them, e.g.
  * `--target production` or `lsp --target production`. A path with a space
  * has no option in it, and `--target=my target` is one argument the parser
- * takes whole, so neither counts.
+ * takes whole, so neither counts. Only `-x` / `--name` tokens are options:
+ * a lone `-` in a path (`witan - Copy`) is not one.
  */
-function folded(arg: string): boolean {
-	const tokens = arg.trim().split(/\s+/);
+function folded(arg: unknown): boolean {
+	// The setting's schema says strings, but VS Code hands back whatever the
+	// settings file holds, and this runs inside the start-failure handler.
+	const tokens = String(arg).trim().split(/\s+/);
 	if (tokens.length < 2) {
 		return false;
 	}
-	const options = tokens.filter((token) => token.startsWith("-"));
+	const options = tokens.filter((token) => /^--?[A-Za-z]/.test(token));
 	if (options.length === 0) {
 		return false;
 	}
@@ -30,7 +33,7 @@ function folded(arg: string): boolean {
  * space-joined line would print `witan lsp --target production`, which looks
  * right and hides the mistake.
  */
-export function describeServerCommand(argv: readonly string[]): string {
+export function describeServerCommand(argv: readonly unknown[]): string {
 	const bad = argv.filter(folded);
 	const hint =
 		bad.length === 0

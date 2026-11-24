@@ -33,8 +33,16 @@ test("a fold anywhere in an item is named, not only at its start", () => {
 test("a path with a space, or one --opt=value argument, is not flagged", () => {
 	for (const argv of [
 		["/opt/my tools/witan", "lsp"],
+		["C:\\Program Files\\witan - Copy\\witan.exe", "lsp"],
 		["witan", "lsp", "--target=my target"],
 	]) {
 		assert.equal(describeServerCommand(argv), `${JSON.stringify(argv)}.`);
 	}
+});
+
+test("a non-string item from a hand-edited settings file does not throw", () => {
+	assert.equal(
+		describeServerCommand(["witan", "lsp", 8080, null]),
+		'["witan","lsp",8080,null].',
+	);
 });
