@@ -1,0 +1,97 @@
+"""Build the store the editor drivers run against, and print its slugs as JSON.
+
+Run as a subprocess with the editor environment (``test_editors.editor_env``),
+never imported: importing ``witan.server`` binds the graph named by
+``WITAN_MEMORY_URI`` at that moment, and the pytest process's own value is the
+session-wide fake home rather than this test's store.
+
+Three indexed checkouts (``app`` calls into ``lib``, ``infra`` provides the env
+var ``app`` reads), one unindexed checkout (``stray``), two ready tasks, a
+project, a memory on ``helper`` and a memory naming a symbol that no longer
+exists.
+
+:param argv[1]: the directory to build the checkouts in.
+"""
+
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+# Run with -I, which keeps the script's directory and PYTHONPATH off sys.path,
+# so testsupport's parent goes on it here, as each rootdir conftest does.
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
+
+from testsupport.checkout import git_checkout
+from testsupport.mcp_tools import tool_fn
+from testsupport.sample_repos import COMPUTE, PULUMI, SERVICE, SETTINGS
+
+APP = "https://github.com/test/app"
+
+FILES = {
+    "app": {"app/service.py": SERVICE, "app/settings.py": SETTINGS},
+    "infra": {"Pulumi.QA.yaml": PULUMI},
+    "lib": {"lib/maths.py": COMPUTE},
+    "stray": {"m.py": "x = 1\n"},
+}
+INDEXED = ("app", "infra", "lib")
+
+
+def main() -> None:
+    repos = Path(sys.argv[1])
+    witan_code = shutil.which("witan-code")
+    assert witan_code, "witan-code is not on PATH"
+    for name, files in FILES.items():
+        path = git_checkout(
+            repos / name, remote=f"https://github.com/test/{name}", files=files
+        )
+        if name in INDEXED:
+            subprocess.run(
+                [witan_code, "index", str(path)], check=True, capture_output=True
+            )
+
+    from witan import server
+
+    helper = f"{APP}#app/service.py::helper"
+    task = tool_fn(server.task_create)(
+        title="Make helper configurable",
+        description="helper should read its source from settings.",
+        repo=APP,
+        symbol_refs=[helper],
+    )
+    task2 = tool_fn(server.task_create)(
+        title="Second ready task", description="Filler.", repo=APP
+    )
+    tool_fn(server.memory_store)(
+        kind="pattern",
+        title="helper wraps compute",
+        content="helper() delegates to lib.maths.compute; change both together.",
+        repo=APP,
+        symbol_refs=[helper],
+    )
+    stale = tool_fn(server.memory_store)(
+        kind="lesson",
+        title="Service.start was renamed",
+        content="Service.start became Service.run; old callers break.",
+        repo=APP,
+        symbol_refs=[f"{APP}#app/service.py::start"],
+    )
+    project = tool_fn(server.workflow_project_create)(
+        title="Editor check project",
+        description="Seeded project.",
+        repos=[APP],
+    )
+    print(
+        json.dumps(
+            {
+                "task": task["slug"],
+                "task2": task2["slug"],
+                "stale_memory": stale["slug"],
+                "project": project["slug"],
+            }
+        )
+    )
+
+
+main()
