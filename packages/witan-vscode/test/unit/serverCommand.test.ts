@@ -35,6 +35,7 @@ test("a path with a space, or one --opt=value argument, is not flagged", () => {
 		["/opt/my tools/witan", "lsp"],
 		["C:\\Program Files\\witan - Copy\\witan.exe", "lsp"],
 		["witan", "lsp", "--target=my target"],
+		["witan", "lsp", "--target=my --east"],
 	]) {
 		assert.equal(describeServerCommand(argv), `${JSON.stringify(argv)}.`);
 	}

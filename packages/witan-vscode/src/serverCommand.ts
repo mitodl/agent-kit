@@ -4,26 +4,21 @@
 /**
  * Whether `arg` holds more than one argument with an option among them, e.g.
  * `--target production` or `lsp --target production`. A path with a space
- * has no option in it, and `--target=my target` is one argument the parser
- * takes whole, so neither counts. Only `-x` / `--name` tokens are options:
- * a lone `-` in a path (`witan - Copy`) is not one.
+ * has no option in it, and an item starting `--opt=` is one argument the
+ * parser takes whole whatever its value holds (`--target=my --east`), so
+ * neither counts. Only `-x` / `--name` tokens are options: a lone `-` in a
+ * path (`witan - Copy`) is not one.
  */
 function folded(arg: unknown): boolean {
 	// The setting's schema says strings, but VS Code hands back whatever the
 	// settings file holds, and this runs inside the start-failure handler.
-	const tokens = String(arg).trim().split(/\s+/);
-	if (tokens.length < 2) {
+	const text = String(arg).trim();
+	if (/^--?[A-Za-z][^\s=]*=/.test(text)) {
 		return false;
 	}
-	const options = tokens.filter((token) => /^--?[A-Za-z]/.test(token));
-	if (options.length === 0) {
-		return false;
-	}
-	const [first = ""] = tokens;
-	return !(
-		options.length === 1 &&
-		first.startsWith("-") &&
-		first.includes("=")
+	const tokens = text.split(/\s+/);
+	return (
+		tokens.length > 1 && tokens.some((token) => /^--?[A-Za-z]/.test(token))
 	);
 }
 
