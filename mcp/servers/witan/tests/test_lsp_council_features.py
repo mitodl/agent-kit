@@ -33,6 +33,7 @@ from witan_core.lsp import Capability, Plugin, Route, escape_markdown
 from witan_core.lsp.host import Host
 from witan_core.lsp.testing import lsp_session
 from witan_core.remote.oidc import NeedsLogin
+from witan_core.remote.proxy import RemoteToolFailed
 
 from .conftest import requires_omnigraph
 
@@ -518,8 +519,8 @@ def test_list_projects_per_scope(checkout):
             listed["project"] = await s.command(
                 LIST_PROJECTS, {"project": "wp-elsewhere"}
             )
-            with pytest.raises(Exception, match="No project 'wp-gone'"):
-                await s.command(LIST_PROJECTS, {"project": "wp-gone"})
+            # Like task_ready and task_list, an unknown project lists nothing.
+            listed["gone"] = await s.command(LIST_PROJECTS, {"project": "wp-gone"})
             return listed
 
     listed = run(go())
@@ -529,19 +530,69 @@ def test_list_projects_per_scope(checkout):
         "repo+unfiled": ["wp-floating", "wp-here"],
         "all": ["wp-floating", "wp-here", "wp-elsewhere"],
         "project": ["wp-elsewhere"],
+        "gone": [],
     }
 
 
-def test_an_unknown_scope_is_refused_with_the_choices(checkout):
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"scope": "everything"}, "one of repo, repo\\+unfiled, all"),
+        ({"project": "elsewhere"}, "must be a wp- slug"),
+    ],
+)
+def test_an_unknown_scope_is_refused_with_the_choices(checkout, arguments, message):
     tools = FakeTools()
 
     async def go():
         async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
-            with pytest.raises(Exception, match="one of repo, repo\\+unfiled, all"):
-                await s.command(LIST_READY_TASKS, {"scope": "everything"})
+            with pytest.raises(Exception, match=message):
+                await s.command(LIST_READY_TASKS, arguments)
 
     run(go())
     assert tools.calls == []
+
+
+def test_a_deployment_older_than_include_unfiled_answers_repo_plus_unfiled(checkout):
+    """The repo scope is asked again without the parameter, and labelled with
+    the scope the deployment answered in."""
+
+    def older(**kwargs):
+        if "include_unfiled" in kwargs:
+            raise RemoteToolFailed(
+                "1 validation error for call[task_ready]\ninclude_unfiled\n"
+                "  Unexpected keyword argument"
+            )
+        return [{"slug": "tk-r"}]
+
+    tools = FakeTools(task_ready=older, task_list=older, task_for_branch=[])
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            return (
+                await s.command(LIST_READY_TASKS),
+                await s.command(LIST_MY_WORK),
+            )
+
+    ready, mine = run(go())
+    assert ready["scope"] == mine["scope"] == "repo+unfiled"
+    assert ready["ready"] == mine["tasks"] == [{"slug": "tk-r"}]
+    assert tools.called("task_ready") == [
+        {"repo": REPO, "include_unfiled": False},
+        {"repo": REPO},
+    ]
+
+
+def test_any_other_refusal_of_the_repo_scope_is_not_retried(checkout):
+    tools = FakeTools(task_ready=RemoteToolFailed("permission denied"))
+
+    async def go():
+        async with lsp_session(Host({"council": Council(tools)}), [checkout]) as s:
+            with pytest.raises(Exception, match="permission denied"):
+                await s.command(LIST_READY_TASKS)
+
+    run(go())
+    assert len(tools.called("task_ready")) == 1
 
 
 def test_a_folder_with_no_remote_is_refused_with_a_reason(tmp_path):

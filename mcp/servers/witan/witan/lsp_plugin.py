@@ -47,8 +47,9 @@ under a project) and ``project`` (the slug, or ``null``), so a client can
 label what it shows.
 
 Every tool call names its scope outright (the folder's own repo, every repo or
-one project), so nothing falls back to the process's cwd or asks. Every call also runs inside :func:`prompts_off`: stdin
-is the JSON-RPC channel, so a tool must never put a question to it. A missing
+one project), so nothing falls back to the process's cwd or asks. Every call
+also runs inside :func:`prompts_off`: stdin is the JSON-RPC channel, so a tool
+must never put a question to it. A missing
 or expired ``witan login`` token does not prompt either: the token provider
 raises ``NeedsLogin``, which fails the request with its message.
 
@@ -204,7 +205,7 @@ def _work_scope(args: Mapping[str, Any], command: str) -> tuple[str, str | None]
     names one, else ``scope`` (default :data:`DEFAULT_SCOPE`)."""
     project = args.get("project")
     if project is not None:
-        if not isinstance(project, str) or not project:
+        if not isinstance(project, str) or not project.startswith("wp-"):
             raise ValueError(f"{command}'s 'project' argument must be a wp- slug.")
         return SCOPE_PROJECT, project
     scope = args.get("scope") or DEFAULT_SCOPE
@@ -224,9 +225,34 @@ def _task_scope(scope: str, project: str | None, repo: str) -> dict[str, Any]:
         return {"all_repos": True}
     if scope == SCOPE_REPO:
         # Sent only off its default: a deployment older than the parameter
-        # rejects it, and `repo+unfiled` is what such a deployment answers.
+        # rejects it (see `_scoped_tasks`).
         return {"repo": repo, "include_unfiled": False}
     return {"repo": repo}
+
+
+def _scoped_tasks(
+    call: Any, scope: str, project: str | None, repo: str, **kwargs: Any
+) -> tuple[list[dict[str, Any]], str]:
+    """``call`` (``task_ready`` or ``task_list``) in ``scope``, and the scope
+    it was answered in.
+
+    A deployment older than ``include_unfiled`` refuses the ``repo`` scope as
+    an unexpected argument. That deployment's own default is ``repo+unfiled``,
+    so the read is asked again in that scope and labelled as such, rather
+    than failing every work list until the deployment is upgraded.
+    """
+    from witan_core.remote.proxy import RemoteToolFailed
+
+    try:
+        return call(**kwargs, **_task_scope(scope, project, repo)), scope
+    except RemoteToolFailed as exc:
+        if scope != SCOPE_REPO or "include_unfiled" not in str(exc):
+            raise
+    logger.warning(
+        "witan.lsp.scope_fallback", reason="deployment predates include_unfiled"
+    )
+    fallback = SCOPE_REPO_UNFILED
+    return call(**kwargs, **_task_scope(fallback, project, repo)), fallback
 
 
 class CouncilPlugin(Plugin):
@@ -415,6 +441,7 @@ class CouncilPlugin(Plugin):
                 )
             if command in WORK_LISTS:
                 scope, project = _work_scope(args, command)
+                # `_work_list` names the scope itself when it had to fall back.
                 return {
                     "repo": folder.repo,
                     "scope": scope,
@@ -449,9 +476,13 @@ class CouncilPlugin(Plugin):
             # Read now: `folder.branch` is what was checked out when the
             # folder was added, and the person may have switched since.
             branch = checkout_branch(folder.path)
+            ready, applied = _scoped_tasks(
+                tools.task_ready, scope, project, folder.repo
+            )
             return {
+                "scope": applied,
                 "branch": branch,
-                "ready": tools.task_ready(**_task_scope(scope, project, folder.repo)),
+                "ready": ready,
                 "for_branch": tools.task_for_branch(branch=branch, repo=folder.repo)
                 if branch
                 else [],
@@ -460,24 +491,25 @@ class CouncilPlugin(Plugin):
             return {"projects": self._projects(ctx, scope, project)}
         # task_ready leaves out a task with a live claim, which is exactly the
         # person's own work in flight.
-        return {
-            "tasks": tools.task_list(
-                status="in_progress",
-                assignee="@me",
-                **_task_scope(scope, project, folder.repo),
-                **({"limit": ALL_REPOS_TASK_LIMIT} if scope == SCOPE_ALL else {}),
-            )
-        }
+        tasks, applied = _scoped_tasks(
+            tools.task_list,
+            scope,
+            project,
+            folder.repo,
+            status="in_progress",
+            assignee="@me",
+            **({"limit": ALL_REPOS_TASK_LIMIT} if scope == SCOPE_ALL else {}),
+        )
+        return {"scope": applied, "tasks": tasks}
 
     def _projects(
         self, ctx: Context, scope: str, project: str | None
     ) -> list[dict[str, Any]]:
         tools, repo = ctx.tools, ctx.folder.repo
         if scope == SCOPE_PROJECT:
+            # An unknown slug lists nothing, as task_ready and task_list do.
             row = tools.workflow_project_get(slug=project)
-            if row is None:
-                raise ValueError(f"No project {project!r} in this graph.")
-            return [row]
+            return [] if row is None else [row]
         if scope == SCOPE_REPO:
             return tools.workflow_project_list(repo=repo)
         rows = tools.workflow_project_list(all_repos=True)

@@ -213,7 +213,12 @@ local function list(command)
     exec(client(uri), command, { args }, function(result) show_list(command, result) end)
   end
 end
-local scoped = { nargs = '?', complete = function() return SCOPES end }
+local scoped = {
+  nargs = '?',
+  complete = function(lead)
+    return vim.tbl_filter(function(s) return vim.startswith(s, lead) end, SCOPES)
+  end,
+}
 vim.api.nvim_create_user_command('WitanReady', list('witan.listReadyTasks'), scoped)
 vim.api.nvim_create_user_command('WitanProjects', list('witan.listProjects'), scoped)
 vim.api.nvim_create_user_command('WitanMyWork', list('witan.listMyWork'), scoped)

@@ -200,7 +200,11 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			node.lists = undefined;
 			return [new MessageNode(errorMessage(err), true)];
 		}
-		this.applied.fire(lists.applied);
+		// A load a refresh or scope change has since replaced would relabel the
+		// view with the scope it was asked for.
+		if (this.folders.get(node.folder.uri.toString()) === node) {
+			this.applied.fire(lists.applied);
+		}
 		const { folder } = node;
 		const sections: WorkNode[] = [
 			new SectionNode(folder, "In progress (mine)", lists.mine, "task"),

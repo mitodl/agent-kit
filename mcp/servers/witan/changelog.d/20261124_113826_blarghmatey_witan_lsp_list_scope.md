@@ -13,6 +13,6 @@
 
 - `witan lsp`'s work lists default to the `repo` scope, so a task filed under
   no repo no longer shows among a repo's ready tasks unless the `repo+unfiled`
-  scope is asked for. Against a deployment that predates `include_unfiled`,
-  the `repo` scope fails with the deployment's unexpected-argument error until
-  the deployment is upgraded.
+  scope is asked for. A deployment that predates `include_unfiled` refuses
+  the `repo` scope, so against one the lists fall back to `repo+unfiled` and
+  answer that scope.

@@ -28,6 +28,14 @@ export function scopeArgs(scope: Scope): Record<string, string> {
 		: { scope: scope.scope };
 }
 
+/** What a server that honours `scope` answers it applied: the view's label
+ * until the first list comes back, so a failed load does not keep the last. */
+export function requested(scope: Scope): Applied {
+	return "project" in scope
+		? { scope: "project", project: scope.project }
+		: { scope: scope.scope, project: null };
+}
+
 /** The view's description for what the server applied. `title` names the
  * project the person picked, when it is the one applied. */
 export function appliedLabel(applied: Applied, picked: Scope): string {

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
 	appliedLabel,
 	DEFAULT_SCOPE,
+	requested,
 	restoreScope,
 	scopeArgs,
 } from "../../src/scope.ts";
@@ -34,6 +35,13 @@ test("the label is what the server applied", () => {
 		),
 		"Project: wp-b",
 	);
+});
+
+test("before a list answers, the label is the scope picked", () => {
+	const alpha = { project: "wp-a", title: "Alpha" };
+	assert.equal(appliedLabel(requested(alpha), alpha), "Project: Alpha");
+	const all = { scope: "all" } as const;
+	assert.equal(appliedLabel(requested(all), all), "All repos");
 });
 
 test("a server older than scopes is labeled with what it lists", () => {
