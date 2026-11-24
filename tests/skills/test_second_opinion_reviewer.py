@@ -620,6 +620,9 @@ class ReviewerTest(unittest.TestCase):
                     self.assertEqual(list(self.topic.glob("reply-*")), [])
 
     def test_working_files_are_private(self) -> None:
+        # The skill has the agent create the directory before the first call.
+        self.topic.mkdir()
+        self.topic.chmod(0o755)
         self.assert_reply(self.start(SECOND_OPINION_REVIEWER="claude:m"), "claude")
         for path in [
             self.topic,

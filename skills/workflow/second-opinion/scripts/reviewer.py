@@ -266,6 +266,9 @@ def open_reply(topic_dir: Path) -> Path:
     """Create the call's partial reply file; doubles as the sandbox check."""
     try:
         (topic_dir / "locks").mkdir(parents=True, exist_ok=True)
+        # The agent may have made it first, with its own umask, and it writes
+        # its debate log here.
+        topic_dir.chmod(0o700)
         pi_session_dir(topic_dir).mkdir(exist_ok=True)
         fd, partial = tempfile.mkstemp(
             dir=topic_dir, prefix=".reply-", suffix=".partial"

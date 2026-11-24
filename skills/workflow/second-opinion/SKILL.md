@@ -28,7 +28,8 @@ with the repository's name and a short kebab-case topic. Resolve it to an
 absolute path once, before the first call, create it with `mkdir -p`, and write
 that literal path everywhere `<dir>` appears below. Everything this skill writes for itself goes
 there, never in the repo: `debate.md`, prompt files, diffs and the reviewer's
-replies. Never commit them.
+replies. Never commit them. The script sets the directory to mode 700 on its
+first call.
 
 ## Setup (once per user)
 
@@ -114,12 +115,14 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <m
   reviewer the user did not configure, unless the user says so.
 - A call takes minutes. If your shell tool can run a command in the background,
   run it that way and wait for it; otherwise use the longest timeout the tool
-  allows. If the call is killed anyway, the token is already in
+  allows. Either way, send stdout to a file in `<dir>` so the token and the
+  reply file's name are not lost. If the call is killed anyway, the token is already in
   `<dir>/reviewer-sessions`: resume with it and ask again.
-- **In codex:** the sandbox blocks the network and writes outside the
-  workspace. Request escalated permissions for every `reviewer.py` call and
-  every write under `<dir>`. If escalation is unavailable (approvals are off),
-  stop before the first call and say why.
+- **In codex:** a sandboxed session blocks the network and writes outside the
+  workspace. There, request escalated permissions for every `reviewer.py` call
+  and every write under `<dir>`, and if escalation is unavailable (approvals
+  are off), stop before the first call and say why. A session with full
+  access needs neither.
 
 ## Debate rules
 
@@ -145,8 +148,13 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <m
    conversation, write it to a file in `<dir>` first.
    - For a change, don't count on the reviewer running `git`: write
      `git diff --no-relative <base>` to a new file made with
-     `mktemp "<dir>/diff-XXXXXX"`, and give the base sha. If the user gave no
-     base, use the merge base with the default branch and say so.
+     `mktemp "<dir>/diff-XXXXXX"`, and give the base sha.
+   - For a branch, `<base>` is the merge base, `git merge-base <target> HEAD`,
+     with the default branch as `<target>` if the user named none. Use it
+     even when the user names the target branch: a diff against that branch's
+     tip also shows, reversed, everything that landed there since. Take a
+     commit as given only when the user names one or asks to compare two
+     revisions directly. Say in the report which base you used.
      `--no-relative` keeps the diff on the whole repo, with paths from its
      root, even when `diff.relative` is set.
    - List untracked files by absolute path. Get them with
@@ -187,7 +195,8 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <m
    followed by one line per point it still disagrees with but accepts as a
    reasonable tradeoff.
 3. **Debate.** Write your answer to each finding (accept / reject with
-   evidence / counter-propose) to `<dir>/debate.md` under `## Round N`, then
+   evidence / counter-propose) to `<dir>/debate.md` under `## Round N` (the
+   answers to the first review go under `## Round 1`), then
    send the answers to the **same** reviewer (`reviewer.py resume` with the
    latest token). Ask it to say for each point whether it now agrees, and to
    end with the verdict line. If the user asked for accepted findings to be
@@ -202,6 +211,9 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <m
    `resume`: a reviewer that agreed to the plan is no longer independent of
    it.
 5. **Change things only when asked.** By default, report and change nothing.
+   The verdict is then about the findings (whether each is right and rated
+   right), not about whether they are fixed: say so in the first prompt, or
+   `CHANGES` can never clear.
    If the user asked for the accepted findings to be applied, apply them
    during the debate and give the reviewer the updated file or a fresh diff
    file each round, made as in step 1 with the same paths left out, so its
