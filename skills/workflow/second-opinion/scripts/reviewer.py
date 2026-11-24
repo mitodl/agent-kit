@@ -56,6 +56,7 @@ CLAUDE_TOOLS = ["Read", "Grep", "Glob"]
 CLAUDE_CONFINED = "SECOND_OPINION_CLAUDE_CONFINED"
 
 _child: list[subprocess.Popen] = []
+_partial: list[Path] = []
 
 
 class Fail(Exception):
@@ -268,6 +269,7 @@ def open_reply(topic_dir: Path) -> Path:
             "with escalated permissions; elsewhere check the directory.",
         ) from None
     os.close(fd)
+    _partial.append(Path(partial))
     return Path(partial)
 
 
@@ -314,6 +316,9 @@ def _kill(proc: subprocess.Popen) -> None:
 def _on_signal(signum: int, _frame: object) -> None:
     for proc in _child:
         _kill(proc)
+    # os._exit skips review()'s finally, so the partial reply goes here.
+    for partial in _partial:
+        partial.unlink(missing_ok=True)
     sys.stderr.write(f"reviewer.py: stopped by signal {signum}; killed the reviewer\n")
     os._exit(EXIT_FAIL)
 
@@ -374,6 +379,11 @@ def run_child(
             f"could not read the reviewer's output ({exc!r}); killed it. The CLI "
             "may have changed its JSON events.",
         ) from None
+    except BaseException:
+        # Anything else (an OSError writing the session log, say) must not
+        # leave the reviewer running to its timeout either.
+        _kill(proc)
+        raise
     finally:
         # The timer stays armed until the child is reaped: a CLI can close
         # stdout and still hang.
@@ -633,6 +643,9 @@ def main(argv: list[str] | None = None) -> int:
     except Fail as exc:
         print(f"reviewer.py: {exc}", file=sys.stderr)
         return exc.code
+    except OSError as exc:
+        print(f"reviewer.py: {exc}", file=sys.stderr)
+        return EXIT_FAIL
 
 
 if __name__ == "__main__":

@@ -509,6 +509,21 @@ class ReviewerTest(unittest.TestCase):
                 self.assertNotIn("did not finish", stderr)
                 self.assertLess(elapsed, 10, "killed by the timeout, not at once")
 
+    def test_any_other_exception_kills_the_reviewer_at_once(self) -> None:
+        # The session log is a directory, so announce() raises an OSError in
+        # the codex thread.started callback. The stub hangs after that event:
+        # one that exits by itself would pass without the kill.
+        (self.topic / "reviewer-sessions").mkdir(parents=True)
+        stderr, elapsed = self.start_until_killed(
+            "20",
+            self.root / "pid",
+            SECOND_OPINION_REVIEWER="codex:m",
+            STUB_MODE="hang",
+        )
+        self.assertTrue(stderr.startswith("reviewer.py: "), stderr)
+        self.assertIn("reviewer-sessions", stderr)
+        self.assertLess(elapsed, 10, "killed by the timeout, not at once")
+
     def test_timeout_kills_the_reviewer(self) -> None:
         # A CLI that hangs, and one that closed stdout and then hangs.
         for backend, mode in [("claude", "hang"), ("codex", "closeout")]:
@@ -622,6 +637,7 @@ class ReviewerTest(unittest.TestCase):
         proc.send_signal(signal.SIGTERM)
         self.assertEqual(proc.wait(5), 1)
         self.assertTrue(_wait_dead(child))
+        self.assertEqual(list(self.topic.glob(".reply-*")), [])
 
 
 if __name__ == "__main__":
