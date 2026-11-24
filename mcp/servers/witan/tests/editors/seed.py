@@ -21,6 +21,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Run with -I, which keeps the script's directory and PYTHONPATH off sys.path,
+# so testsupport's parent goes on it here, as each rootdir conftest does.
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
+
+from testsupport.checkout import git_checkout
+
 APP = "https://github.com/test/app"
 
 FILES = {
@@ -72,21 +78,6 @@ def twice():
 INDEXED = ("app", "infra", "lib")
 
 
-def checkout(repos: Path, name: str) -> Path:
-    path = repos / name
-    for rel, text in FILES[name].items():
-        (path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (path / rel).write_text(text)
-    git = ["git", "-C", str(path)]
-    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
-    subprocess.run(
-        [*git, "remote", "add", "origin", f"https://github.com/test/{name}"], check=True
-    )
-    subprocess.run([*git, "add", "-A"], check=True)
-    subprocess.run([*git, "commit", "-qm", "init"], check=True)
-    return path
-
-
 def call(tool, **kwargs):
     result = getattr(tool, "fn", tool)(**kwargs)
     return asyncio.run(result) if inspect.iscoroutine(result) else result
@@ -96,8 +87,10 @@ def main() -> None:
     repos = Path(sys.argv[1])
     witan_code = shutil.which("witan-code")
     assert witan_code, "witan-code is not on PATH"
-    for name in FILES:
-        path = checkout(repos, name)
+    for name, files in FILES.items():
+        path = git_checkout(
+            repos / name, remote=f"https://github.com/test/{name}", files=files
+        )
         if name in INDEXED:
             subprocess.run(
                 [witan_code, "index", str(path)], check=True, capture_output=True
