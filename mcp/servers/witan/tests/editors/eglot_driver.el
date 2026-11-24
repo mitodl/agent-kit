@@ -16,6 +16,12 @@
     (insert (json-encode (reverse out)))))
 (advice-add 'message :before (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages-seen))))
 
+;; CI's Emacs (purcell/nix-emacs-ci) carries a partial backport of the
+;; CVE-2024-53920 fix: flymake refuses every backend in a buffer outside
+;; `trusted-content', and eglot's backend is not marked safe as the full
+;; upstream change marks it. Without this, the diagnostics never reach flymake.
+(put 'eglot-flymake-backend 'flymake-always-safe t)
+
 (load (getenv "WITAN_CORE_EL"))
 (load (getenv "WITAN_GLUE_EL"))
 
