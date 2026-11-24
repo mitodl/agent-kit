@@ -107,6 +107,7 @@
       (let* ((real witan-execute-function)
              (witan-execute-function
               (lambda (c a) (let ((r (funcall real c a)))
+                              (rec "run_task_argv" (witan--get r "argv"))
                               (plist-put r :env (plist-put (plist-get r :env) :SPEC_MARK "set"))))))
         (witan-run-task (getenv "TASK")))
       (rec "run_task_stub_ran" (wait-for 60 (lambda () (file-exists-p (concat S "/stub-task.json")))))
@@ -115,7 +116,12 @@
       (find-file (concat S "/repos/app/app/service.py"))
       (witan-my-work) (rec "list_mywork_after_launch" (list-buffer "witan.listMyWork"))
       (setenv "STUB_OUT" (concat S "/stub-project.json"))
-      (witan-run-project (getenv "PROJECT"))
+      (let* ((real witan-execute-function)
+             (witan-execute-function
+              (lambda (c a) (let ((r (funcall real c a)))
+                              (rec "run_project_argv" (witan--get r "argv"))
+                              r))))
+        (witan-run-project (getenv "PROJECT")))
       (rec "run_project_stub_ran" (wait-for 60 (lambda () (file-exists-p (concat S "/stub-project.json")))))
       (find-file (concat S "/repos/app/app/service.py"))
       ;; an unknown version is refused

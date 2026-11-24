@@ -120,6 +120,7 @@
       (let* ((real witan-execute-function)
              (witan-execute-function
               (lambda (c a) (let ((r (funcall real c a)))
+                              (rec "run_task_argv" (witan--get r "argv"))
                               (unless (hash-table-p (gethash "env" r))
                                 (puthash "env" (make-hash-table :test #'equal) r))
                               (puthash "SPEC_MARK" "set" (gethash "env" r))
@@ -129,7 +130,12 @@
       (find-file (concat S "/repos/app/app/service.py"))
       (witan-my-work) (rec "list_mywork_after_launch" (list-buffer "witan.listMyWork"))
       (setenv "STUB_OUT" (concat S "/stub-project.json"))
-      (witan-run-project (getenv "PROJECT"))
+      (let* ((real witan-execute-function)
+             (witan-execute-function
+              (lambda (c a) (let ((r (funcall real c a)))
+                              (rec "run_project_argv" (witan--get r "argv"))
+                              r))))
+        (witan-run-project (getenv "PROJECT")))
       (rec "run_project_stub_ran" (wait-for 60 (lambda () (file-exists-p (concat S "/stub-project.json")))))
       (find-file (concat S "/repos/app/app/service.py"))
       (let ((real witan-execute-function))

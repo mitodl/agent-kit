@@ -285,14 +285,19 @@ def plain(text: str | None) -> str:
     return text.replace("\\", "")
 
 
-def check_stub_runs(store: Store) -> None:
+def check_stub_runs(r: dict, store: Store) -> None:
     """The task and project launches started the agent per the launch spec.
 
-    The driver adds ``SPEC_MARK`` to the task launch's ``env``, since a local
-    store's spec sets none, so the config's "then set env" step is exercised.
+    The driver records each spec's ``argv`` as the server sent it, and adds
+    ``SPEC_MARK`` to the task launch's ``env``, since a local store's spec sets
+    none, so the config's "then set env" step is exercised.
     """
     for name, spec_mark in (("task", "set"), ("project", None)):
         run = store.stub_run(name)
+        spec_argv = r[f"run_{name}_argv"]
+        # The prompt and the rest, so a config that drops any of them fails.
+        assert len(spec_argv) > 1, name
+        assert run["argv"] == spec_argv[1:], name
         assert Path(run["cwd"]) == store.app, name
         assert run["env"] == {
             "CLAUDE_SESSION_ID": None,
@@ -349,7 +354,7 @@ def check_emacs(r: dict, store: Store) -> None:
     assert "tk-does-not-exist not launched" in r["refused_launch"]
     assert len(r["diagnostics_unindexed"]) == 1
     assert "has no code index" in r["diagnostics_unindexed"][0]
-    check_stub_runs(store)
+    check_stub_runs(r, store)
 
 
 def test_neovim(store: Store, snippets: dict[str, Path]) -> None:
@@ -434,7 +439,7 @@ def test_neovim(store: Store, snippets: dict[str, Path]) -> None:
         "title": "witan.listReadyTasks",
         "notes": [],
     }
-    check_stub_runs(store)
+    check_stub_runs(r, store)
 
 
 def test_eglot(store: Store, snippets: dict[str, Path]) -> None:

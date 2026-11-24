@@ -117,7 +117,7 @@ for _, case in ipairs({
 end
 
 -- Rewrites the next executeCommand response the witan client gets, for a
--- launch spec the local store would not produce on its own.
+-- launch spec the local store would not produce on its own, or records it.
 local real_request = c().request
 local function patch_once(mutate)
   local cl = c()
@@ -138,7 +138,10 @@ end
 vim.cmd.edit(S .. '/repos/app/app/service.py')
 vim.env.STUB_OUT = S .. '/stub-task.json'
 vim.env.EDITOR_MARK = 'kept'
-patch_once(function(r) r.env = vim.tbl_extend('force', r.env or {}, { SPEC_MARK = 'set' }) end)
+patch_once(function(r)
+  rec('run_task_argv', r.argv)
+  r.env = vim.tbl_extend('force', r.env or {}, { SPEC_MARK = 'set' })
+end)
 vim.cmd('WitanRunTask ' .. vim.env.TASK)
 rec('run_task_stub_ran', wait(60000, function() return vim.uv.fs_stat(S .. '/stub-task.json') ~= nil end))
 rec('run_task_terminal', vim.bo.buftype)
@@ -148,6 +151,7 @@ rec('list_mywork_after_launch', qf_wait('witan.listMyWork'))
 
 -- launch a project
 vim.env.STUB_OUT = S .. '/stub-project.json'
+patch_once(function(r) rec('run_project_argv', r.argv) end)
 vim.cmd('WitanRunProject ' .. vim.env.PROJECT)
 rec('run_project_stub_ran', wait(60000, function() return vim.uv.fs_stat(S .. '/stub-project.json') ~= nil end))
 vim.cmd.tabclose()
