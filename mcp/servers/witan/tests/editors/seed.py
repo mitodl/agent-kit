@@ -13,8 +13,6 @@ exists.
 :param argv[1]: the directory to build the checkouts in.
 """
 
-import asyncio
-import inspect
 import json
 import shutil
 import subprocess
@@ -26,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from testsupport.checkout import git_checkout
+from testsupport.mcp_tools import tool_fn
 
 APP = "https://github.com/test/app"
 
@@ -78,11 +77,6 @@ def twice():
 INDEXED = ("app", "infra", "lib")
 
 
-def call(tool, **kwargs):
-    result = getattr(tool, "fn", tool)(**kwargs)
-    return asyncio.run(result) if inspect.iscoroutine(result) else result
-
-
 def main() -> None:
     repos = Path(sys.argv[1])
     witan_code = shutil.which("witan-code")
@@ -99,34 +93,30 @@ def main() -> None:
     from witan import server
 
     helper = f"{APP}#app/service.py::helper"
-    task = call(
-        server.task_create,
+    task = tool_fn(server.task_create)(
         title="Make helper configurable",
         description="helper should read its source from settings.",
         repo=APP,
         symbol_refs=[helper],
     )
-    task2 = call(
-        server.task_create, title="Second ready task", description="Filler.", repo=APP
+    task2 = tool_fn(server.task_create)(
+        title="Second ready task", description="Filler.", repo=APP
     )
-    call(
-        server.memory_store,
+    tool_fn(server.memory_store)(
         kind="pattern",
         title="helper wraps compute",
         content="helper() delegates to lib.maths.compute; change both together.",
         repo=APP,
         symbol_refs=[helper],
     )
-    stale = call(
-        server.memory_store,
+    stale = tool_fn(server.memory_store)(
         kind="lesson",
         title="Service.start was renamed",
         content="Service.start became Service.run; old callers break.",
         repo=APP,
         symbol_refs=[f"{APP}#app/service.py::start"],
     )
-    project = call(
-        server.workflow_project_create,
+    project = tool_fn(server.workflow_project_create)(
         title="Editor check project",
         description="Seeded project.",
         repos=[APP],
