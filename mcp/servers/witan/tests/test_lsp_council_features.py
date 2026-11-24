@@ -178,7 +178,7 @@ def test_hover_lists_tasks_and_memories_naming_the_symbol(checkout):
     )
     # Teammate text never forms a link, an image or HTML.
     assert "](" not in text.replace("\\](", "")
-    assert "<b>" not in text
+    assert "<b>" not in text.replace("\\<", "")
     assert nothing is None
     assert tools.called("recall") == [
         {"symbol_id": SYMBOL, "repo": REPO, "hops": 0, "limit": 10}
