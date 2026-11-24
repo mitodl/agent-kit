@@ -31,7 +31,11 @@ local function qf()
   return vim.tbl_map(function(i) return { text = i.text, file = i.bufnr > 0 and vim.api.nvim_buf_get_name(i.bufnr) or nil, lnum = i.lnum } end, vim.fn.getqflist())
 end
 local function qf_wait(title)
-  wait(60000, function() return vim.fn.getqflist({ title = 1 }).title == title end)
+  -- A command that never posts its list fails here, rather than recording
+  -- whatever quickfix holds (an empty list, once cleared below) as its result.
+  if not wait(60000, function() return vim.fn.getqflist({ title = 1 }).title == title end) then
+    error(('no quickfix list titled %s within 60s'):format(title))
+  end
   local items = qf()
   -- Items too, so a command that posts no list cannot pass on the last one.
   vim.fn.setqflist({}, 'r', { title = '', items = {} })

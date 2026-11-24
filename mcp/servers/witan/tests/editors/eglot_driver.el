@@ -37,12 +37,15 @@
   (let ((h (eglot--request (srv) :textDocument/hover (eglot--TextDocumentPositionParams))))
     (and h (plist-get (plist-get h :contents) :value))))
 (defun list-buffer (command)
-  (let ((b (get-buffer (format "*%s*" command))))
-    (prog1 (and b (with-current-buffer b
-                    (mapcar (lambda (e) (list (aref (cadr e) 0) (aref (cadr e) 1)
-                                              (witan--get (car e) "uri")))
-                            tabulated-list-entries)))
-      (when b (kill-buffer b)))))
+  ;; witan-show-list makes the buffer even for no rows, so a missing one means
+  ;; the command posted no list: fail rather than record it as an empty one.
+  (let ((b (or (get-buffer (format "*%s*" command))
+               (error "No *%s* buffer: the command posted no list" command))))
+    (prog1 (with-current-buffer b
+             (mapcar (lambda (e) (list (aref (cadr e) 0) (aref (cadr e) 1)
+                                       (witan--get (car e) "uri")))
+                     tabulated-list-entries))
+      (kill-buffer b))))
 (defun xref-summary (items)
   (mapcar (lambda (x) (let ((loc (xref-item-location x)))
                         (format "%s:%s" (xref-location-group loc) (xref-location-line loc))))
