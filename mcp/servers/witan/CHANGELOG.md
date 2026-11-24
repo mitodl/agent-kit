@@ -8,6 +8,60 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.54.0] - 2026-11-24
+
+### Added
+
+- `witan.runTask` takes `claim: false`, which returns the unclaimed task spec a
+  chat-panel handoff needs. Its prompt has the agent claim the task first.
+- A launch spec from `witan.runTask` that took a claim carries `release`, the
+  `slug`, `claimed_at` and `uri` to pass `witan.releaseTask` unchanged.
+
+- `docs/editors.md`: setting up `witan lsp` in Neovim 0.12 and in Emacs with
+  eglot or lsp-mode, including list commands rendered as quickfix and
+  `tabulated-list-mode` buffers and launches run in a terminal, and what each
+  editor shows for every feature.
+
+- `task_ready` and `task_list` take `include_unfiled` (default true). `false`
+  keeps a repo-scoped read to that repo's own tasks, leaving out the tasks
+  filed under no repo.
+- `witan lsp`'s `witan.listReadyTasks`, `witan.listProjects` and
+  `witan.listMyWork` take `scope` (`repo`, `repo+unfiled` or `all`) or
+  `project` (a `wp-` slug, in any repo), and answer with the scope they
+  applied. A folder with no git remote answers the `all` and `project`
+  scopes (with no tasks for its branch) and refuses the repo scopes. The
+  editor guide's Neovim commands take it as an argument, and its Emacs
+  commands ask for it under a prefix argument.
+
+- `witan lsp` answers `witan.uiBundle` with the path of the web UI bundle this install ships, for an editor webview to load, and the council plugin declares its share of the web UI's reads so the host can relay them. A relayed read runs with prompts off, as the plugin's own tool calls do. Against a witan-core from before the relay it declares none of them and loads as before.
+- The web UI reads through the editor when it runs in a VS Code webview (`src/webview.ts`), and over MCP to its own origin everywhere else. `src/mcp.ts` is still the one module that picks, and the views are unchanged.
+- The bundle's scripts and stylesheets name the files they load relative to themselves; only `index.html` names the `/ui/` mount, so a webview can serve the bundle from its own path.
+
+- `witan lsp` answers `witan.listProjectTasks` (`project`, a `wp-` slug): the
+  project's open tasks in dependency waves, each with its wave, open blockers
+  (in and outside the project), cycle flag, place on the longest chain,
+  downstream count and whether `task_ready` returned it. A project names no
+  repo, so a folder with no git remote lists it too. The wave rule is
+  `witan.waves`, the language server's twin of the web UI's waves view; both
+  test suites run the cases in `ui/src/views/waves.cases.json`. The editor
+  guide's Neovim `:WitanWaves` and Emacs `witan-waves` list it with a Wave
+  column.
+
+### Changed
+
+- `witan.releaseTask` requires `uri` and no longer defaults to the first
+  workspace folder. The release has to go through the folder the launch was
+  invoked from, because the spec's `cwd` can be another folder that routes to
+  a different graph.
+- A launch spec that took a claim always has `handoff: false`, from the CLI's
+  `--emit-spec` as well as the language server.
+
+- `witan lsp`'s work lists default to the `repo` scope, so a task filed under
+  no repo no longer shows among a repo's ready tasks unless the `repo+unfiled`
+  scope is asked for. A deployment that predates `include_unfiled` refuses
+  the `repo` scope, so against one the lists fall back to `repo+unfiled` and
+  answer that scope.
+
 ## [0.53.0] - 2026-11-23
 
 ### Added

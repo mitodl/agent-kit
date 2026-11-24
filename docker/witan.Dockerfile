@@ -58,7 +58,7 @@ ARG WITAN_HTTP_API_CONTRACTS=0.14,0.13
 # label. `just bump witan-council` rewrites it (a [[tool.bumpversion.files]]
 # entry in mcp/servers/witan/pyproject.toml) and `just check-versions` fails
 # when it disagrees, so don't edit it by hand.
-ARG WITAN_VERSION=0.53.0
+ARG WITAN_VERSION=0.54.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS omnigraph-fetch

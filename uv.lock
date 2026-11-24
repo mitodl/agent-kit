@@ -2222,7 +2222,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.34.0"
+version = "0.35.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2382,7 +2382,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.53.0"
+version = "0.54.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
