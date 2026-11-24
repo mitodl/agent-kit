@@ -27,9 +27,10 @@ tree arrives pre-silenced.
 for, at the narrowest scope the tool offers, in writing, next to the code.**
 
 Nothing below is specific to one language. Every linter worth using has the same
-five parts: a diagnostic, a rule identifier, an inline escape, a file-or-glob
-scope, and a config. Find those five in whatever tool just fired and the rules
-here apply unchanged. For the exact spelling in a given tool, see
+five parts: a rule identifier, an inline escape, a file-level escape, a config
+key, and a check for suppressions that no longer suppress anything. Find those
+five in whatever tool just fired and the rules here apply unchanged. For the
+exact spelling in a given tool, see
 [references/ecosystems.md](references/ecosystems.md) - look the syntax up there
 rather than reaching for a config change because the inline form would not come
 to mind.
@@ -134,30 +135,19 @@ a line, a block, or a named file is right.
 ### A directive at the top of a file is rung 3, whatever it looks like
 
 Most tools have a form that exempts the **whole file**, and it is usually one
-word away from the line form. Writing it because it was the first spelling that
-came to mind, or because it was easier than finding the right line, opts every
-present and future violation in that file out of the check - including the ones
-nobody has written yet.
+word away from the line form - which is how it gets written: it was the first
+spelling that came to mind, or it was easier than finding the right line. It
+opts every present and future violation in that file out of the check,
+including the ones nobody has written yet.
 
-| Tool | The form that takes the whole file |
-| --- | --- |
-| ruff | `# ruff: noqa` or `# ruff: noqa: CODE` anywhere in the file |
-| mypy | `# mypy: disable-error-code="..."` at the top |
-| biome | `// biome-ignore-all lint/group/rule: reason` |
-| TypeScript | `// @ts-nocheck` |
-| eslint | `/* eslint-disable rule */` with no matching `enable` |
-| shellcheck | a `# shellcheck disable=SCxxxx` placed **before the first command** |
-| yamllint | `# yamllint disable-file` on line 1 |
-| markdownlint | `<!-- markdownlint-disable-file RULE -->` |
+The **File** row of each tool's table in
+[references/ecosystems.md](references/ecosystems.md) names that form, and flags
+the ones that are worse than they look - shellcheck's, which is the same
+directive as the line form and changes meaning with its position, and ruff's,
+which is honoured anywhere in the file rather than only at the top.
 
-shellcheck's is the one that bites, because the same directive means two
-different things depending on where it sits: before the first command it covers
-the file, and anywhere else it covers the next complete command - which for a
-loop or a function is its whole body, not one line. A directive written for one
-expansion and parked at the top of the script silences every expansion in it.
-
-Before writing any of these, answer the rung-3 question out loud: **does the
-whole file have the property that makes the rule wrong?** A test module whose
+Before writing one, answer the rung-3 question out loud: **does the whole file
+have the property that makes the rule wrong?** A test module whose
 entire point is shelling out does. A 300-line module with one unusual call does
 not - that is a line. If the file is long enough that you cannot say, it is a
 line.
@@ -211,10 +201,13 @@ is the one most likely to be read by someone who has no idea why it is there.
   a comment in the config saying what is wrong with the rule here.
 - **Check the repository's convention before inventing one.** A project with no
   config-level exemptions at all and a scattering of inline ones has told you
-  which rung it uses. In mitodl/agent-kit, the repository these skills ship from,
-  the convention is written into the configs themselves: the `extend-select`
-  comment in `pyproject.toml`, the per-rule reasons in `.markdownlint.yaml`, and
-  the per-hook `exclude` reasons in `prek.toml`.
+  which *rung* it reaches for. It has not told you that an existing entry fits
+  your case: a neighbouring `"tests/**"` glob is a precedent for how an entry is
+  written, never for how wide it is, which section 4 still makes you earn from
+  the count. Some repositories write the convention into the configs themselves
+  - a comment on `extend-select`, per-rule reasons in a markdownlint config,
+  per-hook `exclude` reasons in a hook config - and those comments are the thing
+  to read.
 
 ### What a reason has to do
 

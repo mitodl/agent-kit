@@ -48,7 +48,7 @@
 			"expectations": [
 				"The answer declares the label under self-hosted-runner in .github/actionlint.yaml",
 				"No paths/ignore entry is added, and the rule is not disabled",
-				"The answer states that actionlint offers no inline suppression, so the available suppression would have covered a whole path",
+				"The answer states that actionlint offers no inline escape for a runner-label finding, so the only suppression available would have been a config-level paths: entry",
 				"The answer confirms the result by re-running actionlint, not by asserting the config is correct",
 				"The reproduction runs actionlint against the fixture in a scratch repo rather than relying on agent-kit's hook, whose path filter never reaches it"
 			]
