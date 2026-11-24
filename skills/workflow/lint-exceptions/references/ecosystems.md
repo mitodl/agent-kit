@@ -269,6 +269,13 @@ finding the config was meant to silence.
 | Line | `gitleaks:allow` anywhere on the line - it is matched as text, so it does not have to be inside a comment |
 | Config | `.gitleaksignore`, which takes fingerprints from the report - see gitleaks' own docs for its shape |
 
+**A confirmed real credential is not a suppression case at all**, at any rung -
+see the hard rule in [the skill](../SKILL.md#hard-rules). The fingerprint form
+is where that goes wrong, because it *is* the narrowest thing gitleaks offers:
+after deleting the key in a new commit fails to clear a scan over a commit
+range, a `.gitleaksignore` entry is the next step the ladder seems to point at,
+and it turns a live leak green.
+
 A test fixture that must contain a credential-shaped string is the legitimate
 case; `mcp/servers/witan/tests/test_detectors.py` is the worked example, and it
 carries the pragma for both scanners that look at it. Never silence a secret

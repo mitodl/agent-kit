@@ -155,6 +155,16 @@ is the one most likely to be read by someone who has no idea why it is there.
   `# yamllint disable-file`. Those are *broad by construction*, not an exception
   to the rule: name the diagnostic you mean in the reason, and keep what they
   cover as small as the tool allows.
+- **A confirmed real credential is never suppressed, at any rung.** When a
+  secret scanner fires on a live key, the scope ladder does not apply - none of
+  its rungs are available. Deleting the key in a later commit does not clear the
+  finding when the scan covers a commit range, which puts the next step one
+  click from a `.gitleaksignore` fingerprint or a `gitleaks:allow` that makes
+  the check green and leaves the key in history and live. Rotate it, and keep
+  the credential out of every commit; see `create-ol-pull-request` for the
+  procedure. Only a string that is credential-*shaped* and established not to be
+  one - a test fixture, a vendor's documented example key - is a suppression
+  candidate at all, and the reason says which.
 - **Always a reason, inline.** Some tools take a structured one and some do not;
   where the syntax has no slot for it, put a comment on the line above - or
   below, for the rare directive that has to be the whole first line of a file
