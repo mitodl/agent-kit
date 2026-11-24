@@ -25,6 +25,13 @@ import type {
  * Blocker status follows `task_ready`'s resolver exactly: a blocker that no
  * longer exists holds nothing back, and a row with no status is open.
  *
+ * ★ THE LANGUAGE SERVER HAS A TWIN of `components` and `layout` (minus
+ * `unblocksMost` and the edges), in witan-council's `witan/waves.py`, because
+ * an editor client cannot hold the rule (ADR 0012). `waves.cases.json` holds
+ * the `layout` cases the two share, with the Python's answers, and both
+ * `waves.test.ts` and its `tests/test_waves.py` run every one, so a change
+ * here needs the same change there and in the case file.
+ *
  * ★ SVG GEOMETRY IN PERCENTAGES, for the reason the timeline's is: `/ui/`'s
  * CSP blocks inline `style=`. `<line>` takes percentage coordinates, which is
  * why every edge is a straight line rather than a `<path>`, whose `d` does not.

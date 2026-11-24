@@ -26,6 +26,12 @@ commands answer ``{"repo": ..., <list>: [...]}`` for that folder's repo:
   (``task_for_branch`` on the folder's branch) and ``branch``.
 - ``witan.listProjects``: ``projects`` (``workflow_project_list``).
 - ``witan.listMyWork``: ``tasks``, the caller's ``in_progress`` tasks.
+- ``witan.listProjectTasks`` takes ``project``, a ``wp-`` slug, and answers
+  the project's open tasks laid out in dependency waves (:mod:`witan.waves`):
+  ``tasks``, each row with ``wave``, ``open_blockers``, ``outside``,
+  ``cycle``, ``critical``, ``downstream`` and ``ready`` (from ``task_ready``),
+  plus ``waves``, ``critical``, ``cycles`` and ``disagree``. An open blocker
+  from another project is a row with ``outside`` true.
 - ``witan.runTask`` / ``witan.runProject`` take ``slug`` and optional
   ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal.
   ``witan.runTask`` also takes ``claim`` (default true); ``false`` builds the
@@ -50,7 +56,8 @@ folder's own. They answer with the scope applied, ``scope`` (``"project"``
 under a project) and ``project`` (the slug, or ``null``), so a client can
 label what it shows. A folder with no git remote has no repo, so it answers
 ``repo`` ``null`` and only the ``all`` and ``project`` scopes, with an empty
-``for_branch``; the repo scopes and ``witan.listStaleRefs`` refuse it.
+``for_branch``, and ``witan.listProjectTasks``; the repo scopes and
+``witan.listStaleRefs`` refuse it.
 
 Every tool call names its scope outright (the folder's own repo, every repo or
 one project), so nothing falls back to the process's cwd or asks. Every call
@@ -89,6 +96,7 @@ from witan_core.observability import get_logger
 from witan_core.repo_key import checkout_branch
 
 from . import config as cfg_module
+from . import waves
 from .prompts import prompts_off
 from .repo import normalise
 from .ui_access import OPTIONAL_READ_TOOLS, READ_TOOLS
@@ -101,6 +109,7 @@ RUN_TASK = "witan.runTask"
 RUN_PROJECT = "witan.runProject"
 RELEASE_TASK = "witan.releaseTask"
 UI_BUNDLE = "witan.uiBundle"
+LIST_PROJECT_TASKS = "witan.listProjectTasks"
 
 WORK_LISTS = (LIST_READY_TASKS, LIST_PROJECTS, LIST_MY_WORK)
 SCOPE_REPO = "repo"
@@ -111,9 +120,15 @@ SCOPES = (SCOPE_REPO, SCOPE_REPO_UNFILED, SCOPE_ALL)
 DEFAULT_SCOPE = SCOPE_REPO
 """The editor is about the open code; unfiled work is one pick away."""
 
-ALL_REPOS_TASK_LIMIT = 10_000
-"""``task_list``'s maximum. Without a limit its all-repos read stops at 50
-rows, before the assignee filter runs."""
+MAX_TASK_LIMIT = 10_000
+"""``task_list``'s maximum, asked for where a read must be whole. Without a
+limit ``task_list``'s all-repos read stops at 50 rows, before the assignee
+filter runs, and ``task_ready`` at 20."""
+
+OUTSIDE_BLOCKER_FIELDS = ("slug", "title", "type", "status", "priority")
+"""What an outside blocker's stub keeps of its ``task_get`` row: the fields
+``waves.layout`` and the editor's tree read. The rest of that row (comments,
+``blocks``, children, branches, the description) never reaches the editor."""
 
 STALE_REFS_TTL_SECONDS = 60
 """How long one folder's ``memory_stale_refs`` result serves its diagnostics.
@@ -282,6 +297,48 @@ def _scoped_tasks(
     return call(**kwargs, **_task_scope(fallback, project, repo)), fallback
 
 
+def _outside_stub(row: Mapping[str, Any]) -> dict[str, Any]:
+    """An outside blocker's ``task_get`` row cut to ``OUTSIDE_BLOCKER_FIELDS``,
+    plus ``lease_expired`` where the row has it."""
+    stub = {field: row[field] for field in OUTSIDE_BLOCKER_FIELDS}
+    if "lease_expired" in row:
+        stub["lease_expired"] = row["lease_expired"]
+    return stub
+
+
+def _project_waves(ctx: Context, project: str) -> dict[str, Any]:
+    """``project``'s tasks in dependency waves, from the reads the web UI's
+    waves view makes: every task in the project, ``task_ready`` for it, and
+    one ``task_get`` per blocker from outside it, kept only while open and
+    cut to ``OUTSIDE_BLOCKER_FIELDS``."""
+    tools = ctx.tools
+    tasks = tools.task_list(project_slug=project)
+    ready = tools.task_ready(project_slug=project, limit=MAX_TASK_LIMIT)
+    inside = {t["slug"] for t in tasks}
+    elsewhere = sorted(
+        {
+            blocker
+            for t in tasks
+            if t["status"] != "closed"
+            for blocker in t["blocked_by"] or []
+            if blocker not in inside
+        }
+    )
+    outside = [
+        _outside_stub(row)
+        for slug in elsewhere
+        if (row := tools.task_get(slug=slug)) is not None and row["status"] != "closed"
+    ]
+    plan = waves.layout(tasks, ready, outside)
+    return {
+        "waves": plan["waves"],
+        "critical": plan["critical"],
+        "cycles": plan["cycles"],
+        "disagree": plan["disagree"],
+        "tasks": plan["nodes"],
+    }
+
+
 class CouncilPlugin(Plugin):
     capabilities = frozenset({Capability.HOVER, Capability.DIAGNOSTICS})
     commands = (
@@ -293,6 +350,7 @@ class CouncilPlugin(Plugin):
         RUN_PROJECT,
         RELEASE_TASK,
         UI_BUNDLE,
+        LIST_PROJECT_TASKS,
     )
     tools = frozenset(
         {
@@ -473,6 +531,18 @@ class CouncilPlugin(Plugin):
                     slug=_required(args, "slug", command),
                     if_claimed_at=_required(args, "claimed_at", command),
                 )
+            # A project names no repo, so it lists without a remote.
+            if command == LIST_PROJECT_TASKS:
+                project = _required(args, "project", command)
+                if not isinstance(project, str) or not project.startswith("wp-"):
+                    raise ValueError(
+                        f"{command}'s 'project' argument must be a wp- slug."
+                    )
+                return {
+                    "repo": folder.repo,
+                    "project": project,
+                    **_project_waves(fctx, project),
+                }
             scope, project = (
                 _work_scope(args, command) if command in WORK_LISTS else (None, None)
             )
@@ -541,7 +611,7 @@ class CouncilPlugin(Plugin):
             folder.repo,
             status="in_progress",
             assignee="@me",
-            **({"limit": ALL_REPOS_TASK_LIMIT} if scope == SCOPE_ALL else {}),
+            **({"limit": MAX_TASK_LIMIT} if scope == SCOPE_ALL else {}),
         )
         return {"scope": applied, "tasks": tasks}
 

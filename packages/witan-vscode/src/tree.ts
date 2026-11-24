@@ -11,6 +11,15 @@ import {
 	type Scope,
 	scopeArgs,
 } from "./scope";
+import {
+	blockersOf,
+	groupWaves,
+	type ProjectWaves,
+	type WaveTask,
+	wavesMessages,
+} from "./waves";
+
+const LIST_PROJECT_TASKS = "witan.listProjectTasks";
 
 export type ServerCommand = (
 	command: string,
@@ -62,10 +71,26 @@ export class SectionNode {
 	) {}
 }
 
+/**
+ * A task row. Under a project's waves it carries the project's layout, so it
+ * can list its open blockers; a blocker listed that way is a leaf.
+ */
 export class TaskNode {
 	constructor(
 		readonly folder: vscode.WorkspaceFolder,
 		readonly task: TaskRow,
+		readonly waves?: ProjectWaves,
+		readonly blocker = false,
+	) {}
+}
+
+/** One dependency wave of a project's open tasks. */
+export class WaveNode {
+	constructor(
+		readonly folder: vscode.WorkspaceFolder,
+		readonly label: string,
+		readonly tasks: WaveTask[],
+		readonly waves: ProjectWaves,
 	) {}
 }
 
@@ -87,6 +112,7 @@ export type WorkNode =
 	| FolderNode
 	| SectionNode
 	| TaskNode
+	| WaveNode
 	| ProjectNode
 	| MessageNode;
 
@@ -139,6 +165,17 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 						(p) => new ProjectNode(node.folder, p),
 					);
 		}
+		if (node instanceof ProjectNode) {
+			return this.projectWaves(node);
+		}
+		if (node instanceof WaveNode) {
+			return node.tasks.map((t) => new TaskNode(node.folder, t, node.waves));
+		}
+		if (node instanceof TaskNode && node.waves && !node.blocker) {
+			return blockersOf(node.task as WaveTask, node.waves).map(
+				(b) => new TaskNode(node.folder, b, undefined, true),
+			);
+		}
 		return [];
 	}
 
@@ -172,27 +209,23 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			item.tooltip = `Scope: ${label}`;
 			return item;
 		}
-		if (node instanceof TaskNode) {
-			const { task } = node;
-			const item = new vscode.TreeItem(task.title);
-			item.description = [task.priority, task.slug].filter(Boolean).join(" · ");
-			item.tooltip = [
-				task.title,
-				task.slug,
-				[task.type, task.status, task.priority].filter(Boolean).join(", "),
-				task.lease_expired ? "Lease expired: reclaimable." : "",
-			]
-				.filter(Boolean)
-				.join("\n");
-			item.contextValue = "witanTask";
-			item.iconPath = new vscode.ThemeIcon(
-				task.status === "in_progress" ? "sync" : "circle-large-outline",
+		if (node instanceof WaveNode) {
+			const item = new vscode.TreeItem(
+				node.label,
+				vscode.TreeItemCollapsibleState.Expanded,
 			);
+			item.description = String(node.tasks.length);
 			return item;
+		}
+		if (node instanceof TaskNode) {
+			return taskItem(node);
 		}
 		if (node instanceof ProjectNode) {
 			const { project } = node;
-			const item = new vscode.TreeItem(project.title);
+			const item = new vscode.TreeItem(
+				project.title,
+				vscode.TreeItemCollapsibleState.Collapsed,
+			);
 			item.description = [project.phase, project.slug]
 				.filter(Boolean)
 				.join(" · ");
@@ -218,6 +251,26 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 		}
 		const source = folders.find((f) => f.uri.toString() === scope.folder);
 		return source ? [source] : folders;
+	}
+
+	/** A project's open tasks by dependency wave, as the server lays them out. */
+	private async projectWaves(node: ProjectNode): Promise<WorkNode[]> {
+		let result: ProjectWaves;
+		try {
+			result = (await this.request(LIST_PROJECT_TASKS, {
+				uri: node.folder.uri.toString(),
+				project: node.project.slug,
+			})) as ProjectWaves;
+		} catch (err) {
+			return [new MessageNode(errorMessage(err), true)];
+		}
+		const groups = groupWaves(result);
+		return [
+			...wavesMessages(result, groups).map(
+				(m) => new MessageNode(m.text, m.warning),
+			),
+			...groups.map((g) => new WaveNode(node.folder, g.label, g.tasks, result)),
+		];
 	}
 
 	private folderNode(folder: vscode.WorkspaceFolder): FolderNode {
@@ -318,6 +371,55 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			projects: projects.projects,
 		};
 	}
+}
+
+function taskItem(node: TaskNode): vscode.TreeItem {
+	const { task } = node;
+	const wave = node.waves ? (task as WaveTask) : undefined;
+	const item = new vscode.TreeItem(
+		task.title,
+		wave && !node.blocker && wave.open_blockers.length > 0
+			? vscode.TreeItemCollapsibleState.Collapsed
+			: vscode.TreeItemCollapsibleState.None,
+	);
+	const outside = node.blocker && (task as Partial<WaveTask>).outside;
+	item.description = [
+		task.priority,
+		task.slug,
+		outside ? "in another project" : "",
+		wave && wave.downstream > 0 ? `+${wave.downstream} waiting` : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+	item.tooltip = [
+		task.title,
+		task.slug,
+		[task.type, task.status, task.priority].filter(Boolean).join(", "),
+		task.lease_expired ? "Lease expired: reclaimable." : "",
+		wave && wave.downstream > 0
+			? `${wave.downstream} open ${wave.downstream === 1 ? "task waits" : "tasks wait"} on it.`
+			: "",
+		wave?.cycle
+			? "In a Blocks cycle: it cannot become ready as things stand."
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n");
+	// Under a project's waves only a ready task runs; a blocker is shown, not
+	// launched from here.
+	item.contextValue = node.blocker
+		? "witanBlocker"
+		: wave && !wave.ready
+			? "witanWaitingTask"
+			: "witanTask";
+	item.iconPath = new vscode.ThemeIcon(
+		wave?.cycle
+			? "warning"
+			: task.status === "in_progress"
+				? "sync"
+				: "circle-large-outline",
+	);
+	return item;
 }
 
 export function errorMessage(err: unknown): string {
