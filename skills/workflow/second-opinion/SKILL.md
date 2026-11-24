@@ -191,8 +191,10 @@ python3 <skill_dir>/scripts/reviewer.py show --caller <family> --caller-model <m
    security issues and missing tests. Mark a finding `DEFER` only when it is
    both `rare` and low-impact; it doesn't block `AGREE`. Never defer one that
    can lose or expose data, touch security or money, cause an outage, or break
-   a stated requirement, however rare. Tell it which decisions the user
-   already made and to challenge one only with evidence that it's wrong. Tell
+   a stated requirement, however rare. If the user stated decisions in this
+   request, tell it which, and to challenge one only with evidence that it's
+   wrong. List only those: a choice you read out of the code or its history
+   is not the user's decision, and listing it shields it from review. Tell
    it not to open env files, credentials or key material. Tell it to end with
    `Verdict: AGREE`, `Verdict: CHANGES`, or `Verdict: ACCEPT-WITH-DISSENT`
    followed by one line per point it still disagrees with but accepts as a
