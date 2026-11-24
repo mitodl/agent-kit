@@ -1004,7 +1004,17 @@ def test_list_project_tasks_reads_each_outside_blocker_once_and_drops_closed_one
         _row("tk-c", status="closed", blocked_by=["tk-old"]),
     ]
     away = {
-        "tk-away": _row("tk-away", project_slug="wp-other"),
+        # A whole task_get row, of which only the listing fields go on.
+        "tk-away": _row(
+            "tk-away",
+            type="task",
+            project_slug="wp-other",
+            description="long",
+            comments=[{"body": "note"}],
+            blocks=["tk-a", "tk-b"],
+            children=[],
+            branches=[],
+        ),
         "tk-done-away": _row("tk-done-away", status="closed"),
     }
     tools = FakeTools(
@@ -1039,6 +1049,16 @@ def test_list_project_tasks_reads_each_outside_blocker_once_and_drops_closed_one
         "tk-a": (1, False, ["tk-away"]),
         "tk-b": (2, False, ["tk-away", "tk-a"]),
     }
+    stub = next(t for t in result["tasks"] if t["outside"])
+    assert {k: stub[k] for k in ("slug", "title", "type", "status", "priority")} == {
+        "slug": "tk-away",
+        "title": "tk-away",
+        "type": "task",
+        "status": "open",
+        "priority": "p2",
+    }
+    for dropped in ("comments", "blocks", "children", "branches", "description"):
+        assert dropped not in stub
 
 
 @requires_omnigraph

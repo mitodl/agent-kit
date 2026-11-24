@@ -125,6 +125,11 @@ MAX_TASK_LIMIT = 10_000
 limit ``task_list``'s all-repos read stops at 50 rows, before the assignee
 filter runs, and ``task_ready`` at 20."""
 
+OUTSIDE_BLOCKER_FIELDS = ("slug", "title", "type", "status", "priority")
+"""What an outside blocker's stub keeps of its ``task_get`` row: the fields
+``waves.layout`` and the editor's tree read. The rest of that row (comments,
+``blocks``, children, branches, the description) never reaches the editor."""
+
 STALE_REFS_TTL_SECONDS = 60
 """How long one folder's ``memory_stale_refs`` result serves its diagnostics.
 The review resolves every ref in the repo against witan-code, and an editor
@@ -292,10 +297,20 @@ def _scoped_tasks(
     return call(**kwargs, **_task_scope(fallback, project, repo)), fallback
 
 
+def _outside_stub(row: Mapping[str, Any]) -> dict[str, Any]:
+    """An outside blocker's ``task_get`` row cut to ``OUTSIDE_BLOCKER_FIELDS``,
+    plus ``lease_expired`` where the row has it."""
+    stub = {field: row[field] for field in OUTSIDE_BLOCKER_FIELDS}
+    if "lease_expired" in row:
+        stub["lease_expired"] = row["lease_expired"]
+    return stub
+
+
 def _project_waves(ctx: Context, project: str) -> dict[str, Any]:
     """``project``'s tasks in dependency waves, from the reads the web UI's
     waves view makes: every task in the project, ``task_ready`` for it, and
-    one ``task_get`` per blocker from outside it, kept only while open."""
+    one ``task_get`` per blocker from outside it, kept only while open and
+    cut to ``OUTSIDE_BLOCKER_FIELDS``."""
     tools = ctx.tools
     tasks = tools.task_list(project_slug=project)
     ready = tools.task_ready(project_slug=project, limit=MAX_TASK_LIMIT)
@@ -310,7 +325,7 @@ def _project_waves(ctx: Context, project: str) -> dict[str, Any]:
         }
     )
     outside = [
-        row
+        _outside_stub(row)
         for slug in elsewhere
         if (row := tools.task_get(slug=slug)) is not None and row["status"] != "closed"
     ]
