@@ -485,6 +485,11 @@ each driven headlessly with exactly the configuration above against a local
 store. lsp-mode ran once with witan alone and once beside ruff and ty. "Fallback" is the per-editor fallback ADR 0012 specifies for a client
 that lacks the LSP feature.
 
+CI repeats that check, with witan alone, on every change to this page or to
+the servers: `.github/workflows/witan-editors.yml` runs Neovim 0.12.6, Emacs
+30.2's eglot and lsp-mode from MELPA with the blocks above, taken from this
+page as it stands in the change.
+
 | Feature | Neovim | eglot | lsp-mode |
 | --- | --- | --- | --- |
 | Stale memory ref diagnostic on the file it names | works | works (flymake) | works |
