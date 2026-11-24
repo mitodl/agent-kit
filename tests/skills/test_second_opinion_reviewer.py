@@ -513,6 +513,19 @@ class ReviewerTest(unittest.TestCase):
                 self.assertNotIn("did not finish", stderr)
                 self.assertLess(elapsed, 10, "killed by the timeout, not at once")
 
+    def test_failed_restriction_check_kills_the_reviewer_at_once(self) -> None:
+        # claude starts with a tool it must not have and then hangs. A stub
+        # that exits by itself would pass without the kill.
+        stderr, elapsed = self.start_until_killed(
+            "20",
+            self.root / "pid",
+            SECOND_OPINION_REVIEWER="claude:m",
+            STUB_MODE="hang",
+            STUB_TOOLS='["Bash", "Glob", "Grep", "Read"]',
+        )
+        self.assertIn("'Bash'", stderr)
+        self.assertLess(elapsed, 10, "killed by the timeout, not at once")
+
     def test_any_other_exception_kills_the_reviewer_at_once(self) -> None:
         # The session log is a directory, so announce() raises an OSError in
         # the codex thread.started callback. The stub hangs after that event:
