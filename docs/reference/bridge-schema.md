@@ -100,10 +100,19 @@ each package consumer would multiply into one row per use. Repo- and
 file-scoped like InterfaceBinding, so concurrent writers never touch the same
 row, and a reindex purges a file's rows by (repo, file).
 
+`target` is the full dotted name as imported, e.g.
+`mitol.common.utils.datetime.now_in_utc`. A reader matches a definition's
+module path and, where the parent package re-exports it, the parent's
+(`mitol.common.utils.now_in_utc`).
+
 Id convention:
 ExternalUse.slug = repo|file|line|target
 e.g. https://github.com/mitodl/mitxonline|courses/models.py|12|
 mitol.common.models.TimestampedModel
+
+Several uses of one name on one line are therefore one row. A writer dedupes its
+records by slug before loading, because a load with the same slug twice is
+refused whole (and the bridge write shares one load with the bindings).
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -112,7 +121,7 @@ mitol.common.models.TimestampedModel
 | `file` | `String @index` | repo-relative path of the use |
 | `line` | `I32` | 1-based line of the use |
 | `symbol_id` | `String?` | enclosing Symbol id (repo#path::Qn) |
-| `target` | `String @index` | full dotted name as imported, e.g. |
+| `target` | `String @index` | full dotted name as imported |
 | `language` | `String` |  |
 | `indexed_at` | `DateTime` |  |
 

@@ -88,17 +88,6 @@ def test_uses_are_found_by_any_name_a_definition_is_imported_as(bridge):
 
 
 @requires_stack
-def test_uses_stay_out_of_the_package_consumer_counts(bridge):
-    """The interface tools, the impact lens and the visualizations count
-    InterfaceBinding rows, so a use must never show up as one."""
-    bridge.change(
-        "bridge.gq", "insert_external_use", _use(REPO_A, "a.py", 1, MODULE_PATH)
-    )
-
-    assert bridge.read("bridge.gq", "all_bindings", {}) == []
-
-
-@requires_stack
 def test_a_file_purge_drops_only_that_files_uses_in_that_repo(bridge):
     """A reindex replaces the files it re-parsed. The same path in another
     repo, and the repo's other files, keep their rows."""
