@@ -472,7 +472,7 @@ indexer first).
 | Tool | Returns |
 |------|---------|
 | `code_find_definition(name)` / `code_find_definition(symbol_id=...)` | symbols whose name / qualified name matches (at most 50 per repo), or the one symbol with that exact id |
-| `code_find_references(symbol_id)` | incoming `References` + `Calls` |
+| `code_find_references(symbol_id, branch=None)` | incoming `References` + `Calls` |
 | `code_callers(symbol_id, direction="callers", branch=None)` | incoming `Calls`; `direction="callees"` for outgoing |
 | `code_impact(symbol_id, max_depth=5, max_nodes=200, branch=None)` | transitive callers via BFS |
 | `code_symbols_in_file(path)` | symbols defined in a file |
@@ -490,6 +490,7 @@ that repo's bridge branch overlay instead of `main` — see
 | `code_interface_providers(kind, key)` | repos that **provide** a contract (`env_var`/`endpoint`/`package`/`service`) |
 | `code_interface_consumers(kind, key)` | repos that **consume** it (`endpoint` keys are normalized from raw paths) |
 | `code_cross_repo_impact(symbol_id)` | the symbol's own bindings + every binding for those same contracts in **other** repos |
+| `code_interface_bindings_in_file(path, repo=None, branch=None)` | one file's bindings, each with kind, key, role and line |
 | `code_interface_search(query, kind=None)` | BM25 search over interface bindings by normalized key |
 | `code_precise_edges(repo=None)` | Stage-2 cross-repo edges resolved by canonical symbol string |
 | `code_unresolved_symbols(repo=None)` | external references with no precise match (indexing-coverage gaps) |
@@ -559,9 +560,38 @@ graph):
   not usually run by hand.
 - `login` / `logout` / `whoami` — authenticate to a deployed witan service
   (see [Remote mode](#remote-mode)); no-ops with nothing configured.
+- `lsp [--target NAME]` — run the witan language server on stdio (needs the
+  `lsp` extra); see [Language server](#language-server).
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
+
+## Language server
+
+`witan-code lsp` (or `witan lsp`; one server serves both packages' features,
+ADR 0012) gives an editor the code graph. Each workspace folder reads its own
+target's graph, at its own checkout branch:
+
+- a lens on each function, method and class with its caller count, and one on
+  each symbol with interface bindings counting the bindings for the same
+  contracts in other repos. Running a lens (`witan.listCallers`,
+  `witan.listCrossRepoImpact`) returns the rows behind the count as
+  `{title, repo, path, line, uri}`, `uri` null for a repo no folder has open;
+- hover on a line that reads or sets an env var, calls or serves an endpoint,
+  imports a package or names a service: who provides and who consumes it;
+- go to definition across indexed repos, and find references in the
+  definition's own repo (the code graph records no symbol-level use across
+  repos). A definition in a repo no workspace folder has checked out is named
+  in the hover instead (repo, path and line), with its references;
+- an Information diagnostic on the first line when the folder's repo, or its branch,
+  has no index (reads then show the default branch).
+
+An editor without CodeLens (eglot, Zed by default) gets each lens's text in
+the hover on its line and its command as a code action. Configuration for
+Neovim, eglot and lsp-mode, and what each shows, is in witan's
+[editor setup guide](../witan/docs/editors.md). A deployment you are
+not logged in to shows `Not logged in ... run witan-code login` in hover and
+diagnostics; the server never prompts.
 
 ## Remote mode
 

@@ -25,14 +25,16 @@
 # answering queries between pod restarts (ol-infrastructure
 # tk-an-authenticated-synthetic-probe-for-council-to--e89d8f). Deliberately its
 # own fourth identity rather than reusing one of the three above: svc-witan-ci
-# is permanently excluded from this graph by design, svc-witan-admin is
-# break-glass and should not run on a schedule, and svc-witan is the serving
-# tier's own credential, not something a monitoring job should hold or rotate
-# in lockstep with. Read-only — `read` + `invoke_query`, nothing else — so a
-# leaked probe token is worth exactly one thing: reading the graph.
+# is permanently excluded from this graph by design, svc-witan-admin carries
+# `change` and `schema_apply` here (far more than a probe needs), and svc-witan
+# is the serving tier's own credential, not something a monitoring job should
+# hold or rotate in lockstep with. Read-only — `read` + `invoke_query`, nothing
+# else — so a leaked probe token is worth exactly one thing: reading the graph.
 #
 # witan-admin (act-svc-witan-admin) is the break-glass maintenance principal of
-# ADR-0005 path (b) — the in-cluster Job that runs `witan migrate …`. THIS is
+# ADR-0005 path (b) — the in-cluster Job that runs `witan migrate …` — and,
+# since omnigraph 0.16, the actor the nightly maintenance window runs
+# `optimize`/`cleanup` as (the admin-maintain/admin-reclaim rules). THIS is
 # the graph its grants actually cost something on, and the cost is deliberately
 # accepted: `witan migrate topics` / `migrate repo-keys` / `migrate merge`
 # rewrite existing Memory/Task rows in place, so they need `change`, and Cedar
@@ -84,8 +86,10 @@ rules:
       branch_scope: any
   # The MCP service applies the memory schema/migrations as a default op; it
   # reads current state to decide whether a migration is needed.
-  # NOTE: `omnigraph repair`/`optimize`/`cleanup` are direct-storage-only and
-  # CANNOT be Cedar-gated — restrict those with AWS IAM on the bucket instead.
+  # NOTE: `optimize`/`cleanup` are direct-storage-only. Since 0.16 this policy
+  # also judges them (`maintain`/`reclaim`, see the admin rules), but the actor
+  # a direct command names is self-declared, so AWS IAM on the bucket is still
+  # what restricts who can run them.
   - id: service-read-memory
     allow:
       actors: { group: witan-service }
@@ -122,6 +126,21 @@ rules:
       actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected
+  # The nightly maintenance window (docker/omnigraph_maintenance.py) runs
+  # `optimize` and `cleanup` directly against the root as this actor
+  # (OMNIGRAPH_MAINTENANCE_ACTOR). From 0.16 those commands are judged by this
+  # policy and denied without a grant: `maintain` covers optimize and index
+  # builds and preserves content, `reclaim` covers cleanup, which deletes
+  # history no retained commit needs. Neither action changes a row.
+  - id: admin-maintain-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [maintain]
+      branch_scope: any
+  - id: admin-reclaim-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [reclaim]
   # The whole grant: prove the graph answers a read. No export (nothing to
   # hand a caller no human is behind), no change, no schema_apply.
   - id: probe-read-memory

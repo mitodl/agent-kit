@@ -251,9 +251,12 @@ Don't re-derive the mechanics here — see:
   to one in another file of the repo when the callee is an imported name or
   an attribute of one (`mod.func()`, `Cls.method()`). Calls through an
   instance (`obj.method()`), re-exports, star imports, `require()`, path
-  aliases, and shadowing aren't followed. After upgrading, run
-  `witan-code reindex` once: an incremental run skips unchanged files,
-  so their calls into other files are not resolved until they change.
+  aliases, and shadowing aren't followed. After an upgrade that changes
+  what the indexer extracts, the next index of the default branch, or of
+  any branch on a local store, parses every file once, so unchanged files
+  get the new edges without a `witan-code reindex` (the CI indexer does
+  this for a shared graph). A shared graph's branch view does not: one
+  forked before that run keeps its rows for the files it has not changed.
   Treat them as a high-recall starting point for investigation,
   not a verified call graph. `Defines`/`Contains` (and Stage-2 precise
   cross-repo edges) are exact by contrast.

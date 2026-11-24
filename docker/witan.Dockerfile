@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+# syntax=docker/dockerfile:1@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 #
 # witan — the MCP tier (ADR-0009). Packages the `witan` umbrella CLI (which
 # mounts `witan code` from witan-code) and runs it as a streamable-HTTP MCP
@@ -19,30 +19,30 @@
 ARG PYTHON_VERSION=3.14
 # The tag of the node image the UI stage builds in. The exact version is pinned
 # in mcp/servers/witan/ui/.node-version, which the GitHub workflows read; this
-# is the major line that pin lives on (24 = Krypton, the current LTS). Renovate
-# covers both.
-ARG NODE_VERSION=24
+# is the major line that pin lives on (26 = Lithium, the current LTS). Renovate
+# bumps .node-version but not this arg, so a major bump moves it by hand.
+ARG NODE_VERSION=26
 # Keep in lockstep with witan_core's installer pin
 # (packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION)
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
 # version is an outage. Renovate covers all three; `just check-omnigraph-pins`
 # is the CI backstop.
-ARG OMNIGRAPH_VERSION=0.15.0
+ARG OMNIGRAPH_VERSION=0.16.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.15.0
-ARG OMNIGRAPH_SHA256_X86_64=d7312ce49abca47a6bb47956b6987d32f650fa91678be1abd10e02824937bb15
-ARG OMNIGRAPH_SHA256_ARM64=fa1082636bb3927d61dcf9d22bb4e08eb0fb446d08e746738869e40c363b4755
+ARG OMNIGRAPH_RELEASE_TAG=v0.16.0
+ARG OMNIGRAPH_SHA256_X86_64=9b080f761e3d0ec7679a5cb60d479ba2e8982bf9797420a2b75ce99c2b029779
+ARG OMNIGRAPH_SHA256_ARM64=98030e3bdb8843765a556fddcf926904bade4cfaa3e3affd324fcd9e99990651
 # The storage format the pinned binary reads, stamped onto the image as
 # `edu.mit.ol.omnigraph.internal-schema` for ol-infrastructure's preview check.
 # See docker/omnigraph-server.Dockerfile for why the image has to carry it and
 # what `just check-omnigraph-pins` covers; mirrored from
 # packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=16
+ARG OMNIGRAPH_INTERNAL_SCHEMA=17
 # The oldest format the binary opens in place, stamped as
 # `edu.mit.ol.omnigraph.min-internal-schema`. See
 # docker/omnigraph-server.Dockerfile.
@@ -54,12 +54,14 @@ ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=14
 # omnigraph stack refuses a server image whose contract isn't in it.
 # `just check-omnigraph-pins` holds it to witan-core.
 ARG WITAN_HTTP_API_CONTRACTS=0.14,0.13
-# Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
-# [project].version / [tool.bumpversion]); it labels the built image.
-ARG WITAN_VERSION=0.8.0
+# witan-council's version, for the image's org.opencontainers.image.version
+# label. `just bump witan-council` rewrites it (a [[tool.bumpversion.files]]
+# entry in mcp/servers/witan/pyproject.toml) and `just check-versions` fails
+# when it disagrees, so don't edit it by hand.
+ARG WITAN_VERSION=0.53.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS omnigraph-fetch
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS omnigraph-fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_SHA256_X86_64
@@ -122,7 +124,7 @@ RUN mkdir -p /witan && npm run build
 
 # ── Build the relocatable venv from the uv workspace ──────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS builder
-COPY --from=ghcr.io/astral-sh/uv:0.12.19@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d /uv /uvx /usr/local/bin/
 
 # build-essential is insurance for any dependency that ships only an sdist; the
 # runtime stage discards it. UV_PYTHON_DOWNLOADS=never keeps uv on the image's
@@ -187,10 +189,19 @@ COPY --chmod=0755 docker/witan-ci-index.sh /usr/local/bin/witan-ci-index
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /src /src
 
+# FASTMCP_ENABLE_SUBSCRIPTIONS_LISTEN=false: fastmcp 4.2.5 serves the
+# 2026-07-28 `subscriptions/listen` stream by default, and nothing closes an
+# open one on SIGTERM (uvicorn waits on connections before lifespan shutdown
+# runs). One listening client then holds every terminating pod for the whole
+# 120s grace window that exists for in-flight writes (DEFAULT_SHUTDOWN_GRACE_SECONDS
+# in witan/cli/__init__.py). witan publishes no change notifications, so the
+# stream carries nothing; off, `subscriptions/listen` answers METHOD_NOT_FOUND
+# and `listChanged` is not advertised, as before 4.2.5. Read at server creation.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:$PATH
+    PATH=/opt/venv/bin:$PATH \
+    FASTMCP_ENABLE_SUBSCRIPTIONS_LISTEN=false
 WORKDIR /src
 USER witan
 

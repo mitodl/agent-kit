@@ -8,6 +8,114 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.53.0] - 2026-11-23
+
+### Added
+
+- `witan project run` prompts carry a "Team memories" section: the memories a
+  first `task_claim` would surface for each of the first five ready tasks the
+  prompt lists, deduplicated and capped at three, each naming the task it
+  matched. The lookup goes through `workflow_project_run_memories`, which is
+  listed only to witan's CLI, and a failed lookup does not block the launch.
+  Each run logs a `witan.memory.surfaced` line with `surface="project_run"`,
+  the project, the tasks considered and matched, and the scores.
+- `witan task run` and `witan project run` (and the language server's launch
+  commands) set a fresh `WITAN_CLIENT_INSTANCE` in the launched agent's
+  environment and make the launch claim or memory lookup under it, so the
+  agent's later reads join to the surfaced line logged on its behalf.
+
+### Changed
+
+- The `witan` and `omnigraph-server` images bake omnigraph 0.16.0 and label
+  storage format 17 (`edu.mit.ol.omnigraph.internal-schema`), still serving
+  from 14. Deployed graphs stay at format 16: 0.16 never stamps an existing
+  graph 17, and `omnigraph upgrade` refuses cluster graphs. A graph a 0.16
+  `cluster apply` creates is born at 17, which a 0.15 image cannot open, so
+  rolling back to 0.15 after one is created strands it. The HTTP contract
+  stays 0.14.
+
+- The Cedar bundles grant `witan-admin` the two actions 0.16 adds,
+  `maintain` (optimize and index builds) and `reclaim` (cleanup), on the
+  memory, code and bridge graphs. 0.16 judges a direct maintenance command on
+  a cluster graph by the graph's applied policy and denies one that names no
+  actor (upstream #1423), so without them the nightly window's every
+  `optimize` and `cleanup` is refused.
+- The maintenance window passes `OMNIGRAPH_MAINTENANCE_ACTOR` to `optimize`
+  and `cleanup` as `--as`, and fails before stopping the server when the
+  config directory holds policy bundles and it is unset. The `omnigraph`
+  stack's maintenance CronJob has to set it to `svc-witan-admin` before this
+  image deploys.
+
+- `witan.memory.surfaced` and `witan.memory.read` lines carry
+  `client_instance`, a digest of the calling client process (the proxy's
+  `X-Witan-Client-Instance` header, a handshake-era client's `Mcp-Session-Id`,
+  or this process under local stdio). `session` falls back to it when the
+  caller passes no `session_id`, so a `memory_get` through the proxy no
+  longer logs a null session.
+- `witan.memory.read` lines carry `bulk`, true from the 20th call to one read
+  surface by one actor's one client process within a minute, or the 100th by
+  one actor across all their clients, so a scripted sweep can be left out of
+  a measurement without filtering it by hand.
+- Requires witan-core 0.61.0 for `witan_core.client_instance`.
+
+## [0.52.0] - 2026-11-23
+
+### Added
+
+- `witan task run --emit-spec` and `witan project run --emit-spec` print a JSON
+  launch spec (`version`, `kind`, `slug`, `launchable`, `argv`, `cwd`, `env`,
+  `unset_env`, `handoff`, `prompt`, `agent`, `model`, `claim`) instead of
+  launching, for an editor or other launcher to run (ADR 0012, "3. The launch
+  contract"). A refusal (`not_found`, `no_workspace`, `target_mismatch`, or a
+  refused claim passed through as `claim`) prints a spec with
+  `launchable: false` and no `argv`, and exits 1. `target_mismatch` (with the
+  matched name in `target`) means the launcher used the local store, but an
+  agent started in the launch folder would match a named target, so it would
+  not find the task it was handed; nothing is claimed. `build_launch_spec` in `witan.cli.run_helpers` returns
+  the same spec as data, with no console output, for the language server.
+- `task_release` takes `if_claimed_at`: it releases only when the task is still
+  `in_progress` under the claim taken at that instant, and otherwise returns
+  `reason: "claim_changed"`. `force` does not lift it. A launcher uses it to
+  give back the claim of a launch that failed without releasing a claim the
+  launched agent has since renewed. `witan task release --if-claimed-at` passes
+  it from the command line.
+
+- `witan lsp` runs the witan language server on stdio for an editor to start (ADR 0012). It needs the new `lsp` extra (`uv tool install 'witan-council[lsp]'`). witan-council registers a plugin under `witan.lsp.plugins` that provides no features yet; it routes each workspace folder through the CLI's own dispatch, a `RemoteServerProxy` for a deployed target and the local store behind `local_server`'s guard otherwise.
+- `config.load`, `load_remote_config` and `diagnose_local_dispatch` take `project_path=`, which routes by that checkout instead of the process's.
+
+- `witan run` takes `--emit-spec` and `--force`, the same as `witan task run`.
+  `witan run <slug> --emit-spec` prints the same JSON launch spec as
+  `witan task run <slug> --emit-spec`, since both build it through
+  `build_launch_spec`.
+
+- The witan-council language-server plugin provides its features (ADR 0012's feature map). A memory whose `symbol_refs` names a symbol the code graph no longer has gets an Information diagnostic on the first line of that file, listing the memory and its rename candidates. Hover on a symbol lists the tasks and memories whose `symbol_refs` name it, with their titles as escaped plain text; it needs a plugin that resolves positions to symbols, and is off without one. Commands: `witan.listStaleRefs` (every ref that is not live, including those whose file is gone), `witan.listReadyTasks`, `witan.listProjects`, `witan.listMyWork`, `witan.runTask` and `witan.runProject` (the launch spec, built in-process, with `handoff` always false because `serve()` has already dropped the overrides the check looks for; the server never starts the agent), and `witan.releaseTask` (fenced on the spec's `claim.claimed_at`, never forced). Each takes one object argument, with `uri` naming the workspace folder (or a file in it) it applies to.
+
+### Changed
+
+- `witan task run` claims bare. It hides every agent-session id variable
+  (`CLAUDE_SESSION_ID`, `PI_SESSION_ID`, `CODEX_SESSION_ID`) from its own
+  environment while claiming, so run from inside an agent session it no
+  longer claims as that session; the launched agent's first renewal records
+  its own. The launched agent, including the one the picker's consolidated
+  mode starts, no longer inherits those variables, `CLAUDE_PROJECT_DIR` or
+  `WITAN_REPO`, and gets `WITAN_TARGET` pinned to the target the claim was
+  taken in (or unset, for the local store).
+- `witan task run` and `witan project run` refuse when the current directory
+  is not a checkout of the task's repo (or one of the project's repos), before
+  claiming. A task or project with no repo runs anywhere. `--dry-run` skips
+  the check.
+- `witan task run` no longer offers to steal a held task at the terminal; it
+  reports the holder and `--force` takes the claim. The question would have
+  landed on stdout ahead of `--emit-spec`'s JSON.
+- The open-blockers warning `witan task run` prints goes to stderr.
+
+- Requires witan-core 0.59.0.
+
+- The CLI's local-store guard lets `task_for_branch` read the local store, as it already did `task_ready`.
+- The local-store guard refuses a write with `LocalWriteRefused`, a `SystemExit` that carries its explanation as `message`, so the language server can fail the editor's request with that text instead of an exit code. The CLI still exits 1.
+
+- The language-server plugin escapes teammate-written text in hovers with witan-core's `escape_markdown` instead of its own copy, and `witan.lsp_plugin.plain` is gone. Hover output is unchanged. Requires witan-core 0.60.1.
+
 ## [0.51.0] - 2026-11-18
 
 ### Added

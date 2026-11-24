@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+# syntax=docker/dockerfile:1@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 #
 # omnigraph-server — witan's data tier (ADR-0009 decision point 2 / option 3).
 #
@@ -35,15 +35,15 @@
 # 0.15 on (upstream #1189, docs/user/operations/s3-cluster-roots.md); 0.14
 # needed a patched build, which this file carried until the 0.15 pin.
 
-ARG OMNIGRAPH_VERSION=0.15.0
+ARG OMNIGRAPH_VERSION=0.16.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.15.0
-ARG OMNIGRAPH_SHA256_X86_64=d7312ce49abca47a6bb47956b6987d32f650fa91678be1abd10e02824937bb15
-ARG OMNIGRAPH_SHA256_ARM64=fa1082636bb3927d61dcf9d22bb4e08eb0fb446d08e746738869e40c363b4755
+ARG OMNIGRAPH_RELEASE_TAG=v0.16.0
+ARG OMNIGRAPH_SHA256_X86_64=9b080f761e3d0ec7679a5cb60d479ba2e8982bf9797420a2b75ce99c2b029779
+ARG OMNIGRAPH_SHA256_ARM64=98030e3bdb8843765a556fddcf926904bade4cfaa3e3affd324fcd9e99990651
 # The on-disk storage format the pinned binary reads, mirrored from witan_core's
 # declaration (packages/witan-core/witan_core/omnigraph_install.py ::
 # _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image below as
@@ -64,9 +64,9 @@ ARG OMNIGRAPH_SHA256_ARM64=fa1082636bb3927d61dcf9d22bb4e08eb0fb446d08e746738869e
 # runtime stage's re-declaration of it, and the LABEL line that emits it — an
 # ARG not re-declared in the stage expands to empty, which builds a clean image
 # advertising no format at all.
-ARG OMNIGRAPH_INTERNAL_SCHEMA=16
-# The oldest format the binary opens in place (0.15 serves 14 to 16, as 0.14
-# did), mirrored from _OMNIGRAPH_MIN_INTERNAL_SCHEMA and stamped as
+ARG OMNIGRAPH_INTERNAL_SCHEMA=17
+# The oldest format the binary opens in place (0.16 serves 14 to 17; 0.14 and
+# 0.15 served 14 to 16), mirrored from _OMNIGRAPH_MIN_INTERNAL_SCHEMA and stamped as
 # `edu.mit.ol.omnigraph.min-internal-schema`. ol-infrastructure's preview
 # accepts this image against any served root from this number up to the one
 # above, so an in-place upgrade isn't refused as if it needed a rebuild.
@@ -79,7 +79,7 @@ ARG OMNIGRAPH_MIN_INTERNAL_SCHEMA=14
 ARG OMNIGRAPH_HTTP_API_CONTRACT=0.14
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS fetch
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_SHA256_X86_64
@@ -123,7 +123,7 @@ RUN set -eux; \
     /out/omnigraph --version
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA

@@ -1,6 +1,6 @@
 [project]
 name = "ol-agent-kit"
-version = "0.1.5"
+version = "0.2.0"
 description = "Meta-package: installs the full mitodl agent-kit toolkit (agent-config-kit's agent-kit CLI + witan + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -10,15 +10,21 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "agent-config-kit[cli]>=0.3.7",
+    # >=0.15: witan-council 0.52.0 requires agent-config-kit>=0.15, so nothing
+    # older resolves alongside the server floors below.
+    "agent-config-kit[cli]>=0.15",
     # Floored at the releases that speak MCP 2026-07-28 (MRTR elicitation, the
     # tasks extension, cacheable list results). Still no upper bound, so a fresh
     # install keeps picking up newer releases of either server automatically.
-    "witan-council>=0.34.0",
+    # [lsp] >=0.52.0: the editor language server (`witan lsp`, ADR 0012) with
+    # its council features. 0.52.0 is the first release with an `lsp` extra.
+    "witan-council[lsp]>=0.52.0",
     # >=0.32.0: witan-council imports witan-code in process and calls
     # code_find_definition(symbol_id=...) for stale-refs and recall(memory=...);
     # an older witan-code raises on that keyword and every lookup degrades.
-    "witan-code>=0.32.0",
+    # [lsp] >=0.34.0: the code-graph language-server features. 0.33.0 has the
+    # extra but registers a plugin with no features.
+    "witan-code[lsp]>=0.34.0",
 ]
 
 [project.urls]
@@ -54,7 +60,7 @@ witan-code = { workspace = true }
 packages = ["agent_kit"]
 
 [tool.bumpversion]
-current_version = "0.1.5"
+current_version = "0.2.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

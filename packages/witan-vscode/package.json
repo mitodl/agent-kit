@@ -1,0 +1,185 @@
+{
+	"name": "witan",
+	"displayName": "witan",
+	"description": "Ready work, task and project launches, and code-graph features from the witan language server.",
+	"version": "0.0.0",
+	"publisher": "mitol",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mitodl/agent-kit",
+		"directory": "packages/witan-vscode"
+	},
+	"homepage": "https://github.com/mitodl/agent-kit/tree/main/packages/witan-vscode",
+	"bugs": "https://github.com/mitodl/agent-kit/issues",
+	"type": "module",
+	"engines": {
+		"vscode": "^1.91.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"keywords": [
+		"witan",
+		"agents",
+		"tasks",
+		"lsp"
+	],
+	"extensionKind": [
+		"workspace"
+	],
+	"main": "./dist/extension.cjs",
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"capabilities": {
+		"untrustedWorkspaces": {
+			"supported": false,
+			"description": "witan starts a language server and launches agents from the workspace."
+		},
+		"virtualWorkspaces": false
+	},
+	"contributes": {
+		"configuration": {
+			"title": "witan",
+			"properties": {
+				"witan.server.command": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [
+						"witan",
+						"lsp"
+					],
+					"scope": "machine",
+					"markdownDescription": "The command that starts the witan language server, as argv: each item is one argument, so an option and its value are separate items (`[\"witan\", \"lsp\", \"--target\", \"production\"]`, not `\"--target production\"`). `--target` pins every folder to one target; leave it out to route each folder by its own. `[\"witan-code\", \"lsp\"]` works too when only witan-code is installed."
+				},
+				"witan.agent": {
+					"type": "string",
+					"default": "",
+					"scope": "machine",
+					"markdownDescription": "The agent CLI a launch starts (e.g. `claude`, `codex`, `pi`). Empty uses the `agent` in witan's own config."
+				}
+			}
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "witan",
+					"title": "witan",
+					"icon": "resources/witan.svg"
+				}
+			]
+		},
+		"views": {
+			"witan": [
+				{
+					"id": "witan.work",
+					"name": "Work"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "witanClient.refresh",
+				"title": "Refresh",
+				"category": "witan",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "witanClient.restartServer",
+				"title": "Restart Language Server",
+				"category": "witan"
+			},
+			{
+				"command": "witanClient.showStatus",
+				"title": "Show Server Status",
+				"category": "witan"
+			},
+			{
+				"command": "witanClient.runInTerminal",
+				"title": "Run in Terminal",
+				"category": "witan",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "witanClient.handoffToCopilot",
+				"title": "Hand Off to Copilot",
+				"category": "witan"
+			},
+			{
+				"command": "witanClient.handoffToClaude",
+				"title": "Hand Off to Claude Code",
+				"category": "witan"
+			}
+		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "witanClient.runInTerminal",
+					"when": "false"
+				},
+				{
+					"command": "witanClient.handoffToCopilot",
+					"when": "false"
+				},
+				{
+					"command": "witanClient.handoffToClaude",
+					"when": "false"
+				}
+			],
+			"view/title": [
+				{
+					"command": "witanClient.refresh",
+					"when": "view == witan.work",
+					"group": "navigation"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "witanClient.runInTerminal",
+					"when": "view == witan.work && viewItem =~ /^witan(Task|Project)$/",
+					"group": "inline"
+				},
+				{
+					"command": "witanClient.runInTerminal",
+					"when": "view == witan.work && viewItem =~ /^witan(Task|Project)$/",
+					"group": "1_launch@1"
+				},
+				{
+					"command": "witanClient.handoffToCopilot",
+					"when": "view == witan.work && viewItem =~ /^witan(Task|Project)$/ && witan.handoff.copilot",
+					"group": "1_launch@2"
+				},
+				{
+					"command": "witanClient.handoffToClaude",
+					"when": "view == witan.work && viewItem =~ /^witan(Task|Project)$/ && witan.handoff.claude",
+					"group": "1_launch@3"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"build": "node esbuild.mjs",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check src test esbuild.mjs",
+		"format": "biome check --write src test esbuild.mjs",
+		"test": "node --test 'test/unit/**/*.test.ts'",
+		"package": "npm run build && vsce package --no-dependencies -o witan.vsix",
+		"smoke": "node test/smoke/run.mjs"
+	},
+	"dependencies": {
+		"vscode-languageclient": "11.0.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.6.8",
+		"@types/node": "22.20.5",
+		"@types/vscode": "1.91.0",
+		"@vscode/test-electron": "3.1.0",
+		"@vscode/vsce": "4.1.1",
+		"esbuild": "0.28.2",
+		"ovsx": "1.4.0",
+		"typescript": "7.0.2"
+	}
+}

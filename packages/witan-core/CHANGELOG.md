@@ -8,6 +8,61 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.61.0] - 2026-11-23
+
+### Added
+
+- The remote proxy sends an `X-Witan-Client-Instance` header on every request,
+  an id fixed for the proxy process (`witan_core.client_instance`), or the
+  `WITAN_CLIENT_INSTANCE` a launcher set in the agent's environment. A
+  deployed witan logs it on memory surfacing and read lines, so a read can be
+  joined to the surfacing that preceded it when the agent passed no
+  `session_id`. The proxy negotiates MCP 2026-07-28, which has no transport
+  session to fall back on.
+- `workflow_project_run_memories` joins the language server's `BOUND_TOOLS`,
+  so an editor project launch can put team memories in its prompt.
+
+### Changed
+
+- `witan setup` installs omnigraph 0.16.0 (tag `v0.16.0`). Its
+  `omnigraph version --json` reports storage format 17, serving 14 to 17, and
+  HTTP contract 0.14, so `_OMNIGRAPH_INTERNAL_SCHEMA` moves to 17 and the
+  contract negotiation is unchanged. An existing format-16 store opens and is
+  written in place and stays at 16, so nothing is rebuilt. A store 0.16
+  creates is born at 17, which 0.15 refuses, so going back to 0.15 after
+  `witan setup` creates a store means rebuilding that store.
+
+## [0.60.1] - 2026-11-23
+
+### Fixed
+
+- `witan_core.lsp.escape_markdown` escapes every ASCII punctuation character, the set CommonMark lets a backslash escape, and collapses whitespace runs to one space. It used to leave `&`, `@`, `/`, `=` and others alone, so teammate-written text in a hover could form an entity (`&amp;` rendered as `&`), and an indented line could start a code block.
+
+## [0.60.0] - 2026-11-20
+
+### Added
+
+- A language-server plugin can return a `Lens` with only `data` and fill in its title and command in `Plugin.resolve_lens`. The host sends it unresolved and resolves it on `codeLens/resolve`, so a lens that costs a read is only computed for the lines a client shows.
+- For a client with no CodeLens (eglot; Zed by default), the host puts the resolved lenses on a hovered line into the hover and offers their commands as code actions, per ADR 0012's per-editor fallbacks.
+- A plugin's `Context` has `folders` (every workspace folder) and `text(uri)` (the editor's buffer for an open document, else the file on disk).
+- `witan_core.lsp.escape_markdown`, for rendering text a plugin does not control as plain text inside a hover.
+- Hover, definition and references hand plugins the cursor column in code points, converted from whatever position encoding the client negotiated (UTF-8 for Neovim, UTF-16 by default), so a multibyte character earlier on the line no longer shifts the column a plugin indexes.
+
+### Changed
+
+- The language server makes stdin read as an empty non-terminal while it runs, as it already did for stdout, so no prompt can read a JSON-RPC message as its answer, even when the server is started by hand in a terminal.
+
+## [0.59.0] - 2026-11-19
+
+### Added
+
+- The witan language server host, behind a new `lsp` extra on pygls 2.x (ADR 0012). `witan_core.lsp.server.serve` runs it on stdio; `witan_core.lsp.run_language_server` is the body both servers' `lsp` commands share. It loads plugins from the `witan.lsp.plugins` entry-point group, advertises the union of their capabilities, merges their hover sections, CodeLens lists and diagnostics in entry-point order, and owns a `witan.status` command reporting the plugins found and each workspace folder's repo, branch and target. Plugin calls run on one worker thread, with stdout redirected to stderr and a plugin's `SystemExit` turned into a failed request.
+- `witan_core.lsp` is the plugin interface (`Plugin`, `Capability`, `Folder`, `Route`, `Lens`, `Note`, `Location`, `BOUND_TOOLS`). It is stdlib only, so a server imports it without the extra. A plugin declares symbol resolution as a capability, and `BOUND_TOOLS` is the ADR's enumerated tool list; the host refuses a plugin that names a tool outside it or a command outside `witan.*`. Bound tools take keyword arguments only, as a deployment's `RemoteServerProxy` does, and `Plugin.references` receives the request's `includeDeclaration`.
+- Each workspace folder routes to its own target: `--target` or `WITAN_TARGET`, else `match_*` against the folder's own path and remote. The host opens one tool provider per deployment and serves one local store per plugin per process, anchored by the first folder that plugin routes to one; a folder routed to a second local store gets one Information diagnostic and no features. A `Route.guard` gives folders that share a store their own provider, for witan-council's per-folder write guard.
+- `witan_core.lsp.testing` runs the server in-process over OS pipes against a real pygls client, for the language-server tests in all three packages.
+- `witan_core.target_config.match_target_at(targets, path)`, `witan_core.repo_key.remote_uri(path)` and `checkout_branch(path)` route and identify a checkout by its path alone, ignoring `CLAUDE_PROJECT_DIR`, `WITAN_REPO` and the cwd.
+- `witan_core.target_config.named_target(targets, name)` and `witan_core.repo_key.git_remote_url(path)`, moved from the servers so the unknown-target error and the origin-first remote lookup have one implementation.
+
 ## [0.58.0] - 2026-11-19
 
 ### Added

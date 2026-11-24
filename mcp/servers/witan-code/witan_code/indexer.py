@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 from witan_core import chunking, now_iso
 from witan_core.graph_ids import code_graph_id
@@ -85,6 +86,38 @@ _DELETE_BATCH_SIZE = 128
 # Any non-sha256 string does; this one is obvious in a store dump. See
 # `_defer_content_hashes`.
 _PENDING_CONTENT_HASH = "pending"
+
+# Bump when the indexer writes different rows for a file whose bytes have not
+# changed: a new edge kind, a resolver fix, a new extracted field. Each
+# CodeFile row records it in `index_version`, and a writer that checks it
+# (`_checks_index_version`) treats a file stored under any other version as
+# changed, so the next CI run parses every file once and an unchanged file
+# gets the new rows. Without it the content-hash skip kept those files on the
+# old rows indefinitely: after #654, `bridge.py`'s call into
+# `graph.check_writable` had no edge on production because nobody had edited
+# `bridge.py` since.
+#
+# A shared graph's branch views compare content only. A view is a copy of main
+# taken when it is forked, so one forked after CI's re-parse already has the
+# new rows, and an older one keeps its rows for the files it has not changed
+# until the reaper drops it. Re-parsing a whole repo onto a view instead would
+# push every file through the MCP tier, which is sized for the few files a
+# branch changes. A local store's views check the version, since nothing
+# re-forks them from a re-parsed main and the re-parse costs no MCP traffic.
+#
+# 1: every row written before the version was recorded (`index_version` null).
+# 2: cross-file Calls edges through imports (#654, #674).
+INDEX_VERSION = 2
+
+
+class _StoredFile(NamedTuple):
+    """What the incremental skip reads back from one stored CodeFile row."""
+
+    content_hash: str | None
+    #: Null on a row an indexer before ``INDEX_VERSION`` 2 wrote, and absent
+    #: from rows read through a deployed MCP tier that predates the field.
+    index_version: int | None
+
 
 # A load whose records fit one batch at this budget is one commit through an
 # in-process client, which chunks at the 8 MiB omnigraph budget. This is the
@@ -436,7 +469,8 @@ def index_path(
     """Index ``target`` (a file or directory) into the repo's code store.
 
     Incremental by default: unchanged files (matching content_hash) are skipped.
-    ``force`` re-indexes regardless of hash.
+    On the default view a file stored by an older indexer counts as changed
+    (see ``INDEX_VERSION``). ``force`` re-indexes regardless of hash.
 
     A ``target`` that no longer exists is a file deleted or moved away since
     it was named, and indexing it as it is now means dropping its rows. That
@@ -575,10 +609,12 @@ def index_paths(
     # in-memory, not a query per file. Read even under `force` (where the
     # hashes go unused): a full-repo run also needs the stored file set to
     # find rows for files that are no longer part of the repo.
-    existing: dict[str, str] = {}
+    existing: dict[str, _StoredFile] = {}
     with _write_phase("existing-hash read", stats):
         for row in client.read("code_read.gq", "all_file_hashes", {}):
-            existing[row["slug"]] = row.get("content_hash")
+            existing[row["slug"]] = _StoredFile(
+                row.get("content_hash"), row.get("index_version")
+            )
 
     records: list[dict] = []
     parsed_files: list[ParsedFile] = []
@@ -639,7 +675,14 @@ def index_paths(
     for path in collected:
         stats.scanned += 1
         try:
-            result = _parse_for_index(path, base, slug, existing, force=force)
+            result = _parse_for_index(
+                path,
+                base,
+                slug,
+                existing,
+                force=force,
+                check_version=_checks_index_version(branch, is_remote=client.is_remote),
+            )
         except Exception as exc:  # one bad file must not abort
             stats.errors += 1
             logger.warning(
@@ -824,8 +867,8 @@ def _defer_content_hashes(records: list[dict]) -> list[dict]:
     with no recorded hash at all, so the next run re-indexed it — failure was
     self-healing, for free. Chunking the load (``chunking.chunk_records``) takes
     that away: the nodes land, hash and all, in an early batch, and if a later
-    batch fails then ``_parse_for_index``'s ``existing.get(file_id) ==
-    content_hash`` check SKIPS the file on every subsequent run. Its symbols
+    batch fails then ``_parse_for_index``'s :func:`_unchanged` check SKIPS the
+    file on every subsequent run. Its symbols
     would be present and its edges permanently missing, silently, until someone
     thought to force a full reindex. Chunking also raises the odds of a
     part-way failure, since it turns one request into several.
@@ -1156,11 +1199,16 @@ def _parse_for_index(
     path: Path,
     base: Path,
     slug: str,
-    existing: dict[str, str],
+    existing: dict[str, _StoredFile],
     *,
     force: bool,
+    check_version: bool = False,
 ) -> tuple[ParsedFile, bool] | None:
-    """Parse ``path`` unless unchanged. Returns (parsed, file_already_indexed)."""
+    """Parse ``path`` unless unchanged. Returns (parsed, file_already_indexed).
+
+    :param check_version: also count a file stored under another
+        ``INDEX_VERSION`` as changed. The default view's writer sets it.
+    """
     spec = _EXT_TO_SPEC[path.suffix]
     raw = path.read_bytes()
     content_hash = hashlib.sha256(raw).hexdigest()
@@ -1168,13 +1216,38 @@ def _parse_for_index(
     rel = _relative_path(path, base)
     file_id = f"{slug}#{rel}"
 
-    if not force and existing.get(file_id) == content_hash:
-        return None  # unchanged
+    if not force and _unchanged(
+        existing.get(file_id), content_hash, check_version=check_version
+    ):
+        return None
 
     parsed = _parse_file(raw, path, spec, slug, file_id, rel, content_hash)
     if parsed is None:
         return None
     return parsed, (file_id in existing)
+
+
+def _unchanged(
+    stored: _StoredFile | None, content_hash: str, *, check_version: bool
+) -> bool:
+    """Whether a stored CodeFile row says the file needs no parse.
+
+    A stored ``_PENDING_CONTENT_HASH`` matches no content, and a null
+    ``index_version`` counts as version 1.
+    """
+    if stored is None or stored.content_hash != content_hash:
+        return False
+    return not check_version or (stored.index_version or 1) == INDEX_VERSION
+
+
+def _checks_index_version(branch: str | None, *, is_remote: bool) -> bool:
+    """Whether an index re-parses unchanged files stored under another version.
+
+    Every write except a remote branch view's. That one goes through the MCP
+    tier, so a version change would push the whole repo through it; such a
+    view forked after CI's re-parse of main has the new rows already.
+    """
+    return branch is None or not is_remote
 
 
 def _delete_file_steps(file_id: str) -> list[tuple[str, str, dict]]:
@@ -1207,6 +1280,7 @@ def _file_records(parsed: ParsedFile, slug: str, stats: IndexStats) -> list[dict
                 "path": parsed.path,
                 "language": parsed.language,
                 "content_hash": parsed.content_hash,
+                "index_version": INDEX_VERSION,
                 "indexed_at": now,
             },
         }
@@ -1319,7 +1393,7 @@ def _cross_file_records(
     *,
     base: Path,
     slug: str,
-    existing: dict[str, str],
+    existing: dict[str, _StoredFile],
     dropped: set[str],
     relink: Path | None,
     stats: IndexStats,
@@ -1361,7 +1435,9 @@ def _cross_file_records(
             if rel in batch or file_id not in existing or file_id in dropped:
                 continue
             result = _parse_for_index(base / rel, base, slug, existing, force=True)
-            if result is not None and result[0].content_hash == existing[file_id]:
+            if result is not None and _unchanged(
+                existing[file_id], result[0].content_hash, check_version=False
+            ):
                 linking.append(result[0])
 
     modules = xref.ModuleIndex(

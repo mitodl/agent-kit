@@ -5,6 +5,8 @@ from __future__ import annotations
 import cyclopts
 from rich.prompt import Prompt
 
+from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
+
 from .. import config as cfg_module
 from .. import live_pr
 from ._common import (
@@ -37,6 +39,11 @@ from .run_helpers import (
     _prompt_memories,
     _run_prompt,
     _run_task_slug,
+    agent_environ,
+    bare_session_env,
+    check_emit_spec_args,
+    launch_env,
+    launched_client_instance,
 )
 from .selected_target import selected_target
 
@@ -556,6 +563,7 @@ def task_release_cmd(
     assignee: str | None = None,
     status: TaskStatus = "open",
     force: bool = False,
+    if_claimed_at: str | None = None,
 ) -> None:
     """Release a claim, returning the task to ``open`` (or another status).
 
@@ -571,10 +579,16 @@ def task_release_cmd(
         Status to return the task to (default ``open``).
     force:
         Release even if held by a different assignee.
+    if_claimed_at:
+        Release only the claim taken at this instant (a launch spec's
+        ``claim.claimed_at``). A claim renewed since then is left alone, and
+        ``--force`` does not lift this.
     """
     s = _srv()
+    # Sent only when set: a deployment older than the parameter rejects it.
+    fence = {"if_claimed_at": if_claimed_at} if if_claimed_at is not None else {}
     result = _fn(s.task_release)(
-        slug=slug, assignee=assignee, status=status, force=force
+        slug=slug, assignee=assignee, status=status, force=force, **fence
     )
     if _queued(result):
         return
@@ -587,10 +601,13 @@ def task_release_cmd(
             f"{_styled(result.get('status', status), _STATUS_STYLE)}"
         )
         return
-    console.print(
-        f"[yellow]Not released[/yellow] — held by {result.get('held_by')} "
-        f"(pass --force)."
-    )
+    if result.get("reason") == "claim_changed":
+        console.print("[yellow]Not released[/yellow] (claim changed).")
+    else:
+        console.print(
+            f"[yellow]Not released[/yellow] — held by {result.get('held_by')} "
+            f"(pass --force)."
+        )
     if result.get("remedy"):
         console.print(f"  {result['remedy']}")
     raise SystemExit(1)
@@ -741,6 +758,7 @@ def task_run(
     claim: bool = True,
     force: bool = False,
     dry_run: bool = False,
+    emit_spec: bool = False,
     repo: str | None = None,
     all_repos: bool = False,
     project: str | None = None,
@@ -750,6 +768,12 @@ def task_run(
     Without a slug, shows an interactive picker of ready tasks. Multiple
     selections offer a choice between a consolidated single-session prompt or
     running each task sequentially in separate agent invocations.
+
+    The claim is always bare: any agent-session id in the environment is
+    dropped first, so the launched agent's own renewal qualifies it. The task
+    must belong to the repo checked out in the current directory, or have
+    none. Using the local store, it refuses before claiming when the agent,
+    started here, would match a named target instead.
 
     Parameters
     ----------
@@ -762,12 +786,15 @@ def task_run(
     claim:
         Mark each task in_progress before launching.
     force:
-        Take the claim even if someone else's lease is still live. Without
-        this the command could report a task as held and offer no way past it
-        from the CLI it was reported in — the interactive steal prompt is
-        server-side and unreachable through ``_fn``, which passes no ``ctx``.
+        Take the claim even if someone else's lease is still live. A launch
+        never offers to steal a held task (the question would land on stdout,
+        ahead of ``--emit-spec``'s JSON), so this is the way past one.
     dry_run:
         Print the prompt(s) without launching or claiming.
+    emit_spec:
+        Claim, then print the launch spec as JSON instead of launching, for an
+        editor or other launcher to run. Needs a slug. Exits non-zero, after
+        printing the refusal spec, when there is nothing to launch.
     repo:
         Scope the picker to a specific repo URI.
     all_repos:
@@ -775,6 +802,7 @@ def task_run(
     project:
         Scope the picker to a specific wp- project slug.
     """
+    check_emit_spec_args(emit_spec, slug=slug, dry_run=dry_run)
     try:
         cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
@@ -790,6 +818,7 @@ def task_run(
             claim=claim,
             force=force,
             dry_run=dry_run,
+            emit_spec=emit_spec,
         )
         return
 
@@ -838,15 +867,19 @@ def task_run(
     mode = "c" if choice == "1" else "s"
 
     if mode == "c":
+        # One agent for every task, so one client instance its reads join on,
+        # and the claims below are made under it (`launched_client_instance`).
+        instance = new_client_instance()
         claimable = list(selected)
         claims: dict[str, dict] = {}
         if claim and not dry_run:
             claimable = []
             for t in selected:
-                # No explicit assignee: let task_claim qualify the author with
-                # this session, so a task another of these sessions is already
-                # on reads as held instead of being silently re-claimed here.
-                res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
+                # No explicit assignee, and bare (the session env is hidden): a
+                # task one of this person's sessions holds reads as held, and
+                # the launched agent may renew the bare claim as its own.
+                with bare_session_env(), launched_client_instance(instance):
+                    res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
                     claimable.append(t)
@@ -873,7 +906,18 @@ def task_run(
             ],
             "task",
         )
-        _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
+        # The same environment a launch spec gives its agent, so it neither
+        # inherits a session id nor a location override that outranks its cwd.
+        env, unset_env = launch_env(cfg)
+        env[CLIENT_INSTANCE_ENV] = instance
+        _launch_agent(
+            cfg,
+            resolved_agent,
+            resolved_model,
+            merged,
+            dry_run,
+            env=agent_environ(env, unset_env),
+        )
     else:
         for t in selected:
             console.print(f"\n[bold]── {t['slug']}: {t.get('title', '')} ──[/bold]")

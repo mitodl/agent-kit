@@ -39,7 +39,7 @@ from ._common import app, mount_witan_code, print_error, stderr_console
 from .code_routing import warn_if_code_graph_is_local
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
-from .run_helpers import _run_task_slug
+from .run_helpers import _run_task_slug, check_emit_spec_args
 from .selected_target import selected_target, set_selected_target
 
 # ── How long a shutting-down server waits for work already in flight ─────────
@@ -281,19 +281,38 @@ def serve(
 
 
 @app.command
+def lsp() -> None:
+    """Run the witan language server on stdio, for an editor to start.
+
+    One server for every installed witan package: it loads the language-server
+    plugins witan-council and witan-code register, and routes each workspace
+    folder to its own target the way the CLI routes a checkout. ``--target``
+    and ``WITAN_TARGET`` route every folder. ``witan-code lsp`` starts the same
+    server. Needs the ``lsp`` extra: ``uv tool install 'witan-council[lsp]'``.
+    """
+    from witan_core.lsp import run_language_server
+
+    run_language_server(selected_target(), package="witan-council")
+
+
+@app.command
 def run(
     slug: str,
     *,
     agent: str | None = None,
     model: str | None = None,
     claim: bool = True,
+    force: bool = False,
     dry_run: bool = False,
+    emit_spec: bool = False,
 ) -> None:
     """Claim a task and launch an agent to execute it.
 
     Claims the task (status in_progress, assignee = your author), then hands the
     terminal to ``<agent>`` seeded with a prompt describing the work. Run from
     the task's repo checkout so the agent has the right working directory.
+    The single-slug form of ``witan task run``: same claim, same launch, same
+    ``--emit-spec`` output.
 
     Parameters
     ----------
@@ -305,16 +324,30 @@ def run(
         var and target/config-file default.
     claim:
         Mark the task in_progress and assign it to you first.
+    force:
+        Take the claim even if someone else's lease is still live.
     dry_run:
         Print the prompt and exit without launching or claiming.
+    emit_spec:
+        Claim, then print the launch spec as JSON instead of launching, for an
+        editor or other launcher to run. Exits non-zero, after printing the
+        refusal spec, when there is nothing to launch.
     """
+    check_emit_spec_args(emit_spec, slug=slug, dry_run=dry_run)
     try:
         cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
         print_error(exc)
         raise SystemExit(1) from None
     _run_task_slug(
-        slug, cfg=cfg, agent=agent, model=model, claim=claim, dry_run=dry_run
+        slug,
+        cfg=cfg,
+        agent=agent,
+        model=model,
+        claim=claim,
+        force=force,
+        dry_run=dry_run,
+        emit_spec=emit_spec,
     )
 
 

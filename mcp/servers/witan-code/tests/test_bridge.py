@@ -658,6 +658,33 @@ def test_cross_repo_impact_and_generic_flag(tmp_path, monkeypatch):
 
 
 @requires_stack
+def test_bindings_in_file_list_each_contract_with_its_line(tmp_path, monkeypatch):
+    """What the language server's hover reads to find the contract under the
+    cursor: one file's bindings, each with kind, key and line."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    repo_a = "https://github.com/test/repo-a"
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_REPO", repo_a)
+    a, _ = _make_repos(tmp_path)
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    _index(srv, indexer, a)
+
+    rows = srv.code_interface_bindings_in_file(path="main/settings.py", repo=repo_a)
+    assert [(r["kind"], r["key"], r["role"], r["line"]) for r in rows] == [
+        ("env_var", "MITOL_APP_BASE_URL", "consumer", 3),
+        ("env_var", "DEBUG", "consumer", 4),
+    ]
+    assert [r["generic"] for r in rows] == [None, "1"]
+    # The repo defaults to the detected one; an unknown file has none.
+    assert srv.code_interface_bindings_in_file(path="main/settings.py") == rows
+    assert srv.code_interface_bindings_in_file(path="nope.py", repo=repo_a) == []
+
+
+@requires_stack
 def test_incremental_reindex_keeps_sibling_bindings(tmp_path, monkeypatch):
     from witan_code import config as cfg_mod
     from witan_code import indexer

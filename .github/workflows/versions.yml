@@ -15,6 +15,9 @@ on:
     paths:
       - "**/pyproject.toml"
       - "**/CHANGELOG.md"
+      - "packages/witan-vscode/package.json"
+      - "packages/witan-vscode/.bumpversion.toml"
+      - "docker/witan.Dockerfile"
       - "bin/check_versions.py"
       - "justfile"
       - ".github/workflows/versions.yml"
@@ -22,6 +25,9 @@ on:
     paths:
       - "**/pyproject.toml"
       - "**/CHANGELOG.md"
+      - "packages/witan-vscode/package.json"
+      - "packages/witan-vscode/.bumpversion.toml"
+      - "docker/witan.Dockerfile"
       - "bin/check_versions.py"
       - "justfile"
       - ".github/workflows/versions.yml"

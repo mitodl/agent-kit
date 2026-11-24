@@ -37,6 +37,19 @@
 				"The reply names which tests were run",
 				"The thread is replied to and resolved without asking for approval first, since the author is a Bot and no draft wording was used"
 			]
+		},
+		{
+			"id": 4,
+			"prompt": "Address the feedback on PR #5 in mitodl/ads-optimizer. Treat evals/files/ads-optimizer-pr5/feedback.json as the output of fetch-feedback.sh for that PR.",
+			"expected_output": "Most of this PR's feedback is on channels with no resolved state: one unresolved thread, a top-level discussion comment from a human reviewer saying a subsystem of the PR probably belongs in another repository, and eight reviews of which only three carry a body. The skill reads the discussion comment and every non-empty review body, triages their findings alongside the thread, routes the cross-repo suggestion to the user instead of acting on it, and reports a disposition per channel rather than measuring the PR by its unresolved-thread count.",
+			"files": ["evals/files/ads-optimizer-pr5/feedback.json"],
+			"expectations": [
+				"The discussion comment is read and surfaced to the user, not skipped because it has no resolved state",
+				"Findings are extracted from the non-empty reviews[].body entries and triaged alongside thread items",
+				"The PR is not reported as addressed on the strength of a zero unresolved-thread count",
+				"The human reviewer's suggestion to move a subsystem to another repository is brought to the user under the scope-expansion rule rather than implemented",
+				"The final report gives a disposition for every discussion comment and every review-body finding, and says so explicitly for any channel that is empty"
+			]
 		}
 	]
 }

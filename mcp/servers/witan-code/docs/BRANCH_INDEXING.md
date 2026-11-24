@@ -77,7 +77,11 @@ where files they had deleted therefore lingered.
   branch>)` on that repo's store, forked from `main` on first write
   (`load --branch <b> --from main`). The fork means the branch starts as a
   full copy of the `main` view; the incremental indexer then rewrites only
-  the files that differ — exactly the delta the git branch carries.
+  the files that differ — exactly the delta the git branch carries. That
+  comparison is by content alone on a shared graph's branch view: a new
+  `INDEX_VERSION` (`indexer.py`) re-parses unchanged files on `main`, where
+  the CI indexer runs, and on a local store's views, but not on a shared
+  graph's branch view, since the whole repo would go through the MCP tier.
 * Branch detection: `git rev-parse --abbrev-ref HEAD` in `repo.py`
   (worktrees resolve per-worktree, which is precisely what parallel agents
   need). Detached HEAD indexes to `main` behavior? No — detached HEAD writes

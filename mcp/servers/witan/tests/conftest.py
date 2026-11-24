@@ -168,6 +168,19 @@ def no_real_github(monkeypatch):
 
 
 @pytest.fixture
+def outside_a_checkout(tmp_path, monkeypatch):
+    """Run outside any git checkout, so a claim carries no CodeBranch steps.
+
+    `task_claim` folds the caller's CodeBranch upsert into its own commit, and
+    under local stdio it reads the branch from the working directory. Run from
+    a developer's checkout, every claim would be a three-step batch; run from
+    CI's detached HEAD, a single statement. Branch tracking is covered by
+    test_codebranch.py and test_write_batching.py.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
 def tmp_state_dir(tmp_path, monkeypatch):
     """Redirect the system temp dir, which is where witan parks process state.
 
@@ -247,6 +260,9 @@ def logged(server, monkeypatch):
             return lambda *_args, **_fields: None
 
     monkeypatch.setattr(server._module, "logger", Recorder())
+    # The bulk-read window counts across tests otherwise, and one actor makes
+    # every call in the suite.
+    monkeypatch.setattr(server._module, "_recent_reads", {})
     return events
 
 

@@ -56,6 +56,7 @@ token; both `witan` and `witan code` share one cache, so you log in once.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `WITAN_CLIENT_INSTANCE` | — | Id the remote proxy sends as `X-Witan-Client-Instance`, which the deployment logs on memory surfacing and read lines so they join for one agent. Unset, each process generates its own. `witan task run` and `witan project run` set a fresh one in the environment of the agent they launch; you do not set it yourself. |
 | `WITAN_MERGE_WATERMARKS` | `~/.config/witan/merge-watermarks.json` | Where `witan migrate merge` records what each pair of stores looked like when they last agreed, so the next merge can name the nodes both sides have written since. Beside the token cache, and per-machine — losing it costs one merge's divergence report. |
 | `WITAN_OIDC_AUDIENCE` | — | Audience/resource to request, matching the deployment's own `WITAN_OIDC_AUDIENCE`. Sent on the device-auth and token requests so an issuer with an audience mapper stamps the right `aud` claim. |
 | `WITAN_OIDC_CLIENT_ID` | — | OIDC client id presented during the device grant. |
@@ -198,5 +199,5 @@ weight to `0` to reproduce the raw BM25 order.
 | `WITAN_LIVE_PR` | `1` | `0` turns off the live linked-PR lookups: the `live_pr` field `task_get` and `workflow_project_get` add on your machine, the `(live, HH:MM UTC)` lines in the session-context hook, and the same line in `witan task show` and `witan project status`. Each lookup is a `gh pr view` or `gh issue view` run as you (about 2s each), cached per URL for 120s. |
 | `WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL` | `86400` | Minimum seconds between repeats of the warning that a target's memory graph is deployed while its code graphs are still local. `0` disables it. Per target, so switching to a misrouted one warns straight away. Only a terminal ever sees it: hooks, CI and pipes are skipped so they cannot spend the window on nobody. |
 | `WITAN_LOG_FORMAT` | — | Log rendering: `console` or `json`. Defaults to `console` when stderr is a TTY and `json` when it is not — a deployed pod gets structured logs and a developer gets colours, neither having to pass a flag. |
-| `WITAN_LOG_LEVEL` | `INFO` | Log level. Takes precedence over the bare `LOG_LEVEL`, which is also honoured for deployments that set it org-wide. |
+| `WITAN_LOG_LEVEL` | `INFO` | Log level. Takes precedence over the bare `LOG_LEVEL`, which is also honoured for deployments that set it org-wide. Under `witan lsp` and `witan-code lsp` the default is `WARNING` and only this variable raises it, since VS Code labels a language server's stderr as errors. |
 | `WITAN_OPTIMIZE_INTERVAL` | `86400` | Minimum seconds between throttled background `optimize` runs on the memory store. `0` disables. The `Stop` hook spawns a detached run at most this often, so compaction never blocks a session. |

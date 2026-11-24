@@ -103,18 +103,21 @@ def serve(
         capture_output=True,
         text=True,
     )
-    # A direct apply leaves its admission lock behind for the operator to
-    # release, and the server refuses to boot while it is held.
-    lock = next(
-        line.split()[2].rstrip(";")
-        for line in applied.stderr.splitlines() + applied.stdout.splitlines()
-        if line.startswith("Admission lock:")
-    )
-    subprocess.run(
-        [cli, "cluster", "force-unlock", *unlock_scope, lock],
-        check=True,
-        capture_output=True,
-    )
+    # Before 0.16 a direct apply leaves its admission lock behind for the
+    # operator to release, and the server refuses to boot while it is held.
+    # 0.16 releases it once a converged apply's writes settle (upstream #1360)
+    # and still prints the id, so the lock file is what says it is held.
+    if (cluster / "__cluster" / "lock.json").exists():
+        lock = next(
+            line.split()[2].rstrip(";")
+            for line in applied.stderr.splitlines() + applied.stdout.splitlines()
+            if line.startswith("Admission lock:")
+        )
+        subprocess.run(
+            [cli, "cluster", "force-unlock", *unlock_scope, lock],
+            check=True,
+            capture_output=True,
+        )
     port = _free_port()
     log_path = workdir / "server.log"
     with log_path.open("w") as log:

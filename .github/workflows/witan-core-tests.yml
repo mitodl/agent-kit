@@ -76,10 +76,10 @@ jobs:
       - name: Lint (ruff check)
         # Pinned to match the ruff-pre-commit rev in prek.toml so CI and
         # local hooks enforce the same rules.
-        run: uvx ruff@0.17.2 check .
+        run: uvx ruff@0.17.5 check .
 
       - name: Lint (ruff format)
-        run: uvx ruff@0.17.2 format --check .
+        run: uvx ruff@0.17.5 format --check .
 
   test-witan-core-windows:
     # A bare `import fcntl` in a base module once made both CLIs fail at import

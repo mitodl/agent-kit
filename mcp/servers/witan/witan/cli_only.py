@@ -41,6 +41,9 @@ CLI_ONLY_TOOLS = frozenset(
         "workflow_trace_get",
         "workflow_trace_list",
         "workflow_trace_mine",
+        # The memories `witan project run` puts in its prompt. Only the
+        # launcher has the ready list to match them against.
+        "workflow_project_run_memories",
     }
 )
 

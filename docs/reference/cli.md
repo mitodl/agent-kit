@@ -91,6 +91,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`stitch`](#witan-code-stitch)
     - [`inject-context`](#witan-code-inject-context)
     - [`serve`](#witan-code-serve)
+    - [`lsp`](#witan-code-lsp)
     - [`optimize`](#witan-code-optimize)
     - [`cleanup`](#witan-code-cleanup)
     - [`reap-views`](#witan-code-reap-views)
@@ -104,6 +105,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`logout`](#witan-code-logout)
     - [`whoami`](#witan-code-whoami)
 - [`serve`](#witan-serve)
+- [`lsp`](#witan-lsp)
 - [`run`](#witan-run)
 
 **Commands**:
@@ -115,6 +117,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`journal`](#witan-journal): Inspect and replay task writes queued while the deployment was unreachable.
 * [`login`](#witan-login): Authenticate to the deployed witan service via the OIDC device grant.
 * [`logout`](#witan-logout): Forget the cached token for the configured deployment.
+* [`lsp`](#witan-lsp): Run the witan language server on stdio, for an editor to start.
 * [`memory`](#witan-memory): Search memory (BM25), or with no query list memories (filtered by --kind).
 * [`migrate`](#witan-migrate): One-shot, idempotent schema and data migrations.
 * [`optimize`](#witan-optimize): Compact the graph store's Lance fragments, optionally then cleaning up.
@@ -772,6 +775,10 @@ running each project sequentially in separate agent invocations.
 * `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
 * `--model STR`: Model flag passed to the agent.
 * `--dry-run, --no-dry-run`: Print the prompt(s) without launching. *[default: False]*
+* `--emit-spec, --no-emit-spec`: Print the launch spec as JSON instead of launching, for an editor or
+    other launcher to run. Needs a slug. Claims nothing: the prompt has
+    the agent claim each task it starts. Exits non-zero, after printing
+    the refusal spec, when there is nothing to launch. *[default: False]*
 * `--repo STR`: Scope the picker to a specific repo URI.
 * `--all-repos, --no-all-repos`: Span all repos in the picker. *[default: False]*
 
@@ -1288,6 +1295,9 @@ Release a claim, returning the task to ``open`` (or another status).
     still matches, since the check is on identity, not session).
 * `--status CHOICE`: Status to return the task to (default ``open``). *[choices: open, in_progress, blocked, closed]* *[default: open]*
 * `--force, --no-force`: Release even if held by a different assignee. *[default: False]*
+* `--if-claimed-at STR`: Release only the claim taken at this instant (a launch spec's
+    ``claim.claimed_at``). A claim renewed since then is left alone, and
+    ``--force`` does not lift this.
 
 ### witan task update
 
@@ -1369,17 +1379,25 @@ Without a slug, shows an interactive picker of ready tasks. Multiple
 selections offer a choice between a consolidated single-session prompt or
 running each task sequentially in separate agent invocations.
 
+The claim is always bare: any agent-session id in the environment is
+dropped first, so the launched agent's own renewal qualifies it. The task
+must belong to the repo checked out in the current directory, or have
+none. Using the local store, it refuses before claiming when the agent,
+started here, would match a named target instead.
+
 **Parameters**:
 
 * `SLUG, --slug`: Task slug to run directly (skips the picker).
 * `--agent STR`: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
 * `--model STR`: Model flag passed to the agent.
 * `--claim, --no-claim`: Mark each task in_progress before launching. *[default: True]*
-* `--force, --no-force`: Take the claim even if someone else's lease is still live. Without
-    this the command could report a task as held and offer no way past it
-    from the CLI it was reported in — the interactive steal prompt is
-    server-side and unreachable through ``_fn``, which passes no ``ctx``. *[default: False]*
+* `--force, --no-force`: Take the claim even if someone else's lease is still live. A launch
+    never offers to steal a held task (the question would land on stdout,
+    ahead of ``--emit-spec``'s JSON), so this is the way past one. *[default: False]*
 * `--dry-run, --no-dry-run`: Print the prompt(s) without launching or claiming. *[default: False]*
+* `--emit-spec, --no-emit-spec`: Claim, then print the launch spec as JSON instead of launching, for an
+    editor or other launcher to run. Needs a slug. Exits non-zero, after
+    printing the refusal spec, when there is nothing to launch. *[default: False]*
 * `--repo STR`: Scope the picker to a specific repo URI.
 * `--all-repos, --no-all-repos`: Span all repos in the picker. *[default: False]*
 * `--project STR`: Scope the picker to a specific wp- project slug.
@@ -1958,6 +1976,20 @@ When witan-code is mounted into the umbrella ``witan serve`` instead, that
 command has already configured observability; the call here is idempotent so
 the standalone path gets it too without double-configuring the combined one.
 
+### witan code lsp
+
+```console
+witan code lsp
+```
+
+Run the witan language server on stdio, for an editor to start.
+
+The same server as ``witan lsp``: it loads every installed witan
+language-server plugin, so with only witan-code installed it serves the
+code features alone. Each workspace folder routes to its own target, and
+``WITAN_TARGET`` routes every folder. Needs the ``lsp`` extra:
+``uv tool install 'witan-code[lsp]'``.
+
 ### witan code optimize
 
 ```console
@@ -2255,6 +2287,32 @@ deployment would 403 every request from the browser UI. See the call to
     termination grace period. Env:
     ``WITAN_MCP_SHUTDOWN_GRACE_SECONDS``. *[env: WITAN_MCP_SHUTDOWN_GRACE_SECONDS]* *[default: 120.0]*
 
+## witan lsp
+
+```console
+witan lsp
+```
+
+Run the witan language server on stdio, for an editor to start.
+
+One server for every installed witan package: it loads the language-server
+plugins witan-council and witan-code register, and routes each workspace
+folder to its own target the way the CLI routes a checkout. ``--target``
+and ``WITAN_TARGET`` route every folder. ``witan-code lsp`` starts the same
+server. Needs the ``lsp`` extra: ``uv tool install 'witan-council[lsp]'``.
+
+**Parameters**:
+
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, memory import, traces, scan, target list,
+    and mounted witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
+    tasks`, `witan memory` and `witan code index` included, none of which
+    could be pointed at one before. Overrides auto-detection by checkout
+    path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+
 ## witan run
 
 ```console
@@ -2266,6 +2324,8 @@ Claim a task and launch an agent to execute it.
 Claims the task (status in_progress, assignee = your author), then hands the
 terminal to ``<agent>`` seeded with a prompt describing the work. Run from
 the task's repo checkout so the agent has the right working directory.
+The single-slug form of ``witan task run``: same claim, same launch, same
+``--emit-spec`` output.
 
 **Parameters**:
 
@@ -2284,4 +2344,8 @@ the task's repo checkout so the agent has the right working directory.
 * `--model STR`: Model passed to the agent's --model flag. Overrides WITAN_MODEL env
     var and target/config-file default.
 * `--claim, --no-claim`: Mark the task in_progress and assign it to you first. *[default: True]*
+* `--force, --no-force`: Take the claim even if someone else's lease is still live. *[default: False]*
 * `--dry-run, --no-dry-run`: Print the prompt and exit without launching or claiming. *[default: False]*
+* `--emit-spec, --no-emit-spec`: Claim, then print the launch spec as JSON instead of launching, for an
+    editor or other launcher to run. Exits non-zero, after printing the
+    refusal spec, when there is nothing to launch. *[default: False]*

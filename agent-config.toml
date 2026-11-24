@@ -87,6 +87,7 @@ feature-loop                    = "skills/workflow/feature-loop/SKILL.md"
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
+lint-exceptions                 = "skills/workflow/lint-exceptions/SKILL.md"
 pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
 renovate-security-triage        = "skills/process/renovate-security-triage/SKILL.md"
 run-canary-locally              = "skills/process/run-canary-locally/SKILL.md"
@@ -131,6 +132,7 @@ skills = [
     "generate-standup",
     "verify-before-claiming",
     "session-preflight",
+    "lint-exceptions",
 ]
 hooks = [
     "declarative:session_start:cat \"{skill_dir}/SKILL.md\"",

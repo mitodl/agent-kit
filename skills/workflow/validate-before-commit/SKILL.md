@@ -69,3 +69,7 @@ dg check
 Read the full error output before proposing a fix. Do not apply a speculative
 patch without understanding the root cause — iterating blindly on the same error
 multiple times is worse than pausing to diagnose.
+
+When the fix under consideration is to silence a finding rather than satisfy it —
+a `noqa`, a `type: ignore`, a `biome-ignore`, an `exclude` on a hook — follow
+[`lint-exceptions`](../lint-exceptions/SKILL.md) before writing it.

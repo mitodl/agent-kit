@@ -27,6 +27,7 @@ around. This only enforces internal consistency — cheap, unambiguous, and
 exactly what rotted.
 """
 
+import json
 import re
 import sys
 import tomllib
@@ -45,6 +46,21 @@ MEMBERS = (
     "mcp/servers/witan",
     "mcp/servers/witan-code",
 )
+
+# Packages outside the uv workspace that release the same way: the version in
+# package.json, `just bump`'s copy in .bumpversion.toml, and a scriv CHANGELOG.
+NODE_MEMBERS = ("packages/witan-vscode",)
+
+# Images whose version label tracks a workspace member's release: the
+# Dockerfile, the ARG that feeds org.opencontainers.image.version, and the
+# member. `just bump` rewrites the ARG through that member's
+# [[tool.bumpversion.files]]. The witan image's label sat at 0.8.0 through
+# witan-council 0.53.0 because the bump never touched it and nothing looked.
+IMAGE_LABELS = (("docker/witan.Dockerfile", "WITAN_VERSION", "mcp/servers/witan"),)
+
+# A node member's version until its first `just bump`. Nothing has shipped, so
+# there is no CHANGELOG heading for it to match; its publish workflow refuses it.
+UNRELEASED = "0.0.0"
 
 # `## [0.16.0] - 2026-08-10` — the Keep a Changelog release heading. Anchored to
 # a digit so an `## [Unreleased]` section is skipped rather than read as the
@@ -71,25 +87,70 @@ def check_member(root: Path, member: str) -> list[Problem]:
         return [Problem(member, f"no pyproject.toml at {member} — member moved?")]
 
     data = tomllib.loads(pyproject.read_text())
-    name = data["project"]["name"]
-    version = data["project"]["version"]
-    problems: list[Problem] = []
-
     bumpversion = data.get("tool", {}).get("bumpversion", {}).get("current_version")
+    return check_release(
+        root,
+        member,
+        data["project"]["name"],
+        data["project"]["version"],
+        bumpversion,
+        "[project].version",
+        "[tool.bumpversion].current_version",
+    )
+
+
+def check_node_member(root: Path, member: str) -> list[Problem]:
+    """Return every disagreement for one package.json package."""
+    package_json = root / member / "package.json"
+    if not package_json.exists():
+        return [Problem(member, f"no package.json at {member} — package moved?")]
+
+    package = json.loads(package_json.read_text())
+    config = root / member / ".bumpversion.toml"
+    bumpversion = (
+        tomllib.loads(config.read_text())["tool"]["bumpversion"]["current_version"]
+        if config.exists()
+        else None
+    )
+    return check_release(
+        root,
+        member,
+        package["name"],
+        package["version"],
+        bumpversion,
+        "package.json's version",
+        ".bumpversion.toml's current_version",
+        unreleased=package["version"] == UNRELEASED,
+    )
+
+
+def check_release(
+    root: Path,
+    member: str,
+    name: str,
+    version: str,
+    bumpversion: str | None,
+    version_field: str,
+    bumpversion_field: str,
+    *,
+    unreleased: bool = False,
+) -> list[Problem]:
+    """Return every disagreement between a package's version, its bumpversion
+    config and its CHANGELOG."""
+    problems: list[Problem] = []
     if bumpversion is None:
         problems.append(
             Problem(
                 name,
-                "no [tool.bumpversion].current_version — `just bump` cannot "
-                "release this package",
+                f"no {bumpversion_field} — `just bump` cannot release this package",
             )
         )
     elif bumpversion != version:
         problems.append(
             Problem(
                 name,
-                f"[project].version is {version} but "
-                f"[tool.bumpversion].current_version is {bumpversion}. "
+                f"{version_field} is {version} but "
+                f"{bumpversion_field} is {bumpversion}. "
                 "bump-my-version searches for the latter, so it would find "
                 "nothing and silently do nothing. Set them equal.",
             )
@@ -102,6 +163,8 @@ def check_member(root: Path, member: str) -> list[Problem]:
         )
         return problems
 
+    if unreleased:
+        return problems
     text = changelog.read_text()
     headings = [m.group("version") for m in RELEASE_HEADING.finditer(text)]
     if not headings:
@@ -127,6 +190,37 @@ def check_member(root: Path, member: str) -> list[Problem]:
     return problems
 
 
+def check_image_label(
+    root: Path, dockerfile: str, arg: str, member: str
+) -> list[Problem]:
+    """Return a problem when ``dockerfile``'s ``ARG arg=`` default isn't ``member``'s version."""
+    pyproject = root / member / "pyproject.toml"
+    # check_member already reports a missing member; a second line would only repeat it.
+    if not pyproject.exists():
+        return []
+    project = tomllib.loads(pyproject.read_text())["project"]
+    image = root / dockerfile
+    if not image.exists():
+        return [Problem(project["name"], f"no {dockerfile} — image moved or renamed?")]
+    found = re.search(rf"^ARG {arg}=(?P<version>\S+)$", image.read_text(), re.MULTILINE)
+    if found is None:
+        return [
+            Problem(
+                project["name"],
+                f"{dockerfile} has no `ARG {arg}=<version>` default to label the image with",
+            )
+        ]
+    if found.group("version") != project["version"]:
+        return [
+            Problem(
+                project["name"],
+                f"{dockerfile} labels the image {found.group('version')} "
+                f"(ARG {arg}) but [project].version is {project['version']}.",
+            )
+        ]
+    return []
+
+
 @app.default
 def check(root: str = ".") -> None:
     """Check every workspace member.
@@ -137,10 +231,17 @@ def check(root: str = ".") -> None:
         Repo root. Defaults to the working directory.
     """
     base = Path(root).resolve()
-    problems = [p for member in MEMBERS for p in check_member(base, member)]
+    problems = (
+        [p for member in MEMBERS for p in check_member(base, member)]
+        + [p for member in NODE_MEMBERS for p in check_node_member(base, member)]
+        + [p for label in IMAGE_LABELS for p in check_image_label(base, *label)]
+    )
 
     if not problems:
-        print(f"versions consistent across {len(MEMBERS)} packages")
+        print(
+            f"versions consistent across {len(MEMBERS) + len(NODE_MEMBERS)} packages "
+            f"and {len(IMAGE_LABELS)} image label(s)"
+        )
         return
 
     print("VERSION / CHANGELOG DRIFT\n", file=sys.stderr)

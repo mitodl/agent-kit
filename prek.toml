@@ -85,7 +85,7 @@ files = "^\\.github/workflows/.*\\.ya?ml$"
 
 [[repos]]
 repo = "https://github.com/zizmorcore/zizmor-pre-commit"
-rev = "v1.31.1"
+rev = "v1.32.0"
 
 [[repos.hooks]]
 id = "zizmor"
@@ -125,7 +125,7 @@ priority = 10
 
 [[repos]]
 repo = "https://github.com/igorshubovych/markdownlint-cli"
-rev = "v0.50.0"
+rev = "v0.50.1"
 hooks = [{ id = "markdownlint", priority = 10, exclude = "^docs/reference/" }]
 
 # ── Python: ruff (priority 20 format → 30 lint) ───────────────────────────────
@@ -135,7 +135,7 @@ hooks = [{ id = "markdownlint", priority = 10, exclude = "^docs/reference/" }]
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.17.2"
+rev = "v0.17.5"
 
 [[repos.hooks]]
 id = "ruff-format"
@@ -162,7 +162,7 @@ priority = 30
 # `*emphasis*`, which markdownlint (the Markdown owner) then rejects.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
-rev = "v2.6.6"
+rev = "v2.6.8"
 hooks = [
   { id = "biome-check", priority = 20, files = '\.(jsx?|tsx?|c(js|ts)|m(js|ts)|d\.(ts|cts|mts)|jsonc?|css|svelte|vue|astro|graphql|gql)$', exclude = "^(mcp/servers/witan/ui/fixtures|packages/witan-core/tests/fixtures/omnigraph-stores)/" },
 ]

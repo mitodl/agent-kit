@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from witan_core.repo_key import find_git_config, normalise
+from witan_core.repo_key import find_git_config, git_remote_url, normalise
 
 
 def detect(override: str | None = None) -> str | None:
@@ -36,16 +36,29 @@ def detect(override: str | None = None) -> str | None:
         # MCP server config where the server CWD is not the session's repo).
         return normalise(env_repo) if env_repo else None
 
-    cwd = Path.cwd()
+    return detect_at(Path.cwd())
 
+
+def detect_at(path: Path) -> str | None:
+    """The canonical repo key of the checkout at ``path``, or ``None``.
+
+    Reads only the checkout's own remotes, never ``WITAN_REPO``: a launch maps
+    each open workspace folder to a repo with this, and an inherited override
+    would map every folder to the same one.
+
+    :param path: A directory inside the checkout.
+    :returns: The canonical HTTPS remote URI, or ``None`` outside a checkout
+        with a remote.
+    :rtype: str | None
+    """
     # git is the only correct parser of its own config: it resolves worktrees
     # (where .git is a file) and tolerates multi-valued keys (e.g. several
     # `fetch =` lines) that configparser rejects. Fall back to parsing
     # .git/config directly when the git binary is unavailable.
-    if url := git_remote_url(cwd):
+    if url := git_remote_url(path):
         return normalise(url)
 
-    git_config_path = find_git_config(cwd)
+    git_config_path = find_git_config(path)
     if git_config_path is None:
         return None
 
@@ -92,57 +105,6 @@ def current_branch(start: Path | None = None) -> str | None:
         return None
     branch = result.stdout.strip()
     return branch if branch and branch != "HEAD" else None
-
-
-def git_remote_url(start: Path) -> str | None:
-    """Resolve a remote URL via git itself: ``origin`` if present, else the
-    first remote of any name.
-
-    Falling back past ``origin`` means a checkout whose canonical remote is
-    named ``upstream``/``fork``/etc. (or a single differently-named remote)
-    still yields repo context instead of silently getting none. Returns the
-    raw URL; callers normalise it. Fault-tolerant: no git binary or no remote
-    → ``None``."""
-    if url := _git_remote_get_url(start, "origin"):
-        return url
-    for name in _git_remote_names(start):
-        if name == "origin":
-            continue  # already tried above — don't spawn a redundant git call
-        if url := _git_remote_get_url(start, name):
-            return url
-    return None
-
-
-def _git_remote_get_url(start: Path, name: str) -> str | None:
-    """Raw URL of remote ``name`` via ``git remote get-url``, or ``None``."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(start), "remote", "get-url", name],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
-
-
-def _git_remote_names(start: Path) -> list[str]:
-    """Names of configured remotes (in git's stable, sorted order), or ``[]``."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(start), "remote"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return []
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 def _parse_remote(git_config: Path) -> str | None:

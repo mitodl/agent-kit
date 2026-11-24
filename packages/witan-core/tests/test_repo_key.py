@@ -95,3 +95,43 @@ def test_find_git_config_walks_up(tmp_path):
 
 def test_find_git_config_returns_none_when_absent(tmp_path):
     assert repo_key.find_git_config(tmp_path) is None
+
+
+# ── remote_uri / checkout_branch: the path-explicit pair ─────────────────────
+
+
+def _init(path, *remotes):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(path)], check=True)
+    for name, url in remotes:
+        subprocess.run(["git", "-C", str(path), "remote", "add", name, url], check=True)
+
+
+def test_remote_uri_prefers_origin(tmp_path, monkeypatch):
+    _init(
+        tmp_path,
+        ("a-fork", "git@github.com:me/fork.git"),
+        ("origin", "git@github.com:Org/Repo.git"),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/not/this")
+    assert repo_key.remote_uri(tmp_path) == "https://github.com/org/repo"
+
+
+def test_remote_uri_falls_back_to_the_first_remote(tmp_path):
+    _init(
+        tmp_path,
+        ("upstream", "https://github.com/up/stream"),
+        ("zeta", "https://github.com/z/z"),
+    )
+    assert repo_key.remote_uri(tmp_path) == "https://github.com/up/stream"
+
+
+def test_remote_uri_and_branch_outside_a_checkout(tmp_path):
+    assert repo_key.remote_uri(tmp_path) is None
+    assert repo_key.checkout_branch(tmp_path) is None
+
+
+def test_checkout_branch_before_the_first_commit(tmp_path):
+    _init(tmp_path)
+    assert repo_key.checkout_branch(tmp_path) == "trunk"

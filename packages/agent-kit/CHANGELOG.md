@@ -18,6 +18,13 @@ changed is in that member's own changelog.
 
 <!-- scriv-insert-here -->
 
+## [0.2.0] - 2026-11-23
+
+### Changed
+
+- Depends on `witan-council[lsp]>=0.52.0` and `witan-code[lsp]>=0.34.0`, the first releases whose language-server plugins carry features, so the meta-package installs a working `witan lsp` (and `witan-code lsp`) with both plugins.
+- Floors `agent-config-kit[cli]` at 0.15, which witan-council 0.52.0 already requires.
+
 ## [0.1.5] - 2026-11-17
 
 ### Changed

@@ -181,13 +181,14 @@ query get_file($id: String) {
 }
 
 // All file hashes — read once per index run so the incremental skip check is
-// in-memory rather than a query per file.
+// in-memory rather than a query per file. The default view's writer also
+// compares the indexer version that wrote each file.
 
 query all_file_hashes() {
     match {
         $f: CodeFile
     }
-    return { $f.slug, $f.content_hash }
+    return { $f.slug, $f.content_hash, $f.index_version }
     limit 1000000
 }
 

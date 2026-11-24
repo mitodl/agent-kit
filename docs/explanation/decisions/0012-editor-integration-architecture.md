@@ -204,8 +204,9 @@ no feature depends on that default.
 The host holds the tool binding as an enumerated list, as ADR-0011 does for the
 UI: the tools named in the feature map below, plus `task_list`, `task_get`,
 `workflow_project_get`, `task_ready`, `recall`, `task_claim` and `task_release`,
-which the launch contract uses. A plugin that needs a tool outside the list
-amends this ADR.
+which the launch contract uses, and `workflow_project_run_memories`, which a
+project launch's prompt uses for its team memories (added after acceptance). A
+plugin that needs a tool outside the list amends this ADR.
 
 #### Feature map
 
@@ -259,8 +260,8 @@ object; neither parses CLI output.
   "launchable": true,
   "argv": ["claude", "--model", "opus", "<prompt>"],
   "cwd": "/home/me/code/repo",
-  "env": {"WITAN_TARGET": "prod"},
-  "unset_env": ["CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO"],
+  "env": {"WITAN_TARGET": "prod", "WITAN_CLIENT_INSTANCE": "<fresh id>"},
+  "unset_env": ["CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO", "WITAN_CLIENT_INSTANCE"],
   "handoff": false,
   "prompt": "<prompt>",
   "agent": "claude",
@@ -286,12 +287,24 @@ object; neither parses CLI output.
   would otherwise drive (`witan_core/target_config.py:42`, `witan/repo.py`).
   So `unset_env` always lists every name in `SESSION_ID_ENV_VARS` plus
   `CLAUDE_PROJECT_DIR` and `WITAN_REPO`.
+- `env` sets `WITAN_CLIENT_INSTANCE` to an id minted for this launch, and
+  `unset_env` lists it so an inherited one never survives. The agent's remote
+  proxy sends it as `X-Witan-Client-Instance`, and the launcher makes its claim
+  or memory lookup under the same id, so the deployment's log joins the
+  memories surfaced for the agent to the ones it later reads. Added after this
+  ADR was accepted. It adds a key to `env` and changes no field's meaning, so
+  the spec's `version` stays 1.
 - `env` pins the target. It sets `WITAN_TARGET` to the target the folder
   resolved to, whether that came from `--target`, `WITAN_TARGET` or the
   folder's `match_*` rules. When the folder resolved to the local store, which
   has no target name, `unset_env` also lists `WITAN_TARGET`, and the agent's
-  matching from `cwd` reaches the same local store. Either way the agent talks
-  to the graph the claim was taken in. `env` never contains a credential; the
+  matching from `cwd` reaches the same local store. That matching runs without
+  the overrides `unset_env` removes, so it can land on a named target the
+  launcher never matched (an inherited `CLAUDE_PROJECT_DIR` steered the
+  launcher's own matching elsewhere). The launcher checks this before
+  claiming and refuses with `reason: "target_mismatch"`, naming the target in
+  `target`, because the local store cannot be pinned. Either way the agent
+  talks to the graph the claim was taken in. `env` never contains a credential; the
   launched agent's own witan resolves the token from the `witan login` store,
   as any agent does today.
 - A task launch claims first, as `_run_task_slug` does, and the claim is bare
@@ -329,6 +342,14 @@ the two strings never match.
 `witan.releaseTask` passes the spec's `claim.claimed_at`. Once the agent renews,
 `claimed_at` moves and the release is refused; a closed task is refused too. It
 never passes `force`.
+
+The release has to reach the graph the claim was taken in, which is the one the
+invoking folder routes to, and `cwd` can be a different open folder that routes
+elsewhere. So a spec from `witan.runTask` that took a claim carries `release`:
+the `slug`, `claimed_at` and `uri` (the invoking folder) that
+`witan.releaseTask` takes, which the client passes back unchanged.
+`witan.releaseTask` refuses a call without `uri` rather than defaulting to the
+first folder.
 
 #### Why the spec carries no session id
 
@@ -383,14 +404,18 @@ Launch modes, in order of delivery:
    the agent's own panel: Copilot's `openNewSessionSidebar.agent-host-copilotcli`
    submits it, and the Claude Code extension's `claude-vscode.editor.open` only
    prefills it. A handoff never claims. It uses a task spec built with the
-   claim off (the existing `claim=False` path of `_run_task_slug`, whose prompt
-   tells the agent to claim first) or a project spec, because a prefilled
+   claim off (`witan.runTask` with `claim: false`, the `claim=False` path of
+   `_run_task_slug`, whose prompt tells the agent to claim first) or a project
+   spec, and a spec that took a claim always has `handoff: false`, because a
+   prefilled
    prompt the person never submits would otherwise hold a lease for an hour
    with no agent behind it and no failure the client could release on.
    Neither command carries env or `unset_env`, so the panel agent resolves its
    target and repo from VS Code's own environment. The server sets the spec's
    `handoff` to true only when that resolution matches the launch's: its own
-   environment (which it shares with the VS Code process that started it) has
+   environment (which it shares with the VS Code process that started it, as
+   it was before `serve()` changed it; the host hands plugins that copy as
+   `CommandContext.editor_environ`) has
    none of `WITAN_TARGET`, `CLAUDE_PROJECT_DIR` or `WITAN_REPO`, it was not
    started with `--target`, and the window has one workspace folder. The client
    offers a handoff only for a spec with `handoff: true`. Both commands are internal to their owners, so the VS Code client

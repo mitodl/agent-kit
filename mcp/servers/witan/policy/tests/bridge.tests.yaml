@@ -135,3 +135,24 @@ cases:
     actor: act-svc-witan-probe
     action: invoke_query
     expect: deny
+
+  # ── Maintenance (0.16 judges direct optimize and cleanup) ─────────────────
+  # The nightly window runs both as the admin actor; nobody else holds either.
+  - id: admin-maintains-bridge-main
+    actor: act-svc-witan-admin
+    action: maintain
+    branch: main
+    expect: allow
+  - id: admin-reclaims-bridge
+    actor: act-svc-witan-admin
+    action: reclaim
+    expect: allow
+  - id: user-cannot-maintain-bridge
+    actor: act-alice
+    action: maintain
+    branch: main
+    expect: deny
+  - id: user-cannot-reclaim-bridge
+    actor: act-alice
+    action: reclaim
+    expect: deny

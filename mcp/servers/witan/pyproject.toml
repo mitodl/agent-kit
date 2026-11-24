@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.51.0"
+version = "0.53.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -297,7 +297,20 @@ dependencies = [
   # `all_repos`, and 0.55's RemoteMCPProxy fills the detected repo into a
   # call that omits `repo`, `all_repos` or not; 0.56.0 skips it under
   # `all_repos` (#640).
-  "witan-core[cli,remote,observability,sentry]>=0.56.0,<1",
+  #
+  # ★ >=0.59 IS AN IMPORT FLOOR: lsp_plugin.py imports `witan_core.lsp` (the
+  # language-server plugin interface, added in witan-core 0.59.0) at module
+  # scope, config.py imports `match_target_at` and `named_target`, and repo.py
+  # imports `git_remote_url`, all from the same release.
+  #
+  # ★ >=0.60.1: lsp_plugin.py imports `witan_core.lsp.escape_markdown` (added
+  # in 0.60.0) for teammate-written text in hovers, and needs 0.60.1's
+  # version, which escapes every ASCII punctuation character. 0.60.0's leaves
+  # `&`, `@` and `/` unescaped.
+  #
+  # ★ >=0.61: server.py and cli/run_helpers.py import
+  # `witan_core.client_instance` (added in 0.61.0) at module scope.
+  "witan-core[cli,remote,observability,sentry]>=0.61,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -305,6 +318,14 @@ dependencies = [
   # httpx2 fork), relied on directly rather than adding classic httpx too.
   "httpx2>=2.5",
 ]
+
+[project.optional-dependencies]
+# The editor language server, `witan lsp` (ADR 0012). The host and pygls live
+# in witan-core's `lsp` extra; this package only registers its plugin.
+lsp = ["witan-core[lsp]>=0.61,<1"]
+
+[project.entry-points."witan.lsp.plugins"]
+council = "witan.lsp_plugin:CouncilPlugin"
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan"
@@ -364,13 +385,19 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.51.0"
+current_version = "0.53.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+# The image's version label. Relative to this directory, where `just bump` runs.
+[[tool.bumpversion.files]]
+filename = "../../../docker/witan.Dockerfile"
+search = "ARG WITAN_VERSION={current_version}"
+replace = "ARG WITAN_VERSION={new_version}"
 
 [tool.scriv]
 format = "md"
@@ -381,7 +408,8 @@ md_html_anchors = false
 entry_title_template = "[{{ version }}] - {{ date.strftime('%Y-%m-%d') }}"
 
 [dependency-groups]
-test = ["pytest>=8", "pytest-xdist>=3.6"]
+# pygls + lsprotocol: the `lsp` extra, for the language-server tests.
+test = ["pytest>=8", "pytest-xdist>=3.6", "pygls>=2,<3", "lsprotocol>=2025.0.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

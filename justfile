@@ -284,14 +284,15 @@ check-core-floor *args:
 changelog package:
     #!/usr/bin/env bash
     set -euo pipefail
-    SCRIV_TOOL="scriv@1.8.1"   # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.2"   # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
         witan-code)       dir=mcp/servers/witan-code ;;
         agent-config-kit) dir=packages/agent-config-kit ;;
         ol-agent-kit)     dir=packages/agent-kit ;;
-        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit" >&2; exit 1 ;;
+        witan-vscode)     dir=packages/witan-vscode ;;
+        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit witan-vscode" >&2; exit 1 ;;
     esac
     (cd "$dir" && uvx "$SCRIV_TOOL" create)
 
@@ -301,14 +302,15 @@ bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
     BUMP_TOOL="bump-my-version@1.8.1"   # keep in step with AGENTS.md
-    SCRIV_TOOL="scriv@1.8.1"            # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.2"            # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
         witan-code)       dir=mcp/servers/witan-code ;;
         agent-config-kit) dir=packages/agent-config-kit ;;
         ol-agent-kit)     dir=packages/agent-kit ;;
-        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit" >&2; exit 1 ;;
+        witan-vscode)     dir=packages/witan-vscode ;;
+        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit witan-vscode" >&2; exit 1 ;;
     esac
     case "{{ part }}" in
         major|minor|patch) ;;
@@ -378,9 +380,19 @@ bump package part:
     just check-versions
     echo ""
     echo "{{ package }} bumped to ${new}. Commit together:"
-    echo "  $dir/pyproject.toml"
+    # The VS Code extension keeps its version in package.json and its lockfile,
+    # and bump-my-version's config in .bumpversion.toml (packages/witan-vscode).
+    if [[ -f "$dir/package.json" ]]; then
+        echo "  $dir/package.json, $dir/package-lock.json, $dir/.bumpversion.toml"
+    else
+        echo "  $dir/pyproject.toml"
+    fi
     echo "  $dir/CHANGELOG.md"
     echo "  $dir/changelog.d/ (the collected fragments are now gone)"
+    # witan-council's bumpversion config also rewrites the image's version label.
+    if [[ "{{ package }}" == "witan-council" ]]; then
+        echo "  docker/witan.Dockerfile"
+    fi
     # uv.lock records every workspace member's version, so it moves with the
     # bump — `just check-versions` above runs uv and refreshes it. Left behind,
     # the next `uv lock --check` (and CI) fails on a repo that looks untouched.
@@ -429,9 +441,9 @@ docs-check:
 # one CI checks and Read the Docs publishes — which is the exact drift the CI
 # pin exists to prevent. Renovate bumps all three together.
 docs-build:
-    uvx zensical@0.0.74 build
+    uvx zensical@0.1.1 build
     ./bin/gen_llms.py
 
 # Serve the docs locally with incremental rebuilds.
 docs-serve:
-    uvx zensical@0.0.74 serve
+    uvx zensical@0.1.1 serve

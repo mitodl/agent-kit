@@ -6,14 +6,14 @@
 
 # MCP tools
 
-witan exposes **52 MCP tools** across four domains. A single `witan serve` mounts all of them, so one MCP entry in your agent's config gets you the whole surface.
+witan exposes **53 MCP tools** across four domains. A single `witan serve` mounts all of them, so one MCP entry in your agent's config gets you the whole surface.
 
 | Domain | Tools | What it covers |
 | --- | --- | --- |
 | [Memory & recall](memory.md) | 10 | Recording durable knowledge in the shared graph, and reading it back. |
 | [Tasks](tasks.md) | 12 | The work-coordination layer: what needs doing, what blocks what, and who holds which piece of work right now. |
 | [Workflow projects & sessions](workflow.md) | 12 | Tracking an engineering objective across many agent sessions without an explicit hand-off. |
-| [Code graph](code.md) | 18 | Exact symbol lookups, caller graphs, change-impact analysis, and cross-repo contract tracing, served from a tree-sitter index. |
+| [Code graph](code.md) | 19 | Exact symbol lookups, caller graphs, change-impact analysis, and cross-repo contract tracing, served from a tree-sitter index. |
 
 ## Server instructions
 
@@ -69,7 +69,7 @@ Symbol ids have the form `<repo>#<path/to/file.py>::<QualifiedName>` (a whole mo
 
 Repo scoping: tools auto-detect the current repo from `.git/config`. Pass `repo` (a canonical URI like `https://github.com/mitodl/ol-django`) to scope to one repo, or omit it when outside any repo to fan out across every indexed repo. An empty `repo` behaves like omitting it; it does not force a fan-out. A fan-out concatenates each store's BM25-ranked results rather than producing one global ordering.
 
-Branch semantics: name-routed tools (code_find_definition, code_search_symbol, code_symbols_in_file) accept `branch` — either a git branch name, or a specific writer's view of one (`act-bob/feature_x`, as listed by code_indexed_branches). A branch has one view per writer, so reads prefer this process's own and fall back to another's; naming a view reads exactly that agent's in-flight work. The default follows the current checkout's branch ONLY when querying the current detected repo; when you pass `repo` for a different repo and omit `branch`, you read that store's default (main) view — pass `branch` explicitly to target another view. `symbol_id` does not encode a branch, so the id-routed tools follow the same default, reading the checkout's branch view when the id's repo is the current detected repo and that store's main view otherwise. code_callers, code_impact and code_cross_repo_impact also accept `branch` for the id's repo (pass the default branch, e.g. `main`, to read main from a checkout whose own branch is indexed — where a symbol the branch removed no longer exists); code_find_references takes none.
+Branch semantics: name-routed tools (code_find_definition, code_search_symbol, code_symbols_in_file) accept `branch` — either a git branch name, or a specific writer's view of one (`act-bob/feature_x`, as listed by code_indexed_branches). A branch has one view per writer, so reads prefer this process's own and fall back to another's; naming a view reads exactly that agent's in-flight work. The default follows the current checkout's branch ONLY when querying the current detected repo; when you pass `repo` for a different repo and omit `branch`, you read that store's default (main) view — pass `branch` explicitly to target another view. `symbol_id` does not encode a branch, so the id-routed tools follow the same default, reading the checkout's branch view when the id's repo is the current detected repo and that store's main view otherwise. code_callers, code_impact and code_cross_repo_impact and code_find_references also accept `branch` for the id's repo (pass the default branch, e.g. `main`, to read main from a checkout whose own branch is indexed — where a symbol the branch removed no longer exists).
 
 min_precision (`heuristic` default | `precise`) on the interface and cross-repo tools: `precise` keeps only edges also confirmed by a canonical-symbol join, suppressing false positives.
 

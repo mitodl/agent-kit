@@ -1,0 +1,8 @@
+**
+!dist/extension.cjs
+!dist/launcher.cjs
+!resources/**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE

@@ -893,6 +893,26 @@ def _built_handler(monkeypatch):
     return built["elicitation_handler"]
 
 
+def test_every_request_names_the_client_instance(monkeypatch):
+    # The deployment logs this on memory reads so they join to the claim that
+    # surfaced the memory; a launcher's env var must win over the process id.
+    from witan_core import client_instance as ci
+
+    built = {}
+    monkeypatch.setattr(
+        "witan_core.remote.proxy.StreamableHttpTransport",
+        lambda url, **kwargs: built.update(kwargs),
+    )
+    monkeypatch.setattr("witan_core.remote.proxy.Client", lambda *a, **k: object())
+    monkeypatch.delenv(ci.CLIENT_INSTANCE_ENV, raising=False)
+    _Proxy()._new_client("tok")
+    assert built["headers"] == {ci.CLIENT_INSTANCE_HEADER: ci._PROCESS_INSTANCE}
+
+    monkeypatch.setenv(ci.CLIENT_INSTANCE_ENV, "launched")
+    _Proxy()._new_client("tok")
+    assert built["headers"] == {ci.CLIENT_INSTANCE_HEADER: "launched"}
+
+
 def test_client_is_built_with_the_handler_at_a_terminal(monkeypatch):
     # Advertising the capability is what makes a deployed tool ask at all, so a
     # proxy that dropped the handler would silently get the defaults instead.

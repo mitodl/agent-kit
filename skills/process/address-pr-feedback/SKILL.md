@@ -22,8 +22,11 @@ metadata:
 
 # Address PR Feedback
 
-Turns a PR's review activity — and its CI/status checks — into fixes plus a
-clean, fully-resolved thread list and a green check bar. The core pattern is
+Turns a PR's review activity — and its CI/status checks — into fixes, replies,
+and a green check bar. Review activity arrives on three channels: inline review
+threads, top-level discussion comments, and the bodies of the reviews
+themselves. Only the first has a resolved/unresolved state, so a thread count is
+never the measure of whether a PR has been addressed. The core pattern is
 **fetch → categorize → address → reply & resolve → verify**, using scripts
 for the mechanical parts so the interesting work is reading feedback
 correctly and knowing when a decision belongs to a human instead of you.
@@ -95,8 +98,9 @@ Resolve two things before running anything, asking if either is unclear:
 ./skills/process/address-pr-feedback/scripts/fetch-feedback.sh mitodl/agent-kit 116 /tmp/pr116-feedback.json
 ```
 
-This is one call regardless of PR size — it follows GraphQL cursor pagination
-for review threads internally, so a PR with 200 threads across a dozen
+This is one call regardless of PR size — it paginates all three channels
+internally (GraphQL cursors for review threads, slurped REST pages for
+discussion comments and reviews), so a PR with 200 threads across a dozen
 review rounds comes back complete, not truncated at the first page. By
 default it excludes already-resolved threads; add `--include-resolved` when
 you need the full history (e.g. re-checking a PR you partially addressed in
@@ -112,6 +116,20 @@ type (`User`, `Bot`, `Organization`, `Mannequin`), normalized from GraphQL's
 `__typename` and REST's `user.type` so it reads the same regardless of which
 call produced the record. Classify authorship from that field, not from
 whether you recognize the login.
+
+`discussion_comments[]` and `reviews[]` carry the other two channels, each entry
+with an `html_url` to link it by. Neither has an `isResolved` field, because
+GitHub gives them no resolution state at all — nothing marks one read, replied
+to, or handled, so neither can ever appear in a count of outstanding work. That
+is exactly why they get missed: the highest-stakes feedback on a PR is often a
+colleague's architectural judgment left as a top-level comment, and a bot's
+summary review usually carries its real findings in `reviews[].body` rather than
+in any thread. Read both in Phase 2, account for both in Phase 5.
+
+Entries on both carry `is_viewer`, true for the ones you wrote: Phase 4's
+summary comments land on the same endpoint a reviewer's do, and only this field
+tells them apart — without it every pass re-triages the summary the last one
+left. (`viewer` at the top level is the login it was derived from.)
 
 `pending_review` is the viewer's own unsubmitted review (`null` when there
 is none), with each comment's node `id` and a snapshot of its `body`. When
@@ -169,11 +187,33 @@ underlying concern may still apply. Read the current code at that path
 before deciding a stale-looking thread is moot.
 
 Bot review-state fields (`APPROVED`/`COMMENTED`/`CHANGES_REQUESTED` in
-`reviews[]`) tell you formality, not substance — most bots (Copilot, Gemini)
-leave everything in `COMMENTED` state with the real content in the thread
-comments, which is why
-[`github-pr-triage`](../github-pr-triage/SKILL.md#how-the-signals-are-read)
-reads unresolved threads rather than review states.
+`reviews[]`) tell you formality, not substance — most bots leave everything in
+`COMMENTED`, so the state never tells you whether a review carries findings.
+Neither does the vendor: some put their substance in thread comments and leave
+the body boilerplate, others carry real findings in the body and open no thread
+at all, and the same bot changes shape between versions. Read both and judge
+from what is in them.
+
+**Read every discussion comment and every non-empty review body, not just the
+threads.** They go in the same priority list as thread items — they are feedback
+with no thread attached, not metadata. Skip only the entries with
+`is_viewer: true`, which are yours: a summary comment from an earlier round, or
+your own review of someone else's PR. The human-vs-bot rule below applies to
+everything that's left, decided from the same `author_type` field.
+
+`reviews[]` holds submitted reviews only. An unsubmitted draft reaches you
+through `pending_review` alone, and nothing in it is triaged, counted, or
+quoted in a reply — it is private to its author until they submit it, and
+[Editing a pending review comment](#editing-a-pending-review-comment) is the
+only thing that may touch it.
+
+Bot review bodies vary by vendor: `agent-optibot` files findings under a
+`**Risks**` heading inside a `<details>` block, others use `Issues`, `Concerns`,
+or a severity table, and any of them can change shape without notice. Read the
+body as prose rather than pattern-matching one vendor's markup — anything naming
+a file, a function, or a behavior and saying something is wrong is a finding,
+wherever it sits. An empty body is a review that only carried thread comments;
+there is nothing to read there.
 
 **A human reviewer's comment gets more deliberate handling than a bot's,
 even when the fix looks equally obvious.** A bot flags a pattern; a human
@@ -329,16 +369,23 @@ In draft-only mode:
   covers `git push`, `resolve-thread.sh`, `resolve-threads.sh`,
   `reply-comment.sh`, `gh run rerun`, the pre-commit.ci autofix comment, and
   any edit to a pending review comment.
-- End with one table, one row per thread, discussion comment, or failing
-  check:
+- End with one table, one row per thread, discussion comment, review-body
+  finding, or failing check:
 
 ```text
-| Thread | Author | Verdict | Proposed reply | Local commit | Evidence |
-|--------|--------|---------|----------------|--------------|----------|
+| Item | Author | Verdict | Proposed reply | Local commit | Evidence |
+|------|--------|---------|----------------|--------------|----------|
 | [a.py:42](https://github.com/o/r/pull/7#discussion_r1) | copilot-pull-request-reviewer | fix | Fixed in a1b2c3d: transport is now streamable-http (tests/test_config.py, 3 passed). | a1b2c3d | tests/test_config.py: 3 passed |
 | [b.py:10](https://github.com/o/r/pull/7#discussion_r2) | gemini-code-assist | disagree | Not adding the guard: ensure_bridge_store runs at every call site. | (none) | callers at x.py:12, y.py:40 |
-| [c.py:5](https://github.com/o/r/pull/7#discussion_r3) | tmacey | needs you | (your wording) | (none) | two defensible fixes, see below |
+| [review body](https://github.com/o/r/pull/7#pullrequestreview-5928924500): reference_budgets() ignores `before` | agent-optibot | fix | Fixed in d4e5f6a: reference_budgets now filters on the requested date (tests/test_budgets.py, 6 passed). | d4e5f6a | tests/test_budgets.py: 6 passed |
+| [discussion comment](https://github.com/o/r/pull/7#issuecomment-7048965644) | rachellougee | needs you | (your wording) | (none) | proposes moving the panel builders to another repo |
 ```
+
+An item with no thread has no `path:line` to name it by, so link its
+`html_url` and say what it is: the review body's finding in a few words, or
+just "discussion comment". Rows for those two channels are the ones most
+likely to be missing — check the table has one per item Phase 2 found before
+showing it.
 
 Verdict is one of `fix`, `reply only`, `disagree`, or `needs you`. The
 proposed reply is the exact text that would be posted, in Phase 4's reply
@@ -439,15 +486,12 @@ jq -n \
 `--rawfile c1 reply-1.md` reads the file directly if you'd rather skip the
 `$(cat ...)`.
 
-Checks have no resolution state either — like discussion comments, there's
-no thread to mark resolved. A code fix and push is the resolution; the check
-re-runs and flips green on its own. For a scanner finding you investigated
-and declined to act on (Phase 3's security/compliance rule — only after the
-user has weighed in), record the reasoning in the same PR summary comment
-rather than a per-check reply, since most check UIs don't support one.
-
-Top-level discussion comments have no resolution state — reply to those (or
-post one consolidated summary of the whole pass) with `reply-comment.sh`:
+Discussion comments, review-body findings, and checks have no resolution state
+— there is no thread to mark resolved, so the reply *is* the record. Post it
+with `reply-comment.sh`, in the same style as a thread reply: the commit, what
+changed, the tests. One consolidated summary covers a pass that touched
+several, but a human's substantive comment gets its own reply rather than a
+line buried in a summary.
 
 ```bash
 ./skills/process/address-pr-feedback/scripts/reply-comment.sh mitodl/agent-kit 116 \
@@ -455,6 +499,12 @@ post one consolidated summary of the whole pass) with `reply-comment.sh`:
 Addressed all review feedback: 4 threads fixed and resolved, 1 declined (see reply) with reasoning.
 SUMMARY
 ```
+
+For a check, the code fix and push is the resolution — it re-runs and flips
+green on its own. For a scanner finding you investigated and declined to act on
+(Phase 3's security/compliance rule — only after the user has weighed in),
+record the reasoning in that summary comment rather than a per-check reply,
+since most check UIs don't support one.
 
 Always dry-run (`--dry-run` on both resolve scripts) first when acting on a
 batch you haven't manually reviewed thread-by-thread, and check the printed
@@ -484,10 +534,30 @@ one you wrote.
 
 ## Phase 5 — Verify
 
-Re-run `fetch-feedback.sh` (without `--include-resolved`) and report the
-remaining unresolved count. If anything is still open, say specifically why
-(deferred pending a human decision, blocked on another PR, a design choice
-you're waiting on) — never let a comment silently drop off the report.
+Re-run `fetch-feedback.sh` (without `--include-resolved`) and account for all
+three channels. The unresolved-thread count is the one number the script can
+compute and the one number that cannot tell you whether you're done: a PR with
+zero unresolved threads and an unread discussion comment reports as clean, and
+that is how a reviewer's "this subsystem probably belongs in another repo" gets
+shipped past.
+
+Report every item, one line each:
+
+- **Unresolved review threads** — how many remain, and for each one why
+  (deferred pending a human decision, blocked on another PR, a design choice
+  you're waiting on).
+- **Discussion comments** — every one with `is_viewer: false`, with its disposition:
+  fixed (and where), replied, declined with reasoning, or carried to a follow-up
+  issue. "Read it, no action needed" is a disposition; silence is not.
+- **Review bodies** — read any new or edited submitted review bodies in the
+  verification fetch, triage their findings under Phase 2, and report a
+  disposition for every finding, including work still open. A review that
+  landed while you were pushing is the easiest finding on the PR to never see,
+  and a disposition list built only from the Phase 2 reading won't contain it.
+
+A channel with nothing in it gets said out loud ("no discussion comments", "no
+findings in the review bodies") rather than omitted — an omitted channel and an
+unchecked one look identical in the report. Never let an item silently drop off.
 
 If you pushed any commits during Phase 3, also re-run `fetch-checks.sh` —
 checks take time to complete, so poll (`gh pr checks <pr> -R <repo> --watch
