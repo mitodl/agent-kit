@@ -334,7 +334,11 @@ class ReviewerTest(unittest.TestCase):
     def test_start_and_resume_share_the_restrictions(self) -> None:
         topic = Path("/t")
         required = {
-            "codex": ['sandbox_mode="read-only"', "--ignore-user-config"],
+            "codex": [
+                'sandbox_mode="read-only"',
+                "--ignore-user-config",
+                "--ignore-rules",
+            ],
             "claude": ["--restricted", "--strict-mcp-config", "--permission-prompts"],
             "pi": ["--no-extensions", "--no-mcp", "--no-approve", "read,grep,find,ls"],
         }

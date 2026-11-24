@@ -166,6 +166,9 @@ def restriction_flags(backend: str, model: str, topic_dir: Path) -> list[str]:
             'sandbox_mode="read-only"',
             # Drops the user's and a trusted repo's MCP servers.
             "--ignore-user-config",
+            # An `allow` rule in a user or project .rules file runs its command
+            # outside the sandbox.
+            "--ignore-rules",
             "--skip-git-repo-check",
         ]
     if backend == "claude":
