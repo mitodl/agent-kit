@@ -7,6 +7,7 @@ import {
 	requested,
 	restoreScope,
 	scopeArgs,
+	viewLabel,
 } from "../../src/scope.ts";
 
 const ONE = "file:///work/one";
@@ -43,6 +44,22 @@ test("before a list answers, the label is the scope picked", () => {
 
 test("a server older than scopes is labeled with what it lists", () => {
 	assert.equal(appliedLabel({}, { scope: "all" }), "This repo + unfiled");
+});
+
+test("the view names one scope when every list answered it", () => {
+	const repo = { scope: "repo", project: null };
+	assert.equal(viewLabel([repo, repo, repo], DEFAULT_SCOPE), "This repo");
+	assert.equal(viewLabel([], ALPHA), "Project: Alpha");
+});
+
+test("the view names each scope when lists or folders answered differently", () => {
+	// An older deployment: its task lists fall back, its projects do not.
+	const fallback = { scope: "repo+unfiled", project: null };
+	const repo = { scope: "repo", project: null };
+	assert.equal(
+		viewLabel([fallback, fallback, repo], DEFAULT_SCOPE),
+		"Mixed: This repo + unfiled, This repo",
+	);
 });
 
 test("stored state that is not a scope restores the default", () => {

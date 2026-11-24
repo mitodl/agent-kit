@@ -3,7 +3,14 @@
 // own in_progress tasks (`witan.listMyWork`), not what a launch picked up.
 
 import * as vscode from "vscode";
-import { type Applied, DEFAULT_SCOPE, type Scope, scopeArgs } from "./scope";
+import {
+	type Applied,
+	appliedLabel,
+	DEFAULT_SCOPE,
+	requested,
+	type Scope,
+	scopeArgs,
+} from "./scope";
 
 export type ServerCommand = (
 	command: string,
@@ -26,8 +33,11 @@ export interface ProjectRow {
 	status?: string;
 }
 
+type ListName = "ready" | "mine" | "projects";
+
 interface Lists {
-	applied: Applied;
+	/** Per list: an older deployment can answer each in a different scope. */
+	applied: Record<ListName, Applied>;
 	repo: string;
 	branch: string | null;
 	ready: TaskRow[];
@@ -47,6 +57,8 @@ export class SectionNode {
 		readonly label: string,
 		readonly rows: TaskRow[] | ProjectRow[],
 		readonly kind: "task" | "project",
+		/** `undefined` for the branch's tasks, which no scope changes. */
+		readonly applied: Applied | undefined,
 	) {}
 }
 
@@ -81,10 +93,12 @@ export type WorkNode =
 export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 	private readonly changed = new vscode.EventEmitter<WorkNode | undefined>();
 	readonly onDidChangeTreeData = this.changed.event;
-	private readonly applied = new vscode.EventEmitter<Applied>();
-	/** The scope the server answered it applied, on each folder's load. */
+	private readonly applied = new vscode.EventEmitter<Applied[]>();
+	/** Every scope the server answered it applied, per folder and list, on
+	 * each folder's load. */
 	readonly onDidApplyScope = this.applied.event;
 	private folders = new Map<string, FolderNode>();
+	private appliedLists = new Map<string, Applied>();
 
 	constructor(
 		private readonly request: ServerCommand,
@@ -93,6 +107,7 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 
 	refresh(): void {
 		this.folders.clear();
+		this.appliedLists.clear();
 		this.changed.fire(undefined);
 	}
 
@@ -144,6 +159,17 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 					: vscode.TreeItemCollapsibleState.Expanded,
 			);
 			item.description = String(node.rows.length);
+			if (node.applied === undefined) {
+				item.tooltip = "This branch's tasks, whatever the scope.";
+				return item;
+			}
+			// Named on the section only where it is not the scope picked, which
+			// the view's description already shows.
+			const label = appliedLabel(node.applied, this.scope);
+			if (label !== appliedLabel(requested(this.scope), this.scope)) {
+				item.description += ` · ${label}`;
+			}
+			item.tooltip = `Scope: ${label}`;
 			return item;
 		}
 		if (node instanceof TaskNode) {
@@ -216,21 +242,44 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 		}
 		// A load a refresh or scope change has since replaced would relabel the
 		// view with the scope it was asked for.
-		if (this.folders.get(node.folder.uri.toString()) === node) {
-			this.applied.fire(lists.applied);
-		}
 		const { folder } = node;
+		const key = folder.uri.toString();
+		if (this.folders.get(key) === node) {
+			for (const [list, applied] of Object.entries(lists.applied)) {
+				this.appliedLists.set(`${key} ${list}`, applied);
+			}
+			this.applied.fire([...this.appliedLists.values()]);
+		}
+		const { applied } = lists;
 		const sections: WorkNode[] = [
-			new SectionNode(folder, "In progress (mine)", lists.mine, "task"),
+			new SectionNode(
+				folder,
+				"In progress (mine)",
+				lists.mine,
+				"task",
+				applied.mine,
+			),
 		];
 		if (lists.branch && lists.forBranch.length > 0) {
 			sections.push(
-				new SectionNode(folder, `On ${lists.branch}`, lists.forBranch, "task"),
+				new SectionNode(
+					folder,
+					`On ${lists.branch}`,
+					lists.forBranch,
+					"task",
+					undefined,
+				),
 			);
 		}
 		sections.push(
-			new SectionNode(folder, "Ready", lists.ready, "task"),
-			new SectionNode(folder, "Projects", lists.projects, "project"),
+			new SectionNode(folder, "Ready", lists.ready, "task", applied.ready),
+			new SectionNode(
+				folder,
+				"Projects",
+				lists.projects,
+				"project",
+				applied.projects,
+			),
 		);
 		return sections;
 	}
@@ -248,11 +297,19 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 				ready: TaskRow[];
 				for_branch: TaskRow[];
 			},
-			{ tasks: TaskRow[] },
-			{ projects: ProjectRow[] },
+			Applied & { tasks: TaskRow[] },
+			Applied & { projects: ProjectRow[] },
 		];
+		const applied = ({ scope, project }: Applied): Applied => ({
+			scope,
+			project,
+		});
 		return {
-			applied: { scope: ready.scope, project: ready.project },
+			applied: {
+				ready: applied(ready),
+				mine: applied(mine),
+				projects: applied(projects),
+			},
 			repo: ready.repo,
 			branch: ready.branch,
 			ready: ready.ready,

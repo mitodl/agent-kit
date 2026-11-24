@@ -30,13 +30,12 @@ import {
 } from "./launch";
 import {
 	type Applied,
-	appliedLabel,
 	projectChoices,
 	REPO_SCOPES,
-	requested,
 	restoreScope,
 	type Scope,
 	scopeArgs,
+	viewLabel,
 } from "./scope";
 import { describeServerCommand } from "./serverCommand";
 import {
@@ -154,10 +153,10 @@ export async function activate(
 		treeDataProvider: tree,
 		showCollapseAll: true,
 	});
-	const describe = (applied: Applied) => {
-		treeView.description = appliedLabel(applied, tree.scope);
+	const describe = (applied: Applied[]) => {
+		treeView.description = viewLabel(applied, tree.scope);
 	};
-	describe(requested(tree.scope));
+	describe([]);
 	tree.onDidApplyScope(describe);
 
 	const pickScope = async (): Promise<void> => {
@@ -184,7 +183,7 @@ export async function activate(
 		}
 		await context.workspaceState.update(SCOPE_STATE_KEY, scope);
 		tree.setScope(scope);
-		describe(requested(scope));
+		describe([]);
 	};
 
 	const pickProject = async (): Promise<Scope | undefined> => {

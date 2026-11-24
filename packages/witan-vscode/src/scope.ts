@@ -74,6 +74,24 @@ export function projectChoices<P extends { slug: string }>(
 	return [...choices.values()];
 }
 
+/** The view's description for every list the server has answered: the scope
+ * they share, or each one applied when they differ. They can: an older
+ * deployment answers the task lists in `repo+unfiled` but projects in `repo`,
+ * and one folder's graph can answer differently from another's. Before any
+ * list answers, the scope picked. */
+export function viewLabel(applied: readonly Applied[], picked: Scope): string {
+	const labels = [
+		...new Set(
+			(applied.length > 0 ? applied : [requested(picked)]).map((a) =>
+				appliedLabel(a, picked),
+			),
+		),
+	];
+	return labels.length === 1
+		? String(labels[0])
+		: `Mixed: ${labels.join(", ")}`;
+}
+
 /** A scope read back from workspace state, or the default when it is not one. */
 export function restoreScope(stored: unknown): Scope {
 	if (typeof stored !== "object" || stored === null) {
