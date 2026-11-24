@@ -28,6 +28,7 @@ import {
 	type LaunchStatus,
 	releaseArgs,
 } from "./launch";
+import { describeServerCommand } from "./serverCommand";
 import {
 	errorMessage,
 	type ProjectNode,
@@ -102,9 +103,10 @@ export async function activate(
 			(err: unknown) => {
 				void vscode.window
 					.showErrorMessage(
-						`witan: the language server (${[command, ...args].join(" ")}) did not start: ` +
-							`${errorMessage(err)}. Install it with \`uv tool install ol-agent-kit\`, ` +
-							"or point witan.server.command at it.",
+						`witan: the language server did not start: ${errorMessage(err)}. ` +
+							`witan.server.command is ${describeServerCommand([command, ...args])} ` +
+							"If the server ran and exited, the witan output has its own error. Install the server with " +
+							"`uv tool install ol-agent-kit`, or correct witan.server.command.",
 						"Open Settings",
 					)
 					.then((choice) => {
