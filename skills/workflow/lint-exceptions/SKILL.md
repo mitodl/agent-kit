@@ -311,11 +311,14 @@ This is section 2's "will the next file deserve this too" question made
 executable, and it is the one the outside probe cannot answer. Expect the probe
 to be silent: that silence is the finding, not a pass.
 
-In the `ol-github-workflows` case the inside probe was a second
-`subprocess.run` in the same file. Under `"actions/**"` it was silent - the glob
-covered the file, not the call - and under the line-level `noqa` it was flagged
-immediately. Same probe, same rule, and only one of the two scopes was the size
-of the violation.
+The `ol-github-workflows` case is the one where both checks read the same
+probe - a second `subprocess.run` in the same file - because the two candidate
+scopes put it on different sides. Under `"actions/**"` it is *inside*, and it
+was silent: the glob covered the file, not the call, so the rung was too high.
+Under the line-level `noqa` the same call is *outside*, and it was flagged
+immediately, which is that check passing. Same probe, same rule, and only one of
+the two scopes was the size of the violation. Which check you are running is
+decided by the scope you wrote, not by where the probe sits.
 
 **Is it needed at all?**
 

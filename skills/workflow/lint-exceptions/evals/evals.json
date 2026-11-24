@@ -36,7 +36,7 @@
 				"The S607 reason says the runner image decides where git lives so there is no absolute path to pin, not a bare 'false positive' or 'needed for CI'",
 				"No glob is added to per-file-ignores, and the existing \"tests/**\" entry is unchanged",
 				"The answer says why the wrapper was the wrong place for a noqa: it would have covered every future caller, whatever those callers pass",
-				"The answer verifies the scope by adding a second violating call, confirming it is still reported, and removing it",
+				"The answer runs the outside probe: a second violating call in the same file, confirmed still reported because the scope is one line, then removed",
 				"The reproduction runs ruff against the supplied config, not against agent-kit's own ruff settings, which do not enable S603/S607"
 			]
 		},
