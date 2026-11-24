@@ -8,6 +8,51 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.62.0] - 2026-11-24
+
+### Added
+
+- The language server host gives plugins `CommandContext.editor_environ` (and
+  `Context.editor_environ`), the environment the editor started the server
+  with. `serve()` drops `CLAUDE_PROJECT_DIR` and `WITAN_REPO` and sets
+  `WITAN_TARGET` from `--target` before any plugin runs, so `os.environ` no
+  longer shows what a chat-panel agent the editor starts would inherit.
+
+- The language server relays the web UI's reads for an editor webview: `witan.uiRead` runs one read on the route of the open folder its `uri` names (exactly: a read for a folder since closed is refused, not served from a folder that contains it), through the plugin that declares the tool and inside that plugin's `Plugin.tool_calls()` (a new hook, a no-op by default, for the guard a plugin puts around its own tool calls), and `witan.uiTools` lists the reads that folder's routes serve with their arguments. Both refuse anything outside `witan_core.lsp.UI_READ_TOOLS`, ADR 0011's bound set, which joins `BOUND_TOOLS` (ADR 0012's 2026-11-24 amendment).
+
+### Fixed
+
+- lsp-mode got each CodeLens three times: as a lens, in the hover on its line,
+  and as a code action. It renders lenses but advertises only
+  `workspace.codeLens`, never `textDocument.codeLens`, so the language server
+  took it for a client without CodeLens. Either capability now counts.
+
+- Language-server hovers read with backslashes outside VS Code. Neovim's hover
+  float shows every markdown escape, and `escape_markdown` escaped every ASCII
+  punctuation character, so a path read `lib\/maths\.py\:1`. It now escapes
+  only a character that can start markup (a link or image bracket, a `(` right
+  after `]`, `*`, `~`, a backtick, `|`, a `_` that is not inside a word, and
+  a block marker at the start of the text), and writes `<` as `&lt;` and an
+  entity's `&` as `&amp;`, so paths, URLs and `snake_case` names read as themselves. A bare
+  URL that needs no escape is left for a GFM client to autolink, as a link to
+  exactly its own text; one that does need an escape has its `://` or `www.`
+  escaped too, so no autolink carries a backslash.
+- A client that lists plain text first in `hover.contentFormat` (eglot without
+  markdown-mode) now gets a plain-text hover, with the escapes, `**` and the
+  link syntax of the markdown taken out and a blank line in place of the `---`
+  rule between two plugins' sections, instead of markdown it shows raw.
+
+- `witan lsp` and `witan-code lsp` log at `WARNING` unless `WITAN_LOG_LEVEL`
+  is set. They inherited the launcher's `INFO`, so VS Code showed every routine
+  line as `[error]` (it labels a server's stderr that way) and pygls wrote each
+  message body it sent, hover text and task titles included, to the editor's
+  log files. `WITAN_LOG_LEVEL=info` or `debug` restores the verbose log; the
+  bare `LOG_LEVEL` does not.
+- The `httpx2` and `httpcore2` loggers join `httpx` and `httpcore` at
+  `WARNING`. The mcp client and witan's remote proxy moved to the httpx2 fork,
+  whose loggers are named for it, so every `witan` command against a
+  deployment printed an `HTTP Request: POST ...` line for each request.
+
 ## [0.61.0] - 2026-11-23
 
 ### Added
