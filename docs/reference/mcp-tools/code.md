@@ -198,7 +198,7 @@ e.g. ``code_interface_search("BASE_URL")`` or ``("courses", kind="endpoint")``.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Search terms matched against the normalized key. |
-| `kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | Optional filter to one kind. |
+| `kind` | `env_var` \| `package` \| `service` \| `endpoint`? | `null` | Optional filter to one kind. |
 | `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 
 ## `code_precise_edges`
@@ -253,7 +253,7 @@ contracts}]}`` — the coarse, whole-SOA view, where
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | `env_var` \| `endpoint` \| `package` \| `service`? | `null` | Filter to one contract kind (``env_var``/``package``/``service``/``endpoint``). |
+| `kind` | `env_var` \| `package` \| `service` \| `endpoint`? | `null` | Filter to one contract kind (``env_var``/``package``/``service``/``endpoint``). |
 | `repo` | str? | `null` | Keep only links touching a repo whose URI contains this substring. |
 | `min_precision` | `precise` \| `heuristic` \| `fuzzy` | `'heuristic'` | See instructions. |
 

@@ -312,9 +312,49 @@ class Plugin:
         return nullcontext()
 
 
-# Every ASCII punctuation character, which is exactly the set CommonMark lets
-# a backslash escape.
-_MARKDOWN_SPECIAL = re.compile(r"([!-/:-@\[-`{-~])")
+# What can open a construct anywhere in a line: `\` an escape of its own, `` ` ``
+# a code span, `*` and `~` emphasis and strikethrough, `[` `]` a link or image,
+# `<` an autolink or raw HTML, `|` a table cell, and `&` an entity, which needs a
+# `#` or ASCII alphanumeric after it. `_` emphasises only next to something that
+# is not a letter or digit (CommonMark's flanking rules), so `snake_case` is left
+# alone. A `(` right after `]` is escaped too: marked (VS Code's renderer)
+# unescapes `\[` and `\]` inside link text and parses it again, so in a link a
+# plugin builds around the text, `!\[x\](u)` would otherwise be an image.
+_MARKDOWN_INLINE = re.compile(
+    r"[\\`*~\[\]<|]|&(?=[#0-9A-Za-z])|(?<![^\W_])_|_(?![^\W_])|(?<=\])\("
+)
+# What starts a GFM autolink in a word: the `:` of `scheme://` or the `.` of
+# `www.`, which is the character escaped to stop it. marked starts one at a
+# `www.` wherever it falls in a word, not only where GFM says.
+_AUTOLINK = re.compile(r"(?<=[A-Za-z0-9]):(?=//)|(?i:www)\.")
+# What opens a block only at the start of a line: a heading, list item, block
+# quote, thematic break or setext underline, or an ordered list's `1.` or `1)`
+# (which needs a space after it, so `1.5` is left alone).
+_MARKDOWN_LEADING = re.compile(r"^(?:[#+\-=>]|\d{1,9}[.)](?!\S))")
+
+
+# `<` and `&` as entities, not `\<` and `\&`: Python-Markdown (behind Sublime
+# LSP's older mdpopups) escapes neither, so it would pass a tag through and
+# show the backslash before `&`. Neovim's hover float shows `&lt;` and `&amp;`
+# as `<` and `&`, where it would show the backslash.
+_ENTITIES = {"<": "&lt;", "&": "&amp;"}
+
+
+def _escape_char(m: re.Match[str]) -> str:
+    return _ENTITIES.get(m[0], "\\" + m[0])
+
+
+def _escape_last(m: re.Match[str]) -> str:
+    return f"{m[0][:-1]}\\{m[0][-1]}"
+
+
+def _escape_word(word: str) -> str:
+    escaped = _MARKDOWN_INLINE.sub(_escape_char, word)
+    if escaped == word:
+        return word
+    # A URL that needed an escape is kept from autolinking: the link a GFM
+    # client made would carry the backslash in its address.
+    return _AUTOLINK.sub(_escape_last, escaped)
 
 
 def escape_markdown(text: str) -> str:
@@ -322,13 +362,16 @@ def escape_markdown(text: str) -> str:
 
     For text a plugin does not control (teammate-written titles, keys and
     paths read from the graph), which ADR 0012 has the server render as plain
-    text inside its markdown. Every ASCII punctuation character is escaped:
-    ``:`` stops a bare URL from autolinking and ``&`` an entity. Leading and
-    trailing whitespace is dropped and every inner run collapses to one space,
-    so no line starts a heading, list or fence, and no indent starts a code
-    block.
+    text inside its markdown. Only a character that can start a construct is
+    escaped, because some clients (Neovim's hover float) show every backslash,
+    so most paths, URLs and ``snake_case`` names read as themselves. A bare URL
+    or email address that needs no escape stays bare, so a GFM client may
+    autolink it to the address it shows. Leading and trailing whitespace is
+    dropped and every inner run collapses to one space, so the text is one
+    line and no indent starts a code block.
     """
-    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.split()))
+    text = " ".join(_escape_word(word) for word in text.split())
+    return _MARKDOWN_LEADING.sub(_escape_last, text)
 
 
 def discover_plugins() -> dict[str, Plugin]:

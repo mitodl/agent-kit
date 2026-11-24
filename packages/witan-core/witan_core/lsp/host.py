@@ -52,6 +52,8 @@ what the page reads off ``tools/list`` when it speaks MCP itself."""
 UI_READ_COMMAND = "witan.uiRead"
 """One web UI read, for an editor webview that hosts the page (ADR 0012's
 amendment on the webview relay). Only :data:`UI_READ_TOOLS`, never a write."""
+HOVER_SECTION_SEPARATOR = "\n\n---\n\n"
+"""A markdown rule between two plugins' hover sections."""
 HOST_COMMANDS = (STATUS_COMMAND, UI_TOOLS_COMMAND, UI_READ_COMMAND)
 
 T = TypeVar("T")
@@ -417,7 +419,7 @@ class Host:
         ]
         if self.lens_fallback and (lenses := self._lenses_on(path, uri, line)):
             sections.append("\n\n".join(escape_markdown(lens.title) for lens in lenses))
-        return "\n\n---\n\n".join(sections) or None
+        return HOVER_SECTION_SEPARATOR.join(sections) or None
 
     def code_lenses(self, path: Path | None, uri: str) -> list[Lens]:
         """Every plugin's lenses. An unresolved one carries the plugin and

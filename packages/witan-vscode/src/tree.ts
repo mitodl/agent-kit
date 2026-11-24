@@ -3,6 +3,14 @@
 // own in_progress tasks (`witan.listMyWork`), not what a launch picked up.
 
 import * as vscode from "vscode";
+import {
+	type Applied,
+	appliedLabel,
+	DEFAULT_SCOPE,
+	requested,
+	type Scope,
+	scopeArgs,
+} from "./scope";
 
 export type ServerCommand = (
 	command: string,
@@ -25,7 +33,11 @@ export interface ProjectRow {
 	status?: string;
 }
 
+type ListName = "ready" | "mine" | "projects";
+
 interface Lists {
+	/** Per list: an older deployment can answer each in a different scope. */
+	applied: Record<ListName, Applied>;
 	repo: string;
 	branch: string | null;
 	ready: TaskRow[];
@@ -45,6 +57,8 @@ export class SectionNode {
 		readonly label: string,
 		readonly rows: TaskRow[] | ProjectRow[],
 		readonly kind: "task" | "project",
+		/** `undefined` for the branch's tasks, which no scope changes. */
+		readonly applied: Applied | undefined,
 	) {}
 }
 
@@ -79,18 +93,32 @@ export type WorkNode =
 export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 	private readonly changed = new vscode.EventEmitter<WorkNode | undefined>();
 	readonly onDidChangeTreeData = this.changed.event;
+	private readonly applied = new vscode.EventEmitter<Applied[]>();
+	/** Every scope the server answered it applied, per folder and list, on
+	 * each folder's load. */
+	readonly onDidApplyScope = this.applied.event;
 	private folders = new Map<string, FolderNode>();
+	private appliedLists = new Map<string, Applied>();
 
-	constructor(private readonly request: ServerCommand) {}
+	constructor(
+		private readonly request: ServerCommand,
+		public scope: Scope = DEFAULT_SCOPE,
+	) {}
 
 	refresh(): void {
 		this.folders.clear();
+		this.appliedLists.clear();
 		this.changed.fire(undefined);
+	}
+
+	setScope(scope: Scope): void {
+		this.scope = scope;
+		this.refresh();
 	}
 
 	async getChildren(node?: WorkNode): Promise<WorkNode[]> {
 		if (node === undefined) {
-			const folders = vscode.workspace.workspaceFolders ?? [];
+			const folders = this.listedFolders();
 			if (folders.length === 0) {
 				return [new MessageNode("Open a folder to see its witan work.", false)];
 			}
@@ -131,6 +159,17 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 					: vscode.TreeItemCollapsibleState.Expanded,
 			);
 			item.description = String(node.rows.length);
+			if (node.applied === undefined) {
+				item.tooltip = "This branch's tasks, whatever the scope.";
+				return item;
+			}
+			// Named on the section only where it is not the scope picked, which
+			// the view's description already shows.
+			const label = appliedLabel(node.applied, this.scope);
+			if (label !== appliedLabel(requested(this.scope), this.scope)) {
+				item.description += ` · ${label}`;
+			}
+			item.tooltip = `Scope: ${label}`;
 			return item;
 		}
 		if (node instanceof TaskNode) {
@@ -167,6 +206,20 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 		return item;
 	}
 
+	/** The folders whose work the view lists. A project is listed once,
+	 * through the folder it was picked from: a folder on the same graph would
+	 * list the same rows, and one on another graph none. If that folder is no
+	 * longer open, each open folder asks its own route. */
+	private listedFolders(): readonly vscode.WorkspaceFolder[] {
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		const { scope } = this;
+		if (!("project" in scope)) {
+			return folders;
+		}
+		const source = folders.find((f) => f.uri.toString() === scope.folder);
+		return source ? [source] : folders;
+	}
+
 	private folderNode(folder: vscode.WorkspaceFolder): FolderNode {
 		const key = folder.uri.toString();
 		let node = this.folders.get(key);
@@ -187,39 +240,76 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			node.lists = undefined;
 			return [new MessageNode(errorMessage(err), true)];
 		}
+		// A load a refresh or scope change has since replaced would relabel the
+		// view with the scope it was asked for.
 		const { folder } = node;
+		const key = folder.uri.toString();
+		if (this.folders.get(key) === node) {
+			for (const [list, applied] of Object.entries(lists.applied)) {
+				this.appliedLists.set(`${key} ${list}`, applied);
+			}
+			this.applied.fire([...this.appliedLists.values()]);
+		}
+		const { applied } = lists;
 		const sections: WorkNode[] = [
-			new SectionNode(folder, "In progress (mine)", lists.mine, "task"),
+			new SectionNode(
+				folder,
+				"In progress (mine)",
+				lists.mine,
+				"task",
+				applied.mine,
+			),
 		];
 		if (lists.branch && lists.forBranch.length > 0) {
 			sections.push(
-				new SectionNode(folder, `On ${lists.branch}`, lists.forBranch, "task"),
+				new SectionNode(
+					folder,
+					`On ${lists.branch}`,
+					lists.forBranch,
+					"task",
+					undefined,
+				),
 			);
 		}
 		sections.push(
-			new SectionNode(folder, "Ready", lists.ready, "task"),
-			new SectionNode(folder, "Projects", lists.projects, "project"),
+			new SectionNode(folder, "Ready", lists.ready, "task", applied.ready),
+			new SectionNode(
+				folder,
+				"Projects",
+				lists.projects,
+				"project",
+				applied.projects,
+			),
 		);
 		return sections;
 	}
 
 	private async load(folder: vscode.WorkspaceFolder): Promise<Lists> {
-		const args = { uri: folder.uri.toString() };
+		const args = { uri: folder.uri.toString(), ...scopeArgs(this.scope) };
 		const [ready, mine, projects] = (await Promise.all([
 			this.request("witan.listReadyTasks", args),
 			this.request("witan.listMyWork", args),
 			this.request("witan.listProjects", args),
 		])) as [
-			{
+			Applied & {
 				repo: string;
 				branch: string | null;
 				ready: TaskRow[];
 				for_branch: TaskRow[];
 			},
-			{ tasks: TaskRow[] },
-			{ projects: ProjectRow[] },
+			Applied & { tasks: TaskRow[] },
+			Applied & { projects: ProjectRow[] },
 		];
+		const applied = ({ scope, project }: Applied): Applied => ({
+			scope,
+			project,
+		});
 		return {
+			applied: {
+				ready: applied(ready),
+				mine: applied(mine),
+				projects: applied(projects),
+			},
 			repo: ready.repo,
 			branch: ready.branch,
 			ready: ready.ready,
