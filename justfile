@@ -389,6 +389,10 @@ bump package part:
     fi
     echo "  $dir/CHANGELOG.md"
     echo "  $dir/changelog.d/ (the collected fragments are now gone)"
+    # witan-council's bumpversion config also rewrites the image's version label.
+    if [[ "{{ package }}" == "witan-council" ]]; then
+        echo "  docker/witan.Dockerfile"
+    fi
     # uv.lock records every workspace member's version, so it moves with the
     # bump — `just check-versions` above runs uv and refreshes it. Left behind,
     # the next `uv lock --check` (and CI) fails on a repo that looks untouched.

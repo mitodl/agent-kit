@@ -393,6 +393,12 @@ filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
+# The image's version label. Relative to this directory, where `just bump` runs.
+[[tool.bumpversion.files]]
+filename = "../../../docker/witan.Dockerfile"
+search = "ARG WITAN_VERSION={current_version}"
+replace = "ARG WITAN_VERSION={new_version}"
+
 [tool.scriv]
 format = "md"
 fragment_directory = "changelog.d"
