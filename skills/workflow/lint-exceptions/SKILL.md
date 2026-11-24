@@ -69,6 +69,25 @@ right. Defer it visibly: say which findings you are not fixing and why, and leav
 them failing or open an issue. Do not convert "not mine to fix today" into a
 permanent exemption, which is what a config entry is.
 
+### Turning the check off is not one of the outcomes
+
+A suppression at least leaves a record at the site, with a rule identifier and a
+reason a reviewer can argue with. These leave nothing, and none of them is on
+the table above:
+
+| Bypass | What it actually does |
+| --- | --- |
+| `SKIP=<hook>`, `--no-verify` | Commits without running the hook. Either CI fails instead, or CI does not run that hook either and nothing ever checks it |
+| `--exit-zero`, or swallowing a hook's exit code | The tool keeps printing findings and stops failing on them, so the check is green and nobody reads the output |
+| `continue-on-error: true` on a workflow step | The same, one layer up: the job passes with the step red |
+| Deleting the test, the file, or the hook | Not a scope question |
+
+If a check genuinely has to be bypassed to land something - a hook broken
+upstream, a service outage, a release that cannot wait - say so where the person
+reviewing it will see it, and name what is going unchecked and when it gets
+checked. A bypass nobody mentioned is indistinguishable from a check that
+passed.
+
 ### Fixes that get skipped
 
 Each of these is a finding an agent routinely silences when the rule was simply
@@ -178,6 +197,13 @@ is the one most likely to be read by someone who has no idea why it is there.
   recommend turning it on.
 - **Prefer "next line" forms over region pairs.** A region someone later writes
   code inside silently covers the new code too.
+- **A rewrite that only takes the code out of the rule's range is a
+  suppression,** and meets the same bar. `shutil.which("git")` satisfies `S607`
+  while reading exactly the same `PATH` the rule objected to - and trades it for
+  an `S603`, because the executable is now a variable. A cast silences a type
+  error without making the type true. Ask what the rule was checking and whether
+  the rewrite changed it; if it did not, the honest version is the inline escape
+  with a reason, which at least says so.
 - **Never widen an existing exemption to cover a new case** without re-checking
   that the exemption still fits. A new violation inside a tree that already has a
   glob is the moment to narrow the glob, not to file under it.
