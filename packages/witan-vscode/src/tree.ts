@@ -16,7 +16,7 @@ import {
 	groupWaves,
 	type ProjectWaves,
 	type WaveTask,
-	wavesNotes,
+	wavesMessages,
 } from "./waves";
 
 const LIST_PROJECT_TASKS = "witan.listProjectTasks";
@@ -265,11 +265,10 @@ export class WorkTreeProvider implements vscode.TreeDataProvider<WorkNode> {
 			return [new MessageNode(errorMessage(err), true)];
 		}
 		const groups = groupWaves(result);
-		if (groups.length === 0) {
-			return [new MessageNode("Nothing is open in this project.", false)];
-		}
 		return [
-			...wavesNotes(result).map((note) => new MessageNode(note, true)),
+			...wavesMessages(result, groups).map(
+				(m) => new MessageNode(m.text, m.warning),
+			),
 			...groups.map((g) => new WaveNode(node.folder, g.label, g.tasks, result)),
 		];
 	}

@@ -5,6 +5,7 @@ import {
 	groupWaves,
 	type ProjectWaves,
 	type WaveTask,
+	wavesMessages,
 	wavesNotes,
 } from "../../src/waves.ts";
 
@@ -69,4 +70,22 @@ test("a cycle and a disagreement with task_ready are named by title", () => {
 			"task_ready and the waves disagree on TK-A; refresh.",
 		],
 	);
+});
+
+test("an empty project still shows a disagreement with task_ready", () => {
+	// task_ready returned a task the layout saw closed.
+	const empty: ProjectWaves = {
+		...result,
+		waves: 0,
+		tasks: [],
+		disagree: ["tk-x"],
+	};
+	assert.deepEqual(wavesMessages(empty, groupWaves(empty)), [
+		{
+			text: "task_ready and the waves disagree on tk-x; refresh.",
+			warning: true,
+		},
+		{ text: "Nothing is open in this project.", warning: false },
+	]);
+	assert.deepEqual(wavesMessages(result, groupWaves(result)), []);
 });

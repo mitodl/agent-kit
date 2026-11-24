@@ -62,6 +62,27 @@ export function wavesNotes(result: ProjectWaves): string[] {
 	];
 }
 
+export interface WavesMessage {
+	text: string;
+	/** Shown with the error icon: it needs a person's attention. */
+	warning: boolean;
+}
+
+/** The lines above a project's waves: its notes, then "nothing open" when
+ * no wave has a task. A task the layout has closed can still be in
+ * `task_ready`, so an empty project can carry a disagreement. */
+export function wavesMessages(
+	result: ProjectWaves,
+	groups: readonly WaveGroup[],
+): WavesMessage[] {
+	return [
+		...wavesNotes(result).map((text) => ({ text, warning: true })),
+		...(groups.length === 0
+			? [{ text: "Nothing is open in this project.", warning: false }]
+			: []),
+	];
+}
+
 /** The rows of `task`'s open blockers, in and outside the project. */
 export function blockersOf(task: WaveTask, result: ProjectWaves): WaveTask[] {
 	const bySlug = new Map(result.tasks.map((t) => [t.slug, t]));
