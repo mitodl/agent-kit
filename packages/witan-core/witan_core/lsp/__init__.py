@@ -12,6 +12,7 @@ import sys
 from .plugin import (
     BOUND_TOOLS,
     ENTRY_POINT_GROUP,
+    UI_READ_TOOLS,
     Capability,
     CommandContext,
     Context,
@@ -27,6 +28,7 @@ from .plugin import (
 __all__ = [
     "BOUND_TOOLS",
     "ENTRY_POINT_GROUP",
+    "UI_READ_TOOLS",
     "Capability",
     "CommandContext",
     "Context",

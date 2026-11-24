@@ -494,3 +494,19 @@ check", never as stale: a repo nobody indexed is not evidence the code is gone.
 
 `witan.ui_access.READ_TOOLS` and the fixtures moved with the set, as the
 2026-11-10 amendment requires.
+
+## Amendment (2026-11-24): an editor webview reads through the language server
+
+The VS Code client hosts this bundle in a webview. A webview page is served
+from no witan origin and must not hold a credential (ADR 0012, section 1), so
+§1's same-origin `/mcp` and §2's browser login do not apply to it. It reads
+through the language server's `witan.uiRead` instead, which runs each tool on
+the folder's own route, and the host there refuses anything outside §3's
+bound set (ADR 0012's 2026-11-24 amendment). The bound set does not change.
+
+On the page, `src/mcp.ts` is still the only module that knows how reads
+travel. It picks the relay when the page runs in a VS Code webview and MCP
+over streamable-http otherwise, and every view calls the same functions
+either way. The relay answers each tool's value already unwrapped, so the
+wrap-flag check against `tools/list` has nothing to check there; it still
+runs for every page that speaks MCP.

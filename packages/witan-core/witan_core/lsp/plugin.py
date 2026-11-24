@@ -24,6 +24,7 @@ from typing import Any, Protocol
 __all__ = [
     "BOUND_TOOLS",
     "ENTRY_POINT_GROUP",
+    "UI_READ_TOOLS",
     "Capability",
     "CommandContext",
     "Context",
@@ -39,6 +40,37 @@ __all__ = [
 ]
 
 ENTRY_POINT_GROUP = "witan.lsp.plugins"
+
+UI_READ_TOOLS = frozenset(
+    {
+        "task_ready",
+        "task_get",
+        "task_list",
+        "task_search",
+        "workflow_project_get",
+        "workflow_project_status",
+        "workflow_project_list",
+        "workflow_session_list",
+        "recall",
+        "memory_get",
+        "memory_list",
+        "memory_search",
+        "memory_contradictions",
+        "memory_stale_refs",
+        "code_repo_dependencies",
+        "code_interface_providers",
+        "code_interface_consumers",
+    }
+)
+"""ADR 0011's bound set: every read the web UI makes, and nothing else.
+
+The host relays these, and only these, for an editor webview that hosts the
+web UI (``witan.uiRead``, ADR 0012's amendment on the webview relay). The
+webview is the web UI, so ADR 0011 binds it, not this server's own binding.
+witan-council's ``witan.ui_access.READ_TOOLS`` is the same set (a test there
+holds the two equal); it cannot be imported from here, because witan-core
+depends on neither server.
+"""
 
 BOUND_TOOLS = frozenset(
     {
@@ -66,11 +98,14 @@ BOUND_TOOLS = frozenset(
         "task_release",
         # A project launch's prompt memories (``witan.cli_only``).
         "workflow_project_run_memories",
+        # The web UI's reads, which the host relays for a webview.
+        *UI_READ_TOOLS,
     }
 )
 """Every tool the language server may call, as ADR 0012 enumerates them.
 
-A plugin declares the subset it uses in :attr:`Plugin.tools`, and the host
+It includes :data:`UI_READ_TOOLS`, which the host relays for a webview. A
+plugin declares the subset it uses in :attr:`Plugin.tools`, and the host
 refuses to load one that names a tool outside this set. Widening it amends the
 ADR, the same rule ADR 0011 sets for the web UI's binding.
 """
