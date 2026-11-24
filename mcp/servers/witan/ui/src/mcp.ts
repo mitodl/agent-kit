@@ -22,7 +22,14 @@ import type {
 	WorkflowProjectSummary,
 	WorkflowSession,
 } from "./types.js";
-import { assertFlagsMatchServer, OPTIONAL_TOOLS, unwrap } from "./unwrap.js";
+import {
+	assertFlagsMatchServer,
+	BOUND_TOOLS,
+	OPTIONAL_TOOLS,
+	UnknownToolError,
+	unwrap,
+} from "./unwrap.js";
+import { type HostRelay, hostRelay } from "./webview.js";
 
 /**
  * The only file in the frontend that knows it is talking MCP.
@@ -31,6 +38,11 @@ import { assertFlagsMatchServer, OPTIONAL_TOOLS, unwrap } from "./unwrap.js";
  * transport, an envelope or a tool name. That is what lets the widgets
  * (spec §7) and a later Tauri shell be presentations of one read layer rather
  * than three clients that drift.
+ *
+ * Reads travel one of two ways, chosen here and nowhere else: MCP over
+ * streamable-http to the page's own origin, or, inside an editor webview,
+ * the editor's relay to the witan language server (`webview.ts`, ADR 0011's
+ * 2026-11-24 amendment).
  *
  * ★ THERE IS NO GENERIC `call(name, args)`, deliberately. ADR 0011 binds the
  * UI to an enumerated set of read tools, and a generic entry point would make
@@ -113,21 +125,27 @@ async function uiConfig(): Promise<UiConfig> {
 
 const PROTOCOL_ERA = "2026-07-28";
 
-let connected: Promise<Client> | null = null;
+/** How reads travel once connected. `read` answers the tool's unwrapped value. */
+interface Connection {
+	read(tool: string, args: Record<string, unknown>): Promise<unknown>;
+}
+
+let connected: Promise<Connection> | null = null;
 
 /** The tools the server listed on connect, each with its argument names. */
 let served: Map<string, Set<string>> | null = null;
 
 /**
- * The shared client, connected on first use.
+ * The shared connection, made on first use.
  *
  * Memoized rather than per-call: the connect is a round trip and a version
  * negotiation, and every view polls. A failed connect clears the memo so the
  * next read retries instead of resolving the same rejection forever.
  */
-export function client(): Promise<Client> {
+function connection(): Promise<Connection> {
 	if (!connected) {
-		connected = connect().catch((error) => {
+		const relay = hostRelay();
+		connected = (relay ? connectRelay(relay) : connectHttp()).catch((error) => {
 			connected = null;
 			throw error;
 		});
@@ -135,7 +153,45 @@ export function client(): Promise<Client> {
 	return connected;
 }
 
-async function connect(): Promise<Client> {
+/**
+ * Through the editor. The language server runs each read on the folder's own
+ * route and answers the tool's value already unwrapped, so there is no
+ * envelope and no wrap flag to check; what is left to check is that every
+ * required read is served at all.
+ */
+async function connectRelay(relay: HostRelay): Promise<Connection> {
+	const { tools } = await relay.tools();
+	const listed = new Map(
+		Object.entries(tools).map(([name, args]) => [name, new Set(args)]),
+	);
+	const missing = BOUND_TOOLS.filter(
+		(name) => !OPTIONAL_TOOLS.has(name) && !listed.has(name),
+	);
+	if (missing.length > 0) {
+		throw new Error(
+			`The witan language server serves none of ${missing.join(", ")} for ` +
+				"this folder; the page needs witan-council installed beside it.",
+		);
+	}
+	served = listed;
+	return {
+		async read(tool, args) {
+			if (!BOUND_TOOLS.includes(tool)) {
+				throw new UnknownToolError(tool);
+			}
+			try {
+				return await relay.read(tool, args);
+			} catch (error) {
+				throw new ToolCallError(
+					tool,
+					error instanceof Error ? error.message : String(error),
+				);
+			}
+		},
+	};
+}
+
+async function connectHttp(): Promise<Connection> {
 	const mcp = new Client(
 		// Sent even though it is optional: fastmcp's `client_supports_extension`
 		// reads `client_params`, which the server only builds when `clientInfo`
@@ -182,7 +238,7 @@ async function connect(): Promise<Client> {
 		})),
 	);
 
-	return mcp;
+	return { read: (tool, args) => callOverHttp(mcp, tool, args) };
 }
 
 /** Reset the memoized client. For tests, and for a login that replaces creds. */
@@ -197,7 +253,7 @@ export function resetClient(): void {
  * explorer needs the repo graph and both drill-down reads to work at all.
  */
 export async function codeGraphAvailable(): Promise<boolean> {
-	await client();
+	await connection();
 	return [...OPTIONAL_TOOLS].every((name) => served?.has(name) ?? false);
 }
 
@@ -216,7 +272,14 @@ async function read<T>(
 	tool: string,
 	args: Record<string, unknown>,
 ): Promise<T> {
-	const mcp = await client();
+	return (await connection()).read(tool, args) as Promise<T>;
+}
+
+async function callOverHttp(
+	mcp: Client,
+	tool: string,
+	args: Record<string, unknown>,
+): Promise<unknown> {
 	let result: Awaited<ReturnType<typeof mcp.callTool>>;
 	try {
 		result = await mcp.callTool({ name: tool, arguments: args });
@@ -246,7 +309,7 @@ async function read<T>(
 		throw new ToolCallError(tool, "returned no structured result");
 	}
 
-	return unwrap<T>(tool, result.structuredContent);
+	return unwrap(tool, result.structuredContent);
 }
 
 /** The text blocks of a failed call, which carry the server's message. */
@@ -509,7 +572,7 @@ export async function codeInterfaceProviders(args: {
 	key: string;
 	in_repo?: string;
 }): Promise<InterfaceBinding[]> {
-	await client();
+	await connection();
 	return read(
 		"code_interface_providers",
 		withInRepo(args, served?.get("code_interface_providers")),
@@ -521,7 +584,7 @@ export async function codeInterfaceConsumers(args: {
 	key: string;
 	in_repo?: string;
 }): Promise<InterfaceBinding[]> {
-	await client();
+	await connection();
 	return read(
 		"code_interface_consumers",
 		withInRepo(args, served?.get("code_interface_consumers")),

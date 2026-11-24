@@ -13,4 +13,13 @@ export default defineConfig({
 		outDir: "../witan/ui_dist",
 		emptyOutDir: true,
 	},
+	experimental: {
+		// Only index.html names the mount. A script or stylesheet names what it
+		// loads (lazy chunks, preloads, fonts) relative to its own URL, which
+		// under /ui/assets/ resolves to the same files. An editor webview serves
+		// the bundle from a path of its own, and rewrites the two URLs in
+		// index.html; it cannot rewrite the assets themselves.
+		renderBuiltUrl: (_filename, { hostType }) =>
+			hostType === "html" ? undefined : { relative: true },
+	},
 });

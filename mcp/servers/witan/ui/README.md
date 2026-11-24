@@ -53,6 +53,14 @@ project's lower-ranked matches. With Closed off, `task_search` runs once per
 live status and the rankings are interleaved, because it caps before any
 browser-side filter could drop closed rows.
 
+The VS Code extension (`packages/witan-vscode`) opens this same bundle in a
+webview. There the page speaks no MCP and holds no token: `mcp.ts` sends each
+read to the editor, which hands it to the witan language server's
+`witan.uiRead` on the panel's folder, and the server refuses any tool outside
+the bound set (ADR 0011's 2026-11-24 amendment). Only `index.html` names the
+`/ui/` mount; scripts and stylesheets load what they need relative to
+themselves, so the webview can serve the files from another path.
+
 ## Layout
 
 It sits here rather than under `packages/` because it is not independently
@@ -63,6 +71,7 @@ so its version is witan's.
 ui/
   src/
     mcp.ts        The read layer. The ONLY file that knows it speaks MCP.
+    webview.ts    In a VS Code webview, reads relayed through the editor.
     auth.ts       The deployed page's login (oidc-spa). Unused locally.
     unwrap.ts     Takes a result out of its envelope, keyed on the wrap flag.
     types.ts      Hand-written result types, kept honest by the fixtures.
