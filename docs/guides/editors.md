@@ -405,7 +405,7 @@ open in a list buffer.
   ;; before the default method, which strips :title as it recurses.
   (let* ((list-command (and (plist-get action :title)
                             (car (member (plist-get action :command)
-                                         witan-list-commands))))
+                                         witan-list-command))))
          (result (cl-call-next-method)))
     (when list-command
       (witan-show-list list-command result))
