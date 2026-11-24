@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from lsprotocol import types
+from markdown_it import MarkdownIt
 
 from witan_core.lsp import (
     BOUND_TOOLS,
@@ -699,6 +700,60 @@ def test_without_codelens_the_lenses_move_into_hover_and_code_actions(
     run(go())
 
 
+class Marked(Recorder):
+    """A hover built the way the plugins build theirs, around hostile text."""
+
+    capabilities = frozenset({Capability.HOVER})
+    text = "[evil](https://evil) *x* snake_case a/b:1"
+
+    def hover(self, ctx, uri, line, character):
+        e = escape_markdown(self.text)
+        return f"**witan**: {e}\n\nTasks:\n\n- [{e}](file:///r/m.py#L2)\n- {e}"
+
+
+@pytest.mark.parametrize(
+    ("content_format", "kind", "value"),
+    [
+        # VS Code lists markdown first, and so does Neovim.
+        (
+            [types.MarkupKind.Markdown, types.MarkupKind.PlainText],
+            types.MarkupKind.Markdown,
+            None,
+        ),
+        (None, types.MarkupKind.Markdown, None),
+        # eglot without markdown-mode lists only plaintext.
+        (
+            [types.MarkupKind.PlainText],
+            types.MarkupKind.PlainText,
+            "witan: {t}\n\nTasks:\n\n- {t}\n- {t}",
+        ),
+    ],
+)
+def test_hover_is_plain_text_for_a_client_that_prefers_it(
+    config, monkeypatch, content_format, kind, value
+):
+    work, _ = config
+    monkeypatch.chdir(work)
+    plugin = Marked("m")
+    capabilities = types.ClientCapabilities(
+        text_document=types.TextDocumentClientCapabilities(
+            hover=types.HoverClientCapabilities(content_format=content_format)
+        )
+    )
+
+    async def go():
+        async with lsp_session(
+            Host({"m": plugin}), [work], client_capabilities=capabilities
+        ) as session:
+            return (await _hover(session, (work / "m.py").as_uri(), 0)).contents
+
+    contents = run(go())
+    assert contents.kind == kind
+    assert contents.value == (
+        plugin.hover(None, "", 0, 0) if value is None else value.format(t=Marked.text)
+    )
+
+
 def test_a_client_advertising_only_workspace_codelens_gets_no_fallback(
     config, monkeypatch
 ):
@@ -939,19 +994,93 @@ def test_plugins_get_columns_in_code_points_whatever_the_encoding(config, monkey
     assert run(go(None, 3)) == "a"
 
 
+# Enough of GFM to cover what an editor renders: CommonMark plus tables and
+# strikethrough. markdown-it-py has no extended autolinks without linkify-it,
+# which a bare URL is left to (it renders as a link to exactly its own text).
+_MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+
+
+def _inline(markdown: str) -> list[tuple[str, str]]:
+    """``(type, content)`` of each inline token, after asserting ``markdown``
+    is one paragraph."""
+    tokens = _MARKDOWN.parse(markdown)
+    assert [t.type for t in tokens] == [
+        "paragraph_open",
+        "inline",
+        "paragraph_close",
+    ], markdown
+    return [(t.type, t.attrs.get("href", t.content)) for t in tokens[1].children or []]
+
+
+_INJECTIONS = [
+    "[a](b)",
+    "![i](u)",
+    "[a]: https://evil",
+    "<img src=x>",
+    "<https://evil>",
+    "&amp; &#38; &#x26;",
+    "line\n# two",
+    "# heading",
+    "- item",
+    "+ item",
+    "> quote",
+    "1. one",
+    "1) one",
+    "===",
+    "---",
+    "***",
+    "___",
+    "snake_case *x* _y_ __z__ a__b",
+    "**bold** a*b*c",
+    "~~gone~~ ~gone~",
+    "`code` ``code``",
+    "a | b\n|---|---|",
+    "back\\slash \\* end\\",
+    "    indented\tcode",
+    "see https://x.example and ann@x.example",
+]
+
+
+@pytest.mark.parametrize("text", _INJECTIONS)
+def test_escape_markdown_renders_text_as_itself(text):
+    """One paragraph of plain text whose content is ``text`` with its
+    whitespace collapsed: no block, link, image, emphasis, entity or HTML."""
+    assert _inline(escape_markdown(text)) == [("text", " ".join(text.split()))]
+
+
+@pytest.mark.parametrize("text", _INJECTIONS)
+def test_escaped_text_cannot_leave_a_link_the_plugin_built(text):
+    """witan-code writes ``[<escaped text>](<location>)``, so the text must not
+    close the link early and open one of its own. (markdown-it refuses a
+    ``file:`` destination, so this stands in an ``https:`` one.)"""
+    markdown = f"- [{escape_markdown(text)}](https://loc.example/m.py#L1) after"
+    tokens = _MARKDOWN.parse(markdown)
+    inline = next(t for t in tokens if t.type == "inline").children
+    assert [(t.type, t.attrs.get("href", t.content)) for t in inline] == [
+        ("link_open", "https://loc.example/m.py#L1"),
+        ("text", " ".join(text.split())),
+        ("link_close", ""),
+        ("text", " after"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("text", "markdown"),
     [
-        ("[a](b)", r"\[a\]\(b\)"),
-        ("![i](u)", r"\!\[i\]\(u\)"),
-        ("<img src=x>", r"\<img src\=x\>"),
-        ("&amp;", r"\&amp\;"),
-        ("line\n# two", r"line \# two"),
-        ("snake_case *x*", r"snake\_case \*x\*"),
-        ("see https://x.example", r"see https\:\/\/x\.example"),
-        ("ann@x.example", r"ann\@x\.example"),
-        ("    indented\tcode", r"indented code"),
+        # What a hover reads like where the client shows every backslash.
+        (
+            "https://github.com/test/lib lib/maths.py:1 compute",
+            "https://github.com/test/lib lib/maths.py:1 compute",
+        ),
+        ("MITOL_APP_BASE_URL", "MITOL_APP_BASE_URL"),
+        ("tk-make-helper-configurable-0a1b2c", "tk-make-helper-configurable-0a1b2c"),
+        ("Fix x -> y (and z!) & ship 1.5", "Fix x -> y (and z!) & ship 1.5"),
+        ("[a](b)", r"\[a\](b)"),
+        ("<img src=x>", r"\<img src=x>"),
+        ("&amp;", r"\&amp;"),
+        ("1. one", r"1\. one"),
+        ("_y_ a__b", r"\_y\_ a\_\_b"),
     ],
 )
-def test_escape_markdown_renders_text_as_itself(text, markdown):
+def test_escape_markdown_escapes_only_what_could_start_markup(text, markdown):
     assert escape_markdown(text) == markdown

@@ -100,6 +100,7 @@ entry_title_template = "[{{ version }}] - {{ date.strftime('%Y-%m-%d') }}"
 # providers get installed. sentry-sdk: the `sentry` extra; the tests assert on
 # configure_sentry's DSN gating and never-fatal behavior. pygls + lsprotocol:
 # the `lsp` extra; the language-server tests drive the host over real JSON-RPC.
+# markdown-it-py: the escaping tests render hover markdown to check it is text.
 test = [
     "pytest>=8",
     "rich>=13",
@@ -114,6 +115,7 @@ test = [
     "sentry-sdk>=2.20,<3",
     "pygls>=2,<3",
     "lsprotocol>=2025.0.0",
+    "markdown-it-py>=3",
 ]
 
 [tool.uv.sources]

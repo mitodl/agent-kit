@@ -270,9 +270,19 @@ class Plugin:
         raise NotImplementedError(command)
 
 
-# Every ASCII punctuation character, which is exactly the set CommonMark lets
-# a backslash escape.
-_MARKDOWN_SPECIAL = re.compile(r"([!-/:-@\[-`{-~])")
+# What can open a construct anywhere in a line: `\\` an escape of its own, `` ` ``
+# a code span, `*` and `~` emphasis and strikethrough, `[` `]` a link or image
+# (the `!` and `(` of one are inert without them), `<` an autolink or raw HTML,
+# `|` a table cell, and `&` an entity, which needs a `#` or ASCII alphanumeric
+# after it. `_` emphasises only next to something that is not a letter or digit
+# (CommonMark's flanking rules), so `snake_case` is left alone.
+_MARKDOWN_INLINE = re.compile(
+    r"[\\`*~\[\]<|]|&(?=[#0-9A-Za-z])|(?<![^\W_])_|_(?![^\W_])"
+)
+# What opens a block only at the start of a line: a heading, list item, block
+# quote, thematic break or setext underline, or an ordered list's `1.` or `1)`
+# (which needs a space after it, so `1.5` is left alone).
+_MARKDOWN_LEADING = re.compile(r"^(?:[#+\-=>]|\d{1,9}[.)](?!\S))")
 
 
 def escape_markdown(text: str) -> str:
@@ -280,13 +290,17 @@ def escape_markdown(text: str) -> str:
 
     For text a plugin does not control (teammate-written titles, keys and
     paths read from the graph), which ADR 0012 has the server render as plain
-    text inside its markdown. Every ASCII punctuation character is escaped:
-    ``:`` stops a bare URL from autolinking and ``&`` an entity. Leading and
-    trailing whitespace is dropped and every inner run collapses to one space,
-    so no line starts a heading, list or fence, and no indent starts a code
-    block.
+    text inside its markdown. Only a character that can start a construct is
+    escaped, because some clients (Neovim's hover float) show every backslash:
+    a path, URL or ``snake_case`` name reads as itself. A bare URL or email
+    address stays bare, so a GFM client may autolink it, and the link it makes
+    shows exactly where it goes. Leading and trailing whitespace is dropped
+    and every inner run collapses to one space, so the text is one line and no
+    indent starts a code block.
     """
-    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.split()))
+    text = _MARKDOWN_INLINE.sub(lambda m: "\\" + m[0], " ".join(text.split()))
+    # The escape goes before the marker's last character.
+    return _MARKDOWN_LEADING.sub(lambda m: f"{m[0][:-1]}\\{m[0][-1]}", text)
 
 
 def discover_plugins() -> dict[str, Plugin]:
