@@ -20,8 +20,16 @@ on:
       - "mcp/servers/witan/schema/**"
       - "mcp/servers/witan-code/witan_code/**"
       - "uv.lock"
-      # The checks import REAL_HOME from it, and pytest loads it first.
-      - "testsupport/hermetic.py"
+      # The `witan.lsp.plugins` entry points that wire each server's features
+      # into `witan lsp` (uv.lock does not record them), and the pytest config
+      # this suite runs under.
+      - "mcp/servers/witan/pyproject.toml"
+      - "mcp/servers/witan-code/pyproject.toml"
+      # Loaded before the suite: the rootdir conftest, the tests conftest and
+      # the hermetic guard they import.
+      - "mcp/servers/witan/conftest.py"
+      - "mcp/servers/witan/tests/conftest.py"
+      - "testsupport/**"
   pull_request:
     paths: *editor_paths
 
@@ -30,7 +38,8 @@ permissions:
 
 env:
   # The guide asks for Neovim 0.12 or later and Emacs 30 or later. Emacs is
-  # the floor; Neovim is the release the guide was checked with.
+  # the latest 30.x; Neovim is the release the guide was checked with. The
+  # guide's "What each editor shows" section names both, so bump it too.
   NVIM_VERSION: v0.12.6
   NVIM_SHA256: 474430d53e6264f6d6dd18db42d6dc9df3a1b56ca9e88a325bbf860e1a811d87
   EMACS_VERSION: "30.2"
@@ -39,6 +48,8 @@ jobs:
   editors:
     name: witan editors (Neovim, eglot, lsp-mode against witan lsp)
     runs-on: ubuntu-latest
+    # Each driver has its own 600s limit; the suite took 3.5 minutes locally.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

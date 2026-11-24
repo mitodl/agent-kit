@@ -18,8 +18,6 @@ local notes = {}
 local orig_notify = vim.notify
 vim.notify = function(msg, level) table.insert(notes, msg); orig_notify(msg, level) end
 
-dofile(vim.env.WITAN_LUA)
-
 local function wait(ms, cond) return vim.wait(ms, cond, 50) end
 local function c() return vim.lsp.get_clients({ name = 'witan' })[1] end
 local function sync(method, params, bufnr)
@@ -45,6 +43,9 @@ local function hover_text(h)
 end
 
 local ok, err = xpcall(function()
+-- Inside the xpcall, so a guide block that fails to load is recorded as the
+-- driver error rather than leaving Neovim running.
+dofile(vim.env.WITAN_LUA)
 vim.cmd.edit(S .. '/repos/app/app/service.py')
 local buf = vim.api.nvim_get_current_buf()
 rec('attached', wait(120000, function() return c() ~= nil and c().initialized end))
@@ -110,10 +111,26 @@ for _, case in ipairs({
   rec(case[3], qf_wait(case[2]))
 end
 
--- launch a task: terminal job with unset_env removed and env applied
+-- Rewrites the next response the witan client gets, for a launch spec the
+-- local store would not produce on its own.
+local real_request = c().request
+local function patch_once(mutate)
+  local cl = c()
+  cl.request = function(self, method, params, handler, b)
+    cl.request = real_request
+    return real_request(self, method, params, function(err, result, ...)
+      if result then mutate(result) end
+      return handler(err, result, ...)
+    end, b)
+  end
+end
+
+-- launch a task: terminal job with unset_env removed and env applied. A local
+-- store's spec sets no env, so add a name for the config to set.
 vim.cmd.edit(S .. '/repos/app/app/service.py')
 vim.env.STUB_OUT = S .. '/stub-task.json'
 vim.env.EDITOR_MARK = 'kept'
+patch_once(function(r) r.env = vim.tbl_extend('force', r.env or {}, { SPEC_MARK = 'set' }) end)
 vim.cmd('WitanRunTask ' .. vim.env.TASK)
 rec('run_task_stub_ran', wait(60000, function() return vim.uv.fs_stat(S .. '/stub-task.json') ~= nil end))
 rec('run_task_terminal', vim.bo.buftype)
@@ -127,18 +144,7 @@ vim.cmd('WitanRunProject ' .. vim.env.PROJECT)
 rec('run_project_stub_ran', wait(60000, function() return vim.uv.fs_stat(S .. '/stub-project.json') ~= nil end))
 vim.cmd.tabclose()
 
--- an unknown spec version is refused; patch the next response
-local real_request = c().request
-local function patch_once(mutate)
-  local cl = c()
-  cl.request = function(self, method, params, handler, b)
-    cl.request = real_request
-    return real_request(self, method, params, function(err, result, ...)
-      if result then mutate(result) end
-      return handler(err, result, ...)
-    end, b)
-  end
-end
+-- an unknown spec version is refused
 notes = {}
 patch_once(function(r) r.version = 2 end)
 vim.env.STUB_OUT = S .. '/stub-v2.json'
@@ -154,6 +160,8 @@ vim.cmd('WitanRunTask ' .. vim.env.TASK2)
 wait(60000, function() for _, n in ipairs(notes) do if n:match('released') then return true end end return false end)
 rec('failed_launch_notes', notes)
 pcall(vim.cmd.tabclose)
+vim.cmd('WitanMyWork')
+rec('list_mywork_after_release', qf_wait('witan.listMyWork'))
 
 -- a refused launch: no such task
 notes = {}

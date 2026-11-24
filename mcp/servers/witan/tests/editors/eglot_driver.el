@@ -94,7 +94,12 @@
       ;; launch a task in a make-term buffer
       (setenv "STUB_OUT" (concat S "/stub-task.json"))
       (setenv "EDITOR_MARK" "kept")
-      (witan-run-task (getenv "TASK"))
+      ;; A local store's spec sets no env, so add a name for the config to set.
+      (let* ((real witan-execute-function)
+             (witan-execute-function
+              (lambda (c a) (let ((r (funcall real c a)))
+                              (plist-put r :env (plist-put (plist-get r :env) :SPEC_MARK "set"))))))
+        (witan-run-task (getenv "TASK")))
       (rec "run_task_stub_ran" (wait-for 60 (lambda () (file-exists-p (concat S "/stub-task.json")))))
       (rec "run_task_buffer" (buffer-name))
       (rec "run_task_term_process" (and (get-buffer-process (current-buffer)) t))

@@ -113,7 +113,15 @@
       (witan-stale-refs) (rec "list_stale_refs" (list-buffer "witan.listStaleRefs"))
       (setenv "STUB_OUT" (concat S "/stub-task.json"))
       (setenv "EDITOR_MARK" "kept")
-      (witan-run-task (getenv "TASK"))
+      ;; A local store's spec sets no env, so add a name for the config to set.
+      (let* ((real witan-execute-function)
+             (witan-execute-function
+              (lambda (c a) (let ((r (funcall real c a)))
+                              (unless (hash-table-p (gethash "env" r))
+                                (puthash "env" (make-hash-table :test #'equal) r))
+                              (puthash "SPEC_MARK" "set" (gethash "env" r))
+                              r))))
+        (witan-run-task (getenv "TASK")))
       (rec "run_task_stub_ran" (wait-for 60 (lambda () (file-exists-p (concat S "/stub-task.json")))))
       (find-file (concat S "/repos/app/app/service.py"))
       (witan-my-work) (rec "list_mywork_after_launch" (list-buffer "witan.listMyWork"))

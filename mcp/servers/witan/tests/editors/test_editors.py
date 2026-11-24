@@ -75,6 +75,20 @@ AGENT_VARS = (
     "SENTRY_DSN",
     "VIRTUAL_ENV",
 )
+# Inherited by the editors and the server from a developer's shell: a
+# PYTHONPATH reaches `witan lsp`, which runs without -I, and the editor ones
+# change what loads.
+CLEARED_PREFIXES = ("WITAN_", "OTEL_", "CLAUDE_CODE_", "ANTHROPIC_")
+CLEARED_VARS = (
+    *AGENT_VARS,
+    "CLAUDECODE",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "EMACSLOADPATH",
+    "NVIM",
+    "NVIM_APPNAME",
+    "NVIM_LOG_FILE",
+)
 
 # The agent a launch spec names. It records how it was started, as JSON, at
 # the path the driver puts in STUB_OUT.
@@ -85,7 +99,7 @@ with open(os.environ["STUB_OUT"], "w") as f:
                "env": {{n: os.environ.get(n) for n in {names!r}}}}}, f)
 print("stub agent ran")
 """
-STUB_ENV_NAMES = ["CLAUDE_SESSION_ID", "CLAUDE_PROJECT_DIR", "EDITOR_MARK"]
+STUB_ENV_NAMES = ["CLAUDE_SESSION_ID", "CLAUDE_PROJECT_DIR", "EDITOR_MARK", "SPEC_MARK"]
 
 
 def editor(name: str) -> str:
@@ -140,8 +154,11 @@ def editor_env(root: Path) -> dict[str, str]:
     """The environment every editor, server and seeding command runs in."""
     home = root / "home"
     bin_dir = root / "bin"
+    runtime = root / "run"
     for d in (home / ".config" / "witan", home / ".local" / "share", bin_dir):
         d.mkdir(parents=True, exist_ok=True)
+    # Neovim's server socket goes here.
+    runtime.mkdir(mode=0o700)
 
     omnigraph = shutil.which("omnigraph")
     assert omnigraph, "omnigraph is not on PATH"
@@ -153,7 +170,7 @@ def editor_env(root: Path) -> dict[str, str]:
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(("WITAN_", "OTEL_")) and k not in AGENT_VARS
+        if not k.startswith(CLEARED_PREFIXES) and k not in CLEARED_VARS
     }
     # Nothing from the real home: a real `claude` there must not be what a
     # launch finds. bin_dir holds the stub and the omnigraph link; the server's
@@ -161,7 +178,7 @@ def editor_env(root: Path) -> dict[str, str]:
     system_path = [
         d
         for d in os.environ["PATH"].split(os.pathsep)
-        if d and not Path(d).resolve().is_relative_to(REAL_HOME)
+        if d and not Path(d).resolve().is_relative_to(REAL_HOME.resolve())
     ]
     env.update(
         PATH=os.pathsep.join(
@@ -172,6 +189,7 @@ def editor_env(root: Path) -> dict[str, str]:
         XDG_CACHE_HOME=str(home / ".cache"),
         XDG_DATA_HOME=str(home / ".local" / "share"),
         XDG_STATE_HOME=str(home / ".local" / "state"),
+        XDG_RUNTIME_DIR=str(runtime),
         WITAN_CONFIG=str(home / ".config" / "witan" / "config.toml"),
         WITAN_TOKEN_CACHE=str(home / ".config" / "witan" / "tokens.json"),
         WITAN_MERGE_WATERMARKS=str(
@@ -238,21 +256,24 @@ def run_driver(store: Store, argv: list[str], **extra: str) -> dict:
         **extra,
     }
     with log.open("w") as out:
-        proc = subprocess.run(
-            argv,
-            env=env,
-            cwd=store.app,
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            timeout=DRIVER_TIMEOUT_SECONDS,
-            check=False,
-        )
+        try:
+            returncode = subprocess.run(
+                argv,
+                env=env,
+                cwd=store.app,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                timeout=DRIVER_TIMEOUT_SECONDS,
+                check=False,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            returncode = f"killed after {DRIVER_TIMEOUT_SECONDS}s"
     recorded = json.loads(result.read_text()) if result.exists() else None
     # Shown by pytest only when an assertion below fails.
-    print(f"exit {proc.returncode}\n--- editor log (tail)\n{log.read_text()[-4000:]}")
+    print(f"exit {returncode}\n--- editor log (tail)\n{log.read_text()[-4000:]}")
     print("--- recorded\n" + json.dumps(recorded, indent=2))
-    assert proc.returncode == 0, "the editor exited non-zero; see its log above"
+    assert returncode == 0, "the editor did not exit cleanly; see its log above"
     assert recorded is not None, "the driver recorded nothing; see the editor log above"
     assert recorded.get("driver_error") is None, recorded["driver_error"]
     return recorded
@@ -265,14 +286,19 @@ def plain(text: str | None) -> str:
 
 
 def check_stub_runs(store: Store) -> None:
-    """The task and project launches started the agent per the launch spec."""
-    for name in ("task", "project"):
+    """The task and project launches started the agent per the launch spec.
+
+    The driver adds ``SPEC_MARK`` to the task launch's ``env``, since a local
+    store's spec sets none, so the config's "then set env" step is exercised.
+    """
+    for name, spec_mark in (("task", "set"), ("project", None)):
         run = store.stub_run(name)
         assert Path(run["cwd"]) == store.app, name
         assert run["env"] == {
             "CLAUDE_SESSION_ID": None,
             "CLAUDE_PROJECT_DIR": None,
             "EDITOR_MARK": "kept",
+            "SPEC_MARK": spec_mark,
         }, name
 
 
@@ -296,12 +322,9 @@ def check_emacs(r: dict, store: Store) -> None:
     assert r["attached"] is True
     assert any(store.stale_memory in d for d in r["diagnostics_service"])
     check_hovers(r, store)
-    assert any(
-        f"{store.app}/app/service.py:{n}" == ref
-        for n in (5, 9)
-        for ref in r["references_helper"]
-    )
-    assert len(r["references_helper"]) == 2
+    assert sorted(r["references_helper"]) == [
+        f"{store.app}/app/service.py:{n}" for n in (5, 9)
+    ]
     assert emacs_rows(r["impact_list"]) == ["provider of env_var MITOL_APP_BASE_URL"]
     ready = emacs_rows(r["list_ready"])
     assert any(store.task in row for row in ready) and any(
@@ -340,6 +363,9 @@ def test_neovim(store: Store, snippets: dict[str, Path]) -> None:
             "NONE",
             "-c",
             f"luafile {HERE / 'nvim_driver.lua'}",
+            # Reached only when the driver dies before its own `qa!`.
+            "-c",
+            "cq 1",
         ],
         WITAN_LUA=str(snippets["witan.lua"]),
     )
@@ -392,6 +418,8 @@ def test_neovim(store: Store, snippets: dict[str, Path]) -> None:
     assert [("launch spec version 2" in n) for n in refused["notes"]] == [True]
     assert refused["tabs_opened"] == 0 and refused["stub_ran"] is False
     assert any(f"released {store.task2}" in n for n in r["failed_launch_notes"])
+    # The release took effect, not only ran: the task is no longer held.
+    assert not any(store.task2 in t for t in texts(r["list_mywork_after_release"]))
     assert any("tk-does-not-exist not launched" in n for n in r["refused_launch_notes"])
     assert [
         (lnum, "has no code index" in msg)
@@ -422,6 +450,9 @@ def test_eglot(store: Store, snippets: dict[str, Path]) -> None:
     assert r["code_actions_helper"] == ["1 caller"]
     assert emacs_rows(r["code_action_list"]) == ["Service.run"]
     assert any("cross-repo" in a for a in r["code_actions_base_url"])
+    # ...and each lens's text is in the hover on its line.
+    assert "1 caller" in plain(r["hover_helper"])
+    assert "cross-repo binding" in plain(r["hover_base_url"])
     # One server per project, so lib's definition is named in the hover only.
     assert r["eglot_lib_servers"] == 2
     assert r["run_task_buffer"] == f"*witan {store.task}*"
