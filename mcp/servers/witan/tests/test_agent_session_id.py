@@ -1,10 +1,13 @@
 """The agent session id under Claude Code, Pi and Codex.
 
-Everything that keys on "the current agent session" — the parked workflow
-session handle, the Stop hook's auto-close, the local-stdio provenance and
-task-claim fallbacks, the remote proxy's injected ``session_id`` — resolves it
-through ``session_state.current_session_id``: an explicit value, else a
-runner's ``$WITAN_SESSION_ID``, else ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``.
+The parked workflow session handle, the Stop hook's auto-close and the
+local-stdio provenance fallback resolve the session through
+``session_state.current_session_id``: an explicit value, else
+``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``,
+else a runner's ``$WITAN_SESSION_ID``. A task claim's holder and the remote
+proxy's injected ``session_id`` resolve it through
+``session_state.claim_session_id``, which reads ``$WITAN_SESSION_ID`` first so
+a runner's worker slots never share a claim.
 Claude-keyed behaviour must be byte-identical to what it was before Pi was a
 source; Pi and Codex must get the same auto-close Claude does. Codex's Stop hook
 has no session variable, so ``witan session-checkpoint`` reads the id from the
@@ -67,18 +70,55 @@ def test_codex_id_is_the_last_fallback(monkeypatch):
     assert session_state.current_session_id() == PI_SID
 
 
-def test_a_runners_id_beats_every_harness_id(monkeypatch):
+def test_the_two_resolution_orders():
+    """A claim reads the runner's slot id first; the handle reads it last."""
+    assert session_state.SESSION_ID_ENV_VARS == (
+        "WITAN_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "PI_SESSION_ID",
+        "CODEX_SESSION_ID",
+    )
+    assert session_state.HANDLE_SESSION_ID_ENV_VARS == (
+        "CLAUDE_SESSION_ID",
+        "PI_SESSION_ID",
+        "CODEX_SESSION_ID",
+        "WITAN_SESSION_ID",
+    )
+
+
+def test_a_runners_id_decides_a_claim(monkeypatch):
     """A runner sets ``$WITAN_SESSION_ID`` per worker slot, and it has to decide
-    under every harness, including one that exports an id of its own."""
+    the claim holder under every harness, including one that exports an id of
+    its own."""
     monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
     monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
     monkeypatch.setenv("PI_SESSION_ID", PI_SID)
     monkeypatch.setenv("CODEX_SESSION_ID", CODEX_SID)
-    assert session_state.current_session_id() == "slot-1"
-    assert session_state.current_session_id("explicit-1") == "explicit-1"
+    assert session_state.claim_session_id() == "slot-1"
+    assert session_state.claim_session_id("explicit-1") == "explicit-1"
 
     monkeypatch.setenv("WITAN_SESSION_ID", "")
+    assert session_state.claim_session_id() == CLAUDE_SID
+
+
+def test_a_runners_id_is_the_handles_last_fallback(monkeypatch):
+    """The handle stays keyed by the harness id the agent passes to
+    ``workflow_session_start`` and the checkpoints resolve; a harness that
+    exports none (Copilot, OpenCode) falls back to the slot id."""
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+    monkeypatch.setenv("PI_SESSION_ID", PI_SID)
     assert session_state.current_session_id() == CLAUDE_SID
+
+    monkeypatch.delenv("CLAUDE_SESSION_ID")
+    assert session_state.current_session_id() == PI_SID
+
+    monkeypatch.delenv("PI_SESSION_ID")
+    monkeypatch.setenv("CODEX_SESSION_ID", CODEX_SID)
+    assert session_state.current_session_id() == CODEX_SID
+
+    monkeypatch.delenv("CODEX_SESSION_ID")
+    assert session_state.current_session_id() == "slot-1"
 
 
 def test_remote_proxy_sends_the_runners_id(monkeypatch):
@@ -87,6 +127,18 @@ def test_remote_proxy_sends_the_runners_id(monkeypatch):
     monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
     monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
     assert RemoteServerProxy._resolve_session_id(None) == "slot-1"
+
+
+def test_remote_proxy_finds_the_handle_by_the_harness_id(tmp_state_dir, monkeypatch):
+    """Under a runner the proxy's ``session_slug`` still comes from the handle
+    parked under the harness id, not the slot id its claims use."""
+    from witan.remote.proxy import RemoteServerProxy
+
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+    assert session_state.write_handle(CLAUDE_SID, {"session_slug": "ws-claude"})
+    assert session_state.write_handle("slot-1", {"session_slug": "ws-slot"})
+    assert RemoteServerProxy._resolve_session_slug(None) == "ws-claude"
 
 
 def test_empty_values_fall_through(monkeypatch):
@@ -221,6 +273,79 @@ def test_claude_checkpoint_is_unchanged_when_both_ids_are_set(server, monkeypatc
     assert _closed(srv, proj["slug"], claude["session_slug"])
     assert not _closed(srv, proj["slug"], pi["session_slug"])
     assert session_state.read_handle(PI_SID) is not None
+
+
+@requires_omnigraph
+def test_claude_checkpoint_under_a_runner_finds_the_claude_handle(server, monkeypatch):
+    """The agent passes ``$CLAUDE_SESSION_ID`` to ``workflow_session_start``
+    as the skills say; a runner's slot id in the Stop hook's env must not send
+    the close looking under a different id."""
+    from witan import server as srv
+    from witan.cli import _common, hooks
+
+    monkeypatch.setattr(_common, "_server", srv)
+    proj = server.workflow_project_create(title="runner claude", description="d")
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=CLAUDE_SID, phase="spec"
+    )
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+
+    hooks.session_checkpoint()
+
+    assert _closed(srv, proj["slug"], handle["session_slug"])
+    assert session_state.read_handle(CLAUDE_SID) is None
+
+
+@requires_omnigraph
+def test_cli_session_start_under_a_runner_is_closed_by_the_pi_checkpoint(
+    server, monkeypatch
+):
+    """``witan session start`` run from Pi's bash tool under a runner sees
+    both ids. It parks the handle under the Pi id, because Pi's checkpoint
+    child carries only that one."""
+    from witan import server as srv
+    from witan.cli import _common, hooks
+    from witan.cli import session as session_cli
+
+    monkeypatch.setattr(_common, "_server", srv)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    monkeypatch.setenv("PI_SESSION_ID", PI_SID)
+    proj = server.workflow_project_create(title="runner pi", description="d")
+    session_cli.session_start(proj["slug"], phase="spec")
+    handle = session_state.read_handle(PI_SID)
+    assert handle and handle["session_id"] == PI_SID
+
+    # The extension's checkpoint child: the slot id dropped, the Pi id set.
+    monkeypatch.delenv("WITAN_SESSION_ID")
+    hooks.session_checkpoint()
+
+    assert _closed(srv, proj["slug"], handle["session_slug"])
+
+
+@requires_omnigraph
+def test_cli_session_start_without_a_harness_id_parks_under_the_slot_id(
+    server, monkeypatch
+):
+    """Copilot and OpenCode export no id, so the slot id keys the handle and
+    the Stop hook in the same env finds it."""
+    from witan import server as srv
+    from witan.cli import _common, hooks
+    from witan.cli import session as session_cli
+
+    monkeypatch.setattr(_common, "_server", srv)
+    for name in session_state.HARNESS_SESSION_ID_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    proj = server.workflow_project_create(title="runner bare", description="d")
+    session_cli.session_start(proj["slug"], phase="spec")
+    handle = session_state.read_handle("slot-1")
+    assert handle and handle["session_id"] == "slot-1"
+
+    hooks.session_checkpoint()
+
+    assert _closed(srv, proj["slug"], handle["session_slug"])
 
 
 def test_checkpoint_without_any_id_is_a_noop(

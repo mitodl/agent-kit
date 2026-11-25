@@ -371,10 +371,12 @@ The cost is that a client cannot tell which tasks a launched project session
 picked up. Until something needs that, a client shows the person's own
 `in_progress` tasks instead, from `witan.listMyWork`. `WITAN_SESSION_ID` as the runners project uses it
 (one id per worker slot, set by the runner) is a separate decision, and nothing
-here depends on it. It went into `SESSION_ID_ENV_VARS` for that use (ahead of
-the Claude and Pi variables) after this ADR was accepted, so a launch now strips
-an inherited one like the other ids: the launcher before it claims, and the
-spec's `unset_env` for the agent. The hazard above still holds inside a
+here depends on it. It went into `SESSION_ID_ENV_VARS` for that use after
+this ADR was accepted, ahead of the harness ids for a claim's holder only: the
+workflow-session handle reads it after them (`HANDLE_SESSION_ID_ENV_VARS`), so
+a worker's handle stays keyed by the harness id its Stop hook resolves. A
+launch strips an inherited one like the other ids: the launcher before it
+claims, and the spec's `unset_env` for the agent. The hazard above still holds inside a
 worker: an agent started by hand from a worker's shell inherits the slot id
 and shares its claim holder, so a nested launch has to go through
 `witan task run`.

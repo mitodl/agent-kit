@@ -31,7 +31,7 @@ only settings a local, single-user install normally needs.
 | `WITAN_OUTPUT_FORMAT` | `txt` | Default CLI output format: `txt`, `json`, `toml`, or `yaml`. Equivalent to passing `--output-format`. |
 | `WITAN_S3_PROFILE` | — | AWS CLI profile exported into omnigraph subprocesses for an `s3://` store. Witan delegates to `aws configure export-credentials`, so credentials stay out of this config file. Ignored for local and `http(s)://` stores. |
 | `WITAN_S3_REGION` | — | Optional AWS region supplied with `WITAN_S3_PROFILE`. Sets both `AWS_REGION` and `AWS_DEFAULT_REGION` for the omnigraph subprocess. |
-| `WITAN_SESSION_ID` | — | Agent session id read ahead of `$CLAUDE_SESSION_ID`, `$PI_SESSION_ID` and `$CODEX_SESSION_ID` wherever witan falls back to the environment for one: a task claim's holder (`<author>#<digest>`) and the CLI proxy's `session_id`. An explicit `session_id` argument still wins. A runner sets one per worker slot so parallel workers under one author never share a claim. You do not set it yourself, and a `witan task run` launch strips an inherited one. |
+| `WITAN_SESSION_ID` | — | Agent session id for task claims, read ahead of `$CLAUDE_SESSION_ID`, `$PI_SESSION_ID` and `$CODEX_SESSION_ID` for a claim's holder (`<author>#<digest>`) and the CLI proxy's `session_id`. An explicit `session_id` argument still wins. The workflow-session handle reads it last, after the harness ids, so a harness with no id of its own still gets one. A runner sets one per worker slot so parallel workers under one author never share a claim. You do not set it yourself, and a `witan task run` launch strips an inherited one. |
 
 ## Repository and target scoping
 

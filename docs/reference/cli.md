@@ -855,8 +855,8 @@ Link a session to a workflow project.
 * `PROJECT-SLUG, --project-slug`: The ``wp-`` slug of the project this session belongs to. **[required]**
 * `--phase CHOICE`: The phase this session is working in. **[required]** *[choices: discovery, spec, implementation, delivery]*
 * `--session-id STR`: Unique id for the session.
-    Defaults to ``$WITAN_SESSION_ID``, else ``$CLAUDE_SESSION_ID``, else
-    ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
+    Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
+    ``$CODEX_SESSION_ID``, else ``$WITAN_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
 * `--repo STR`: Repo URI to scope the session to (default: auto-detected).
 * `--tags STR..., --empty-tags`: Optional tags.
 

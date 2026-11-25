@@ -52,10 +52,12 @@ So:
   someone is on it. Pick another task — do not `force` past a live lease
   without a reason you can state.
 - **Pass `session_id`, not `assignee`.** `task_claim(slug=..., session_id=...)`
-  — your `$CLAUDE_SESSION_ID` on Claude Code, `$PI_SESSION_ID` on Pi (read
-  your own platform's variable with `echo`, not a fallback chain: an agent
-  launched from the other one can inherit its id), any stable per-run id
-  elsewhere.
+  — `$WITAN_SESSION_ID` when it is set (a runner sets one per worker slot, and
+  workers it starts can share an inherited harness id), otherwise your
+  `$CLAUDE_SESSION_ID` on Claude Code, `$PI_SESSION_ID` on Pi (read your own
+  platform's variable with `echo`, not a fallback chain: an agent launched
+  from the other one can inherit its id), any stable per-run id elsewhere.
+  This is for claims only: `workflow_session_start` still takes the harness id.
   It qualifies the holder as `<you>#<session>` so your own parallel sessions
   are told apart; without it they all claim under one name, the contention
   check cannot separate them, and the second session silently renews the
@@ -254,7 +256,7 @@ MCP call fails, tell the user the witan server is not connected and stop.
   task; "None" means claim nothing and stop.
 - On a chosen task: claim it (that is what picking it means — see **Claim
   before you work it**). Call
-  `task_claim(slug="<slug>", session_id="<$CLAUDE_SESSION_ID or $PI_SESSION_ID>")`.
+  `task_claim(slug="<slug>", session_id="<$WITAN_SESSION_ID if set, else $CLAUDE_SESSION_ID or $PI_SESSION_ID>")`.
   `task_claim` sets `in_progress` with a lease and **refuses if someone else
   holds it** (`{"claimed": false, "held_by": ...}`) — surface that and offer
   another task instead of overwriting. On success confirm: "Claimed **{title}**

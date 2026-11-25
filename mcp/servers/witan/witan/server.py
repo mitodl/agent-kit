@@ -926,7 +926,7 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     through the CLI proxy) has to pass its own.
 
     The environment is still consulted as the local-stdio fallback, via
-    ``session_state.current_session_id`` (``$WITAN_SESSION_ID``, which a
+    ``session_state.claim_session_id`` (``$WITAN_SESSION_ID``, which a
     runner sets per worker slot, else ``$CLAUDE_SESSION_ID``, else
     ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``; Pi and Codex export theirs
     only to the commands their shell tools run, not to the MCP servers they
@@ -943,7 +943,7 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     if assignee:
         return assignee
     identity = _current_author()
-    session = session_state.current_session_id(session_id)
+    session = session_state.claim_session_id(session_id)
     suffix = _session_suffix(session)
     return f"{identity}#{suffix}" if suffix else identity
 
@@ -4202,7 +4202,7 @@ def _log_session(session_id: str | None) -> str | None:
     lines then share, in ``client_instance`` on both.
     """
     return (
-        _session_suffix(session_state.current_session_id(session_id))
+        _session_suffix(session_state.claim_session_id(session_id))
         or _log_client_instance()
     )
 
@@ -5594,9 +5594,9 @@ def _active_session_slug() -> str | None:
     """The WorkflowSession slug for the current agent session, or None.
 
     Reads the handle stored locally under the agent session id
-    (``session_state.current_session_id``: ``$WITAN_SESSION_ID``, else
-    ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
-    ``$CODEX_SESSION_ID``). Fails soft on
+    (``session_state.current_session_id``: ``$CLAUDE_SESSION_ID``, else
+    ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``, else
+    ``$WITAN_SESSION_ID``). Fails soft on
     any missing-env/read/parse error — provenance is best-effort and must never
     block a memory write.
 
