@@ -1244,6 +1244,65 @@ def test_fanout_session_start_is_re_entrant_and_merges_fields(server, tmp_state_
     assert {k: row[k] for k in _FANOUT_START} == _FANOUT_START
 
 
+def _end_after_read(monkeypatch, server, query, slug):
+    """Land ``workflow_session_end(state="crashed")`` on ``slug`` right after
+    the first ``query`` read returns, so a write built from that read is stale."""
+    from witan import server as srv
+
+    real_read = srv.client.read
+    fired = []
+
+    def read(path, name, params=None):
+        rows = real_read(path, name, params)
+        if name == query and not fired:
+            fired.append(name)
+            server.workflow_session_end(slug, summary="crashed", state="crashed")
+        return rows
+
+    monkeypatch.setattr(srv.client, "read", read)
+
+
+@requires_omnigraph
+def test_session_update_keeps_a_state_an_end_recorded_in_between(
+    server, tmp_state_dir, monkeypatch
+):
+    """An update that only records the event log must not write back the
+    ``running`` it might have read before the end recorded ``crashed``."""
+    proj = server.workflow_project_create(title="end races update", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    slug = _fanout_session(server, proj["slug"], task)["session_slug"]
+    server.workflow_session_update(slug, state="running")
+
+    _end_after_read(monkeypatch, server, "get_workflow_session_fanout", slug)
+    server.workflow_session_update(slug, event_log="s3://logs/ws-x.jsonl")
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["state"] == "crashed"
+    assert row["event_log"] == "s3://logs/ws-x.jsonl"
+
+
+@requires_omnigraph
+def test_re_entrant_start_keeps_a_state_an_end_recorded_in_between(
+    server, tmp_state_dir, monkeypatch
+):
+    proj = server.workflow_project_create(title="end races start", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    sid = uuid.uuid4().hex
+    slug = _fanout_session(server, proj["slug"], task, session_id=sid)["session_slug"]
+
+    _end_after_read(monkeypatch, server, "sessions_for_key", slug)
+    server.workflow_session_start(
+        project_slug=proj["slug"],
+        session_id=sid,
+        phase="implementation",
+        harness_session_ref="claude-abc",
+    )
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["state"] == "crashed"
+    assert row["harness_session_ref"] == "claude-abc"
+
+
 @requires_omnigraph
 def test_stop_hook_auto_closes_a_fanout_session_and_keeps_its_fields(
     server, tmp_state_dir, no_background_optimize, monkeypatch

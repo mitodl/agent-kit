@@ -467,43 +467,62 @@ query update_workflow_session_superseded(
         where slug = $slug
 }
 
-// A fan-out session's runner-owned fields. Sets every one of them, so the
-// caller passes the merged row (`_merge_fanout`): a field it does not mean to
-// change goes back as it was read, not as null.
-query update_workflow_session_fanout(
-    $slug: String,
-    $task_slug: String?,
-    $runner: String?,
-    $harness: String?,
-    $mode: String?,
-    $harness_session_ref: String?,
-    $host: String?,
-    $cwd: String?,
-    $state: String?,
-    $event_log: String?,
-    $attach_endpoint: String?
-) {
+// A fan-out session's runner-owned fields, one mutation per field: a caller
+// writes only the fields it was given (`_fanout_steps`), batched into one
+// commit, so it never reads the row and writes back a stale copy of a field
+// another writer changed in between (e.g. the `crashed` an end recorded).
+// `attach_endpoint` has no setter until live sessions exist.
+query update_workflow_session_task_slug($slug: String, $task_slug: String) {
     update WorkflowSession
-        set {
-            task_slug: $task_slug,
-            runner: $runner,
-            harness: $harness,
-            mode: $mode,
-            harness_session_ref: $harness_session_ref,
-            host: $host,
-            cwd: $cwd,
-            state: $state,
-            event_log: $event_log,
-            attach_endpoint: $attach_endpoint
-        }
+        set { task_slug: $task_slug }
         where slug = $slug
 }
 
-// `workflow_session_end(state=...)`: the final state alone, so ending needs no
-// read and cannot write back a stale copy of the other fan-out fields.
+query update_workflow_session_runner($slug: String, $runner: String) {
+    update WorkflowSession
+        set { runner: $runner }
+        where slug = $slug
+}
+
+query update_workflow_session_harness($slug: String, $harness: String) {
+    update WorkflowSession
+        set { harness: $harness }
+        where slug = $slug
+}
+
+query update_workflow_session_mode($slug: String, $mode: String) {
+    update WorkflowSession
+        set { mode: $mode }
+        where slug = $slug
+}
+
+query update_workflow_session_harness_session_ref($slug: String, $harness_session_ref: String) {
+    update WorkflowSession
+        set { harness_session_ref: $harness_session_ref }
+        where slug = $slug
+}
+
+query update_workflow_session_host($slug: String, $host: String) {
+    update WorkflowSession
+        set { host: $host }
+        where slug = $slug
+}
+
+query update_workflow_session_cwd($slug: String, $cwd: String) {
+    update WorkflowSession
+        set { cwd: $cwd }
+        where slug = $slug
+}
+
 query update_workflow_session_state($slug: String, $state: String) {
     update WorkflowSession
         set { state: $state }
+        where slug = $slug
+}
+
+query update_workflow_session_event_log($slug: String, $event_log: String) {
+    update WorkflowSession
+        set { event_log: $event_log }
         where slug = $slug
 }
 

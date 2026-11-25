@@ -5547,7 +5547,8 @@ SessionMode = Literal["oneshot", "resume", "live"]
 # outcome, not this: `exited` only says the harness stopped on its own.
 SessionState = Literal["starting", "running", "exited", "crashed", "cancelled"]
 _TERMINAL_SESSION_STATES = frozenset({"exited", "crashed", "cancelled"})
-# The runner-owned columns `update_workflow_session_fanout` sets as one row.
+# A fan-out session's runner-owned columns, each set by its own
+# `update_workflow_session_<field>` mutation (`_fanout_steps`).
 _FANOUT_FIELDS = (
     "task_slug",
     "runner",
@@ -6947,16 +6948,23 @@ def _dedupe_open_sessions(
     return canonical["slug"], canonical.get("started_at") or started_at
 
 
-def _merge_fanout(row: dict, changes: dict) -> dict:
-    """The full set of fan-out columns after applying ``changes`` to ``row``.
+def _fanout_steps(slug: str, changes: dict) -> list[_Step]:
+    """One ``update_workflow_session_<field>`` step per fan-out field in
+    ``changes`` that is not ``None``.
 
-    ``update_workflow_session_fanout`` sets every column, so a field the caller
-    left as ``None`` keeps its stored value rather than being cleared.
+    Writing only the given fields, rather than a whole row merged over a read,
+    means a field another writer set since (an end's ``crashed``) is never
+    overwritten with the value read before it.
     """
-    return {
-        field: changes[field] if changes.get(field) is not None else row.get(field)
-        for field in _FANOUT_FIELDS
-    }
+    return [
+        (
+            "mutations.gq",
+            f"update_workflow_session_{field}",
+            {"slug": slug, field: value},
+        )
+        for field, value in changes.items()
+        if value is not None
+    ]
 
 
 @_tool(WRITE_IDEMPOTENT)
@@ -7086,15 +7094,16 @@ def workflow_session_start(
                     {"slug": slug, "repo": merged_repo, "tags": merged_tags or None},
                 )
             )
-        merged_fanout = _merge_fanout(existing, fanout)
-        if merged_fanout != _merge_fanout(existing, {}):
-            steps.append(
-                (
-                    "mutations.gq",
-                    "update_workflow_session_fanout",
-                    {"slug": slug, **merged_fanout},
-                )
-            )
+        # Only the fields this call changes, so a retry cannot write back a
+        # field an end recorded after `existing` was read.
+        steps += _fanout_steps(
+            slug,
+            {
+                field: value
+                for field, value in fanout.items()
+                if value != existing.get(field)
+            },
+        )
         phase = existing.get("phase") or phase
         started_at = existing.get("started_at") or now
     else:
@@ -7209,29 +7218,27 @@ def workflow_session_update(
     event_log:
         Path or URI of the session's JSONL event log on the runner's host.
     """
-    # `attach_endpoint` has a column but no setter until live sessions exist;
-    # it round-trips here as stored.
-    rows = client.read("read.gq", "get_workflow_session_fanout", {"slug": session_slug})
-    if not rows:
-        raise MissingReference(
-            "workflow_session_update", "WorkflowSession", session_slug
-        )
-    current = rows[0]
-    merged = _merge_fanout(
-        current,
+    # Write first, read after: the read only reports what is stored, so no
+    # field is ever written back from it.
+    steps = _fanout_steps(
+        session_slug,
         {
             "state": state,
             "harness_session_ref": harness_session_ref,
             "event_log": event_log,
         },
     )
-    if merged != _merge_fanout(current, {}):
-        client.change(
-            "mutations.gq",
-            "update_workflow_session_fanout",
-            {"slug": session_slug, **merged},
+    if steps:
+        client.change_many(steps)
+    rows = client.read("read.gq", "get_workflow_session_fanout", {"slug": session_slug})
+    if not rows:
+        raise MissingReference(
+            "workflow_session_update", "WorkflowSession", session_slug
         )
-    return {"session_slug": session_slug, **merged}
+    return {
+        "session_slug": session_slug,
+        **{field: rows[0].get(field) for field in _FANOUT_FIELDS},
+    }
 
 
 @_tool(DESTRUCTIVE)
@@ -7295,13 +7302,7 @@ def workflow_session_end(
                 f"{sorted(_TERMINAL_SESSION_STATES)}, got {state!r}"
             )
             raise ValueError(msg)
-        steps.append(
-            (
-                "mutations.gq",
-                "update_workflow_session_state",
-                {"slug": session_slug, "state": state},
-            )
-        )
+        steps += _fanout_steps(session_slug, {"state": state})
     client.change_many(steps)
 
     # Drop the local handle so the Stop hook doesn't re-close this session.

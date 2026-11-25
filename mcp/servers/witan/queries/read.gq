@@ -862,8 +862,8 @@ query list_sessions_by_task($task_slug: String) {
     order { $s.started_at asc }
 }
 
-// One session's fan-out fields, for `workflow_session_update` to merge into:
-// an update changes only the fields it is given.
+// One session's fan-out fields as stored, which `workflow_session_update`
+// returns after its write.
 query get_workflow_session_fanout($slug: String) {
     match {
         $s: WorkflowSession { slug: $slug }
