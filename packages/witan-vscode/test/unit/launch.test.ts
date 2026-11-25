@@ -30,6 +30,7 @@ function spec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
 		cwd: "/home/me/repo",
 		env: { WITAN_TARGET: "prod" },
 		unset_env: [
+			"WITAN_SESSION_ID",
 			"CLAUDE_SESSION_ID",
 			"PI_SESSION_ID",
 			"CODEX_SESSION_ID",
@@ -65,6 +66,7 @@ test("the effective env keeps everything the terminal would get otherwise", () =
 		{
 			PATH: "/usr/bin",
 			HOME: "/home/me",
+			WITAN_SESSION_ID: "slot-1",
 			CLAUDE_SESSION_ID: "outer",
 			CLAUDE_PROJECT_DIR: "/elsewhere",
 			WITAN_TARGET: "personal",

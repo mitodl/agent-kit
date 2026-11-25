@@ -48,8 +48,8 @@ so the omnigraph trackers work the same under Pi.
     up by the agent session id: Pi exposes `PI_SESSION_ID` only to commands its
     `bash` tool runs, not to its own process env, so the extension sets it on
     the checkpoint child from `ctx.sessionManager.getSessionId()` (and drops any
-    inherited `CLAUDE_SESSION_ID` or `CODEX_SESSION_ID` from that child only,
-    since either would name an enclosing session).
+    inherited `WITAN_SESSION_ID`, `CLAUDE_SESSION_ID` or `CODEX_SESSION_ID` from
+    that child only, since witan would resolve any of them ahead of the Pi id).
     For the close to find the session, `workflow_session_start` must have been
     given the same id — the `witan-workflow` and `witan-project-tracker` skills
     tell the agent to pass `$PI_SESSION_ID`. With no handle the close no-ops.
