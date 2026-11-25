@@ -687,7 +687,11 @@ def task_outcome_cmd(
         if check_output is not None:
             print_error("Pass --check-output or --check-file, not both.")
             raise SystemExit(2)
-        check_output = check_file.read_text()
+        try:
+            check_output = check_file.read_text()
+        except OSError as exc:
+            print_error(f"Cannot read --check-file {check_file}: {exc.strerror}")
+            raise SystemExit(2) from exc
     # Validated here too, so a missing field reads the same whether the tool
     # runs in-process or on a deployment.
     try:

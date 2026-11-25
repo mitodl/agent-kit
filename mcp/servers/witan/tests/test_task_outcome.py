@@ -352,6 +352,24 @@ def test_witan_task_outcome_reads_the_check_from_a_file(
     assert server.task_get(slug)["outcome_check"] == "== 7 passed ==\n"
 
 
+def test_witan_task_outcome_reports_an_unreadable_check_file(tmp_path, capsys):
+    from witan.cli.tasks import task_outcome_cmd
+
+    missing = tmp_path / "missing.txt"
+    with pytest.raises(SystemExit) as exc:
+        task_outcome_cmd(
+            "tk-x",
+            "ready_for_review",
+            branch="fanout/tk-x",
+            commits=["0123abcd"],
+            check_file=missing,
+            assignee=WORKER,
+        )
+
+    assert exc.value.code == 2
+    assert str(missing) in capsys.readouterr().err
+
+
 @requires_omnigraph
 def test_witan_task_outcome_names_what_is_missing(server, monkeypatch, capsys):
     from witan.cli.tasks import task_outcome_cmd
