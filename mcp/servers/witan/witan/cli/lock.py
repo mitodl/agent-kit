@@ -37,9 +37,9 @@ lock_app = cyclopts.App(
 )
 app.command(lock_app, name="lock")
 
-# sysexits.h EX_TEMPFAIL: the lock was busy, so a later retry can succeed. Kept
-# apart from the command's own codes so a runner can tell "never ran" from
-# "ran and failed".
+# sysexits.h EX_TEMPFAIL: the lock was busy, so a later retry can succeed. A
+# command can exit 75 itself, which passes through unchanged, so the code alone
+# does not prove the command never ran; the timeout message on stderr does.
 LOCK_TIMEOUT_EXIT = 75
 # Shell conventions for a command that could not be started.
 COMMAND_NOT_EXECUTABLE_EXIT = 126
