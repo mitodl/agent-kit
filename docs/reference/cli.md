@@ -23,6 +23,8 @@ witan — agent memory, planning, and collaboration graph.
     - [`list`](#witan-journal-list)
     - [`replay`](#witan-journal-replay)
     - [`drop`](#witan-journal-drop)
+- [`lock`](#witan-lock)
+    - [`run`](#witan-lock-run)
 - [`optimize`](#witan-optimize)
 - [`cleanup`](#witan-cleanup)
 - [`memory`](#witan-memory)
@@ -115,6 +117,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`graph`](#witan-graph): Visualize the workflow project and task dependency graph.
 * [`inject-context`](#witan-inject-context): Print workflow context for the UserPromptSubmit hook.
 * [`journal`](#witan-journal): Inspect and replay task writes queued while the deployment was unreachable.
+* [`lock`](#witan-lock): Host-local named locks for commands that parallel workers contend on.
 * [`login`](#witan-login): Authenticate to the deployed witan service via the OIDC device grant.
 * [`logout`](#witan-logout): Forget the cached token for the configured deployment.
 * [`lsp`](#witan-lsp): Run the witan language server on stdio, for an editor to start.
@@ -370,6 +373,46 @@ Remove one queued write without sending it.
 **Parameters**:
 
 * `ENTRY-ID, --entry-id`: The entry's id, from ``witan journal list``. **[required]**
+
+## witan lock
+
+Host-local named locks for commands that parallel workers contend on.
+
+**Parameters**:
+
+* `--output-format CHOICE`: txt | json | toml | yaml.
+    Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, memory import, traces, scan, target list,
+    and mounted witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--target STR`: Which deployment to talk to.
+    Names a [targets.<name>] block, and applies to every command — `witan
+    tasks`, `witan memory` and `witan code index` included, none of which
+    could be pointed at one before. Overrides auto-detection by checkout
+    path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+
+### witan lock run
+
+```console
+witan lock run [OPTIONS] NAME [ARGS...]
+```
+
+Run a command while holding the host-local lock ``name``.
+
+Commands holding the same name on this machine run one at a time; other
+hosts are unaffected. Exits with the command's exit code (128 + N if a
+signal killed it). SIGINT, SIGTERM and SIGHUP are forwarded to the command,
+and the lock is held until it exits. Put witan's own options before ``--``,
+e.g. ``witan lock run tests:<repo> --timeout 600 -- just test``.
+
+**Arguments**:
+
+* `COMMAND`: The command and its arguments, after ``--``.
+
+**Parameters**:
+
+* `NAME, --name`: What the lock guards, e.g. ``tests:<repo-url>``. Any string. **[required]**
+* `--timeout FLOAT`: Seconds to wait for the lock before giving up with exit code 75
+    without running the command. Waits indefinitely when omitted.
 
 ## witan optimize
 

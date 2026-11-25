@@ -24,6 +24,7 @@ from . import (
     graph,  # noqa: F401
     hooks,  # noqa: F401
     journal,  # noqa: F401
+    lock,  # noqa: F401
     maintenance,  # noqa: F401
     memory,  # noqa: F401
     projects,  # noqa: F401
