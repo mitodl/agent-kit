@@ -3,7 +3,7 @@
 # neighbouring key because a bare `"version": "X"` also matches dependency
 # entries in package-lock.json.
 [tool.bumpversion]
-current_version = "0.0.0"
+current_version = "0.1.0"
 # `just bump` collects changelog fragments before it bumps, so the tree is
 # always dirty by the time bump-my-version runs.
 allow_dirty = true
