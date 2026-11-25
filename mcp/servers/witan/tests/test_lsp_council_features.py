@@ -732,14 +732,14 @@ def test_run_task_returns_the_launch_spec_and_spawns_nothing(checkout, monkeypat
     ]
 
 
-def _unclaimed(checkout, arguments):
+def _unclaimed(checkout, arguments, editor_environ=None):
     tools = FakeTools(
         task_get={"slug": "tk-a", "title": "T", "type": "bug", "repo": REPO},
         recall={"memories": []},
     )
 
     async def go():
-        host = Host({"council": Council(tools)})
+        host = Host({"council": Council(tools)}, editor_environ=editor_environ or {})
         async with lsp_session(host, [checkout]) as s:
             return await s.command(RUN_TASK, arguments)
 
@@ -757,7 +757,24 @@ def test_run_task_without_a_claim_claims_nothing(checkout, monkeypatch):
     assert 'task_claim(slug="tk-a")' in spec["prompt"]
     assert "release" not in spec
     assert tools.called("task_claim") == []
-    # Still never a handoff: this process cannot see the editor's overrides.
+    # One folder, and an editor environment with no override to follow.
+    assert spec["handoff"] is True
+
+
+@pytest.mark.parametrize("name", ["CLAUDE_PROJECT_DIR", "WITAN_REPO", "WITAN_TARGET"])
+def test_no_handoff_when_the_editor_env_carries_an_override(
+    checkout, monkeypatch, name
+):
+    """`serve()` drops the location overrides from this process, but a
+    chat-panel agent inherits the editor's environment, which still has them."""
+    for var in ("WITAN_TARGET", "CLAUDE_PROJECT_DIR", "WITAN_REPO"):
+        monkeypatch.delenv(var, raising=False)
+
+    spec, _ = _unclaimed(
+        checkout, {"slug": "tk-a", "claim": False}, editor_environ={name: "x"}
+    )
+
+    assert spec["launchable"] is True
     assert spec["handoff"] is False
 
 

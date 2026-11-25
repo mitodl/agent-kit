@@ -35,9 +35,10 @@ commands answer ``{"repo": ..., <list>: [...]}`` for that folder's repo:
 - ``witan.runTask`` / ``witan.runProject`` take ``slug`` and optional
   ``agent`` and ``model``, and answer ``build_launch_spec``'s spec or refusal.
   ``witan.runTask`` also takes ``claim`` (default true); ``false`` builds the
-  unclaimed spec a chat-panel handoff needs. ``handoff`` is always false for
-  now (see ``_launch``). A spec that took a claim carries ``release``, the
-  arguments for ``witan.releaseTask``.
+  unclaimed spec a chat-panel handoff needs. ``handoff`` is judged against
+  the editor's environment (``CommandContext.editor_environ``), the one a
+  chat-panel agent inherits. A spec that took a claim carries ``release``,
+  the arguments for ``witan.releaseTask``.
 - ``witan.releaseTask`` takes ``slug``, ``claimed_at`` and ``uri``, which is
   the spec's ``release`` as given, and answers ``task_release``'s result.
   ``uri`` is required and names the folder the launch was invoked from, not
@@ -692,17 +693,14 @@ class CouncilPlugin(Plugin):
             ],
             # `witan lsp --target` reaches this process as WITAN_TARGET.
             started_with_target="WITAN_TARGET" in os.environ,
+            # `serve()` drops CLAUDE_PROJECT_DIR and WITAN_REPO before any
+            # plugin runs, and a chat-panel agent inherits the editor's
+            # environment, not this one.
+            editor_environ=ctx.editor_environ,
             agent=args.get("agent"),
             model=args.get("model"),
             claim=claim,
         )
-        if spec["launchable"]:
-            # `serve()` drops CLAUDE_PROJECT_DIR and WITAN_REPO before any
-            # plugin runs, so the handoff check cannot see that the editor,
-            # whose environment a chat-panel agent inherits, still has them.
-            # witan-core's `CommandContext.editor_environ` says what the editor
-            # had; until a published witan-core carries it, never offer one.
-            spec["handoff"] = False
         if spec["launchable"] and spec["claim"]:
             # The folder the claim was routed through, which `cwd` need not be.
             spec["release"] = {

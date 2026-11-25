@@ -310,7 +310,12 @@ dependencies = [
   #
   # ★ >=0.61: server.py and cli/run_helpers.py import
   # `witan_core.client_instance` (added in 0.61.0) at module scope.
-  "witan-core[cli,remote,observability,sentry]>=0.61,<1",
+  #
+  # ★ >=0.62 IS NOT AN IMPORT FLOOR: lsp_plugin.py's `_launch` reads
+  # `CommandContext.editor_environ` (added in witan-core 0.62.0) during
+  # `witan.runTask` / `witan.runProject`. On 0.61 the server starts and every
+  # launch raises AttributeError, which `just check-core-floor` cannot see.
+  "witan-core[cli,remote,observability,sentry]>=0.62,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -322,7 +327,7 @@ dependencies = [
 [project.optional-dependencies]
 # The editor language server, `witan lsp` (ADR 0012). The host and pygls live
 # in witan-core's `lsp` extra; this package only registers its plugin.
-lsp = ["witan-core[lsp]>=0.61,<1"]
+lsp = ["witan-core[lsp]>=0.62,<1"]
 
 [project.entry-points."witan.lsp.plugins"]
 council = "witan.lsp_plugin:CouncilPlugin"
