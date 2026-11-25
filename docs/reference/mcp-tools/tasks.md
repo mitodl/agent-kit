@@ -152,6 +152,7 @@ Re-prioritise, re-parent, reassign, fix the repo, or attach an
 | `tags` | list[str]? | `null` | Free-form tags. Replaces the list. |
 | `session_id` | str? | `null` | Your agent session id, for the assignee ``in_progress`` fills in; see<br>instructions. |
 | `force` | bool | `False` | With ``status="closed"``, close despite another person's live claim. |
+| `if_no_outcome_since` | str? | `null` | An ISO timestamp. Refuse (``reason: "outcome_recorded"``), writing<br>nothing, if an outcome was recorded at or after it. Journal replay<br>passes the time the write was queued. |
 
 ## `task_claim`
 
@@ -206,6 +207,7 @@ status released to is ``closed``.
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to. |
 | `force` | bool | `False` | Release even if held by a different assignee. |
 | `if_claimed_at` | str? | `null` | The ``claimed_at`` a ``task_claim`` returned. Release only that claim:<br>not one renewed since, and not a task that has left ``in_progress``.<br>``force`` does not lift this check. |
+| `if_no_outcome_since` | str? | `null` | An ISO timestamp. Refuse (``reason: "outcome_recorded"``) if an<br>outcome was recorded at or after it, rather than clear one the caller<br>never saw. Journal replay passes the time the release was queued.<br>``force`` does not lift this check. |
 
 ## `task_record_outcome`
 

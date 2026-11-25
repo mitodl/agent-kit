@@ -220,6 +220,55 @@ def test_a_queued_release_on_a_task_given_an_outcome_since_becomes_a_comment(
     assert "ci-worker recorded needs_human at" in comment["body"]
 
 
+@pytest.mark.parametrize(
+    "queued",
+    [
+        ("task_release", {}),
+        ("task_update", {"status": "in_progress"}),
+    ],
+    ids=["release", "update"],
+)
+@requires_omnigraph
+def test_an_outcome_landing_after_the_replay_check_turns_the_write_into_a_comment(
+    proxy, monkeypatch, queued
+):
+    # Another of our sessions holds the task, so the holder check passes on
+    # replay's read. That session then records an outcome, which ends its
+    # claim, before the write lands. Unfenced, the release or update would
+    # find an unheld task and clear the question.
+    worker = "ada@example.org#99998888"
+    slug = _new_task(proxy)
+    proxy.task_claim(slug=slug, assignee=worker)
+    plan_after_read = proxy._replay_plan
+
+    async def outcome_after_the_read(entry, call):
+        plan = await plan_after_read(entry, call)
+        await call(
+            "task_record_outcome",
+            {
+                "slug": slug,
+                "assignee": worker,
+                "outcome": "needs_human",
+                "detail": "Which region?",
+            },
+        )
+        return plan
+
+    monkeypatch.setattr(proxy, "_replay_plan", outcome_after_the_read)
+    tool, args = queued
+    _queue(proxy, tool, {"slug": slug, **args})
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["outcome"] == "needs_human"
+    assert task["outcome_detail"] == "Which region?"
+    assert task["status"] == "open"
+    [comment] = task["comments"]
+    assert f"buffered {tool}" in comment["body"]
+    assert f"{worker} recorded needs_human at" in comment["body"]
+    assert not proxy.journal.has_pending()
+
+
 @requires_omnigraph
 def test_a_queued_create_is_skipped_when_that_title_was_created_since(proxy, server):
     _queue(proxy, "task_create", {"title": "only once", "description": "d"})

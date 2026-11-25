@@ -17,7 +17,9 @@
   names it), except when releasing to `closed`. A claim or a reopen from
   `closed` clears it too; `task_close` keeps it. A task write queued in the
   journal before an outcome was recorded replays as a comment instead of
-  clearing it.
+  clearing it, including an outcome recorded between replay's read and the
+  write: `task_release` and `task_update` take `if_no_outcome_since` and
+  refuse (`reason: "outcome_recorded"`) when an outcome landed at or after it.
 
 ### Notes
 

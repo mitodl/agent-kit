@@ -11,6 +11,7 @@ from witan import outcome as outcome_mod
 from witan import readiness
 from witan.cli import _common
 from witan.cli._common import _fn
+from witan_core import now_iso
 
 from .conftest import requires_omnigraph
 
@@ -247,6 +248,38 @@ def test_a_claim_is_refused_until_the_task_is_requeued(server):
     assert all(task[f] is None for f in outcome_mod.FIELDS)
     assert slug in _ready_slugs(server)
     assert server.task_claim(slug, assignee="next-worker")["claimed"] is True
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        lambda server, slug, since: server.task_release(
+            slug, if_no_outcome_since=since
+        ),
+        lambda server, slug, since: server.task_update(
+            slug, status="in_progress", if_no_outcome_since=since
+        ),
+    ],
+    ids=["release", "update"],
+)
+@requires_omnigraph
+def test_a_write_fenced_on_no_outcome_since_spares_a_later_outcome(server, write):
+    slug = _claimed(server)
+    before = now_iso()
+    server.task_record_outcome(slug, assignee=WORKER, outcome="needs_human", detail="q")
+    set_at = server.task_get(slug)["outcome_set_at"]
+
+    refused = write(server, slug, before)
+
+    assert refused["reason"] == "outcome_recorded"
+    assert refused["outcome"] == "needs_human"
+    assert refused["outcome_set_by"] == WORKER
+    assert server.task_get(slug)["outcome"] == "needs_human"
+
+    # An outcome from before the fence is one the caller already saw.
+    write(server, slug, now_iso())
+    assert server.task_get(slug)["outcome"] is None
+    assert set_at is not None
 
 
 @requires_omnigraph

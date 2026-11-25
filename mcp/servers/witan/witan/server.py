@@ -1178,6 +1178,43 @@ def _close_refusal(
     }
 
 
+def _refuse_outcome_since(
+    slug: str, since: str | None, current: dict, flag: str
+) -> None:
+    """Refuse a write fenced on ``if_no_outcome_since`` if an outcome landed since.
+
+    ``flag`` is the tool's own success key (``released``, ``updated``), set
+    false in the refusal the way the tool's other refusals set it.
+
+    Journal replay reads a task, then sends the queued write. An outcome
+    recorded in between ends the claim, so the holder check passes and a
+    release or an update to ``in_progress`` would clear a question nobody
+    saw. Checked on the row the write is fenced on, so nothing lands between.
+    A tie counts as since, the same rule replay applies to its own read.
+    """
+    set_at = current.get("outcome_set_at")
+    if since is None or not set_at:
+        return
+    if parse_timestamp(set_at) < parse_timestamp(since):
+        return
+    set_by = current.get("outcome_set_by")
+    raise _TaskWriteRefused(
+        {
+            "slug": slug,
+            flag: False,
+            "reason": "outcome_recorded",
+            "outcome": current.get("outcome"),
+            "outcome_set_by": set_by,
+            "outcome_set_at": set_at,
+            "remedy": (
+                f"{set_by} recorded {current.get('outcome')} on {slug} at "
+                f"{set_at}, after {since}, so it is left as it is. Read it with "
+                f"`witan task show {slug}` before writing again."
+            ),
+        }
+    )
+
+
 def _require_closable(
     slug: str, closer: str, force: bool, override: str
 ) -> Callable[[dict], None]:
@@ -8286,6 +8323,7 @@ def task_update(
     tags: list[str] | None = None,
     session_id: str | None = None,
     force: bool = False,
+    if_no_outcome_since: str | None = None,
 ) -> dict | None:
     """
     Update a task's mutable fields. Only non-null arguments are applied.
@@ -8335,6 +8373,10 @@ def task_update(
         instructions.
     force:
         With ``status="closed"``, close despite another person's live claim.
+    if_no_outcome_since:
+        An ISO timestamp. Refuse (``reason: "outcome_recorded"``), writing
+        nothing, if an outcome was recorded at or after it. Journal replay
+        passes the time the write was queued.
     """
     # The write is fenced on the read it merged from (the whole branch head)
     # and re-merged up to five times, so an edit cannot revert a claim that
@@ -8431,7 +8473,7 @@ def task_update(
 
     # The close check runs here too, or `task_close`'s refusal is one call
     # away from being sidestepped.
-    require = (
+    require_closable = (
         _require_closable(
             slug,
             _claim_holder(None, session_id),
@@ -8441,6 +8483,12 @@ def task_update(
         if status == "closed"
         else None
     )
+
+    def require(current: dict) -> None:
+        _refuse_outcome_since(slug, if_no_outcome_since, current, "updated")
+        if require_closable is not None:
+            require_closable(current)
+
     try:
         updated = _update_task(
             slug,
@@ -8750,6 +8798,7 @@ def task_release(
     status: TaskStatus = "open",
     force: bool = False,
     if_claimed_at: str | None = None,
+    if_no_outcome_since: str | None = None,
 ) -> dict | None:
     """
     Release a claim: clear the assignee/lease and return the task to ``open``.
@@ -8779,6 +8828,11 @@ def task_release(
     if_claimed_at:
         The ``claimed_at`` a ``task_claim`` returned. Release only that claim:
         not one renewed since, and not a task that has left ``in_progress``.
+        ``force`` does not lift this check.
+    if_no_outcome_since:
+        An ISO timestamp. Refuse (``reason: "outcome_recorded"``) if an
+        outcome was recorded at or after it, rather than clear one the caller
+        never saw. Journal replay passes the time the release was queued.
         ``force`` does not lift this check.
     """
     holder = _claim_holder(assignee, session_id)
@@ -8832,6 +8886,7 @@ def task_release(
     cleared: dict[str, str | None] = {}
 
     def require_and_note_outcome(current: dict) -> None:
+        _refuse_outcome_since(slug, if_no_outcome_since, current, "released")
         require_held_by_caller(current)
         cleared["outcome"] = current.get("outcome") if status != "closed" else None
 
