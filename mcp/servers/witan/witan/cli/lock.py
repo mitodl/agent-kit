@@ -79,9 +79,12 @@ def _acquire(path: Path, name: str, timeout: float | None) -> int | None:
         return _filelock.acquire(path)
     deadline = time.monotonic() + timeout
     while (fd := _filelock.acquire(path, blocking=False)) is None:
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             return None
-        time.sleep(LOCK_POLL_SECONDS)
+        # Capped so the last attempt lands at the deadline, not up to a poll
+        # interval past it.
+        time.sleep(min(LOCK_POLL_SECONDS, remaining))
     return fd
 
 
