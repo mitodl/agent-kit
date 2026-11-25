@@ -335,6 +335,12 @@ _BRANCH_IS_EXPLICIT = frozenset({"task_for_branch", "task_record_outcome"})
 # call provably was not sent. `task_claim` is deliberately absent: a claim that
 # is not live when it is made means nothing, and replaying it later would steal
 # a task someone else picked up in the meantime.
+#
+# `task_record_outcome` is absent too. A journal replays only when the same
+# machine next calls the deployment, and a fan-out worker's container may exit
+# first, so a queued outcome might never land while the claim lapses back into
+# ready work. Failing the call lets the runner that launched the worker see
+# that the attempt's ending was not recorded and act on it.
 _BUFFERED_WRITES = frozenset(
     {"task_comment", "task_create", "task_update", "task_close", "task_release"}
 )
