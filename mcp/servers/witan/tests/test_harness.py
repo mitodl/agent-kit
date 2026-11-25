@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
+import stat
 import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 
@@ -736,3 +739,65 @@ def test_a_line_separator_inside_a_record_does_not_split_it(stand_in):
         if isinstance(n.update, UserMessageChunk)
     ]
     assert prompts[0].content.text == "one two\x85three"
+
+
+def test_the_event_log_is_owner_only_whatever_the_umask(stand_in):
+    executable, spec, _ = stand_in
+    start_spec = spec("claude_start.jsonl")
+    previous = os.umask(0o022)
+    try:
+        ClaudeAdapter(executable).start(start_spec).wait()
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(start_spec.event_log.stat().st_mode) == 0o600
+
+
+def test_a_log_other_users_can_read_is_refused_before_launch(stand_in, monkeypatch):
+    executable, spec, _ = stand_in
+    start_spec = spec("claude_start.jsonl")
+    start_spec.event_log.parent.mkdir(parents=True)
+    start_spec.event_log.write_text("")
+    start_spec.event_log.chmod(0o644)
+
+    def popen(*args, **kwargs):
+        pytest.fail("the harness was launched")
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    with pytest.raises(PermissionError) as refused:
+        ClaudeAdapter(executable).start(start_spec)
+
+    assert str(start_spec.event_log) in str(refused.value)
+    assert "0o644" in str(refused.value)
+    assert start_spec.event_log.read_text() == ""
+
+
+def test_a_run_nobody_watches_holds_no_events_and_the_log_replays_them(stand_in):
+    executable, spec, _ = stand_in
+    adapter = PiAdapter(executable)
+    start_spec = spec("pi_start.jsonl", "pi_resume.jsonl")
+    start_spec = replace(start_spec, env={**start_spec.env, "STAND_IN_PAD_KIB": "64"})
+    first = adapter.start(start_spec)
+    first.wait()
+
+    # The session keeps no copy of what it logged: nothing it holds is a
+    # queue or collection of notifications.
+    assert not any(
+        isinstance(value, (queue.SimpleQueue, queue.Queue, list, tuple, deque))
+        for value in vars(first).values()
+    )
+    resumed = adapter.resume(first.ref, "again", start_spec)
+    resumed.wait()
+
+    # Read back after the fact, each run's events() is that run's records,
+    # from its started update through its exited one.
+    first_events, resumed_events = list(first.events()), list(resumed.events())
+    assert first_events + resumed_events == read_event_log(start_spec.event_log)
+    for events, was_resumed in ((first_events, False), (resumed_events, True)):
+        started, exited = (
+            events[0].update.meta["witan"],
+            events[-1].update.meta["witan"],
+        )
+        assert (started["lifecycle"], started["resumed"]) == ("started", was_resumed)
+        assert exited["lifecycle"] == "exited"

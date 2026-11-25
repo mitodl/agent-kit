@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import socket
+import stat
 import subprocess
 import threading
 from collections import deque
@@ -126,7 +126,12 @@ class EventLog:
     """Appends a session's notifications to a JSONL file, one per line.
 
     Each line is flushed as it is written, because ``witan fanout status``
-    reads a running worker's last activity from this file.
+    reads a running worker's last activity from this file. The file is the
+    only copy of a run's notifications: :meth:`follow` reads them back from
+    it, so a run nobody watches holds none of them in memory.
+
+    The log is owner-only, because it carries the prompt and clipped tool
+    input and output.
     """
 
     RESERVED_META = frozenset({"seq", "ts"})
@@ -137,12 +142,24 @@ class EventLog:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._meta = dict(meta)
-        # A resume appends to its start's log; numbering carries on from it.
-        self._seq = 0
-        if path.exists():
-            with path.open(encoding="utf-8") as existing:
-                self._seq = sum(1 for line in existing if line.strip())
-        self._file: TextIO = path.open("a", encoding="utf-8")
+        fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        status = os.fstat(fd)
+        if mode := stat.S_IMODE(status.st_mode) & 0o077:
+            os.close(fd)
+            raise PermissionError(
+                f"refusing to append to event log {path}: its mode "
+                f"{stat.S_IMODE(status.st_mode):#o} grants access to other users "
+                f"({mode:#o}); restrict it to 0o600"
+            )
+        # A resume appends to its start's log: numbering carries on from it,
+        # and this run's notifications start at its current end.
+        self.start_offset = status.st_size
+        with path.open(encoding="utf-8") as existing:
+            self._seq = sum(1 for line in existing if line.strip())
+        self._file: TextIO = os.fdopen(fd, "a", encoding="utf-8")
+        self._changed = threading.Condition()
+        self._writes = 0
+        self._end_offset: int | None = None
 
     def write(self, session_id: str, update: SessionUpdate) -> SessionNotification:
         self._seq += 1
@@ -155,10 +172,43 @@ class EventLog:
         )
         self._file.write(json.dumps(notification.wire(), ensure_ascii=False) + "\n")
         self._file.flush()
+        with self._changed:
+            self._writes += 1
+            self._changed.notify_all()
         return notification
 
     def close(self) -> None:
+        end = os.fstat(self._file.fileno()).st_size
         self._file.close()
+        with self._changed:
+            self._end_offset = end
+            self._changed.notify_all()
+
+    def follow(self) -> Iterator[SessionNotification]:
+        """This run's notifications, read back from the file as they are
+        written, ending where this run closed the log (a resume appends
+        after it)."""
+        with self.path.open("rb") as stream:
+            stream.seek(self.start_offset)
+            partial = b""
+            while True:
+                # Taken before reading, so a write that lands after the read
+                # reaches EOF still changes the count and ends the wait.
+                with self._changed:
+                    seen, end = self._writes, self._end_offset
+                while (end is None or stream.tell() < end) and (
+                    chunk := stream.readline()
+                ):
+                    partial += chunk
+                    if partial.endswith(b"\n"):
+                        if partial.strip():
+                            yield SessionNotification.model_validate_json(partial)
+                        partial = b""
+                if end is not None:
+                    return
+                with self._changed:
+                    while self._writes == seen and self._end_offset is None:
+                        self._changed.wait()
 
 
 def read_event_log(path: Path) -> list[SessionNotification]:
@@ -180,10 +230,10 @@ class SubprocessSession:
     harness never stalls on a full stdout pipe and the log stays current
     whether or not anyone iterates ``events()``. When stdout closes, the pump
     reaps the harness and writes the ``exited`` update, so a log reader sees
-    the end without the runner calling ``wait()``. ``events()`` is
-    single-consumer and yields every notification from the start through
-    ``exited``; ``wait()`` alone is enough for a runner that only wants the
-    outcome.
+    the end without the runner calling ``wait()``. ``events()`` reads the log
+    back, yielding every notification of this run from the start through
+    ``exited``, so nothing is held in memory for a runner that only calls
+    ``wait()``.
     """
 
     def __init__(
@@ -200,7 +250,6 @@ class SubprocessSession:
         self._transport = transport
         self._codec = codec
         self._log = log
-        self._queue: queue.SimpleQueue[SessionNotification | None] = queue.SimpleQueue()
         self._exit: Exit | None = None
         self._failure: Exception | None = None
         self._emit(
@@ -224,7 +273,7 @@ class SubprocessSession:
         return self._log.path
 
     def _emit(self, update: SessionUpdate) -> None:
-        self._queue.put(self._log.write(self.ref.harness_session_ref, update))
+        self._log.write(self.ref.harness_session_ref, update)
 
     def _drain(self) -> None:
         try:
@@ -247,7 +296,6 @@ class SubprocessSession:
             self._transport.kill()
         finally:
             self._log.close()
-            self._queue.put(None)
 
     def _finish(self) -> None:
         returncode = self._transport.wait()
@@ -273,10 +321,7 @@ class SubprocessSession:
         )
 
     def events(self) -> Iterator[SessionNotification]:
-        while (notification := self._queue.get()) is not None:
-            yield notification
-        # Leave the end marker for a later call, so it returns at once.
-        self._queue.put(None)
+        return self._log.follow()
 
     def _decode(self, line: str) -> list[SessionUpdate]:
         try:
