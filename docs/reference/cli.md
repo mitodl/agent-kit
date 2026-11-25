@@ -404,6 +404,14 @@ signal killed it). SIGINT, SIGTERM and SIGHUP are forwarded to the command,
 and the lock is held until it exits. Put witan's own options before ``--``,
 e.g. ``witan lock run tests:<repo> --timeout 600 -- just test``.
 
+While witan is in the terminal's foreground process group, a SIGINT is
+taken as a Ctrl-C the command already got and is not forwarded, so a
+runner should stop it with SIGTERM.
+
+The command inherits the lock on POSIX only, so there killing just witan
+leaves the lock held until the command exits. On Windows it does not, and
+killing just witan frees the lock while the command may still be running.
+
 **Arguments**:
 
 * `COMMAND`: The command and its arguments, after ``--``.
