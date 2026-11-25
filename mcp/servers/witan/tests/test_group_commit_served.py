@@ -291,6 +291,13 @@ def test_a_server_refused_fence_spares_the_writes_riding_with_it(served, burst):
                 "claimed_at",
                 "first_claimed_at",
                 "updated_at",
+                "outcome",
+                "outcome_detail",
+                "outcome_branch",
+                "outcome_commits",
+                "outcome_check",
+                "outcome_set_by",
+                "outcome_set_at",
             )
         }
         params.update(UNSCREENED)
