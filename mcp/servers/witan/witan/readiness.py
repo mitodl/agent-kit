@@ -13,12 +13,15 @@ holder string must match the server's.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 from witan_core.timeutil import parse_timestamp
+
+from .config import load_claim_config
 
 # A holder is ``"<identity>#<session>"`` — see ``server._claim_holder``. Matched
 # conservatively (the charset of a session id, anchored at the end) so an
@@ -72,10 +75,17 @@ def session_suffix(session_id: str | None) -> str:
     ).hexdigest()
 
 
-# Advisory-claim lease: a task left ``in_progress`` longer than this without being
-# re-claimed is treated as abandoned (the holder likely crashed) and becomes
-# reclaimable. Holders renew by calling ``task_claim`` again.
-CLAIM_LEASE_SECONDS = 3600
+@functools.cache
+def claim_lease_seconds() -> int:
+    """The advisory-claim lease, in seconds, from this process's configuration.
+
+    A task left ``in_progress`` longer than this without being re-claimed is
+    treated as abandoned (the holder likely crashed) and becomes reclaimable.
+    Holders renew by calling ``task_claim`` again. The length is
+    ``config.ClaimConfig``, read once per process.
+    """
+    return load_claim_config().lease_seconds
+
 
 _PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 
@@ -96,7 +106,7 @@ def lease_expired(claimed_at: str | None, *, now: datetime | None = None) -> boo
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    return (now - started).total_seconds() > CLAIM_LEASE_SECONDS
+    return (now - started).total_seconds() > claim_lease_seconds()
 
 
 def status_pickable(task: dict, *, now: datetime | None = None) -> bool:

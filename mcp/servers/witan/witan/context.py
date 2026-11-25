@@ -646,7 +646,7 @@ def _held_by(rows: list[dict], author: str | None) -> list[dict]:
 
     Lease expiry is deliberately NOT consulted. It answers "may someone else
     take this?", which is a different question from "is this the work in front
-    of me?" — and the 60-minute lease lapses routinely mid-task, exactly when a
+    of me?" — and the claim lease lapses routinely mid-task, exactly when a
     correction is most worth reading.
     """
     if not author:

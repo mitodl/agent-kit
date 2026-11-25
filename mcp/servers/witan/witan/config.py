@@ -644,6 +644,58 @@ def load_screen_config() -> ScreenConfig:
     return config
 
 
+CLAIM_LEASE_ENV_VAR = "WITAN_CLAIM_LEASE_SECONDS"
+
+
+class ClaimConfig(BaseModel):
+    """How long a ``task_claim`` lease lasts before the task is reclaimable.
+
+    Server-side policy, like :class:`ScreenConfig`: the process that decides
+    readiness reads it from its own environment and ``config.toml``. A granted
+    claim reports it as ``lease_seconds``, so a client that renews leases
+    derives its schedule from the server's value, and changing it on the
+    server needs no client change.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    lease_seconds: int = Field(default=3600, gt=0)
+
+    @field_validator("lease_seconds", mode="before")
+    @classmethod
+    def _bool_is_not_a_length(cls, value: object) -> object:
+        # Lax int parsing reads a TOML `true` as 1, a one-second lease.
+        if isinstance(value, bool):
+            raise ValueError("a boolean is not a number of seconds")  # noqa: TRY004 - pydantic validators raise ValueError
+        return value
+
+
+def load_claim_config() -> ClaimConfig:
+    """Resolve ClaimConfig from ``WITAN_CLAIM_LEASE_SECONDS`` > the ``[claims]``
+    table in config.toml > the 3600s default.
+
+    A lease that is not a positive whole number of seconds is refused, because
+    zero or a negative value makes every claim expire the moment it is taken.
+    """
+    file_claims = _load_toml().get("claims", {})
+    if not isinstance(file_claims, dict):
+        raise ValueError("The 'claims' section in config must be a table.")  # noqa: TRY004 - config errors are ValueError
+    value: object = os.environ.get(CLAIM_LEASE_ENV_VAR)
+    source = CLAIM_LEASE_ENV_VAR
+    if value is None:
+        if "lease_seconds" not in file_claims:
+            return ClaimConfig()
+        value = file_claims["lease_seconds"]
+        source = "[claims].lease_seconds in config.toml"
+    try:
+        return ClaimConfig(lease_seconds=value)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid claim lease {source}={value!r}: expected a whole number of "
+            "seconds greater than 0."
+        ) from exc
+
+
 def default_config_toml() -> str:
     """Render a starter ``config.toml``: every optional setting present,
     commented out, shown at its actual current default (pulled from
@@ -652,6 +704,7 @@ def default_config_toml() -> str:
     """
     rank = RankConfig()
     scan = ScanConfig()
+    claims = ClaimConfig()
     return f"""\
 # witan configuration.
 #
@@ -783,6 +836,13 @@ def default_config_toml() -> str:
 [screen]
 # provider = "example-provider"
 # model = "example-model"
+
+# ── [claims] — task claim leases ────────────────────────────────────────────
+# Seconds a task_claim holds a task before it becomes reclaimable. Read by
+# whichever process decides readiness: the deployed server for a remote
+# target, this machine for a local store. Env: WITAN_CLAIM_LEASE_SECONDS
+[claims]
+# lease_seconds = {claims.lease_seconds}
 """
 
 

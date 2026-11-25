@@ -175,6 +175,10 @@ desc = "Overrides the OIDC-derived identity. Intended for service accounts and t
 [section.vars.WITAN_UI_OIDC_CLIENT_ID]
 desc = "Public Keycloak client the browser UI logs in with, served to the page in `/ui/config.json`. Read on its own rather than with the four vars above, because a deployment that serves no UI needs none of it. Required once `WITAN_OIDC_ISSUER` is set and a bundle is present: `/ui/` then answers 503 naming this variable rather than serving a page that cannot log in."
 
+[section.vars.WITAN_CLAIM_LEASE_SECONDS]
+default = "3600"
+desc = "Seconds a `task_claim` holds a task before it becomes reclaimable. Read by whichever process decides readiness: the deployed server for a remote target, the local process for a local store. A granted claim returns it as `lease_seconds`, so a client renews on the server's schedule rather than its own copy. Also `[claims].lease_seconds` in config.toml. Must be a positive whole number; anything else fails the server's start."
+
 [section.vars.WITAN_UI_PORT]
 desc = "Port `witan ui` binds on loopback. Defaults to one the OS reports free."
 

@@ -194,6 +194,9 @@ cfg = cfg_module.load()
 rank_cfg = cfg_module.load_rank_config()
 scan_cfg = cfg_module.load_scan_config()
 identity_cfg = cfg_module.load_identity_config()
+# Resolved here so a bad lease length fails the server's start, not its first
+# claim or readiness read.
+readiness.claim_lease_seconds()
 _ensure_graph(cfg.graph_uri)
 # Scanning first, so the screen classifies the text that is stored after any
 # redaction.
@@ -868,8 +871,7 @@ _KIND_PREFIX = {
 
 # Advisory-claim lease lives in ``readiness`` (shared with the context hook so
 # the injected "Ready Tasks" list and ``task_ready`` agree). Re-exported under
-# the historical names for the in-module call sites.
-_CLAIM_LEASE_SECONDS = readiness.CLAIM_LEASE_SECONDS
+# the historical name for the in-module call sites.
 _lease_expired = readiness.lease_expired
 
 # A task can be held (in_progress, lease not expired) with no assignee on
@@ -1019,7 +1021,7 @@ def _lease_expiry(lease_started_at: str | None) -> str | None:
         started = parse_timestamp(lease_started_at)
     except (ValueError, TypeError):
         return None
-    return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
+    return (started + timedelta(seconds=readiness.claim_lease_seconds())).isoformat()
 
 
 def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
@@ -7279,7 +7281,7 @@ def _with_lease_flag(row: dict) -> dict:
     and the board reading `task_ready` can never disagree.
 
     Deriving it in the browser was the alternative and it drifts: the lease
-    window is `readiness.CLAIM_LEASE_SECONDS`, and a client copy of that
+    window is `readiness.claim_lease_seconds()`, and a client copy of that
     constant goes stale the day the server's changes. Inferring it from
     `task_ready` membership does not work either — an `in_progress` task whose
     lease lapsed while it still has an open blocker never appears in Ready
@@ -8486,7 +8488,8 @@ async def task_claim(
 
     Call it before starting a ready task so others see it is taken.
     Re-calling renews the lease; an expired lease makes the task reclaimable.
-    Returns ``{"claimed": true, ...}``, or ``{"claimed": false, "reason":
+    Returns ``{"claimed": true, "lease_seconds": ..., ...}`` (renew before
+    ``lease_seconds`` pass), or ``{"claimed": false, "reason":
     ...}`` when the task is closed, blocked, held (``held``/``lost_race``), or
     the graph stayed too busy (``contention``, safe to retry).
 
@@ -8675,6 +8678,9 @@ async def task_claim(
         "claimed_at": now,
         "qualified": _is_qualified(holder),
         "stole": bool(held and not own),
+        # The server's configured lease, so a client renewing it derives its
+        # schedule from this rather than a copy of the default.
+        "lease_seconds": readiness.claim_lease_seconds(),
     }
     # The moment an agent starts a task is the one call every agent makes, so
     # relevant memories arrive here without anyone deciding to look. A renewal
