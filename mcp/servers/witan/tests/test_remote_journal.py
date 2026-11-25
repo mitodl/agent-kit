@@ -198,6 +198,29 @@ def test_a_queued_update_on_a_task_closed_since_becomes_a_comment(proxy, server)
 
 
 @requires_omnigraph
+def test_a_queued_release_on_a_task_given_an_outcome_since_becomes_a_comment(
+    proxy, server
+):
+    # A recorded outcome leaves the task open with no holder, so only its own
+    # timestamp says the release is stale; applied, it would erase the question.
+    slug = server.task_create(title="parked since", description="d")["slug"]
+    _queue(proxy, "task_release", {"slug": slug})
+    # In-process, so neither call replays the entry first.
+    server.task_claim(slug=slug, assignee="ci-worker")
+    server.task_record_outcome(
+        slug=slug, assignee="ci-worker", outcome="needs_human", detail="Which region?"
+    )
+
+    task = proxy.task_get(slug=slug)
+
+    assert task["outcome"] == "needs_human"
+    assert task["outcome_detail"] == "Which region?"
+    [comment] = task["comments"]
+    assert "buffered task_release" in comment["body"]
+    assert "ci-worker recorded needs_human at" in comment["body"]
+
+
+@requires_omnigraph
 def test_a_queued_create_is_skipped_when_that_title_was_created_since(proxy, server):
     _queue(proxy, "task_create", {"title": "only once", "description": "d"})
     server.task_create(title="only once", description="d")

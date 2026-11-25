@@ -454,16 +454,17 @@ function within(
  * Where `task_ready` and wave 0 disagree.
  *
  * A wave-0 task should be in `task_ready` unless someone holds a live claim on
- * it, and nothing past wave 0 should be. Either direction means the reads saw
- * the graph at different moments (they run in parallel), which the next poll
- * settles.
+ * it or it carries an outcome (it waits on a person), and nothing past wave 0
+ * should be. Either direction means the reads saw the graph at different
+ * moments (they run in parallel), which the next poll settles.
  */
 function disagreements(project: WaveNode[], ready: TaskRow[]): TaskRow[] {
 	const placed = new Map(project.map((node) => [node.task.slug, node]));
 	const found: TaskRow[] = [];
 	for (const node of project) {
 		const held = node.task.status === "in_progress" && !node.task.lease_expired;
-		const expected = node.wave === 0 && !node.cycle && !held;
+		const parked = Boolean(node.task.outcome);
+		const expected = node.wave === 0 && !node.cycle && !held && !parked;
 		if (expected !== node.ready) {
 			found.push(node.task);
 		}

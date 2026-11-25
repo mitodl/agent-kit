@@ -107,8 +107,9 @@ tracked. For "the next task" in a project use
 Return ready-to-work tasks: pickable tasks whose blockers are all closed.
 
 Call it to pick the next item. A task is ready when it is ``open`` or
-``blocked``, or ``in_progress`` with an expired lease, and every task in
-its ``blocked_by`` is closed. An ``in_progress`` result is a reclaim
+``blocked``, or ``in_progress`` with an expired lease, every task in
+its ``blocked_by`` is closed, and it carries no recorded ``outcome``
+(one waiting on a person; see ``task_record_outcome``). An ``in_progress`` result is a reclaim
 (``lease_expired: true``): check ``assignee`` and ``claimed_at`` (or
 ``updated_at`` when that is null) first.
 Ordered by priority, ``p0`` first.
@@ -140,7 +141,7 @@ Re-prioritise, re-parent, reassign, fix the repo, or attach an
 | `title` | str? | `null` | New title, readable on its own (see ``task_create``). |
 | `description` | str? | `null` | Replacement description (not appended). |
 | `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | The kind of work. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``in_progress`` stamps a fresh lease, filling a missing assignee with<br>you, without ``task_claim``'s checks. ``closed`` unblocks dependents<br>and is refused while another person holds a live claim (see<br>``force``). Prefer ``task_claim``/``task_close`` for those two. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``in_progress`` stamps a fresh lease, filling a missing assignee with<br>you, without ``task_claim``'s checks. ``closed`` unblocks dependents<br>and is refused while another person holds a live claim (see<br>``force``). Prefer ``task_claim``/``task_close`` for those two.<br>``in_progress``, or any move out of ``closed``, clears a recorded<br>outcome. |
 | `priority` | `p0` \| `p1` \| `p2` \| `p3`? | `null` | ``p0`` is highest. Drives ``task_ready`` ordering. |
 | `repo` | str? | `null` | Repo URI to reassign the task to. |
 | `assignee` | str? | `null` | Reassign to this holder. Unlike ``task_claim``, does not check who<br>holds the task. |
@@ -191,6 +192,9 @@ Call when stepping away from an unfinished task so others can pick it up
 if the task is held by a different ``assignee`` unless ``force`` is set.
 With ``if_claimed_at``, also refuses (``reason: "claim_changed"``) unless
 the task is still ``in_progress`` under the claim taken at that instant.
+Releasing also requeues a task waiting on a person: it clears the outcome
+``task_record_outcome`` set (``cleared_outcome`` names it), unless the
+status released to is ``closed``.
 
 *Writes (destructive).*
 
@@ -202,6 +206,38 @@ the task is still ``in_progress`` under the claim taken at that instant.
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to. |
 | `force` | bool | `False` | Release even if held by a different assignee. |
 | `if_claimed_at` | str? | `null` | The ``claimed_at`` a ``task_claim`` returned. Release only that claim:<br>not one renewed since, and not a task that has left ``in_progress``.<br>``force`` does not lift this check. |
+
+## `task_record_outcome`
+
+Record how your attempt at a claimed task ended, and end the claim.
+
+A fan-out worker calls this exactly once, last. ``ready_for_review``
+needs ``branch``, ``commits`` and ``check_output``; ``needs_human`` needs
+the question in ``detail``; ``cannot_proceed`` the reason in ``detail``.
+The task returns to ``open`` with no holder, and while it carries the
+outcome it waits on a person: ``task_ready`` leaves it out and
+``task_claim`` refuses it until ``task_release`` requeues it, which
+clears the outcome. ``task_get`` returns it as the ``outcome*`` fields,
+with ``outcome_set_by`` and ``outcome_set_at``.
+
+Refuses, writing nothing, unless you hold the claim: ``{"recorded":
+false, "reason": "not_claimed"}`` when the task is not ``in_progress``
+(including one whose outcome is already recorded), ``"held"`` when
+another holder, another session of yours included, has it.
+
+*Writes (destructive).*
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `slug` | str | **required** | The ``tk-`` slug the attempt was on. |
+| `outcome` | `ready_for_review` \| `needs_human` \| `cannot_proceed` | **required** | ``ready_for_review``, ``needs_human`` or ``cannot_proceed``. |
+| `detail` | str? | `null` | The question (``needs_human``), the reason (``cannot_proceed``), or<br>an optional summary (``ready_for_review``). |
+| `branch` | str? | `null` | The pushed branch holding the work. |
+| `commits` | list[str]? | `null` | The commits on ``branch`` for this task, e.g. full SHAs. |
+| `check_output` | str? | `null` | Output of the check that proves the acceptance criteria. |
+| `assignee` | str? | `null` | Holder identity the claim was taken under; defaults to you, qualified<br>by ``session_id``. Pass it when the claim named an explicit holder. |
+| `session_id` | str? | `null` | Your agent session id; see instructions. |
+| `force` | bool | `False` | Record it anyway: on a task you do not hold, or over an outcome<br>already recorded. |
 
 ## `task_close`
 

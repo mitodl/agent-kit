@@ -23,6 +23,7 @@
 export type TaskStatus = "open" | "in_progress" | "blocked" | "closed";
 export type TaskPriority = "p0" | "p1" | "p2" | "p3";
 export type TaskType = "bug" | "feature" | "task" | "chore" | "epic";
+export type TaskOutcome = "ready_for_review" | "needs_human" | "cannot_proceed";
 export type WorkflowPhase =
 	| "discovery"
 	| "spec"
@@ -71,6 +72,11 @@ export interface TaskRow extends TaskCore {
 	 * from `claimed_at`.
 	 */
 	first_claimed_at: string | null;
+	/**
+	 * How a fan-out worker's attempt ended. A task carrying one waits on a
+	 * person, so `task_ready` leaves it out until it is requeued.
+	 */
+	outcome: TaskOutcome | null;
 }
 
 /** A `task_search` hit. Narrower, and it carries `description` instead. */
@@ -120,6 +126,14 @@ export interface TaskDetail extends TaskRow {
 	resolution: string | null;
 	symbol_refs: string[] | null;
 	author: string | null;
+	/** The question, the reason, or a summary, by `outcome`. */
+	outcome_detail: string | null;
+	outcome_branch: string | null;
+	outcome_commits: string[] | null;
+	/** Output of the acceptance check, for `ready_for_review`. */
+	outcome_check: string | null;
+	outcome_set_by: string | null;
+	outcome_set_at: string | null;
 	comments: TaskComment[];
 	/** Slugs of the tasks THIS one holds back: the inverse of `blocked_by`. */
 	blocks: string[];
@@ -534,6 +548,7 @@ const strList = nullable(arrayOf(str));
 const taskStatus = oneOf("open", "in_progress", "blocked", "closed");
 const taskPriority = oneOf("p0", "p1", "p2", "p3");
 const taskType = oneOf("bug", "feature", "task", "chore", "epic");
+const taskOutcome = oneOf("ready_for_review", "needs_human", "cannot_proceed");
 const workflowPhase = oneOf("discovery", "spec", "implementation", "delivery");
 const memoryKind = oneOf("pattern", "project_fact", "lesson", "agent_context");
 
@@ -591,6 +606,7 @@ const TASK_ROW: Record<string, Check> = {
 	closed_at: nullable(str),
 	claimed_at: nullable(str),
 	first_claimed_at: nullable(str),
+	outcome: nullable(taskOutcome),
 };
 
 const WORKFLOW_PROJECT_CORE: Record<string, Check> = {
@@ -666,6 +682,12 @@ export function isTaskDetail(value: unknown): value is TaskDetail {
 			resolution: nullable(str),
 			symbol_refs: strList,
 			author: nullable(str),
+			outcome_detail: nullable(str),
+			outcome_branch: nullable(str),
+			outcome_commits: strList,
+			outcome_check: nullable(str),
+			outcome_set_by: nullable(str),
+			outcome_set_at: nullable(str),
 			comments: arrayOf(isTaskComment),
 			blocks: arrayOf(str),
 			children: arrayOf(isTaskChild),

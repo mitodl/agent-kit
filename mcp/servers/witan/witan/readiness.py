@@ -116,7 +116,14 @@ def status_pickable(task: dict, *, now: datetime | None = None) -> bool:
     write, including the status transition itself): recently started reads as
     held, and only a task that has sat untouched past the lease window reads
     as abandoned/reclaimable.
+
+    A task carrying an ``outcome`` (``task_record_outcome``) is never
+    pickable: it waits on a person until a requeue clears the outcome, and a
+    runner picking it up again would bury the question or the branch under
+    review. A row read without the field reads as having none.
     """
+    if task.get("outcome"):
+        return False
     status = task.get("status")
     if status == "in_progress":
         lease_started_at = task.get("claimed_at") or task.get("updated_at")

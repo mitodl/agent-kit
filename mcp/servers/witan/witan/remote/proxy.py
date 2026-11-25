@@ -322,7 +322,12 @@ _BRANCH_IS_CHECKOUT = frozenset({"task_claim", "workflow_session_start"})
 # `test_every_branch_tool_is_classified` fails on a tool nobody has considered;
 # nothing reads this set at runtime, and being absent from both sets behaves
 # exactly like being in this one.
-_BRANCH_IS_EXPLICIT = frozenset({"task_for_branch"})
+#
+# `task_record_outcome`'s is the branch the worker pushed for review
+# (`fanout/<slug>`), which need not be the local checkout's name, and a
+# defaulted branch would satisfy `ready_for_review`'s evidence check with a
+# branch nobody can fetch.
+_BRANCH_IS_EXPLICIT = frozenset({"task_for_branch", "task_record_outcome"})
 
 
 # Task writes queued in the journal when the deployment cannot be reached (see
@@ -383,6 +388,15 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     closed_at = task.get("closed_at")
     if closed_at and parse_timestamp(closed_at) >= parse_timestamp(entry.ts):
         return f"the task was closed at {closed_at}"
+    # A recorded outcome leaves the task open with no holder, so neither check
+    # above sees it, and a release or an update to in_progress clears it: a
+    # write queued before it would erase a worker's question or its branch
+    # under review.
+    set_at = task.get("outcome_set_at")
+    if set_at and parse_timestamp(set_at) >= parse_timestamp(entry.ts):
+        return (
+            f"{task.get('outcome_set_by')} recorded {task.get('outcome')} at {set_at}"
+        )
     return None
 
 

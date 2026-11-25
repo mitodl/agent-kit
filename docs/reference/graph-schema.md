@@ -181,6 +181,13 @@ e.g. tk-wire-vault-sidecar-9c1d04
 | `first_claimed_at` | `DateTime?` | the FIRST claim ever; set once, never cleared — the retrospective timeline's work start |
 | `symbol_refs` | `[String]?` | soft refs into the code-graph store |
 | `tags` | `[String]?` |  |
+| `outcome` | `enum(ready_for_review, needs_human, cannot_proceed)? @index` |  |
+| `outcome_detail` | `String?` | the question (needs_human), the reason (cannot_proceed), or a summary |
+| `outcome_branch` | `String?` | pushed branch holding the work |
+| `outcome_commits` | `[String]?` | commits on outcome_branch for this task |
+| `outcome_check` | `String?` | output of the acceptance check (ready_for_review) |
+| `outcome_set_by` | `String?` | holder that recorded it |
+| `outcome_set_at` | `DateTime?` |  |
 | `screen_verdict` | `enum(clean, flagged)?` |  |
 | `screen_reason` | `String?` |  |
 | `screen_version` | `String?` |  |

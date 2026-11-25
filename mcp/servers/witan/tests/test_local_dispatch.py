@@ -288,6 +288,7 @@ def test_writes_the_cli_dispatches_are_all_refused(
         "task_close",
         "task_claim",
         "task_release",
+        "task_record_outcome",
         "task_link",
         "memory_store",
         "memory_update",

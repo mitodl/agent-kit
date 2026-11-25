@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import cyclopts
+from pydantic import ValidationError
 from rich.prompt import Prompt
 
 from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
 
 from .. import config as cfg_module
 from .. import live_pr
+from ..outcome import DETAIL_LABEL, OutcomeKind, TaskOutcome
 from ._common import (
     _PRIORITY_STYLE,
     _STATUS_STYLE,
     TaskLinkKind,
+    TaskOutcomeKind,
     TaskPriority,
     TaskStatus,
     TaskType,
@@ -300,6 +305,7 @@ def _task_show(slug: str) -> None:
         )
     if t.get("resolution"):
         console.print(f"\n  resolution: {esc(t['resolution'])}")
+    _print_outcome(t)
 
     comments = t.get("comments") or []
     if comments:
@@ -311,6 +317,26 @@ def _task_show(slug: str) -> None:
             )
             _print_screening(c)
             console.print(f"  {esc(c.get('body'))}")
+
+
+def _print_outcome(task: dict) -> None:
+    """Print the outcome a worker recorded on ``task``, if there is one."""
+    if not task.get("outcome"):
+        return
+    kind = OutcomeKind(task["outcome"])
+    console.print(
+        f"\n  [bold]outcome: {kind.value}[/bold] "
+        f"[dim](by {esc(task.get('outcome_set_by'))} at "
+        f"{esc(task.get('outcome_set_at'))})[/dim]"
+    )
+    if task.get("outcome_detail"):
+        console.print(f"  {DETAIL_LABEL[kind]}: {esc(task['outcome_detail'])}")
+    if task.get("outcome_branch"):
+        console.print(f"  branch: {esc(task['outcome_branch'])}")
+    if task.get("outcome_commits"):
+        console.print(f"  commits: {esc(', '.join(task['outcome_commits']))}")
+    if task.get("outcome_check"):
+        console.print(f"  check output:\n{esc(task['outcome_check'])}")
 
 
 def _print_screening(record: dict) -> None:
@@ -600,6 +626,8 @@ def task_release_cmd(
             f"[green]Released[/green] [bold]{slug}[/bold] → "
             f"{_styled(result.get('status', status), _STATUS_STYLE)}"
         )
+        if result.get("cleared_outcome"):
+            console.print(f"  cleared outcome: {esc(result['cleared_outcome'])}")
         return
     if result.get("reason") == "claim_changed":
         console.print("[yellow]Not released[/yellow] (claim changed).")
@@ -610,6 +638,93 @@ def task_release_cmd(
         )
     if result.get("remedy"):
         console.print(f"  {result['remedy']}")
+    raise SystemExit(1)
+
+
+@task_app.command(name="outcome")
+def task_outcome_cmd(
+    slug: str,
+    outcome: TaskOutcomeKind,
+    *,
+    detail: str | None = None,
+    branch: str | None = None,
+    commits: list[str] | None = None,
+    check_output: str | None = None,
+    check_file: Path | None = None,
+    assignee: str | None = None,
+    force: bool = False,
+) -> None:
+    """Record how an attempt at a claimed task ended, and end the claim.
+
+    The task returns to ``open`` and waits on a person until ``witan task
+    release`` requeues it.
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug the attempt was on.
+    outcome:
+        ready_for_review | needs_human | cannot_proceed.
+    detail:
+        The question (needs_human), the reason (cannot_proceed), or a summary
+        (ready_for_review).
+    branch:
+        The pushed branch holding the work (required for ready_for_review).
+    commits:
+        Commits on the branch for this task (required for ready_for_review).
+    check_output:
+        Output of the acceptance check (required for ready_for_review).
+    check_file:
+        Read the acceptance check's output from this file instead.
+    assignee:
+        Holder identity the claim was taken under (default: the author,
+        qualified by this agent session).
+    force:
+        Record it on a task you do not hold, or over an outcome already
+        recorded.
+    """
+    if check_file is not None:
+        if check_output is not None:
+            print_error("Pass --check-output or --check-file, not both.")
+            raise SystemExit(2)
+        check_output = check_file.read_text()
+    # Validated here too, so a missing field reads the same whether the tool
+    # runs in-process or on a deployment.
+    try:
+        TaskOutcome(
+            outcome=outcome,
+            detail=detail,
+            branch=branch,
+            commits=_split_csv(commits),
+            check_output=check_output,
+        )
+    except ValidationError as exc:
+        print_error("; ".join(e["msg"] for e in exc.errors()))
+        raise SystemExit(2) from exc
+    result = _fn(_srv().task_record_outcome)(
+        slug=slug,
+        outcome=outcome,
+        detail=detail,
+        branch=branch,
+        commits=_split_csv(commits),
+        check_output=check_output,
+        assignee=assignee,
+        **_close_override(force),
+    )
+    if result is None:
+        print_error(f"No task {slug!r}.")
+        raise SystemExit(1)
+    if result.get("recorded"):
+        console.print(
+            f"[green]Recorded[/green] {esc(result['outcome'])} on [bold]{slug}[/bold] "
+            f"(by {esc(result['outcome_set_by'])}); it waits on a person until "
+            f"`witan task release {slug}` requeues it."
+        )
+        return
+    reason = result.get("held_by") or result.get("reason") or "refused"
+    console.print(f"[yellow]Not recorded[/yellow] ({esc(reason)}).")
+    if result.get("remedy"):
+        console.print(f"  {esc(result['remedy'])}")
     raise SystemExit(1)
 
 

@@ -1158,7 +1158,9 @@ query get_task($slug: String) {
         $t.assignee, $t.external_uri, $t.resolution,
         $t.symbol_refs, $t.tags, $t.author,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at,
+        $t.outcome, $t.outcome_detail, $t.outcome_branch, $t.outcome_commits,
+        $t.outcome_check, $t.outcome_set_by, $t.outcome_set_at
     }
 }
 
@@ -1187,7 +1189,9 @@ query get_tasks_by_slugs($slugs: [String]) {
         $t.assignee, $t.external_uri, $t.resolution,
         $t.symbol_refs, $t.tags, $t.author,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at,
+        $t.outcome, $t.outcome_detail, $t.outcome_branch, $t.outcome_commits,
+        $t.outcome_check, $t.outcome_set_by, $t.outcome_set_at
     }
 }
 
@@ -1210,7 +1214,7 @@ query list_tasks_by_repo($repo: String, $status: String?) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at, $t.outcome
     }
     order { $t.updated_at desc }
 }
@@ -1225,7 +1229,7 @@ query list_tasks($status: String?) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at, $t.outcome
     }
     order { $t.updated_at desc }
     limit 50
@@ -1246,7 +1250,7 @@ query list_tasks_uncapped($status: String?) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at, $t.outcome
     }
     order { $t.updated_at desc }
     limit 10000
@@ -1279,7 +1283,7 @@ query list_tasks_by_project($project_slug: String) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at, $t.outcome
     }
     order { $t.updated_at desc }
 }
@@ -1293,7 +1297,7 @@ query list_tasks_by_parent($parent_slug: String) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
         $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
-        $t.first_claimed_at
+        $t.first_claimed_at, $t.outcome
     }
     order { $t.priority, $t.updated_at desc }
 }

@@ -61,6 +61,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`close`](#witan-task-close)
     - [`claim`](#witan-task-claim)
     - [`release`](#witan-task-release)
+    - [`outcome`](#witan-task-outcome)
     - [`update`](#witan-task-update)
     - [`link`](#witan-task-link)
     - [`unlink`](#witan-task-unlink)
@@ -1167,6 +1168,7 @@ Manage tasks.
 * [`comment`](#witan-task-comment): Leave an attributed, append-only comment on a task.
 * [`create`](#witan-task-create): Create a task in the work-coordination graph.
 * [`link`](#witan-task-link): Link two tasks (or a task to a memory).
+* [`outcome`](#witan-task-outcome): Record how an attempt at a claimed task ended, and end the claim.
 * [`release`](#witan-task-release): Release a claim, returning the task to ``open`` (or another status).
 * [`run`](#witan-task-run): Claim one or more tasks and launch an agent to execute them.
 * [`show`](#witan-task-show): Show one task's details, its sub-tasks, and blocker status.
@@ -1298,6 +1300,32 @@ Release a claim, returning the task to ``open`` (or another status).
 * `--if-claimed-at STR`: Release only the claim taken at this instant (a launch spec's
     ``claim.claimed_at``). A claim renewed since then is left alone, and
     ``--force`` does not lift this.
+
+### witan task outcome
+
+```console
+witan task outcome [OPTIONS] SLUG OUTCOME
+```
+
+Record how an attempt at a claimed task ended, and end the claim.
+
+The task returns to ``open`` and waits on a person until ``witan task
+release`` requeues it.
+
+**Parameters**:
+
+* `SLUG, --slug`: The ``tk-`` slug the attempt was on. **[required]**
+* `OUTCOME, --outcome`: ready_for_review | needs_human | cannot_proceed. **[required]** *[choices: ready_for_review, needs_human, cannot_proceed]*
+* `--detail STR`: The question (needs_human), the reason (cannot_proceed), or a summary
+    (ready_for_review).
+* `--branch STR`: The pushed branch holding the work (required for ready_for_review).
+* `--commits STR..., --empty-commits`: Commits on the branch for this task (required for ready_for_review).
+* `--check-output STR`: Output of the acceptance check (required for ready_for_review).
+* `--check-file PATH`: Read the acceptance check's output from this file instead.
+* `--assignee STR`: Holder identity the claim was taken under (default: the author,
+    qualified by this agent session).
+* `--force, --no-force`: Record it on a task you do not hold, or over an outcome already
+    recorded. *[default: False]*
 
 ### witan task update
 

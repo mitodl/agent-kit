@@ -283,6 +283,7 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "task_update",
             "task_claim",
             "task_release",
+            "task_record_outcome",
             "task_close",
             "task_comment",
             "task_link",
