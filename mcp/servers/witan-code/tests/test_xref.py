@@ -181,22 +181,88 @@ def test_a_name_whose_module_is_in_the_repo_is_not_a_use_of_another_repo():
     [
         (
             "r#src/common/mitol/common/utils/datetime.py::now_in_utc",
-            ["mitol.common.utils.datetime.now_in_utc", "mitol.common.utils.now_in_utc"],
+            ["mitol.common.utils.datetime.now_in_utc"],
         ),
-        (
-            "r#src/mitol/common/models.py::Base.save",
-            ["mitol.common.models.Base.save", "mitol.common.Base.save"],
-        ),
+        ("r#src/mitol/common/models.py::Base.save", ["mitol.common.models.Base.save"]),
         ("r#src/mitol/common/__init__.py::thing", ["mitol.common.thing"]),
         ("r#src/mitol/common/utils/__init__.py::<module>", ["mitol.common.utils"]),
         ("r#app/views.py::f", []),
         ("r#src/mitol/common/x.ts::f", []),
     ],
 )
-def test_a_definition_is_imported_as_its_module_path_and_its_packages(symbol_id, names):
+def test_a_definition_is_imported_as_its_module_path(symbol_id, names):
     from witan_code import bridge
 
     assert bridge.imported_as(symbol_id) == names
+
+
+def test_a_package_name_is_checked_against_the_package_init():
+    """A method's is its class's: re-exporting the class carries it."""
+    from witan_code import bridge
+
+    alias = bridge.package_alias("r#src/mitol/common/models.py::Base.save")
+    assert alias == bridge.PackageAlias(
+        init_files=(
+            "r#src/mitol/common/__init__.py",
+            "r#src/mitol/common/__init__.pyi",
+        ),
+        exported="r#src/mitol/common/models.py::Base",
+        name="mitol.common.Base.save",
+    )
+
+
+@pytest.mark.parametrize(
+    "symbol_id",
+    [
+        "r#src/mitol/common/__init__.py::thing",  # the package's own
+        "r#src/mitol/common/utils/datetime.py::<module>",
+        "r#src/mitol/common.py::f",  # `mitol` is the namespace, not a package
+        "r#app/views.py::f",
+    ],
+)
+def test_some_definitions_have_no_package_name(symbol_id):
+    from witan_code import bridge
+
+    assert bridge.package_alias(symbol_id) is None
+
+
+def _module(source):
+    from tree_sitter import Parser
+
+    from witan_code import indexer
+
+    raw = source.encode()
+    spec = indexer._EXT_TO_SPEC[".py"]
+    root = Parser(indexer._ts_language(spec.grammar)).parse(raw).root_node
+    return root, raw
+
+
+@pytest.mark.parametrize(
+    ("source", "names"),
+    [
+        ("x = 1\n", None),
+        ("__all__ = [\"f\", 'g']\n", {"f", "g"}),
+        ("__all__ = ('f',)\n", {"f"}),
+        ("__all__ = ['f']\n__all__ += ['g']\n", set()),
+        ("__all__ = [f'{x}']\n", set()),
+        ("__all__ = [name]\n", set()),
+        ("__all__ = names()\n", set()),
+    ],
+)
+def test_only_a_literal_all_is_read(source, names):
+    """Any other form names nothing, so a star import of it re-exports
+    nothing rather than names the module may not export."""
+    assert xref.declared_all(*_module(source)) == (
+        None if names is None else frozenset(names)
+    )
+
+
+def test_star_imports_resolve_relative_and_absolute_modules():
+    root, raw = _module("from .a import *\nfrom pkg.b import *\nfrom c import d\n")
+    assert xref.star_imports(root, raw, "src/pkg/__init__.py") == [
+        xref.ModuleRef("src/pkg/a", exact=True),
+        xref.ModuleRef("pkg/b", exact=False),
+    ]
 
 
 # ── Through the indexer and code_callers ──────────────────────────

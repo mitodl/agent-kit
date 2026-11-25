@@ -15,6 +15,7 @@ import functools
 import hashlib
 import importlib
 import os
+import posixpath
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -107,7 +108,8 @@ _PENDING_CONTENT_HASH = "pending"
 #
 # 1: every row written before the version was recorded (`index_version` null).
 # 2: cross-file Calls edges through imports (#654, #674).
-# 3: uses of another repo's package names (ExternalUse rows in the bridge).
+# 3: uses of another repo's package names (ExternalUse rows in the bridge), and
+#    a Python package's re-exports as Imports edges.
 INDEX_VERSION = 3
 
 
@@ -329,6 +331,10 @@ class ParsedFile:
     # package namespace (Python only); `_cross_file_records` keeps the ones
     # whose module is not a file of this repo
     name_uses: list[tuple[int, tuple[str, ...]]] = field(default_factory=list)
+    # modules the file star-imports, and the names a star import of the file
+    # takes (Python only), for a package's re-exports
+    star_imports: list[xref.ModuleRef] = field(default_factory=list)
+    exports: frozenset[str] = frozenset()
     # cross-repo interface bindings (env vars, packages, endpoints) in this file
     bindings: list[ParsedBinding] = field(default_factory=list)
 
@@ -1501,6 +1507,7 @@ def _cross_file_records(
             if defined(resolved[0], target_id) and defined(parsed.path, origin.id):
                 records.append(_edge("Calls", origin.id, target_id))
                 records.append(_edge("References", origin.id, target_id))
+    records += _reexport_edges(linking, batch, modules, defined, base, slug, existing)
     records = _dedupe(records)
     stats.edges += len(records)
 
@@ -1522,6 +1529,69 @@ def _cross_file_records(
                 for target in xref.external_names(chain, binding, modules)
             )
     return records, uses
+
+
+def _reexport_edges(
+    linking: list[ParsedFile],
+    batch: dict[str, ParsedFile],
+    modules: xref.ModuleIndex,
+    defined: Callable[[str, str], bool],
+    base: Path,
+    slug: str,
+    existing: dict[str, _StoredFile],
+) -> list[dict]:
+    """Imports edges from a Python package's ``__init__`` to the definitions
+    it re-exports from its own submodules.
+
+    A re-export is ``from .sub import name`` or ``from pkg.sub import name``
+    (``as`` the same name, since an edge cannot carry another), or a star
+    import of the submodule, which takes the submodule's ``exports``. Only a
+    direct submodule of the package counts: that is what makes
+    ``pkg.name`` another name for ``pkg.sub.name``, which
+    ``code_find_references`` matches uses in other repos by. Same batch rule
+    as the Calls edges: an edge between two files this run left alone was
+    never deleted.
+    """
+    exports: dict[str, frozenset[str]] = {}
+
+    def exports_of(rel: str) -> frozenset[str]:
+        """From this run's parse, else from the checkout's copy of the file,
+        whose names ``defined`` then holds to the stored symbols."""
+        if rel not in exports:
+            sub = batch.get(rel)
+            if sub is None:
+                result = _parse_for_index(base / rel, base, slug, existing, force=True)
+                sub = result[0] if result else None
+            exports[rel] = sub.exports if sub else frozenset()
+        return exports[rel]
+
+    prefix = f"{slug}#"
+    edges: list[dict] = []
+    for parsed in linking:
+        if parsed.language != "python" or Path(parsed.path).stem != "__init__":
+            continue
+        package = posixpath.dirname(parsed.path)
+        sources = [
+            (binding.module, binding.member)
+            for local, binding in parsed.import_bindings.items()
+            if binding.member == local
+        ] + [(module, None) for module in parsed.star_imports]
+        for module, member in sources:
+            target = modules.find("python", module, parsed.path)
+            if (
+                target is None
+                or posixpath.dirname(target) != package
+                or Path(target).stem == "__init__"
+                or (parsed.path not in batch and target not in batch)
+            ):
+                continue
+            names = [member] if member else sorted(exports_of(target))
+            edges.extend(
+                _edge("Imports", parsed.file_id, f"{prefix}{target}::{name}")
+                for name in names
+                if defined(target, f"{prefix}{target}::{name}")
+            )
+    return edges
 
 
 # The file types xref resolves imports in, for the relink's word search.
@@ -1636,6 +1706,16 @@ def _parse_file(
                 xref.dotted_name(chain, absolute[chain[0]])
             )
         ]
+        parsed.star_imports = xref.star_imports(root, raw, rel)
+        # A star import takes `__all__` when the module declares one, else its
+        # public names. Only defs are symbols here, which is all a reader asks
+        # about; a public name the module itself imported is never one of them.
+        declared = xref.declared_all(root, raw)
+        parsed.exports = (
+            declared
+            if declared is not None
+            else frozenset(n for n in _top_level_names(parsed) if not n.startswith("_"))
+        )
 
     # Cross-repo interface bindings (env vars, packages, endpoint consumers).
     # Attribute each to its enclosing symbol by line containment.

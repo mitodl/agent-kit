@@ -9,6 +9,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from witan_core import now_iso
 from witan_core.observability import get_logger
@@ -330,27 +331,83 @@ def _external_use_record(use: ExternalUse, repo: str) -> dict:
     }
 
 
-def imported_as(symbol_id: str) -> list[str]:
-    """Every dotted name another repo can import the definition ``symbol_id``
-    as, for matching ``ExternalUse.target``. Empty outside the shared package
-    namespaces.
+class PackageAlias(NamedTuple):
+    """The name a package's re-export gives a definition in its submodule.
 
-    The module path from the namespace root, and for a definition in a
-    package's submodule the package's too, because ol-django's packages
-    re-export their submodules (``mitol/common/utils/__init__.py`` star-imports
-    ``datetime``, so ``now_in_utc`` is imported as both
-    ``mitol.common.utils.datetime.now_in_utc`` and
-    ``mitol.common.utils.now_in_utc``). A module symbol (``::<module>``) is the
-    module's own dotted name.
+    ``name`` is valid only when one of ``init_files`` (the package's
+    ``__init__``, by CodeFile id) has an Imports edge to ``exported``, the
+    definition's top-level symbol: the indexer writes one for each name the
+    package re-exports from that submodule (``indexer._reexport_edges``).
     """
+
+    init_files: tuple[str, ...]
+    exported: str
+    name: str
+
+
+def imported_as(symbol_id: str) -> list[str]:
+    """The dotted name another repo imports the definition ``symbol_id`` by
+    through its own module, for matching ``ExternalUse.target``: the module
+    path from the namespace root. Empty outside the shared package
+    namespaces. A module symbol (``::<module>``) is the module's own name.
+
+    :func:`package_alias` gives the package's name for it, when it has one.
+    """
+    found = _module_path(symbol_id)
+    if found is None:
+        return []
+    module, _, qualified_name = found
+    if qualified_name == "<module>":
+        return [".".join(module)]
+    return [".".join((*module, qualified_name))]
+
+
+def package_alias(symbol_id: str) -> PackageAlias | None:
+    """The name the definition ``symbol_id`` has if its package re-exports it,
+    and what says whether it does.
+
+    ol-django's packages re-export some submodules
+    (``mitol/common/utils/__init__.py`` star-imports ``datetime``, so
+    ``now_in_utc`` is also ``mitol.common.utils.now_in_utc``) but not every
+    one (``helpers`` is not star-imported, so its ``max_or_none`` is not
+    ``mitol.common.utils.max_or_none``, which is ``collections``'). Only a
+    definition in a submodule file (not a package's own ``__init__``) under a
+    package inside the namespace has one. A method's is its class's, since
+    re-exporting the class re-exports the method with it.
+    """
+    found = _module_path(symbol_id)
+    if found is None:
+        return None
+    module, path, qualified_name = found
+    package = module[:-1]
+    if (
+        qualified_name == "<module>"
+        or path.rpartition("/")[2].startswith("__init__.")
+        or not consumed_package(".".join(package))
+    ):
+        return None
+    repo = symbol_id.partition("#")[0]
+    directory = path.rpartition("/")[0]
+    top = qualified_name.partition(".")[0]
+    return PackageAlias(
+        init_files=tuple(
+            f"{repo}#{directory}/__init__.{suffix}" for suffix in ("py", "pyi")
+        ),
+        exported=f"{repo}#{path}::{top}",
+        name=".".join((*package, qualified_name)),
+    )
+
+
+def _module_path(symbol_id: str) -> tuple[list[str], str, str] | None:
+    """``(dotted module parts, file path, qualified name)`` of a Python
+    definition under the shared package namespaces, else ``None``."""
     _, _, rest = symbol_id.partition("#")
     path, _, qualified_name = rest.partition("::")
     stem, dot, suffix = path.rpartition(".")
     if not dot or suffix not in ("py", "pyi") or not qualified_name:
-        return []
+        return None
     parts = stem.split("/")
-    package = parts[-1] == "__init__"
-    if package:
+    if parts[-1] == "__init__":
         parts.pop()
     module = next(
         (
@@ -361,13 +418,8 @@ def imported_as(symbol_id: str) -> list[str]:
         None,
     )
     if module is None:
-        return []
-    if qualified_name == "<module>":
-        return [".".join(module)]
-    names = [".".join((*module, qualified_name))]
-    if not package and consumed_package(".".join(module[:-1])):
-        names.append(".".join((*module[:-1], qualified_name)))
-    return names
+        return None
+    return module, path, qualified_name
 
 
 # Binding role → symbol-table role. Providers export contract surface;

@@ -9,7 +9,10 @@ It is still syntactic. A call resolves when its callee is an imported name, or
 an attribute chain rooted at one (``mod.func()``, ``pkg.mod.Cls.method()``).
 Calls through an instance (``obj.method()``), re-exports (a package
 ``__init__.py`` importing a name from a submodule), star imports, ``require()``
-and path aliases are not followed.
+and path aliases are not followed. The indexer does record a Python package's
+re-exports, explicit and star, as Imports edges of their own
+(``indexer._reexport_edges``), from :func:`star_imports` and
+:func:`declared_all`.
 """
 
 import posixpath
@@ -369,6 +372,52 @@ def _python_imports(root, raw: bytes, rel: str) -> dict[str, ImportBinding]:
                 member = local = _text(name, raw)
             out[local] = ImportBinding(module, member)
     return out
+
+
+def star_imports(root, raw: bytes, rel: str) -> list[ModuleRef]:
+    """The modules a Python file star-imports (``from pkg.mod import *``)."""
+    out: list[ModuleRef] = []
+    for node in _walk(root, ("import_from_statement",)):
+        if not any(c.type == "wildcard_import" for c in node.children):
+            continue
+        module = _from_module(node.child_by_field_name("module_name"), raw, rel)
+        if module is not None:
+            out.append(module)
+    return out
+
+
+def declared_all(root, raw: bytes) -> frozenset[str] | None:
+    """The names a Python module's ``__all__`` lists, ``None`` without one.
+
+    Only one module-level ``__all__ = [...]`` (or a tuple) of plain string
+    literals is read. Any other ``__all__`` statement (a second assignment,
+    ``+=``, a computed value) gives the empty set, so a reader that follows a
+    star import through this follows nothing it cannot vouch for.
+    """
+    assignments = []
+    for statement in root.children:
+        if statement.type != "expression_statement":
+            continue
+        for node in statement.children:
+            if node.type not in ("assignment", "augmented_assignment"):
+                continue
+            left = node.child_by_field_name("left")
+            if left is not None and _text(left, raw) == "__all__":
+                assignments.append(node)
+    if not assignments:
+        return None
+    if len(assignments) != 1 or assignments[0].type != "assignment":
+        return frozenset()
+    value = assignments[0].child_by_field_name("right")
+    if value is None or value.type not in ("list", "tuple"):
+        return frozenset()
+    names = set()
+    for item in value.named_children:
+        parts = [c for c in item.named_children if c.type == "string_content"]
+        if item.type != "string" or len(parts) != 1 or len(item.named_children) != 3:
+            return frozenset()  # not a plain literal: an f-string, a name, ...
+        names.add(_text(parts[0], raw))
+    return frozenset(names)
 
 
 def _absolute(dotted: str) -> ModuleRef:

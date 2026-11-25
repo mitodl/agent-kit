@@ -592,7 +592,7 @@ async def code_find_references(
     seen = {r["slug"] for r in refs}
     return _as_symbol_id(
         refs + [c for c in callers if c["slug"] not in seen]
-    ) + _external_uses(symbol_id, branch)
+    ) + _external_uses(symbol_id, branch, client)
 
 
 #: Uses from other repos ``code_find_references`` lists, as many as the
@@ -600,15 +600,28 @@ async def code_find_references(
 _EXTERNAL_USES_LIMIT = 200
 
 
-def _external_uses(symbol_id: str, branch: str | None) -> list[dict]:
+def _external_uses(
+    symbol_id: str, branch: str | None, repo_client: OmnigraphClient
+) -> list[dict]:
     """Uses of ``symbol_id`` in other repos (``ExternalUse`` rows), in
-    ``code_find_references``' row shape."""
+    ``code_find_references``' row shape.
+
+    By its module path, and by its package's name for it when ``repo_client``
+    (the definition repo's graph) holds the package's re-export of it.
+    """
     targets = bridge.imported_as(symbol_id)
     if not targets:
         return []
     client = _bridge_client(repo=symbol_id.split("#", 1)[0], branch=branch)
     if client is None:
         return []
+    alias = bridge.package_alias(symbol_id)
+    if alias is not None:
+        importers = repo_client.read(
+            "code_read.gq", "importing_files", {"id": alias.exported}
+        )
+        if any(row["slug"] in alias.init_files for row in importers):
+            targets.append(alias.name)
     try:
         rows = client.read(
             "bridge.gq", "external_uses_by_targets", {"targets": targets}
