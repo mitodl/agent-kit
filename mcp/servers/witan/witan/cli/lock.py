@@ -196,7 +196,13 @@ def lock_run(
         try:
             code = _run_holding(fd, command)
         finally:
-            _filelock.release(fd)
+            # An explicit unlock on POSIX would free the lock under anything
+            # the command left running with the inherited descriptor, so only
+            # witan's copy is closed and the kernel frees it after the last.
+            if sys.platform == "win32":
+                _filelock.release(fd)
+            else:
+                os.close(fd)
     except KeyboardInterrupt:
         raise SystemExit(SIGNAL_EXIT_BASE + signal.SIGINT) from None
     raise SystemExit(code)

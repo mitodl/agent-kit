@@ -208,3 +208,27 @@ def test_the_lock_stays_with_a_command_that_outlives_a_killed_witan(tmp_path):
     finally:
         os.killpg(run.pid, signal.SIGKILL)
     _wait_for(lambda: not _is_held(path), "the kernel releases the lock")
+
+
+def test_the_lock_stays_with_a_process_the_command_left_running(tmp_path):
+    started = tmp_path / "started"
+    path = lock_path("tests:left-running")
+    # The command exits at once, leaving a background child that still holds
+    # the inherited descriptor, as a test runner's surviving subprocess would.
+    run = _lock_run(
+        "tests:left-running",
+        "sh",
+        "-c",
+        '(touch "$1"; exec sleep 60) & exit 0',
+        "sh",
+        str(started),
+        start_new_session=True,
+    )
+    try:
+        assert run.wait(timeout=WAIT_SECONDS) == 0
+        _wait_for(started.exists, "the background child starts")
+        assert _is_held(path)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(run.pid, signal.SIGKILL)
+    _wait_for(lambda: not _is_held(path), "the kernel releases the lock")
