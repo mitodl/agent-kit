@@ -149,3 +149,25 @@ def test_a_server_without_the_use_files_query_still_replaces_a_files_uses(
 
     assert not stats.bridge_failed
     assert (APP, "courses/api.py", 4, "created") not in _references(NOW_IN_UTC)
+
+
+@requires_stack
+def test_references_keep_the_in_repo_rows_when_the_bridge_read_fails(
+    stores, monkeypatch
+):
+    """A bridge without ExternalUse (not yet re-indexed after an upgrade, or a
+    deployment older than this release) fails the uses read; the definition
+    repo's own references still come back."""
+    from witan_code.graph import OmnigraphClient
+
+    read = OmnigraphClient.read
+
+    def without_uses(self, query_file, query_name, params):
+        if query_name == "external_uses_by_targets":
+            raise RuntimeError("no node type ExternalUse")
+        return read(self, query_file, query_name, params)
+
+    monkeypatch.setattr(OmnigraphClient, "read", without_uses)
+    assert _references(NOW_IN_UTC) == [
+        (LIB, "src/common/mitol/common/factories.py", 4, "stamp"),
+    ]

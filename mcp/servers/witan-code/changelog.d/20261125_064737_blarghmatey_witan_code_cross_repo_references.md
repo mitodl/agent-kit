@@ -1,7 +1,7 @@
 ### Added
 
 - The indexer records each use of a name imported from a shared package namespace (today `mitol.*`, the namespaces package consumers are extracted for) whose module is not a file of the repo, as `ExternalUse` rows in the bridge: every load of the name (a call, a base class, a constant), with its line and enclosing symbol. A reindex replaces a re-parsed file's uses, and a full-repo index drops the uses of a file that left the repo.
-- `code_find_references` on a definition in a shared package namespace also returns its uses in other indexed repos (at most 200), matched by its module path and by the parent package that re-exports it (`mitol.common.utils.now_in_utc` as well as `mitol.common.utils.datetime.now_in_utc`). The language server's references therefore cross repos, and hovering a definition's own line names its uses in repos no workspace folder has open. This replaces the 0.34.0 limit of references to the definition's own repo.
+- `code_find_references` on a definition in a shared package namespace also returns its uses in other indexed repos (at most 200), matched by its module path and by the parent package that re-exports it (`mitol.common.utils.now_in_utc` as well as `mitol.common.utils.datetime.now_in_utc`). The language server's references therefore cross repos, and hovering a definition's own line names its uses in repos no workspace folder has open. This replaces the 0.34.0 limit of references to the definition's own repo. When the bridge cannot answer the uses read (a bridge or deployment from before `ExternalUse`), references log a warning and return the definition repo's own rows.
 
 ### Changed
 

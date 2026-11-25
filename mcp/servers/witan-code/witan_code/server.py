@@ -609,7 +609,15 @@ def _external_uses(symbol_id: str, branch: str | None) -> list[dict]:
     client = _bridge_client(repo=symbol_id.split("#", 1)[0], branch=branch)
     if client is None:
         return []
-    rows = client.read("bridge.gq", "external_uses_by_targets", {"targets": targets})
+    try:
+        rows = client.read(
+            "bridge.gq", "external_uses_by_targets", {"targets": targets}
+        )
+    except Exception:  # a bridge or deployment from before ExternalUse
+        # The in-repo rows are already read; losing them to this one would
+        # turn an upgrade into a Find References that fails outright.
+        logger.warning("witan.code.references.external_uses_failed", exc_info=True)
+        return []
     out: dict[tuple[str, str, int], dict] = {}
     for row in rows:
         key = (row["repo"], row["file"], row["line"])
