@@ -29,7 +29,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token, get_http_headers
 from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, StrictInt
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -5623,7 +5623,7 @@ def workflow_project_create(
     preauthorized: list[str] | None = None,
     reserved_decisions: list[str] | None = None,
     fanout_enabled: bool | None = None,
-    fanout_concurrency: int | None = None,
+    fanout_concurrency: StrictInt | None = None,
     fanout_harnesses: list[Harness] | None = None,
     fanout_labels: list[str] | None = None,
 ) -> dict:
@@ -6025,7 +6025,7 @@ def workflow_project_update(
     add_blocked_by: list[str] | None = None,
     remove_blocked_by: list[str] | None = None,
     fanout_enabled: bool | None = None,
-    fanout_concurrency: int | None = None,
+    fanout_concurrency: StrictInt | None = None,
     fanout_harnesses: list[Harness] | None = None,
     fanout_labels: list[str] | None = None,
 ) -> dict | None:

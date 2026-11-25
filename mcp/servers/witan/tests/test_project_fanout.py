@@ -86,10 +86,36 @@ def test_no_harness_list_allows_any_the_runner_has():
     assert not policy.admits(harnesses=[], labels=[])
 
 
-@pytest.mark.parametrize("bad", [0, -1, True])
+@pytest.mark.parametrize("bad", [0, -1, True, 1.5, 2.0])
 def test_concurrency_must_be_a_positive_integer(bad):
     with pytest.raises(ValueError, match="positive integer"):
         fanout.validated(concurrency=bad)
+
+
+@pytest.mark.parametrize("tool", ["workflow_project_create", "workflow_project_update"])
+@pytest.mark.parametrize("bad", [True, 1.5])
+def test_the_tools_refuse_a_non_integer_concurrency(tool, bad):
+    """Lax pydantic coercion would turn ``true`` into 1 before ``validated``
+    could see it was a bool, so the tool schema has to be strict."""
+    import asyncio
+
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    from witan import server as srv
+
+    args = (
+        {"title": "t", "description": "d"}
+        if tool == "workflow_project_create"
+        else {"slug": "wp-x"}
+    )
+
+    async def _call():
+        async with Client(srv.mcp) as client:
+            await client.call_tool(tool, {**args, "fanout_concurrency": bad})
+
+    with pytest.raises(ToolError, match="fanout_concurrency"):
+        asyncio.run(_call())
 
 
 def test_an_unknown_harness_is_refused():

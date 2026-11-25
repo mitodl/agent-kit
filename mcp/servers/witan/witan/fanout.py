@@ -65,7 +65,12 @@ def validated(
         out["fanout_enabled"] = bool(enabled)
     if concurrency is not None:
         # bool is an int subclass, and True would otherwise read as a cap of 1.
-        if isinstance(concurrency, bool) or concurrency < 1:
+        # A float (even 2.0) is refused too: the column is an I64.
+        if (
+            not isinstance(concurrency, int)
+            or isinstance(concurrency, bool)
+            or concurrency < 1
+        ):
             msg = f"fan-out concurrency must be a positive integer, not {concurrency!r}"
             raise ValueError(msg)
         out["fanout_concurrency"] = concurrency
