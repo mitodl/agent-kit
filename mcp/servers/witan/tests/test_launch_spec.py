@@ -239,6 +239,25 @@ def test_handoff_only_when_the_editor_env_resolves_what_the_spec_does(
     assert _spec(fake, folders=[here], claim=False)["handoff"] is False
 
 
+def test_handoff_reads_the_editor_env_it_is_given_over_its_own(folders, monkeypatch):
+    """The language server passes the editor's environment, which can differ
+    from the one it runs under."""
+    here, _ = folders
+    fake = _Fake(task=_task(), claim=_CLAIMED)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/somewhere/else")
+
+    clean = _spec(fake, folders=[here], claim=False, editor_environ={})
+    assert clean["handoff"] is True
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR")
+    overridden = _spec(
+        fake,
+        folders=[here],
+        claim=False,
+        editor_environ={"CLAUDE_PROJECT_DIR": "/somewhere/else"},
+    )
+    assert overridden["handoff"] is False
+
+
 def test_a_spec_that_claimed_is_never_a_handoff(folders):
     """A prefilled prompt nobody submits would hold the lease for an hour."""
     here, _ = folders

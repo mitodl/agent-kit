@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
@@ -528,19 +528,21 @@ def _folder_checkout(folder: Path) -> dict[str, str | None]:
 
 
 def _handoff_allowed(
-    workspace_folders: Sequence[Path], started_with_target: bool
+    workspace_folders: Sequence[Path],
+    started_with_target: bool,
+    editor_environ: Mapping[str, str],
 ) -> bool:
     """Whether a chat-panel agent, which gets no env, resolves what the spec does.
 
-    It resolves its target and repo from the editor's environment, which this
-    process shares, so that has to carry no override and leave one folder to
-    resolve from (docs/adr/0012, "5. Launch modes and per-editor fallbacks").
+    It resolves its target and repo from the editor's environment, so that has
+    to carry no override and leave one folder to resolve from (docs/adr/0012,
+    "5. Launch modes and per-editor fallbacks").
     """
     return (
         len(workspace_folders) == 1
         and not started_with_target
         and not any(
-            name in os.environ for name in ("WITAN_TARGET", *_LOCATION_ENV_VARS)
+            name in editor_environ for name in ("WITAN_TARGET", *_LOCATION_ENV_VARS)
         )
     )
 
@@ -571,6 +573,7 @@ def build_launch_spec(
     cfg: Config,
     workspace_folders: Sequence[Path],
     started_with_target: bool,
+    editor_environ: Mapping[str, str] = os.environ,
     agent: str | None = None,
     model: str | None = None,
     claim: bool = True,
@@ -591,6 +594,9 @@ def build_launch_spec(
         the target ``server`` dispatches to.
     :param workspace_folders: The open folders, the invoking one first.
     :param started_with_target: Whether this process was given ``--target``.
+    :param editor_environ: The environment a chat-panel agent would inherit,
+        which decides ``handoff``. The CLI's own; the language server passes
+        the editor's, from before it dropped the location overrides.
     :param agent: Agent CLI, overriding ``cfg.agent``.
     :param model: Model, overriding ``cfg.model``.
     :param claim: For a task, claim it before launching.
@@ -703,7 +709,7 @@ def build_launch_spec(
         # A handoff never claims: a prefilled prompt nobody submits would hold
         # the lease for an hour, with no failed launch to release it on.
         handoff=claim_result is None
-        and _handoff_allowed(workspace_folders, started_with_target),
+        and _handoff_allowed(workspace_folders, started_with_target, editor_environ),
         prompt=prompt,
         agent=resolved_agent,
         model=resolved_model,

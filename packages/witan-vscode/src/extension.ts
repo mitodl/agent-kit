@@ -19,6 +19,7 @@ import {
 	HANDOFF_COMMANDS,
 	type HandoffTarget,
 	handoffArguments,
+	handoffEnvOverrides,
 } from "./handoff";
 import {
 	checkVersion,
@@ -375,14 +376,20 @@ export async function activate(
 			void vscode.window.showErrorMessage(`witan: ${result.message}`);
 			return;
 		}
-		if (!result.handoff) {
+		const overrides = handoffEnvOverrides(process.env);
+		if (!result.handoff || overrides.length > 0) {
 			const choice = await vscode.window.showWarningMessage(
-				`witan did not offer ${slug} for a chat-panel handoff. Either this ` +
-					"witan does not offer handoffs yet, or a chat-panel agent, which " +
-					"starts with VS Code's own environment, would not resolve the same " +
-					"witan target and repo as this launch (more than one folder is open, " +
-					"WITAN_TARGET, CLAUDE_PROJECT_DIR or WITAN_REPO is set, or the server " +
-					"was started with --target).",
+				result.handoff
+					? `witan did not hand off ${slug}: VS Code's environment sets ` +
+							`${overrides.join(", ")}, so a chat-panel agent, which starts ` +
+							"with that environment, would not resolve the same witan target " +
+							"and repo as this launch."
+					: `witan did not offer ${slug} for a chat-panel handoff. Either this ` +
+							"witan does not offer handoffs yet, or a chat-panel agent, which " +
+							"starts with VS Code's own environment, would not resolve the same " +
+							"witan target and repo as this launch (more than one folder is open, " +
+							"WITAN_TARGET, CLAUDE_PROJECT_DIR or WITAN_REPO is set, or the server " +
+							"was started with --target).",
 				"Run in Terminal",
 			);
 			if (choice) {

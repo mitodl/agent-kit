@@ -10,6 +10,7 @@ import {
 	CLAUDE_HANDOFF_COMMAND,
 	COPILOT_HANDOFF_COMMAND,
 	handoffArguments,
+	handoffEnvOverrides,
 } from "../../src/handoff.ts";
 import {
 	checkVersion,
@@ -190,6 +191,18 @@ test("handoff targets follow the registered commands", () => {
 test("each handoff command gets the prompt the way it takes it", () => {
 	assert.deepEqual(handoffArguments("copilot", "p"), [{ prompt: "p" }]);
 	assert.deepEqual(handoffArguments("claude", "p"), [undefined, "p"]);
+});
+
+test("VS Code's own target or repo override vetoes a handoff", () => {
+	assert.deepEqual(handoffEnvOverrides({ PATH: "/bin", HOME: "/h" }), []);
+	// Set but empty still overrides: witan reads presence, not value.
+	assert.deepEqual(
+		handoffEnvOverrides({ WITAN_TARGET: "production", WITAN_REPO: "" }),
+		["WITAN_TARGET", "WITAN_REPO"],
+	);
+	assert.deepEqual(handoffEnvOverrides({ CLAUDE_PROJECT_DIR: "/r" }), [
+		"CLAUDE_PROJECT_DIR",
+	]);
 });
 
 const LAUNCHER = fileURLToPath(

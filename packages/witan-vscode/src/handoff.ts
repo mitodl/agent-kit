@@ -28,6 +28,25 @@ export function availableHandoffs(
 	};
 }
 
+/** The variables that point a witan client at another target or repo. */
+export const HANDOFF_ENV_OVERRIDES = [
+	"WITAN_TARGET",
+	"CLAUDE_PROJECT_DIR",
+	"WITAN_REPO",
+] as const;
+
+/**
+ * The overrides set in `env`, the environment a chat-panel agent inherits. The
+ * server checks its own environment, but `witan.server.command` can change
+ * that one (e.g. `["env", "-u", "WITAN_TARGET", "witan", "lsp"]`), so the
+ * client checks VS Code's as well before it hands off.
+ */
+export function handoffEnvOverrides(
+	env: Readonly<Record<string, string | undefined>>,
+): string[] {
+	return HANDOFF_ENV_OVERRIDES.filter((name) => env[name] !== undefined);
+}
+
 /** The arguments each target's command takes for `prompt`. */
 export function handoffArguments(
 	target: HandoffTarget,
