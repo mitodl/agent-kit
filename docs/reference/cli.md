@@ -561,6 +561,7 @@ List workflow projects (default: active in the current repo).
 * `--repo STR`: Scope to a specific repo URI (default: the current git repo).
 * `--status CHOICE`: Filter by active | completed | abandoned, or all for every status. *[choices: active, completed, abandoned, all]* *[default: active]*
 * `--all-repos, --no-all-repos`: Span every repo in the graph. *[default: False]*
+* `--fanout, --no-fanout`: Only active projects with fan-out enabled, the ones runners claim from. *[default: False]*
 * `--limit INT`: Max rows. *[default: 50]*
 
 ## witan project
@@ -659,6 +660,13 @@ Create a new workflow project.
 * `--allow STR..., --empty-allow`: An action agents may take on this project without asking. Repeat the
     flag for each item; items are not comma-split.
 * `--reserve STR..., --empty-reserve`: A decision kept for a human. Repeatable, like ``--allow``.
+* `--fanout, --no-fanout`: Let ``witan runner`` processes claim this project's ready tasks.
+* `--fanout-concurrency INT`: Most runner-claimed tasks in flight at once, across all runners
+    (default 1).
+* `--fanout-harness CHOICE..., --empty-fanout-harness`: A harness runners may start for this project. Repeatable; unset
+    allows any. *[choices: claude, pi, codex, copilot, opencode]*
+* `--fanout-label STR..., --empty-fanout-label`: A label a runner must advertise to claim from this project, e.g.
+    ``docker``. Repeatable.
 
 ### witan project update
 
@@ -698,6 +706,13 @@ trace without a narrative.
     for each item; ``--empty-allow`` clears the list.
 * `--reserve STR..., --empty-reserve`: Replace the decisions kept for a human. Repeatable;
     ``--empty-reserve`` clears the list.
+* `--fanout, --no-fanout`: ``--fanout`` lets runners claim this project's ready tasks;
+    ``--no-fanout`` stops them.
+* `--fanout-concurrency INT`: Most runner-claimed tasks in flight at once, across all runners.
+* `--fanout-harness CHOICE..., --empty-fanout-harness`: Replace the harnesses runners may start. Repeatable;
+    ``--empty-fanout-harness`` clears the list, which allows any. *[choices: claude, pi, codex, copilot, opencode]*
+* `--fanout-label STR..., --empty-fanout-label`: Replace the labels a runner must advertise. Repeatable;
+    ``--empty-fanout-label`` clears the list.
 
 ### witan project advance
 

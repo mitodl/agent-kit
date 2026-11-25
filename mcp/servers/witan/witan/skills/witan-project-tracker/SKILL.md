@@ -202,6 +202,24 @@ grants into suggestions until the author sets them again. The CLI equivalent is
 `witan project update <slug> --allow "..." --reserve "..."` (repeat a flag per
 item; `--empty-allow` / `--empty-reserve` clear).
 
+## Fan-out Policy
+
+Whether `witan runner` processes may work a project's ready tasks in parallel
+is data on the project, next to the envelope: `fanout_enabled`,
+`fanout_concurrency` (most runner-claimed tasks in flight across all runners,
+1 when unset), `fanout_harnesses` (which of `claude`, `pi`, `codex`,
+`copilot`, `opencode` a runner may start; unset allows any) and
+`fanout_labels` (labels a runner must advertise, e.g. `docker`). A project
+that never set `fanout_enabled` is never claimed from. Turn it on only when
+the user asks:
+
+```text
+workflow_project_update(slug="wp-...", fanout_enabled=True, fanout_concurrency=3)
+```
+
+The CLI equivalent is `witan project update <slug> --fanout
+--fanout-concurrency 3`; `--no-fanout` stops runners from claiming more.
+
 ## Advancing a Project
 
 "Advance the X project" (or "continue the X project") means: work the

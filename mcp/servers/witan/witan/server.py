@@ -29,7 +29,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token, get_http_headers
 from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, StrictInt
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -61,6 +61,7 @@ from witan_core.timeutil import parse_timestamp
 from . import config as cfg_module
 from . import (
     elicit,
+    fanout,
     live_pr,
     merge_bounds,
     merge_report,
@@ -76,6 +77,7 @@ from . import (
 )
 from . import repo as repo_module
 from .cli_only import CliOnlyToolsMiddleware
+from .fanout import Harness
 from .graph import (
     OmnigraphClient,
     OmnigraphConflict,
@@ -5622,6 +5624,10 @@ def workflow_project_create(
     tags: list[str] | None = None,
     preauthorized: list[str] | None = None,
     reserved_decisions: list[str] | None = None,
+    fanout_enabled: bool | None = None,
+    fanout_concurrency: StrictInt | None = None,
+    fanout_harnesses: list[Harness] | None = None,
+    fanout_labels: list[str] | None = None,
 ) -> dict:
     """
     Create a new workflow project to track an engineering objective.
@@ -5658,7 +5664,25 @@ def workflow_project_create(
     reserved_decisions:
         Decisions kept for a human, e.g. ``"merging to main"``. Collect these
         into one list for the user rather than acting or asking one by one.
+    fanout_enabled:
+        Let ``witan runner`` processes claim this project's ready tasks. Off
+        unless set; a runner never claims from a project without it.
+    fanout_concurrency:
+        Most runner-claimed tasks in flight at once, across all runners. At
+        least 1; unset reads as 1.
+    fanout_harnesses:
+        Harnesses a runner may start for this project's tasks; unset allows
+        any.
+    fanout_labels:
+        Labels a runner must advertise to claim from this project, e.g.
+        ``docker`` or ``gpu``.
     """
+    policy = fanout.validated(
+        enabled=fanout_enabled,
+        concurrency=fanout_concurrency,
+        harnesses=fanout_harnesses,
+        labels=fanout_labels,
+    )
     now = now_iso()
     author = _current_author()
     repo_set = _merge_repos(repos, repo_module.detect())
@@ -5697,6 +5721,11 @@ def workflow_project_create(
             "github_pr": None,
             **_envelope_write("preauthorized", preauthorized, author),
             **_envelope_write("reserved_decisions", reserved_decisions, author),
+            **dict.fromkeys(fanout.FIELDS),
+            **policy,
+            "fanout_set_by": author
+            if any(v is not None for v in policy.values())
+            else None,
             "created_at": now,
             "updated_at": now,
         },
@@ -5724,6 +5753,10 @@ def workflow_project_get(slug: str) -> dict | None:
     not act on ``reserved_decisions``, whoever set them, but collect them into
     one list for the user. Neither overrides a permission prompt, the user's
     in-session instructions, or a repo's AGENTS.md.
+
+    ``fanout_enabled``, ``fanout_concurrency``, ``fanout_harnesses`` and
+    ``fanout_labels`` are the fan-out policy runners read (see
+    ``workflow_project_create``); ``fanout_set_by`` names who last changed it.
 
     ``blocked_by`` lists projects that must complete first, and ``blockers``
     resolves each to ``{slug, title, status, phase}``. ``blocks`` lists the
@@ -5875,6 +5908,8 @@ def workflow_project_status(slug: str) -> dict | None:
                 "reserved_decisions",
                 "preauthorized_set_by",
                 "reserved_decisions_set_by",
+                *fanout.FIELDS,
+                "fanout_set_by",
                 # How old the project's text is, for a reader resuming from it.
                 "updated_at",
             )
@@ -5895,6 +5930,7 @@ def workflow_project_list(
     ready: bool = False,
     query: str | None = None,
     all_repos: bool = False,
+    fanout_enabled: bool = False,
 ) -> list[dict]:
     """
     List workflow projects, optionally filtered by repo, status, and phase, or
@@ -5919,6 +5955,9 @@ def workflow_project_list(
         Free-text search query.
     all_repos:
         List every repo's projects.
+    fanout_enabled:
+        Only active projects with fan-out enabled, the ones a runner may
+        claim from.
     """
     detected_repo = _scope(repo, all_repos)
 
@@ -5945,6 +5984,9 @@ def workflow_project_list(
             r["slug"]: r.get("status", "active") for r in rows
         }
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
+
+    if fanout_enabled:
+        rows = fanout.enabled_projects(rows)
 
     return rows[:_SEARCH_LIMIT] if query else rows
 
@@ -5984,6 +6026,10 @@ def workflow_project_update(
     reserved_decisions: list[str] | None = None,
     add_blocked_by: list[str] | None = None,
     remove_blocked_by: list[str] | None = None,
+    fanout_enabled: bool | None = None,
+    fanout_concurrency: StrictInt | None = None,
+    fanout_harnesses: list[Harness] | None = None,
+    fanout_labels: list[str] | None = None,
 ) -> dict | None:
     """
     Correct a project's metadata after creation, or change what blocks it.
@@ -6028,7 +6074,22 @@ def workflow_project_update(
         ``wp-`` slugs that must complete before this project can begin.
     remove_blocked_by:
         ``wp-`` slugs to drop from ``blocked_by``.
+    fanout_enabled:
+        Turn runner fan-out on or off for this project.
+    fanout_concurrency:
+        Most runner-claimed tasks in flight at once, across all runners; at
+        least 1.
+    fanout_harnesses:
+        Replaces the allowed harnesses; ``[]`` clears, which allows any.
+    fanout_labels:
+        Replaces the labels a runner must advertise; ``[]`` clears.
     """
+    policy = fanout.validated(
+        enabled=fanout_enabled,
+        concurrency=fanout_concurrency,
+        harnesses=fanout_harnesses,
+        labels=fanout_labels,
+    )
     # Phase stays with workflow_project_advance so every transition passes its
     # ordering check (going backwards asks first); `completed` stays with
     # workflow_project_complete, which seals a corpus trace with a narrative.
@@ -6068,17 +6129,26 @@ def workflow_project_update(
         ),
         "updated_at": now,
     }
-    # The envelope lists and `blocked_by` are written only when passed, each by
-    # its own mutation, so a call that changes one of them never rewrites the
-    # others from a stale `current`: that would restore a grant another session
-    # just revoked, or drop a reservation it just added. The general fields are
-    # skipped on a call that touches only those lists for the same reason.
+    # The envelope lists, the fan-out fields and `blocked_by` are written only
+    # when passed, each by its own mutation, so a call that changes one of them
+    # never rewrites the others from a stale `current`: that would restore a
+    # grant another session just revoked, drop a reservation it just added, or
+    # turn fan-out back on. The general fields are skipped on a call that
+    # touches only those for the same reason.
     # `blocked_by` itself is still read-modify-write from `current`, so two
     # concurrent `add_blocked_by` calls can drop one entry (the edge survives);
     # the removed `workflow_project_block` had the same race.
-    lists_only = any(
-        v is not None
-        for v in (preauthorized, reserved_decisions, add_blocked_by, remove_blocked_by)
+    lists_only = (
+        bool(policy)
+        or any(
+            v is not None
+            for v in (
+                preauthorized,
+                reserved_decisions,
+                add_blocked_by,
+                remove_blocked_by,
+            )
+        )
     ) and all(
         v is None
         for v in (
@@ -6117,6 +6187,19 @@ def workflow_project_update(
                     },
                 )
             )
+    steps += [
+        (
+            "mutations.gq",
+            f"update_workflow_project_{key}",
+            {
+                "slug": slug,
+                key: value,
+                "fanout_set_by": _current_author(),
+                "updated_at": now,
+            },
+        )
+        for key, value in policy.items()
+    ]
     # The engine refuses a body that mixes deletes with inserts and updates,
     # so the edge deletes go first, in their own commit. A failure between the
     # two leaves `blocked_by` still naming the blocker, and a retry finds no

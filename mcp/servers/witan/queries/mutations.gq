@@ -245,6 +245,11 @@ query insert_workflow_project(
     $reserved_decisions: [String]?,
     $preauthorized_set_by: String?,
     $reserved_decisions_set_by: String?,
+    $fanout_enabled: Bool?,
+    $fanout_concurrency: I64?,
+    $fanout_harnesses: [String]?,
+    $fanout_labels: [String]?,
+    $fanout_set_by: String?,
     $created_at: DateTime,
     $updated_at: DateTime
 ) {
@@ -263,6 +268,11 @@ query insert_workflow_project(
         reserved_decisions: $reserved_decisions,
         preauthorized_set_by: $preauthorized_set_by,
         reserved_decisions_set_by: $reserved_decisions_set_by,
+        fanout_enabled: $fanout_enabled,
+        fanout_concurrency: $fanout_concurrency,
+        fanout_harnesses: $fanout_harnesses,
+        fanout_labels: $fanout_labels,
+        fanout_set_by: $fanout_set_by,
         created_at: $created_at,
         updated_at: $updated_at
     }
@@ -343,6 +353,70 @@ query update_workflow_project_reserved_decisions(
         set {
             reserved_decisions: $reserved_decisions,
             reserved_decisions_set_by: $reserved_decisions_set_by,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+// The fan-out policy, one mutation per field for the reason the envelope has
+// one per list: a field written back from a stale read could re-enable fan-out
+// another session just turned off. Each write records its caller as
+// `fanout_set_by`.
+query update_workflow_project_fanout_enabled(
+    $slug: String,
+    $fanout_enabled: Bool?,
+    $fanout_set_by: String?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set {
+            fanout_enabled: $fanout_enabled,
+            fanout_set_by: $fanout_set_by,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+query update_workflow_project_fanout_concurrency(
+    $slug: String,
+    $fanout_concurrency: I64?,
+    $fanout_set_by: String?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set {
+            fanout_concurrency: $fanout_concurrency,
+            fanout_set_by: $fanout_set_by,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+query update_workflow_project_fanout_harnesses(
+    $slug: String,
+    $fanout_harnesses: [String]?,
+    $fanout_set_by: String?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set {
+            fanout_harnesses: $fanout_harnesses,
+            fanout_set_by: $fanout_set_by,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+query update_workflow_project_fanout_labels(
+    $slug: String,
+    $fanout_labels: [String]?,
+    $fanout_set_by: String?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set {
+            fanout_labels: $fanout_labels,
+            fanout_set_by: $fanout_set_by,
             updated_at: $updated_at
         }
         where slug = $slug

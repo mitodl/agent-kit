@@ -95,6 +95,11 @@ e.g. wp-add-vault-k8s-auth-a3f912
 | `reserved_decisions` | `[String]?` | decisions kept for a human; agents batch these into one list |
 | `preauthorized_set_by` | `String?` | server-resolved actor who last set preauthorized (every item in it) |
 | `reserved_decisions_set_by` | `String?` | server-resolved actor who last set reserved_decisions |
+| `fanout_enabled` | `Bool?` | whether runners may claim this project's ready tasks; unset is off |
+| `fanout_concurrency` | `I64?` | cap on runner-claimed tasks in flight, across all runners; unset reads as 1 |
+| `fanout_harnesses` | `[String]?` | harnesses a runner may start for it (claude, pi, codex, copilot, opencode); unset is any |
+| `fanout_labels` | `[String]?` | labels a runner must advertise to claim from it, e.g. docker, gpu |
+| `fanout_set_by` | `String?` | server-resolved actor who last changed any fan-out field |
 
 ### `WorkflowSession`
 

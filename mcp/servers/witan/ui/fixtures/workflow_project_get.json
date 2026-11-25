@@ -7,6 +7,16 @@
     "completed_at": null,
     "created_at": "2026-01-01T00:00:00+00:00",
     "description": "A human-readable surface for the graph.",
+    "fanout_concurrency": 2,
+    "fanout_enabled": true,
+    "fanout_harnesses": [
+      "claude",
+      "pi"
+    ],
+    "fanout_labels": [
+      "docker"
+    ],
+    "fanout_set_by": "fixtures",
     "github_issue": null,
     "github_pr": null,
     "phase": "discovery",

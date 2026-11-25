@@ -3,6 +3,16 @@
     {
       "author": "fixtures",
       "blocked_by": null,
+      "fanout_concurrency": 2,
+      "fanout_enabled": true,
+      "fanout_harnesses": [
+        "claude",
+        "pi"
+      ],
+      "fanout_labels": [
+        "docker"
+      ],
+      "fanout_set_by": "fixtures",
       "github_issue": null,
       "github_pr": null,
       "phase": "discovery",
