@@ -5,4 +5,4 @@
 
 ### Changed
 
-- `INDEX_VERSION` is 3, so each repo's next index of its default branch re-parses every file and writes its uses. The `code-bridge` graph has to carry the `ExternalUse` schema (0.35.0) before this release indexes into it, because a load carrying a type the graph lacks fails the whole bridge write; a deployed witan has to run this release before a branch index through it writes uses, since the writer reads the new `external_use_files` query.
+- `INDEX_VERSION` is 3, so each repo's next index of its default branch re-parses every file and writes its uses. The `code-bridge` graph has to carry the `ExternalUse` schema (0.35.0) before this release indexes into it, because a load carrying a type the graph lacks fails the whole bridge write. A branch index through a deployed witan older than this release still writes its bindings and uses, but deletes uses in every re-parsed file rather than only where some are stored, and a full-repo index leaves the uses of a file that left the repo carrying no package binding, because that server lacks the new `external_use_files` query.

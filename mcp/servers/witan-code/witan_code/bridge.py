@@ -159,12 +159,7 @@ def write_bindings(
     )
     repo_symbol_rows = _read_repo_symbols(client) if has_endpoint_consumers else []
 
-    # Only the files that hold uses get a delete for them: a delete costs about
-    # as much as the binding deletes below, and most files hold none.
-    use_files = {
-        r["file"]
-        for r in client.read("bridge.gq", "external_use_files", {"repo": repo})
-    }
+    use_files = _stored_use_files(client, repo)
     purge_files = set(touched_files) | {b.file for b in bindings}
     if full_repo and (indexed_files is not None or base is not None):
 
@@ -178,7 +173,10 @@ def write_bindings(
             for r in all_rows
             if r.get("repo") == repo and r.get("file") and _gone(r["file"])
         }
-        purge_files |= {rel for rel in use_files if _gone(rel)}
+        purge_files |= {rel for rel in use_files or () if _gone(rel)}
+    # Only the files that hold uses get a delete for them: a delete costs about
+    # as much as a binding delete, and most files hold none.
+    use_purge = purge_files if use_files is None else purge_files & use_files
     # One commit for the whole purge, not one per file: this runs over every
     # touched file on each index, and a commit apiece fragments the bridge store
     # the same way the per-file deletes did the per-repo one. Chunked because a
@@ -205,7 +203,7 @@ def write_bindings(
                     "delete_external_uses_in_file",
                     {"repo": repo, "file": rel},
                 )
-                for rel in sorted(purge_files & use_files)
+                for rel in sorted(use_purge)
             ),
             ("bridge.gq", "delete_repo_symbols", {"repo": repo}),
         ],
@@ -296,6 +294,24 @@ def write_bindings(
     records.extend(_dedupe([_external_use_record(u, repo) for u in external_uses]))
     client.load(records, mode="merge")
     return n_bindings
+
+
+def _stored_use_files(client: OmnigraphClient, repo: str) -> set[str] | None:
+    """The files ``repo``'s stored uses are in, or ``None`` when the read fails.
+
+    Through a deployed witan the read runs that server's copy of the query,
+    which one older than this release lacks. Failing the bridge write over it
+    would freeze the branch's bindings too, so the caller instead deletes uses
+    in every file it purges and cannot find the uses of a file that left the
+    repo with no binding, until the server is upgraded.
+    """
+    try:
+        rows = client.read("bridge.gq", "external_use_files", {"repo": repo})
+    except Exception:  # a deployment older than the query
+        # Warning: the write goes on, but a deleted file's uses outlive it.
+        logger.warning("witan.code.bridge.external_use_files_failed", exc_info=True)
+        return None
+    return {r["file"] for r in rows}
 
 
 def _external_use_record(use: ExternalUse, repo: str) -> dict:

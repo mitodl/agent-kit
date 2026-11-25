@@ -1621,10 +1621,13 @@ def _parse_file(
     if spec.name in xref.LANGUAGES:
         parsed.import_bindings = xref.imports(spec.name, root, raw, rel)
     if spec.name == "python":
+        # Filtered before the walk, which costs about a quarter of a parse and
+        # finds nothing in a file with no import from the shared namespace.
         absolute = {
             name: binding
             for name, binding in parsed.import_bindings.items()
             if not binding.module.exact
+            and bridge_extractors.shared_namespace(binding.module.path.split("/")[0])
         }
         parsed.name_uses = [
             (line, chain)

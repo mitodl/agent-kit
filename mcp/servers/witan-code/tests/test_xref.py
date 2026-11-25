@@ -302,7 +302,7 @@ def _index_as_an_indexer_before_cross_file_calls(base, monkeypatch):
 
     with monkeypatch.context() as old:
         old.setattr(indexer, "_file_records", without_index_version)
-        old.setattr(indexer, "_cross_file_records", lambda *a, **k: [])
+        old.setattr(indexer, "_cross_file_records", lambda *a, **k: ([], []))
         _index(base)
     assert not _callers("pkg/b.py::target") & CROSS_FILE_CALLERS
 

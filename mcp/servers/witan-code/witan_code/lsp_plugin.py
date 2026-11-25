@@ -79,6 +79,7 @@ from witan_core.remote.proxy import (
 )
 from witan_core.repo_key import checkout_branch
 
+from . import bridge
 from . import config as cfg_module
 from . import repo as repo_module
 
@@ -519,7 +520,9 @@ class CodePlugin(Plugin):
         and ``references`` cannot return as a location.
 
         Only on the definition's line for the second, so hovering a name
-        elsewhere does not read its references too."""
+        elsewhere does not read its references too, and only for a definition
+        another repo can import (``bridge.imported_as``): any other's
+        references are all in its own repo, which this folder has open."""
         targets = self._targets(ctx, uri, line, character)
         away = [
             t
@@ -531,6 +534,7 @@ class CodePlugin(Plugin):
             t
             for t in targets
             if (t["repo"], _rel(t), t["start_line"]) == (ctx.folder.repo, rel, line + 1)
+            and bridge.imported_as(t["symbol_id"])
         ]
         uses = [
             (r["repo"], _rel(r), r["start_line"], r["qualified_name"])

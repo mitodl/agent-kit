@@ -121,3 +121,31 @@ def test_a_reindex_replaces_a_files_uses_and_drops_a_deleted_files(stores):
     assert [r for r in _references(NOW_IN_UTC) if r[0] == APP] == [
         (APP, "courses/models.py", 7, "Course.stamp"),
     ]
+
+
+@requires_stack
+def test_a_server_without_the_use_files_query_still_replaces_a_files_uses(
+    stores, monkeypatch
+):
+    """Through a deployed witan older than this release the read of the stored
+    use files fails. The bridge write still goes through, deleting uses in
+    every re-parsed file instead."""
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+
+    read = OmnigraphClient.read
+
+    def without_use_files(self, query_file, query_name, params):
+        if query_name == "external_use_files":
+            raise KeyError(f"query {query_name!r} not found")
+        return read(self, query_file, query_name, params)
+
+    monkeypatch.setattr(OmnigraphClient, "read", without_use_files)
+    cfg, app = stores
+    (app / "courses" / "api.py").write_text(
+        "from mitol.common.utils.datetime import now_in_utc\n\n\nx = 1\n"
+    )
+    stats = indexer.index_path(app, repo_override=APP, config=cfg)
+
+    assert not stats.bridge_failed
+    assert (APP, "courses/api.py", 4, "created") not in _references(NOW_IN_UTC)

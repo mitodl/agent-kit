@@ -243,6 +243,12 @@ _PY_PKG = re.compile(
 _PY_PKG_DOTTED = re.compile(rf"({_PY_PKG_NAME})(?:\.|$)")
 
 
+def shared_namespace(top: str) -> bool:
+    """Whether the top-level Python package ``top`` is the root of the shared
+    packages, so a name under it can be one :func:`consumed_package` takes."""
+    return top == _PY_NAMESPACE
+
+
 def consumed_package(dotted: str) -> str | None:
     """The shared package a dotted Python name falls under, or ``None``.
 
