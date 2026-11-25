@@ -78,12 +78,22 @@ of the use, and at most 200 are listed. A use is any load of the name (a
 call, a base class, a constant), imported by its module path or through
 the parent package that re-exports it.
 
+Those uses come from the bridge view ``branch`` selects for the
+definition's repo, which holds every other repo as bridge main has it (a
+branch overlay, as main had it when the overlay was forked). A
+repo named in ``consumer_branches`` whose branch has a bridge overlay has
+its uses read from that overlay instead. An overlay is a copy of bridge
+main taken when the branch was first indexed, so outside the files the
+branch has re-indexed it holds what main held then: one forked before
+main had the repo's uses shows none in the files the branch left alone.
+
 *Read-only.*
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `symbol_id` | str | **required** | The symbol to start from (a ``symbol_id`` from a name-based tool). |
 | `branch` | str? | `null` | Branch or view of ``symbol_id``'s repo to read; see instructions. |
+| `consumer_branches` | object? | `null` | Git branch to read each other repo's uses at, keyed by repo URI (e.g.<br>the branch each open editor folder is on). A repo left out, or whose<br>branch has no bridge overlay, reads its default branch's uses. |
 
 ## `code_impact`
 

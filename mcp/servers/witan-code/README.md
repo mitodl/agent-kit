@@ -472,7 +472,7 @@ indexer first).
 | Tool | Returns |
 |------|---------|
 | `code_find_definition(name)` / `code_find_definition(symbol_id=...)` | symbols whose name / qualified name matches (at most 50 per repo), or the one symbol with that exact id |
-| `code_find_references(symbol_id, branch=None)` | incoming `References` + `Calls`, plus uses in other repos of a `mitol.*` definition (at most 200, from the bridge) |
+| `code_find_references(symbol_id, branch=None, consumer_branches=None)` | incoming `References` + `Calls`, plus uses in other repos of a `mitol.*` definition (at most 200, from the bridge view `branch` reads, where other repos are as bridge main has them (or had them when that view was forked); a repo in `consumer_branches` (`{repo: git branch}`) reads its branch's bridge overlay instead, when one exists) |
 | `code_callers(symbol_id, direction="callers", branch=None)` | incoming `Calls`; `direction="callees"` for outgoing |
 | `code_impact(symbol_id, max_depth=5, max_nodes=200, branch=None)` | transitive callers via BFS |
 | `code_symbols_in_file(path)` | symbols defined in a file |
@@ -581,7 +581,13 @@ target's graph, at its own checkout branch:
   imports a package or names a service: who provides and who consumes it;
 - go to definition across indexed repos, and find references in the
   definition's own repo plus, for a definition in a shared package namespace
-  (`mitol.*`), its uses in other indexed repos. A definition in a repo no
+  (`mitol.*`), its uses in other indexed repos. A repo a folder has open on a
+  feature branch has its uses read from that branch's bridge overlay, so
+  they land on the branch's lines; a repo on its default branch, or on a
+  branch never indexed, has its default branch's. The overlay is a copy of
+  bridge main from when the branch was first indexed, so one forked before
+  main had the repo's uses lists them only in files the branch has
+  re-indexed since. A definition in a repo no
   workspace folder has checked out is named in the hover instead (repo, path
   and line), with its references, and hovering a definition's own line names
   its uses in repos no folder has open;

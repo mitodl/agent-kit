@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import git_checkout, requires_stack, tool_fn
+from .conftest import git, git_checkout, requires_stack, tool_fn
 
 LIB = "https://github.com/test/ol-django"
 APP = "https://github.com/test/app"
@@ -112,10 +112,14 @@ def stores(tmp_path, monkeypatch):
     srv.use_config(before)
 
 
-def _references(symbol_id: str) -> list[tuple[str, str, int, str]]:
+def _references(
+    symbol_id: str, consumer_branches: dict[str, str] | None = None
+) -> list[tuple[str, str, int, str]]:
     from witan_code import server as srv
 
-    rows = tool_fn(srv.code_find_references)(symbol_id)
+    rows = tool_fn(srv.code_find_references)(
+        symbol_id, consumer_branches=consumer_branches
+    )
     return sorted(
         (r["repo"], r["file_id"].split("#", 1)[1], r["start_line"], r["qualified_name"])
         for r in rows
@@ -258,3 +262,63 @@ def test_references_keep_the_in_repo_rows_when_the_bridge_read_fails(
     assert _references(NOW_IN_UTC) == [
         (LIB, "src/common/mitol/common/factories.py", 4, "stamp"),
     ]
+
+
+def _app_on_a_branch(stores, branch: str = "feature/move") -> None:
+    """The app switched to ``branch`` and indexed there: `api.py`'s use moves
+    down two lines and `legacy.py`, with its use, is deleted."""
+    from witan_code import indexer
+
+    cfg, app, _ = stores
+    git(app, "switch", "-q", "-c", branch)
+    (app / "courses" / "legacy.py").unlink()
+    (app / "courses" / "api.py").write_text(
+        "from mitol.common.utils.datetime import now_in_utc\n"
+        "\n\n"
+        "# moved\n\n"
+        "def created(default=now_in_utc):\n"
+        "    return default()\n"
+    )
+    git(app, "commit", "-qam", "move")
+    indexer.index_path(app, repo_override=APP, config=cfg)
+
+
+@requires_stack
+def test_a_consumer_branch_reads_its_uses_from_its_bridge_overlay(stores):
+    """Named in ``consumer_branches``, the app's uses come from its branch's
+    bridge overlay; left out, from bridge main, which the branch never wrote."""
+    _app_on_a_branch(stores)
+
+    assert [r for r in _references(NOW_IN_UTC) if r[0] == APP] == [
+        (APP, "courses/api.py", 4, "created"),
+        (APP, "courses/legacy.py", 5, "created"),
+        (APP, "courses/models.py", 7, "Course.stamp"),
+    ]
+    assert _references(NOW_IN_UTC, {APP: "feature/move"}) == [
+        (APP, "courses/api.py", 6, "created"),
+        (APP, "courses/models.py", 7, "Course.stamp"),
+        (LIB, "src/common/mitol/common/factories.py", 4, "stamp"),
+    ]
+
+
+@requires_stack
+def test_a_consumer_branch_without_an_overlay_reads_main(stores):
+    """A branch never indexed has no overlay, so the repo's default branch's
+    uses stand in for it."""
+    _app_on_a_branch(stores)
+
+    assert _references(NOW_IN_UTC, {APP: "never-indexed"}) == _references(NOW_IN_UTC)
+
+
+@requires_stack
+def test_the_cap_applies_to_the_uses_after_the_overlay_replaces_them(
+    stores, monkeypatch
+):
+    from witan_code import server as srv
+
+    _app_on_a_branch(stores)
+    monkeypatch.setattr(srv, "_EXTERNAL_USES_LIMIT", 1)
+
+    assert [
+        r for r in _references(NOW_IN_UTC, {APP: "feature/move"}) if r[0] == APP
+    ] == [(APP, "courses/api.py", 6, "created")]

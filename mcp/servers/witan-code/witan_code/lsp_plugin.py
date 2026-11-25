@@ -24,11 +24,11 @@ The features, from ADR 0012's feature map:
   who provides and who consumes it, with repo, file and line.
 - Definition and references across indexed repos. References are the
   definition repo's own edges, plus, for a definition in a shared package
-  namespace (``mitol.*``), its uses in other repos from the bridge. A
-  location in a repo that no workspace folder has checked out cannot be
-  opened, so the hover names it instead (repo, path and line): on the
-  identifier for a definition elsewhere, and on a definition's own line for
-  its uses elsewhere.
+  namespace (``mitol.*``), its uses in other repos from the bridge, each
+  repo's at the branch of the folder that has it open. A location in a repo
+  that no workspace folder has checked out cannot be opened, so the hover
+  names it instead (repo, path and line): on the identifier for a definition
+  elsewhere, and on a definition's own line for its uses elsewhere.
 - One Information diagnostic on line 0 when the folder's repo, or its branch,
   has no index.
 
@@ -369,9 +369,28 @@ class CodePlugin(Plugin):
         ]
 
     def _references(self, ctx: Context, target: dict) -> list[dict]:
-        return ctx.tools.code_find_references(
-            symbol_id=target["symbol_id"], branch=self._branch_of(ctx, target["repo"])
-        )
+        """``target``'s references, each other repo's uses read at the branch
+        of the folder that has it open (the one ``_location`` maps them onto),
+        so a use the branch moved lands on its line there."""
+        consumers: dict[str, str | None] = {}
+        for f in (ctx.folder, *ctx.folders):
+            if f.repo is not None and f.repo != target["repo"]:
+                consumers.setdefault(f.repo, self._branch(f))
+        args = {
+            "symbol_id": target["symbol_id"],
+            "branch": self._branch_of(ctx, target["repo"]),
+        }
+        branches = {repo: b for repo, b in consumers.items() if b is not None}
+        if not branches:
+            return ctx.tools.code_find_references(**args)
+        try:
+            return ctx.tools.code_find_references(**args, consumer_branches=branches)
+        except RemoteToolFailed as exc:
+            # A deployment older than the parameter refuses the call; its
+            # rows at the default branch beat no references at all.
+            if "consumer_branches" not in str(exc):
+                raise
+            return ctx.tools.code_find_references(**args)
 
     # ── features ──────────────────────────────────────────────────────────
 
