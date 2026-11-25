@@ -559,7 +559,10 @@ async def code_find_definition(
 
 @mcp.tool(annotations=READ)
 async def code_find_references(
-    symbol_id: str, branch: str | None = None, ctx: Context | None = None
+    symbol_id: str,
+    branch: str | None = None,
+    consumer_branches: dict[str, str] | None = None,
+    ctx: Context | None = None,
 ) -> list[dict]:
     """
     Find symbols that reference or call ``symbol_id`` (incoming edges).
@@ -574,12 +577,25 @@ async def code_find_references(
     call, a base class, a constant), imported by its module path or through
     the parent package that re-exports it.
 
+    Those uses come from the bridge view ``branch`` selects for the
+    definition's repo, which holds every other repo as bridge main has it (a
+    branch overlay, as main had it when the overlay was forked). A
+    repo named in ``consumer_branches`` whose branch has a bridge overlay has
+    its uses read from that overlay instead. An overlay is a copy of bridge
+    main taken when the branch was first indexed, so outside the files the
+    branch has re-indexed it holds what main held then: one forked before
+    main had the repo's uses shows none in the files the branch left alone.
+
     Parameters
     ----------
     symbol_id:
         The symbol to start from (a ``symbol_id`` from a name-based tool).
     branch:
         Branch or view of ``symbol_id``'s repo to read; see instructions.
+    consumer_branches:
+        Git branch to read each other repo's uses at, keyed by repo URI (e.g.
+        the branch each open editor folder is on). A repo left out, or whose
+        branch has no bridge overlay, reads its default branch's uses.
     """
     client = _client_for_symbol(symbol_id, branch)
     if client is None:
@@ -592,7 +608,7 @@ async def code_find_references(
     seen = {r["slug"] for r in refs}
     return _as_symbol_id(
         refs + [c for c in callers if c["slug"] not in seen]
-    ) + _external_uses(symbol_id, branch, client)
+    ) + _external_uses(symbol_id, branch, client, consumer_branches or {})
 
 
 #: Uses from other repos ``code_find_references`` lists, as many as the
@@ -601,18 +617,24 @@ _EXTERNAL_USES_LIMIT = 200
 
 
 def _external_uses(
-    symbol_id: str, branch: str | None, repo_client: OmnigraphClient
+    symbol_id: str,
+    branch: str | None,
+    repo_client: OmnigraphClient,
+    consumer_branches: dict[str, str],
 ) -> list[dict]:
     """Uses of ``symbol_id`` in other repos (``ExternalUse`` rows), in
     ``code_find_references``' row shape.
 
     By its module path, and by its package's name for it when ``repo_client``
-    (the definition repo's graph) holds the package's re-export of it.
+    (the definition repo's graph) holds the package's re-export of it. A repo
+    in ``consumer_branches`` with a bridge overlay for its branch has its rows
+    replaced by the overlay's before the rows are capped.
     """
     targets = bridge.imported_as(symbol_id)
     if not targets:
         return []
-    client = _bridge_client(repo=symbol_id.split("#", 1)[0], branch=branch)
+    definition_repo = symbol_id.split("#", 1)[0]
+    client = _bridge_client(repo=definition_repo, branch=branch)
     if client is None:
         return []
     alias = bridge.package_alias(symbol_id)
@@ -631,6 +653,29 @@ def _external_uses(
         # turn an upgrade into a Find References that fails outright.
         logger.warning("witan.code.references.external_uses_failed", exc_info=True)
         return []
+    store = store_module.bridge_store(cfg)
+    for repo, git_branch in consumer_branches.items():
+        if repo == definition_repo:
+            continue  # `client` already reads this repo at `branch`
+        overlay = _resolve_bridge_branch(store, repo, git_branch)
+        if overlay is None:
+            continue
+        try:
+            branch_rows = _client_for_ref(store, overlay).read(
+                "bridge.gq", "external_uses_by_targets", {"targets": targets}
+            )
+        except Exception:  # an overlay forked from a bridge before ExternalUse
+            logger.warning(
+                "witan.code.references.consumer_uses_failed",
+                repo=repo,
+                view=overlay,
+                exc_info=True,
+            )
+            continue
+        rows = [r for r in rows if r["repo"] != repo] + [
+            r for r in branch_rows if r["repo"] == repo
+        ]
+    rows.sort(key=lambda r: (r["repo"], r["file"], r["line"]))
     out: dict[tuple[str, str, int], dict] = {}
     for row in rows:
         key = (row["repo"], row["file"], row["line"])

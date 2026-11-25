@@ -508,6 +508,40 @@ def test_references_on_a_library_definition_reach_another_repo(graph):
 
 
 @requires_stack
+def test_references_on_a_library_definition_land_on_the_consumers_branch(
+    graph, tmp_path
+):
+    """The app is open on a branch that moves its use of `now_in_utc` down
+    three lines. References on the library's definition land on the line the
+    branch has, not the default branch's."""
+    from witan_code import indexer
+
+    moved = tmp_path / "app-moved"
+    git(graph.app, "worktree", "add", "-q", "-b", f"moved-{tmp_path.name}", str(moved))
+    stamps = moved / "app" / "stamps.py"
+    stamps.write_text(STAMPS.replace("\n\ndef", "\n\n# moved\n\n\ndef"))
+    git(moved, "commit", "-qam", "moved")
+    indexer.index_path(moved, repo_override=RA, config=cfg_module.load())
+    datetime = graph.lib / "src" / "mitol" / "common" / "utils" / "datetime.py"
+
+    async def go():
+        async with lsp_session(_host(), [graph.lib, moved]) as session:
+            return await session.client.text_document_references_async(
+                types.ReferenceParams(
+                    text_document=_doc(datetime),
+                    position=_at(0, 5),
+                    context=types.ReferenceContext(include_declaration=False),
+                )
+            )
+
+    try:
+        [loc] = run(go())
+        assert (loc.uri, loc.range.start.line) == (stamps.as_uri(), 7)
+    finally:
+        git(graph.app, "worktree", "remove", "--force", str(moved))
+
+
+@requires_stack
 def test_diagnostics_name_a_missing_index(graph):
     async def go():
         async with lsp_session(
@@ -658,6 +692,49 @@ def test_a_whole_file_function_wins_over_its_module(monkeypatch):
     ]
     monkeypatch.setattr(plugin, "_symbols", lambda ctx, uri: rows)
     assert plugin.resolve_symbol(None, "file:///w.py", 1, 0) == "r#w.py::whole"
+
+
+def test_references_drop_the_consumer_branches_a_deployment_refuses(monkeypatch):
+    """A deployment older than `consumer_branches` refuses the argument; the
+    references are read again without it, at the default branch."""
+    from types import SimpleNamespace
+
+    from witan_core.remote.proxy import RemoteToolFailed
+
+    calls = []
+
+    def code_find_references(**kwargs):
+        calls.append(kwargs)
+        if "consumer_branches" in kwargs:
+            raise RemoteToolFailed(
+                "1 validation error for call[code_find_references]\n"
+                "consumer_branches\n  Unexpected keyword argument"
+            )
+        return [{"repo": RA}]
+
+    def folder(name: str, repo: str) -> Folder:
+        return Folder(f"file:///{name}", Path(f"/{name}"), repo, None, None)
+
+    plugin = CodePlugin()
+    branches = {Path("/lib"): None, Path("/app"): "feature"}
+    monkeypatch.setattr(plugin, "_branch", lambda f: branches[f.path])
+    lib, app = folder("lib", RL), folder("app", RA)
+    ctx = SimpleNamespace(
+        folder=lib,
+        folders=[lib, app],
+        tools=SimpleNamespace(code_find_references=code_find_references),
+    )
+    target = {"symbol_id": f"{RL}#m.py::f", "repo": RL}
+
+    assert plugin._references(ctx, target) == [{"repo": RA}]
+    assert calls == [
+        {
+            "symbol_id": target["symbol_id"],
+            "branch": None,
+            "consumer_branches": {RA: "feature"},
+        },
+        {"symbol_id": target["symbol_id"], "branch": None},
+    ]
 
 
 @requires_stack
