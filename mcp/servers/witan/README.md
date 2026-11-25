@@ -202,7 +202,8 @@ tasks hard-link to projects, sessions, and memories. See
 | `task_comment` | Leave an attributed, append-only note **on** a task without changing it — for telling the holder their premise is wrong instead of overwriting their description or filing a task that is not work |
 | `task_update` | Update mutable fields — reassign, re-prioritise, re-parent, attach a URI (to *claim* for work, prefer `task_claim`) |
 | `task_claim` | **Advisory claim** for parallel/multi-user agents: set `in_progress` under an `assignee` with a lease; refuses if actively held (use `force` to steal). Read-check-write, not an atomic lock — see `claimed_at` lease + the CAS follow-up |
-| `task_release` | Drop a claim: clear assignee/lease, return the task to `open` |
+| `task_release` | Drop a claim: clear assignee/lease, return the task to `open`; requeues a task with an outcome |
+| `task_record_outcome` | End a claimed attempt with `ready_for_review`, `needs_human` or `cannot_proceed` and its evidence; the task then waits on a person |
 | `task_close` | Close a task with an optional resolution; unblocks its dependents |
 | `task_ready` | **Ready work**: open/unblocked tasks (plus `in_progress` tasks whose lease has lapsed) ordered by priority — the core coordination primitive |
 | `task_link` | Link tasks: `blocks` / `parent` / `discovered_from`, or `addresses` a Memory node. `remove=True` removes any of those links, for one recorded backwards or against the wrong slug (a no-op when the link isn't there) |

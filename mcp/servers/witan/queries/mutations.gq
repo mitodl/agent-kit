@@ -689,6 +689,13 @@ query update_task(
     $updated_at: DateTime,
     $claimed_at: DateTime?,
     $first_claimed_at: DateTime?,
+    $outcome: String?,
+    $outcome_detail: String?,
+    $outcome_branch: String?,
+    $outcome_commits: [String]?,
+    $outcome_check: String?,
+    $outcome_set_by: String?,
+    $outcome_set_at: DateTime?,
     $screen_verdict: String?,
     $screen_reason: String?,
     $screen_version: String?,
@@ -714,6 +721,13 @@ query update_task(
             updated_at: $updated_at,
             claimed_at: $claimed_at,
             first_claimed_at: $first_claimed_at,
+            outcome: $outcome,
+            outcome_detail: $outcome_detail,
+            outcome_branch: $outcome_branch,
+            outcome_commits: $outcome_commits,
+            outcome_check: $outcome_check,
+            outcome_set_by: $outcome_set_by,
+            outcome_set_at: $outcome_set_at,
             screen_verdict: $screen_verdict,
             screen_reason: $screen_reason,
             screen_version: $screen_version,
@@ -749,7 +763,14 @@ query merge_task(
     $updated_at: DateTime,
     $closed_at: DateTime?,
     $claimed_at: DateTime?,
-    $first_claimed_at: DateTime?
+    $first_claimed_at: DateTime?,
+    $outcome: String?,
+    $outcome_detail: String?,
+    $outcome_branch: String?,
+    $outcome_commits: [String]?,
+    $outcome_check: String?,
+    $outcome_set_by: String?,
+    $outcome_set_at: DateTime?
 ) {
     update Task
         set {
@@ -772,7 +793,14 @@ query merge_task(
             updated_at: $updated_at,
             closed_at: $closed_at,
             claimed_at: $claimed_at,
-            first_claimed_at: $first_claimed_at
+            first_claimed_at: $first_claimed_at,
+            outcome: $outcome,
+            outcome_detail: $outcome_detail,
+            outcome_branch: $outcome_branch,
+            outcome_commits: $outcome_commits,
+            outcome_check: $outcome_check,
+            outcome_set_by: $outcome_set_by,
+            outcome_set_at: $outcome_set_at
         }
         where slug = $slug
 }

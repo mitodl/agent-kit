@@ -25,6 +25,7 @@ TaskType = Literal["bug", "feature", "task", "chore", "epic"]
 TaskStatus = Literal["open", "in_progress", "blocked", "closed"]
 TaskPriority = Literal["p0", "p1", "p2", "p3"]
 TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
+TaskOutcomeKind = Literal["ready_for_review", "needs_human", "cannot_proceed"]
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 ProjectStatusFilter = Literal["active", "completed", "abandoned", "all"]
 

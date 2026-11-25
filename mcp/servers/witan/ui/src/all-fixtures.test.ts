@@ -89,11 +89,21 @@ const MEMORY_OPTIONAL = [
 	"symbol_refs",
 	"updated_at",
 ];
+const TASK_OUTCOME_FIELDS = [
+	"outcome",
+	"outcome_detail",
+	"outcome_branch",
+	"outcome_commits",
+	"outcome_check",
+	"outcome_set_by",
+	"outcome_set_at",
+];
 const OPTIONAL_FIELDS: Record<string, string[]> = {
-	// `TaskCore.lease_expired`: present only on an `in_progress` row.
-	task_ready: ["lease_expired"],
-	task_get: ["lease_expired"],
-	task_list: ["lease_expired"],
+	// `TaskCore.lease_expired`: present only on an `in_progress` row. The
+	// outcome fields: a deployment older than them omits them.
+	task_ready: ["lease_expired", "outcome"],
+	task_get: ["lease_expired", ...TASK_OUTCOME_FIELDS],
+	task_list: ["lease_expired", "outcome"],
 	task_search: ["lease_expired"],
 	workflow_project_get: [],
 	workflow_project_status: [],

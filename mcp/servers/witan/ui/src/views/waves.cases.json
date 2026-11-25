@@ -490,6 +490,39 @@
 			}
 		},
 		{
+			"name": "a wave-0 task waiting on a person agrees with task_ready",
+			"tasks": [
+				{
+					"slug": "tk-free"
+				},
+				{
+					"slug": "tk-parked",
+					"outcome": "needs_human"
+				}
+			],
+			"ready": ["tk-free"],
+			"outside": [],
+			"expect": {
+				"order": ["tk-free", "tk-parked"],
+				"wave": {
+					"tk-parked": 0,
+					"tk-free": 0
+				},
+				"outside": [],
+				"cycle": [],
+				"critical_nodes": [],
+				"downstream": {
+					"tk-parked": 0,
+					"tk-free": 0
+				},
+				"ready": ["tk-free"],
+				"waves": 1,
+				"critical": [],
+				"cycles": [],
+				"disagree": []
+			}
+		},
+		{
 			"name": "task_ready and wave 0 disagree in both directions",
 			"tasks": [
 				{

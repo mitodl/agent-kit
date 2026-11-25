@@ -322,7 +322,12 @@ _BRANCH_IS_CHECKOUT = frozenset({"task_claim", "workflow_session_start"})
 # `test_every_branch_tool_is_classified` fails on a tool nobody has considered;
 # nothing reads this set at runtime, and being absent from both sets behaves
 # exactly like being in this one.
-_BRANCH_IS_EXPLICIT = frozenset({"task_for_branch"})
+#
+# `task_record_outcome`'s is the branch the worker pushed for review
+# (`fanout/<slug>`), which need not be the local checkout's name, and a
+# defaulted branch would satisfy `ready_for_review`'s evidence check with a
+# branch nobody can fetch.
+_BRANCH_IS_EXPLICIT = frozenset({"task_for_branch", "task_record_outcome"})
 
 
 # Task writes queued in the journal when the deployment cannot be reached (see
@@ -330,6 +335,12 @@ _BRANCH_IS_EXPLICIT = frozenset({"task_for_branch"})
 # call provably was not sent. `task_claim` is deliberately absent: a claim that
 # is not live when it is made means nothing, and replaying it later would steal
 # a task someone else picked up in the meantime.
+#
+# `task_record_outcome` is absent too. A journal replays only when the same
+# machine next calls the deployment, and a fan-out worker's container may exit
+# first, so a queued outcome might never land while the claim lapses back into
+# ready work. Failing the call lets the runner that launched the worker see
+# that the attempt's ending was not recorded and act on it.
 _BUFFERED_WRITES = frozenset(
     {"task_comment", "task_create", "task_update", "task_close", "task_release"}
 )
@@ -343,6 +354,12 @@ _IDEMPOTENT_WRITES = frozenset({"task_update", "task_close", "task_release"})
 # Queued writes that act on a task someone else may have taken in the meantime.
 # Replay re-reads the task first and turns the write into a comment if so.
 _HOLDER_CHECKED = _IDEMPOTENT_WRITES
+
+# The subset that can clear a recorded outcome (a release, an update to
+# in_progress or out of closed). Replay's read cannot see an outcome recorded
+# after it, so these also carry `if_no_outcome_since`, which the tool checks
+# on the row its write is fenced on.
+_OUTCOME_FENCED = frozenset({"task_update", "task_release"})
 
 
 # Graph and journal timestamps go through `parse_timestamp`: the graph hands
@@ -383,7 +400,22 @@ def _replay_conflict(task: dict, entry: JournalEntry) -> str | None:
     closed_at = task.get("closed_at")
     if closed_at and parse_timestamp(closed_at) >= parse_timestamp(entry.ts):
         return f"the task was closed at {closed_at}"
+    # A recorded outcome leaves the task open with no holder, so neither check
+    # above sees it, and a release or an update to in_progress clears it: a
+    # write queued before it would erase a worker's question or its branch
+    # under review.
+    set_at = task.get("outcome_set_at")
+    if set_at and parse_timestamp(set_at) >= parse_timestamp(entry.ts):
+        return _outcome_conflict(task)
     return None
+
+
+def _outcome_conflict(task: dict) -> str:
+    """The conflict reason for an outcome a queued write would have cleared."""
+    return (
+        f"{task.get('outcome_set_by')} recorded {task.get('outcome')} "
+        f"at {task.get('outcome_set_at')}"
+    )
 
 
 def _conflict_comment(entry: JournalEntry, reason: str) -> JournalEntry:
@@ -477,6 +509,12 @@ class RemoteServerProxy(RemoteMCPProxy):
             reason = _replay_conflict(task, entry) if task else None
             if reason is not None:
                 return _conflict_comment(entry, reason)
+            # Only to a deployment that returns the outcome fields: an older
+            # one refuses the parameter, and has no outcome to clear.
+            if task and entry.tool in _OUTCOME_FENCED and "outcome_set_at" in task:
+                return dataclasses.replace(
+                    entry, args={**entry.args, "if_no_outcome_since": entry.ts}
+                )
         elif entry.tool == "task_create":
             title = entry.args["title"]
             duplicate = await _created_since(call, title, entry.ts)
@@ -495,16 +533,20 @@ class RemoteServerProxy(RemoteMCPProxy):
     def _replay_result(
         self, entry: JournalEntry, plan: JournalEntry, result: Any
     ) -> JournalEntry | None:
-        # `_replay_plan` checked the holder on its own read, so a claim that
-        # lands between that read and the write is refused by the tool itself,
-        # as `{"closed": false}` rather than an error. Without this the replay
-        # reports it applied and the queued close is gone.
+        # `_replay_plan` checked the holder and the outcome on its own read, so
+        # a claim or an outcome that lands between that read and the write is
+        # refused by the tool itself, as an answer rather than an error.
+        # Without this the replay reports it applied and the queued write is
+        # gone.
         if (
-            plan is entry
-            and entry.tool in _HOLDER_CHECKED
-            and isinstance(result, dict)
-            and result.get("closed") is False
+            plan.tool != entry.tool
+            or entry.tool not in _HOLDER_CHECKED
+            or not isinstance(result, dict)
         ):
+            return None
+        if result.get("reason") == "outcome_recorded":
+            return _conflict_comment(entry, _outcome_conflict(result))
+        if result.get("closed") is False:
             return _conflict_comment(
                 entry, f"the task is now held by {result['held_by']}"
             )

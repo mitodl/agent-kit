@@ -67,7 +67,19 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
     "update_workflow_session_end": ("WorkflowSession", ("summary",)),
     "insert_workflow_trace": ("WorkflowTrace", ("title", "description", "outcome")),
     "insert_task": ("Task", ("title", "description", "external_uri")),
-    "update_task": ("Task", ("title", "description", "resolution", "external_uri")),
+    # A worker's question, reason and acceptance-check output are free text it
+    # writes unreviewed, and check output is where an env dump would land.
+    "update_task": (
+        "Task",
+        (
+            "title",
+            "description",
+            "resolution",
+            "external_uri",
+            "outcome_detail",
+            "outcome_check",
+        ),
+    ),
     "insert_task_comment": ("TaskComment", ("body",)),
 }
 

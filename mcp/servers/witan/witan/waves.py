@@ -296,14 +296,16 @@ def _disagreements(project: list[dict[str, Any]], ready: Sequence[Row]) -> list[
     """Where ``task_ready`` and wave 0 disagree.
 
     A wave-0 task should be in ``task_ready`` unless someone holds a live claim
-    on it, and nothing past wave 0 should be. Either direction means the reads
-    saw the graph at different moments.
+    on it or it carries an outcome (it waits on a person), and nothing past
+    wave 0 should be. Either direction means the reads saw the graph at
+    different moments.
     """
     placed = {n["slug"] for n in project}
     found = []
     for node in project:
         held = node.get("status") == "in_progress" and not node.get("lease_expired")
-        expected = node["wave"] == 0 and not node["cycle"] and not held
+        parked = bool(node.get("outcome"))
+        expected = node["wave"] == 0 and not node["cycle"] and not held and not parked
         if expected != node["ready"]:
             found.append(node["slug"])
     found.extend(t["slug"] for t in ready if t["slug"] not in placed)

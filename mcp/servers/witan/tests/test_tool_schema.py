@@ -114,6 +114,7 @@ def test_the_tools_that_overwrite_or_remove_are_annotated_destructive():
         "store_merge",
         "task_close",
         "task_link",
+        "task_record_outcome",
         "task_release",
         "task_update",
         "workflow_project_advance",

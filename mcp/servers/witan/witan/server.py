@@ -75,6 +75,7 @@ from . import (
     ui_routes,
     ui_widgets,
 )
+from . import outcome as task_outcome
 from . import repo as repo_module
 from .cli_only import CliOnlyToolsMiddleware
 from .fanout import Harness
@@ -1099,6 +1100,23 @@ def _claim_refusal(
     status = row.get("status")
     if status in ("closed", "blocked"):
         return {"slug": slug, "claimed": False, "reason": status}
+    # A recorded outcome is waiting on a person, and a claim would clear it
+    # (`_update_task_once`), so a question or a branch under review would be
+    # lost to whoever claimed first. Requeueing is the explicit way back.
+    if row.get("outcome") and not force:
+        return {
+            "slug": slug,
+            "claimed": False,
+            "reason": "outcome",
+            "outcome": row["outcome"],
+            "outcome_set_by": row.get("outcome_set_by"),
+            "remedy": (
+                f"{slug} is waiting on a person: {row.get('outcome_set_by')} "
+                f"recorded {row['outcome']}. Requeue it with `witan task release "
+                f"{slug}`, which clears the outcome, or claim it anyway with "
+                f"`witan task claim {slug} --force`."
+            ),
+        }
     rival = row.get("assignee")
     lease_started_at = row.get("claimed_at") or row.get("updated_at")
     if (
@@ -1162,6 +1180,43 @@ def _close_refusal(
             f"with `{override}`."
         ),
     }
+
+
+def _refuse_outcome_since(
+    slug: str, since: str | None, current: dict, flag: str
+) -> None:
+    """Refuse a write fenced on ``if_no_outcome_since`` if an outcome landed since.
+
+    ``flag`` is the tool's own success key (``released``, ``updated``), set
+    false in the refusal the way the tool's other refusals set it.
+
+    Journal replay reads a task, then sends the queued write. An outcome
+    recorded in between ends the claim, so the holder check passes and a
+    release or an update to ``in_progress`` would clear a question nobody
+    saw. Checked on the row the write is fenced on, so nothing lands between.
+    A tie counts as since, the same rule replay applies to its own read.
+    """
+    set_at = current.get("outcome_set_at")
+    if since is None or not set_at:
+        return
+    if parse_timestamp(set_at) < parse_timestamp(since):
+        return
+    set_by = current.get("outcome_set_by")
+    raise _TaskWriteRefused(
+        {
+            "slug": slug,
+            flag: False,
+            "reason": "outcome_recorded",
+            "outcome": current.get("outcome"),
+            "outcome_set_by": set_by,
+            "outcome_set_at": set_at,
+            "remedy": (
+                f"{set_by} recorded {current.get('outcome')} on {slug} at "
+                f"{set_at}, after {since}, so it is left as it is. Read it with "
+                f"`witan task show {slug}` before writing again."
+            ),
+        }
+    )
 
 
 def _require_closable(
@@ -2890,6 +2945,7 @@ _MERGE_TASK_FIELDS = (
     "closed_at",
     "claimed_at",
     "first_claimed_at",
+    *task_outcome.FIELDS,
 )
 _TASK_DATETIME_FIELDS = (
     "created_at",
@@ -2897,6 +2953,7 @@ _TASK_DATETIME_FIELDS = (
     "closed_at",
     "claimed_at",
     "first_claimed_at",
+    "outcome_set_at",
 )
 
 
@@ -7339,6 +7396,7 @@ TaskType = Literal["bug", "feature", "task", "chore", "epic"]
 TaskStatus = Literal["open", "in_progress", "blocked", "closed"]
 TaskPriority = Literal["p0", "p1", "p2", "p3"]
 TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
+TaskOutcomeKind = Literal["ready_for_review", "needs_human", "cannot_proceed"]
 
 _PRIORITY_ORDER = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 
@@ -7617,6 +7675,21 @@ def _update_task_once(
         else None
     )
 
+    # ★ AN OUTCOME BELONGS TO ONE ATTEMPT. `task_record_outcome` writes it and
+    # `task_release` clears it, each by naming the fields. Otherwise a write
+    # that starts a new attempt clears it (taking a lease, i.e. a claim or a
+    # `task_update` to in_progress, or reopening a closed task), and every
+    # other write carries it forward, `task_close` included: the branch,
+    # commits and check output are the evidence the close rests on.
+    if "outcome" in changes:
+        merged_outcome = {f: changes.get(f) for f in task_outcome.FIELDS}
+    elif taking_lease or (
+        current.get("status") == "closed" and merged_status != "closed"
+    ):
+        merged_outcome = task_outcome.CLEARED
+    else:
+        merged_outcome = {f: current.get(f) for f in task_outcome.FIELDS}
+
     merged = {
         "slug": slug,
         "title": changes.get("title", current.get("title")),
@@ -7646,6 +7719,7 @@ def _update_task_once(
         # same write is setting, so a first claim records ONE time rather than
         # two a few milliseconds apart.
         "first_claimed_at": merged_first_claimed_at,
+        **merged_outcome,
         "updated_at": now_iso(),
         **screen.UNSCREENED,
         # For the screener, not the graph (`update_task` does not declare it):
@@ -8334,6 +8408,7 @@ def task_update(
     tags: list[str] | None = None,
     session_id: str | None = None,
     force: bool = False,
+    if_no_outcome_since: str | None = None,
 ) -> dict | None:
     """
     Update a task's mutable fields. Only non-null arguments are applied.
@@ -8357,6 +8432,8 @@ def task_update(
         you, without ``task_claim``'s checks. ``closed`` unblocks dependents
         and is refused while another person holds a live claim (see
         ``force``). Prefer ``task_claim``/``task_close`` for those two.
+        ``in_progress``, or any move out of ``closed``, clears a recorded
+        outcome.
     priority:
         ``p0`` is highest. Drives ``task_ready`` ordering.
     repo:
@@ -8381,6 +8458,10 @@ def task_update(
         instructions.
     force:
         With ``status="closed"``, close despite another person's live claim.
+    if_no_outcome_since:
+        An ISO timestamp. Refuse (``reason: "outcome_recorded"``), writing
+        nothing, if an outcome was recorded at or after it. Journal replay
+        passes the time the write was queued.
     """
     # The write is fenced on the read it merged from (the whole branch head)
     # and re-merged up to five times, so an edit cannot revert a claim that
@@ -8477,7 +8558,7 @@ def task_update(
 
     # The close check runs here too, or `task_close`'s refusal is one call
     # away from being sidestepped.
-    require = (
+    require_closable = (
         _require_closable(
             slug,
             _claim_holder(None, session_id),
@@ -8487,6 +8568,12 @@ def task_update(
         if status == "closed"
         else None
     )
+
+    def require(current: dict) -> None:
+        _refuse_outcome_since(slug, if_no_outcome_since, current, "updated")
+        if require_closable is not None:
+            require_closable(current)
+
     try:
         updated = _update_task(
             slug,
@@ -8800,6 +8887,7 @@ def task_release(
     status: TaskStatus = "open",
     force: bool = False,
     if_claimed_at: str | None = None,
+    if_no_outcome_since: str | None = None,
 ) -> dict | None:
     """
     Release a claim: clear the assignee/lease and return the task to ``open``.
@@ -8809,6 +8897,9 @@ def task_release(
     if the task is held by a different ``assignee`` unless ``force`` is set.
     With ``if_claimed_at``, also refuses (``reason: "claim_changed"``) unless
     the task is still ``in_progress`` under the claim taken at that instant.
+    Releasing also requeues a task waiting on a person: it clears the outcome
+    ``task_record_outcome`` set (``cleared_outcome`` names it), unless the
+    status released to is ``closed``.
 
     Parameters
     ----------
@@ -8826,6 +8917,11 @@ def task_release(
     if_claimed_at:
         The ``claimed_at`` a ``task_claim`` returned. Release only that claim:
         not one renewed since, and not a task that has left ``in_progress``.
+        ``force`` does not lift this check.
+    if_no_outcome_since:
+        An ISO timestamp. Refuse (``reason: "outcome_recorded"``) if an
+        outcome was recorded at or after it, rather than clear one the caller
+        never saw. Journal replay passes the time the release was queued.
         ``force`` does not lift this check.
     """
     holder = _claim_holder(assignee, session_id)
@@ -8874,20 +8970,162 @@ def task_release(
                 }
             )
 
+    # Releasing is how a task with an outcome is requeued, so the outcome goes
+    # with the claim. Releasing to `closed` keeps it, as `task_close` does.
+    cleared: dict[str, str | None] = {}
+
+    def require_and_note_outcome(current: dict) -> None:
+        _refuse_outcome_since(slug, if_no_outcome_since, current, "released")
+        require_held_by_caller(current)
+        cleared["outcome"] = current.get("outcome") if status != "closed" else None
+
+    changes: dict = {"status": status, "assignee": None, "claimed_at": None}
+    if status != "closed":
+        changes.update(task_outcome.CLEARED)
     try:
-        released = _update_task(
-            slug,
-            {"status": status, "assignee": None, "claimed_at": None},
-            require=require_held_by_caller,
-        )
+        released = _update_task(slug, changes, require=require_and_note_outcome)
     except _TaskWriteRefused as refused:
         return refused.result
     if released is None:
         return None
     result = {"slug": slug, "released": True, "status": status}
+    if cleared.get("outcome"):
+        result["cleared_outcome"] = cleared["outcome"]
     if status == "closed":
         result = _with_unswept_warning(result, _unblock_dependents())
     return result
+
+
+@_tool(DESTRUCTIVE)
+def task_record_outcome(
+    slug: str,
+    outcome: TaskOutcomeKind,
+    detail: str | None = None,
+    branch: str | None = None,
+    commits: list[str] | None = None,
+    check_output: str | None = None,
+    assignee: str | None = None,
+    session_id: str | None = None,
+    force: bool = False,
+) -> dict | None:
+    """
+    Record how your attempt at a claimed task ended, and end the claim.
+
+    A fan-out worker calls this exactly once, last. ``ready_for_review``
+    needs ``branch``, ``commits`` and ``check_output``; ``needs_human`` needs
+    the question in ``detail``; ``cannot_proceed`` the reason in ``detail``.
+    The task returns to ``open`` with no holder, and while it carries the
+    outcome it waits on a person: ``task_ready`` leaves it out and
+    ``task_claim`` refuses it until ``task_release`` requeues it, which
+    clears the outcome. ``task_get`` returns it as the ``outcome*`` fields,
+    with ``outcome_set_by`` and ``outcome_set_at``.
+
+    Refuses, writing nothing, unless you hold the claim: ``{"recorded":
+    false, "reason": "not_claimed"}`` when the task is not ``in_progress``
+    (including one whose outcome is already recorded), ``"held"`` when
+    another holder, another session of yours included, has it.
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug the attempt was on.
+    outcome:
+        ``ready_for_review``, ``needs_human`` or ``cannot_proceed``.
+    detail:
+        The question (``needs_human``), the reason (``cannot_proceed``), or
+        an optional summary (``ready_for_review``).
+    branch:
+        The pushed branch holding the work.
+    commits:
+        The commits on ``branch`` for this task, e.g. full SHAs.
+    check_output:
+        Output of the check that proves the acceptance criteria.
+    assignee:
+        Holder identity the claim was taken under; defaults to you, qualified
+        by ``session_id``. Pass it when the claim named an explicit holder.
+    session_id:
+        Your agent session id; see instructions.
+    force:
+        Record it anyway: on a task you do not hold, or over an outcome
+        already recorded.
+    """
+    # Exact holder, not `_same_person` as `task_close` decides it: runners act
+    # as the user, so two workers on one task are the same person in two
+    # sessions, and a worker whose lease lapsed must not end its successor's
+    # claim. `_own_claim` still lets a qualified caller finish a bare claim it
+    # was launched under (`witan task run`).
+    recorded = task_outcome.TaskOutcome(
+        outcome=outcome,
+        detail=detail,
+        branch=branch,
+        commits=commits,
+        check_output=check_output,
+    )
+    holder = _claim_holder(assignee, session_id)
+    identity = None if assignee else _current_author()
+
+    def require_held_by_caller(current: dict) -> None:
+        if force:
+            return
+        if current.get("status") != "in_progress":
+            prior = current.get("outcome")
+            already = f", and already carries {prior}" if prior else ""
+            raise _TaskWriteRefused(
+                {
+                    "slug": slug,
+                    "recorded": False,
+                    "reason": "not_claimed",
+                    "status": current.get("status"),
+                    "outcome": prior,
+                    "remedy": (
+                        f"{slug} is {current.get('status')}, not claimed"
+                        f"{already}. Claim it first, or record over it with "
+                        f"`witan task outcome {slug} {outcome} --force`."
+                    ),
+                }
+            )
+        current_holder = current.get("assignee")
+        if not _own_claim(current_holder, holder, identity):
+            held_by = current_holder or _UNKNOWN_HOLDER
+            raise _TaskWriteRefused(
+                {
+                    "slug": slug,
+                    "recorded": False,
+                    "reason": "held",
+                    "held_by": held_by,
+                    "claimed_at": current.get("claimed_at"),
+                    "remedy": (
+                        f"{slug} is held by {held_by}, not {holder}. Leave the "
+                        f"outcome to that holder, or record it anyway with "
+                        f"`witan task outcome {slug} {outcome} --force`."
+                    ),
+                }
+            )
+
+    set_at = now_iso()
+
+    def record(current: dict) -> dict:
+        fields = recorded.graph_fields(holder, set_at)
+        # Only a claim ends here. A forced record on an open or closed task
+        # leaves its status alone rather than reopening it.
+        if current.get("status") != "in_progress":
+            return fields
+        return {"status": "open", "assignee": None, "claimed_at": None, **fields}
+
+    try:
+        updated = _update_task(slug, record, require=require_held_by_caller)
+    except _TaskWriteRefused as refused:
+        return refused.result
+    if updated is None:
+        return None
+    return {
+        "slug": slug,
+        "recorded": True,
+        "outcome": recorded.outcome.value,
+        "status": updated.get("status"),
+        "outcome_set_by": holder,
+        "outcome_set_at": set_at,
+    }
 
 
 @_tool(READ, app=ui_widgets.app_for("task_ready"))
@@ -8903,8 +9141,9 @@ def task_ready(
     Return ready-to-work tasks: pickable tasks whose blockers are all closed.
 
     Call it to pick the next item. A task is ready when it is ``open`` or
-    ``blocked``, or ``in_progress`` with an expired lease, and every task in
-    its ``blocked_by`` is closed. An ``in_progress`` result is a reclaim
+    ``blocked``, or ``in_progress`` with an expired lease, every task in
+    its ``blocked_by`` is closed, and it carries no recorded ``outcome``
+    (one waiting on a person; see ``task_record_outcome``). An ``in_progress`` result is a reclaim
     (``lease_expired: true``): check ``assignee`` and ``claimed_at`` (or
     ``updated_at`` when that is null) first.
     Ordered by priority, ``p0`` first.
