@@ -33,6 +33,10 @@ logger = get_logger("witan.scan")
 # lists (a task's or project's tags, symbol_refs, files_changed, …) and
 # structured/enum params are intentionally out of scope for now. Branch names
 # (insert_code_branch) are deliberately excluded — witan never sanitises them.
+# A fan-out session's ``event_log`` is scanned because it may be a URI, and a
+# presigned one carries a token; its ``runner``, ``harness``, ``host``, ``cwd``
+# and ``harness_session_ref`` are identifiers a resume matches on exactly, so
+# they stay out like branch names.
 # Keep this aligned with queries/mutations.gq when free-text fields are added.
 #
 # The ``link_*`` entries are EDGE types, not nodes — the second slot is only a
@@ -63,8 +67,9 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
         ("reserved_decisions",),
     ),
     "update_workflow_project_description": ("WorkflowProject", ("description",)),
-    "insert_workflow_session": ("WorkflowSession", ("summary",)),
+    "insert_workflow_session": ("WorkflowSession", ("summary", "event_log")),
     "update_workflow_session_end": ("WorkflowSession", ("summary",)),
+    "update_workflow_session_event_log": ("WorkflowSession", ("event_log",)),
     "insert_workflow_trace": ("WorkflowTrace", ("title", "description", "outcome")),
     "insert_task": ("Task", ("title", "description", "external_uri")),
     "update_task": ("Task", ("title", "description", "resolution", "external_uri")),

@@ -481,6 +481,35 @@ def test_workflow_project_update_scans_title_and_description():
         )
 
 
+@pytest.mark.parametrize(
+    "query_name", ["insert_workflow_session", "update_workflow_session_event_log"]
+)
+def test_a_fanout_event_log_is_scanned(query_name):
+    """An event log may be a presigned URI, whose token must not reach the store."""
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked):
+        guard(
+            query_name,
+            {"slug": "ws-1", "event_log": "https://logs/x.jsonl?key=AKIASECRET"},
+        )
+
+
+def test_fanout_identifiers_are_not_scanned():
+    """A resume matches ``host``, ``cwd`` and ``harness_session_ref`` exactly,
+    so a redaction would break it; they stay out like branch names."""
+    guard = _guard([MatchScanner("s", "secret", "SECRET")])
+    params = {
+        "slug": "ws-1",
+        "summary": "",
+        "runner": "SECRET",
+        "harness": "SECRET",
+        "host": "SECRET",
+        "cwd": "/SECRET",
+        "harness_session_ref": "SECRET",
+    }
+    assert guard("insert_workflow_session", params) == params
+
+
 # ── stored_text: what a slug is built from ──────────────────────────────────────
 # A slug is the node's permanent @key and is never scanned, so it is built from
 # the field as the write will store it, not from what the caller sent.
