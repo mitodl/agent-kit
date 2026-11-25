@@ -284,6 +284,22 @@ def _overlap_lines(overlaps: list[dict]) -> list[str]:
     return lines
 
 
+def _lease_length(lease_seconds: int) -> str:
+    """A claim's lease length as a person or agent reads it.
+
+    Minutes only when the lease is whole minutes: the server accepts any
+    positive number of seconds, and flooring a 90s lease would say it lapses
+    after 1 minute.
+
+    :param lease_seconds: The lease ``task_claim`` reported.
+    :returns: e.g. ``"120 minutes"`` or ``"90 seconds"``.
+    :rtype: str
+    """
+    if lease_seconds % 60 == 0:
+        return f"{lease_seconds // 60} minutes"
+    return f"{lease_seconds} seconds"
+
+
 def _run_prompt(
     t: dict,
     *,
@@ -334,12 +350,11 @@ def _run_prompt(
     # `task_claim` renews it, which the agent can only do if it is told to.
     # The length comes from the claim, never a local constant: a deployment
     # sets its own, and this process is only its client.
-    if lease_seconds is None:
-        lapses = "lapses after the lease task_claim reports as lease_seconds"
-    elif lease_seconds % 60 == 0:
-        lapses = f"lapses after {lease_seconds // 60} minutes"
-    else:
-        lapses = f"lapses after {lease_seconds} seconds"
+    lapses = (
+        "lapses after the lease task_claim reports as lease_seconds"
+        if lease_seconds is None
+        else f"lapses after {_lease_length(lease_seconds)}"
+    )
     held = (
         f"This task is claimed for you. The claim is a lease, not a lock: it "
         f"{lapses} and nothing renews it for you, "

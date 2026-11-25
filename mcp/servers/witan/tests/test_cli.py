@@ -444,6 +444,23 @@ def test_task_claim_and_release_cli(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_task_claim_cli_prints_the_lease_it_was_granted(server, monkeypatch):
+    """The lease is the server's, so a person claiming from the CLI needs it printed."""
+    from witan import readiness
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.tasks import task_claim_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: 5400)
+    t = _fn(srv.task_create)(title="t", description="d")
+
+    task_claim_cmd(t["slug"], assignee="alice")
+
+    assert "lease 90 minutes" in "\n".join(printed)
+
+
+@requires_omnigraph
 def test_task_update_cli(server, monkeypatch):
     """task update changes mutable fields."""
     from witan import server as srv
