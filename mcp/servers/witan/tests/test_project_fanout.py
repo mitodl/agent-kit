@@ -9,6 +9,7 @@ from witan import fanout
 from witan.fanout import FanoutPolicy
 
 from .conftest import requires_omnigraph
+from .test_project_envelope import _patch_server, _run_cli
 
 
 @pytest.fixture(autouse=True)
@@ -292,25 +293,6 @@ def test_invalid_policy_is_refused_before_anything_is_written(server):
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
-
-
-def _patch_server(monkeypatch, srv):
-    from witan.cli import _common
-
-    monkeypatch.setattr(_common, "_server", srv)
-    printed = []
-    monkeypatch.setattr(
-        _common.console, "print", lambda *a, **kw: printed.append(str(a[0]))
-    )
-    return printed
-
-
-def _run_cli(argv):
-    import witan.cli  # noqa: F401  (registers the subcommands)
-    from witan.cli._common import app
-
-    command, bound, _ = app.parse_args(argv)
-    command(*bound.args, **bound.kwargs)
 
 
 @requires_omnigraph
