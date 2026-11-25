@@ -210,6 +210,15 @@ export interface WorkflowSession {
 	superseded_by: string | null;
 	tools_used?: string[] | null;
 	files_changed?: string[] | null;
+	/** Fan-out fields, set when a `witan runner` launched the session for a task. */
+	task_slug?: string | null;
+	runner?: string | null;
+	harness?: string | null;
+	mode?: "oneshot" | "resume" | "live" | null;
+	harness_session_ref?: string | null;
+	state?: "starting" | "running" | "exited" | "crashed" | "cancelled" | null;
+	event_log?: string | null;
+	attach_endpoint?: string | null;
 }
 
 /** One row of `workflow_project_status.ready_tasks`: a narrower projection. */
@@ -756,6 +765,16 @@ export function isWorkflowSession(value: unknown): value is WorkflowSession {
 			session_id: str,
 			tools_used: strList,
 			files_changed: strList,
+			task_slug: nullable(str),
+			runner: nullable(str),
+			harness: nullable(str),
+			mode: nullable(oneOf("oneshot", "resume", "live")),
+			harness_session_ref: nullable(str),
+			state: nullable(
+				oneOf("starting", "running", "exited", "crashed", "cancelled"),
+			),
+			event_log: nullable(str),
+			attach_endpoint: nullable(str),
 		},
 	);
 }

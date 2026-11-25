@@ -209,6 +209,16 @@ node WorkflowSession {
     // `witan migrate dedupe-sessions`; workflow_session_start now upserts
     // instead of minting these.
     superseded_by: String?
+    // Fan-out: set when a `witan runner` started this session to work one
+    // task. All unset on a session a person or agent started by hand.
+    task_slug:           String? @index   // the tk- task the session works
+    runner:              String? @index   // the runner (host + slot) that launched it
+    harness:             String?          // claude, pi, codex, copilot, opencode
+    mode:                enum(oneshot, resume, live)?   // run to completion, continue a harness session, or take input while running
+    harness_session_ref: String?          // the harness's own session id, for resume on the same host
+    state:               enum(starting, running, exited, crashed, cancelled)? @index   // the process, not the task's outcome
+    event_log:           String?          // path or URI of the host-local JSONL event log, not its content
+    attach_endpoint:     String?          // where a live session can be attached to (unset until live sessions exist)
 }
 
 // WorkflowTrace is an assembled, corpus-ready record of a completed project.

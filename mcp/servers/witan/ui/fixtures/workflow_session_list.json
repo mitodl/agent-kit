@@ -1,15 +1,23 @@
 {
   "result": [
     {
+      "attach_endpoint": null,
       "ended_at": "2026-01-01T00:00:00+00:00",
+      "event_log": null,
       "files_changed": null,
+      "harness": null,
+      "harness_session_ref": null,
+      "mode": null,
       "phase": "implementation",
       "project_slug": "wp-fixture-001",
+      "runner": null,
       "session_id": "fixture-session",
       "slug": "ws-fixture-006",
       "started_at": "2026-01-01T00:00:00+00:00",
+      "state": null,
       "summary": "Recorded the fixtures.",
       "superseded_by": null,
+      "task_slug": null,
       "tools_used": null
     }
   ]

@@ -403,7 +403,14 @@ query insert_workflow_session(
     $summary: String,
     $author: String,
     $tags: [String]?,
-    $started_at: DateTime
+    $started_at: DateTime,
+    $task_slug: String?,
+    $runner: String?,
+    $harness: String?,
+    $mode: String?,
+    $harness_session_ref: String?,
+    $state: String?,
+    $event_log: String?
 ) {
     insert WorkflowSession {
         slug: $slug,
@@ -414,7 +421,14 @@ query insert_workflow_session(
         summary: $summary,
         author: $author,
         tags: $tags,
-        started_at: $started_at
+        started_at: $started_at,
+        task_slug: $task_slug,
+        runner: $runner,
+        harness: $harness,
+        mode: $mode,
+        harness_session_ref: $harness_session_ref,
+        state: $state,
+        event_log: $event_log
     }
 }
 
@@ -446,6 +460,42 @@ query update_workflow_session_superseded(
 ) {
     update WorkflowSession
         set { superseded_by: $superseded_by }
+        where slug = $slug
+}
+
+// A fan-out session's runner-owned fields. Sets every one of them, so the
+// caller passes the merged row (`_merge_fanout`): a field it does not mean to
+// change goes back as it was read, not as null.
+query update_workflow_session_fanout(
+    $slug: String,
+    $task_slug: String?,
+    $runner: String?,
+    $harness: String?,
+    $mode: String?,
+    $harness_session_ref: String?,
+    $state: String?,
+    $event_log: String?,
+    $attach_endpoint: String?
+) {
+    update WorkflowSession
+        set {
+            task_slug: $task_slug,
+            runner: $runner,
+            harness: $harness,
+            mode: $mode,
+            harness_session_ref: $harness_session_ref,
+            state: $state,
+            event_log: $event_log,
+            attach_endpoint: $attach_endpoint
+        }
+        where slug = $slug
+}
+
+// `workflow_session_end(state=...)`: the final state alone, so ending needs no
+// read and cannot write back a stale copy of the other fan-out fields.
+query update_workflow_session_state($slug: String, $state: String) {
+    update WorkflowSession
+        set { state: $state }
         where slug = $slug
 }
 

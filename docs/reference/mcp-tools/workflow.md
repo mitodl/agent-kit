@@ -207,9 +207,13 @@ injected context names the ``project_slug``. Returns a handle
 
 Re-entrant: while the session for this (``project_slug``, ``session_id``)
 is open, a repeat returns the same handle with ``existed: true``, merging
-any new ``repo`` and ``tags``; ``phase`` stays as first set. After it
-ends, the same ``session_id`` starts a fresh session. Also links your
-branch to the project when a repo and branch are known.
+any new ``repo``, ``tags`` and fan-out fields; ``phase`` stays as first
+set. After it ends, the same ``session_id`` starts a fresh session. Also
+links your branch to the project when a repo and branch are known.
+
+``task_slug`` through ``event_log`` are for a ``witan runner`` starting a
+session to work one task; an agent linking its own session omits them.
+``workflow_session_update`` changes them while the session runs.
 
 *Writes (non-destructive, idempotent).*
 
@@ -222,6 +226,33 @@ branch to the project when a repo and branch are known.
 | `branch` | str? | `null` | Your git branch. witan's CLI proxy fills it in; under local stdio it<br>defaults to the server's checkout. |
 | `tags` | list[str]? | `null` | Optional tags. |
 | `all_repos` | bool | `False` | Record the session under no repo; see instructions. |
+| `task_slug` | str? | `null` | The ``tk-`` task a runner started this session to work. |
+| `runner` | str? | `null` | The runner that launched the session (host and slot). |
+| `harness` | str? | `null` | The coding harness running it, e.g. ``claude`` or ``pi``. |
+| `mode` | `oneshot` \| `resume` \| `live`? | `null` | ``oneshot`` (one prompt run to completion), ``resume`` (continues an<br>earlier harness session) or ``live`` (takes input while running). |
+| `harness_session_ref` | str? | `null` | The harness's own session id, which resumes it on the same host. |
+| `state` | `starting` \| `running` \| `exited` \| `crashed` \| `cancelled`? | `null` | Where the session's process is: ``starting``, ``running``, or<br>``exited``/``crashed``/``cancelled`` once it stopped. |
+| `event_log` | str? | `null` | Path or URI of the session's JSONL event log on the runner's host. |
+
+## `workflow_session_update`
+
+Record a running fan-out session's progress.
+
+For a ``witan runner``: the harness's process changes state and reports its
+own session id after ``workflow_session_start`` has already been called.
+Only the fields passed change; omitted ones keep their stored value.
+Works on an ended session too, since a Stop hook may close the session
+before its runner sees the process exit. Returns the session's fan-out
+fields as stored after the update.
+
+*Writes (destructive, idempotent).*
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_slug` | str | **required** | The ``ws-`` slug returned by ``workflow_session_start``. |
+| `state` | `starting` \| `running` \| `exited` \| `crashed` \| `cancelled`? | `null` | ``starting``, ``running``, ``exited``, ``crashed`` or ``cancelled``. |
+| `harness_session_ref` | str? | `null` | The harness's own session id, once the harness has reported it. |
+| `event_log` | str? | `null` | Path or URI of the session's JSONL event log on the runner's host. |
 
 ## `workflow_session_end`
 
@@ -245,6 +276,7 @@ For best corpus quality, write a summary that includes:
 | `summary` | str | **required** | Description of what was accomplished and what remains. It is injected<br>into later sessions' context and read by people, so name tasks by<br>title and PR, not by slug or its hex suffix. |
 | `tools_used` | list[str]? | `null` | List of tool names used. e.g. ``["Edit", "Bash", "Read"]``. |
 | `files_changed` | list[str]? | `null` | List of file paths modified in this session. |
+| `state` | `starting` \| `running` \| `exited` \| `crashed` \| `cancelled`? | `null` | For a fan-out session, how its process stopped: ``exited``,<br>``crashed`` or ``cancelled``. Omit it to leave the state as it is. |
 
 ## `workflow_session_list`
 
@@ -263,3 +295,4 @@ sweep`` closes them in bulk.
 | `open_only` | bool | `False` | Only sessions with no ``ended_at``. Superseded sessions are excluded. |
 | `include_superseded` | bool | `False` | Keep rows superseded by ``witan migrate dedupe-sessions``. |
 | `since` | str? | `null` | ISO timestamp: sessions that ended at or after it, plus every open<br>one. An unparseable value, ``""`` included, raises ``ValueError``. |
+| `task_slug` | str? | `null` | Restrict to the sessions a runner started to work this ``tk-`` task,<br>with their fan-out fields. Combines with ``project_slug``. |

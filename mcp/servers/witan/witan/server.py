@@ -5539,6 +5539,25 @@ def _code_branch_steps(
 
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 WorkflowStatus = Literal["active", "completed", "abandoned"]
+# How a runner drives a fan-out session: one prompt run to completion, a
+# continuation of an earlier harness session by its ref, or a two-way session
+# that takes input while it runs.
+SessionMode = Literal["oneshot", "resume", "live"]
+# Where a fan-out session's process is. Whether the task got done is the task's
+# outcome, not this: `exited` only says the harness stopped on its own.
+SessionState = Literal["starting", "running", "exited", "crashed", "cancelled"]
+_TERMINAL_SESSION_STATES = frozenset({"exited", "crashed", "cancelled"})
+# The runner-owned columns `update_workflow_session_fanout` sets as one row.
+_FANOUT_FIELDS = (
+    "task_slug",
+    "runner",
+    "harness",
+    "mode",
+    "harness_session_ref",
+    "state",
+    "event_log",
+    "attach_endpoint",
+)
 
 _PHASE_ORDER = {"discovery": 0, "spec": 1, "implementation": 2, "delivery": 3}
 
@@ -6926,6 +6945,18 @@ def _dedupe_open_sessions(
     return canonical["slug"], canonical.get("started_at") or started_at
 
 
+def _merge_fanout(row: dict, changes: dict) -> dict:
+    """The full set of fan-out columns after applying ``changes`` to ``row``.
+
+    ``update_workflow_session_fanout`` sets every column, so a field the caller
+    left as ``None`` keeps its stored value rather than being cleared.
+    """
+    return {
+        field: changes[field] if changes.get(field) is not None else row.get(field)
+        for field in _FANOUT_FIELDS
+    }
+
+
 @_tool(WRITE_IDEMPOTENT)
 def workflow_session_start(
     project_slug: str,
@@ -6935,6 +6966,13 @@ def workflow_session_start(
     branch: str | None = None,
     tags: list[str] | None = None,
     all_repos: bool = False,
+    task_slug: str | None = None,
+    runner: str | None = None,
+    harness: str | None = None,
+    mode: SessionMode | None = None,
+    harness_session_ref: str | None = None,
+    state: SessionState | None = None,
+    event_log: str | None = None,
 ) -> dict:
     """
     Link the current agent session to a workflow project.
@@ -6946,9 +6984,13 @@ def workflow_session_start(
 
     Re-entrant: while the session for this (``project_slug``, ``session_id``)
     is open, a repeat returns the same handle with ``existed: true``, merging
-    any new ``repo`` and ``tags``; ``phase`` stays as first set. After it
-    ends, the same ``session_id`` starts a fresh session. Also links your
-    branch to the project when a repo and branch are known.
+    any new ``repo``, ``tags`` and fan-out fields; ``phase`` stays as first
+    set. After it ends, the same ``session_id`` starts a fresh session. Also
+    links your branch to the project when a repo and branch are known.
+
+    ``task_slug`` through ``event_log`` are for a ``witan runner`` starting a
+    session to work one task; an agent linking its own session omits them.
+    ``workflow_session_update`` changes them while the session runs.
 
     Parameters
     ----------
@@ -6967,6 +7009,22 @@ def workflow_session_start(
         Optional tags.
     all_repos:
         Record the session under no repo; see instructions.
+    task_slug:
+        The ``tk-`` task a runner started this session to work.
+    runner:
+        The runner that launched the session (host and slot).
+    harness:
+        The coding harness running it, e.g. ``claude`` or ``pi``.
+    mode:
+        ``oneshot`` (one prompt run to completion), ``resume`` (continues an
+        earlier harness session) or ``live`` (takes input while running).
+    harness_session_ref:
+        The harness's own session id, which resumes it on the same host.
+    state:
+        Where the session's process is: ``starting``, ``running``, or
+        ``exited``/``crashed``/``cancelled`` once it stopped.
+    event_log:
+        Path or URI of the session's JSONL event log on the runner's host.
     """
     # The handle is the only thing tying start to end: the protocol carries no
     # session state and consecutive calls may land on different replicas, which
@@ -6978,6 +7036,15 @@ def workflow_session_start(
     now = now_iso()
     detected_repo = _scope(repo, all_repos)
     existing = _open_session_for_key(project_slug, session_id)
+    fanout = {
+        "task_slug": task_slug,
+        "runner": runner,
+        "harness": harness,
+        "mode": mode,
+        "harness_session_ref": harness_session_ref,
+        "state": state,
+        "event_log": event_log,
+    }
 
     # ONE commit for everything this call writes. Each of the four writes below
     # used to be its own `mutate` — insert+edge, the project's repo set, the
@@ -7006,6 +7073,15 @@ def workflow_session_start(
                     {"slug": slug, "repo": merged_repo, "tags": merged_tags or None},
                 )
             )
+        merged_fanout = _merge_fanout(existing, fanout)
+        if merged_fanout != _merge_fanout(existing, {}):
+            steps.append(
+                (
+                    "mutations.gq",
+                    "update_workflow_session_fanout",
+                    {"slug": slug, **merged_fanout},
+                )
+            )
         phase = existing.get("phase") or phase
         started_at = existing.get("started_at") or now
     else:
@@ -7025,6 +7101,7 @@ def workflow_session_start(
                     "author": _current_author(),
                     "tags": tags,
                     "started_at": now,
+                    **fanout,
                 },
             ),
             (
@@ -7090,12 +7167,66 @@ def workflow_session_start(
     return handle
 
 
+@_tool(DESTRUCTIVE_IDEMPOTENT)
+def workflow_session_update(
+    session_slug: str,
+    state: SessionState | None = None,
+    harness_session_ref: str | None = None,
+    event_log: str | None = None,
+) -> dict:
+    """
+    Record a running fan-out session's progress.
+
+    For a ``witan runner``: the harness's process changes state and reports its
+    own session id after ``workflow_session_start`` has already been called.
+    Only the fields passed change; omitted ones keep their stored value.
+    Works on an ended session too, since a Stop hook may close the session
+    before its runner sees the process exit. Returns the session's fan-out
+    fields as stored after the update.
+
+    Parameters
+    ----------
+    session_slug:
+        The ``ws-`` slug returned by ``workflow_session_start``.
+    state:
+        ``starting``, ``running``, ``exited``, ``crashed`` or ``cancelled``.
+    harness_session_ref:
+        The harness's own session id, once the harness has reported it.
+    event_log:
+        Path or URI of the session's JSONL event log on the runner's host.
+    """
+    # `attach_endpoint` has a column but no setter until live sessions exist;
+    # it round-trips here as stored.
+    rows = client.read("read.gq", "get_workflow_session_fanout", {"slug": session_slug})
+    if not rows:
+        raise MissingReference(
+            "workflow_session_update", "WorkflowSession", session_slug
+        )
+    current = rows[0]
+    merged = _merge_fanout(
+        current,
+        {
+            "state": state,
+            "harness_session_ref": harness_session_ref,
+            "event_log": event_log,
+        },
+    )
+    if merged != _merge_fanout(current, {}):
+        client.change(
+            "mutations.gq",
+            "update_workflow_session_fanout",
+            {"slug": session_slug, **merged},
+        )
+    return {"session_slug": session_slug, **merged}
+
+
 @_tool(DESTRUCTIVE)
 def workflow_session_end(
     session_slug: str,
     summary: str,
     tools_used: list[str] | None = None,
     files_changed: list[str] | None = None,
+    state: SessionState | None = None,
 ) -> dict:
     """
     Close the current session with a summary of work accomplished.
@@ -7125,19 +7256,39 @@ def workflow_session_end(
         List of tool names used. e.g. ``["Edit", "Bash", "Read"]``.
     files_changed:
         List of file paths modified in this session.
+    state:
+        For a fan-out session, how its process stopped: ``exited``,
+        ``crashed`` or ``cancelled``. Omit it to leave the state as it is.
     """
     now = now_iso()
-    client.change(
-        "mutations.gq",
-        "update_workflow_session_end",
-        {
-            "slug": session_slug,
-            "summary": summary,
-            "tools_used": tools_used,
-            "files_changed": files_changed,
-            "ended_at": now,
-        },
-    )
+    steps: list[_Step] = [
+        (
+            "mutations.gq",
+            "update_workflow_session_end",
+            {
+                "slug": session_slug,
+                "summary": summary,
+                "tools_used": tools_used,
+                "files_changed": files_changed,
+                "ended_at": now,
+            },
+        )
+    ]
+    if state is not None:
+        if state not in _TERMINAL_SESSION_STATES:
+            msg = (
+                f"workflow_session_end: state must be one of "
+                f"{sorted(_TERMINAL_SESSION_STATES)}, got {state!r}"
+            )
+            raise ValueError(msg)
+        steps.append(
+            (
+                "mutations.gq",
+                "update_workflow_session_state",
+                {"slug": session_slug, "state": state},
+            )
+        )
+    client.change_many(steps)
 
     # Drop the local handle so the Stop hook doesn't re-close this session.
     # Local-stdio only — a deployed replica would be scanning its own container's
@@ -7194,6 +7345,7 @@ def workflow_session_list(
     open_only: bool = False,
     include_superseded: bool = False,
     since: str | None = None,
+    task_slug: str | None = None,
 ) -> list[dict]:
     """
     List workflow sessions, newest last.
@@ -7214,6 +7366,9 @@ def workflow_session_list(
     since:
         ISO timestamp: sessions that ended at or after it, plus every open
         one. An unparseable value, ``""`` included, raises ``ValueError``.
+    task_slug:
+        Restrict to the sessions a runner started to work this ``tk-`` task,
+        with their fan-out fields. Combines with ``project_slug``.
     """
     # An open session inflates the trace's session_count, adds its phase with
     # nothing recorded, and cannot extend `duration` (max(ended_at)). `since`
@@ -7226,7 +7381,17 @@ def workflow_session_list(
     # "unparseable values raise" promise exists to rule out. Omitted stays
     # omitted; supplied-and-empty is a bad value and says so.
     since_at = _parse_since(since) if since is not None else None
-    if project_slug:
+    if task_slug:
+        # Filters ON task_slug, so put the column back as the project branch
+        # below does for project_slug.
+        rows = [
+            {**r, "task_slug": task_slug}
+            for r in client.read(
+                "read.gq", "list_sessions_by_task", {"task_slug": task_slug}
+            )
+            if not project_slug or r["project_slug"] == project_slug
+        ]
+    elif project_slug:
         rows = client.read(
             "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
         )

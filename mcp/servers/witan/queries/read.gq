@@ -837,9 +837,39 @@ query list_sessions_by_project($project_slug: String) {
     return {
         $s.slug, $s.session_id, $s.phase, $s.summary,
         $s.tools_used, $s.files_changed,
-        $s.started_at, $s.ended_at, $s.superseded_by
+        $s.started_at, $s.ended_at, $s.superseded_by,
+        $s.task_slug, $s.runner, $s.harness, $s.mode,
+        $s.harness_session_ref, $s.state, $s.event_log, $s.attach_endpoint
     }
     order { $s.started_at asc }
+}
+
+// Every session that worked one task, across projects: the fan-out view of a
+// task's attempts. task_slug is @index'd, so this is a keyed lookup.
+query list_sessions_by_task($task_slug: String) {
+    match {
+        $s: WorkflowSession { task_slug: $task_slug }
+    }
+    return {
+        $s.slug, $s.project_slug, $s.session_id, $s.phase, $s.summary,
+        $s.tools_used, $s.files_changed,
+        $s.started_at, $s.ended_at, $s.superseded_by,
+        $s.runner, $s.harness, $s.mode,
+        $s.harness_session_ref, $s.state, $s.event_log, $s.attach_endpoint
+    }
+    order { $s.started_at asc }
+}
+
+// One session's fan-out fields, for `workflow_session_update` to merge into:
+// an update changes only the fields it is given.
+query get_workflow_session_fanout($slug: String) {
+    match {
+        $s: WorkflowSession { slug: $slug }
+    }
+    return {
+        $s.slug, $s.task_slug, $s.runner, $s.harness, $s.mode,
+        $s.harness_session_ref, $s.state, $s.event_log, $s.attach_endpoint
+    }
 }
 
 // The sessions already recorded for one (project, session_id) pair — the
@@ -851,7 +881,9 @@ query sessions_for_key($project_slug: String, $session_id: String) {
     }
     return {
         $s.slug, $s.session_id, $s.repo, $s.phase, $s.tags,
-        $s.started_at, $s.ended_at, $s.superseded_by
+        $s.started_at, $s.ended_at, $s.superseded_by,
+        $s.task_slug, $s.runner, $s.harness, $s.mode,
+        $s.harness_session_ref, $s.state, $s.event_log, $s.attach_endpoint
     }
     order { $s.started_at asc }
 }

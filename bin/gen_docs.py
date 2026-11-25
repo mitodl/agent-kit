@@ -309,6 +309,7 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "workflow_project_link_memory",
             "workflow_project_memories",
             "workflow_session_start",
+            "workflow_session_update",
             "workflow_session_end",
             "workflow_session_list",
         ],
