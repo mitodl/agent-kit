@@ -124,6 +124,16 @@ Slug convention: ws-&lt;project-slug-prefix&gt;-&lt;6hex&gt;
 | `ended_at` | `DateTime?` |  |
 | `tags` | `[String]?` |  |
 | `superseded_by` | `String?` |  |
+| `task_slug` | `String? @index` | the tk- task the session works |
+| `runner` | `String? @index` | label for the runner and slot that launched it (not a hostname; see host) |
+| `harness` | `String?` | claude, pi, codex, copilot, opencode |
+| `mode` | `enum(oneshot, resume, live)?` | run to completion, continue a harness session, or take input while running |
+| `harness_session_ref` | `String?` | the harness's own session id, for resume on the same host |
+| `host` | `String? @index` | hostname the harness ran on |
+| `cwd` | `String?` | the worktree path the harness ran in |
+| `state` | `enum(starting, running, exited, crashed, cancelled)? @index` | the process, not the task's outcome |
+| `event_log` | `String?` | path or URI of the host-local JSONL event log, not its content |
+| `attach_endpoint` | `String?` | where a live session can be attached to (unset until live sessions exist) |
 
 ### `WorkflowTrace`
 

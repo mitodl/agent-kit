@@ -922,17 +922,19 @@ user, so a sweep cannot reach a teammate's sessions.
 ### witan session list
 
 ```console
-witan session list PROJECT-SLUG
+witan session list [OPTIONS] [ARGS]
 ```
 
-List a project's sessions, newest last.
+List a project's or a task's sessions, newest last.
 
 Under ``--output-format json|toml|yaml`` it prints
 ``workflow_session_list``'s rows as the tool returned them.
 
 **Parameters**:
 
-* `PROJECT-SLUG, --project-slug`: The ``wp-`` slug whose sessions to list. **[required]**
+* `PROJECT-SLUG, --project-slug`: The ``wp-`` slug whose sessions to list.
+* `--task STR`: A ``tk-`` slug: list the sessions a runner started to work it, with
+    each one's runner, harness and state.
 
 ## witan setup
 

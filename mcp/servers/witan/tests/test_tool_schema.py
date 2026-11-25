@@ -17,6 +17,7 @@ remembers to extend a fixture.
 from __future__ import annotations
 
 import asyncio
+import re
 
 
 def _tool_properties() -> list[tuple[str, str, dict]]:
@@ -120,6 +121,7 @@ def test_the_tools_that_overwrite_or_remove_are_annotated_destructive():
         "workflow_project_complete",
         "workflow_project_update",
         "workflow_session_end",
+        "workflow_session_update",
     }
 
 
@@ -133,3 +135,48 @@ def test_the_local_read_allowlist_is_annotated_read_only():
     assert (
         sorted(n for n in READ_TOOLS if not tools[n].annotations.read_only_hint) == []
     )
+
+
+def _enum_values(schema: dict) -> set[str]:
+    """The string values an optional ``Literal`` parameter's schema admits."""
+    return {v for part in schema.get("anyOf", [schema]) for v in part.get("enum", [])}
+
+
+def _stored_enum(field: str) -> set[str]:
+    """The values ``WorkflowSession.<field>``'s ``enum(...)`` in schema.pg allows."""
+    from .conftest import SCHEMA
+
+    node = re.search(r"node WorkflowSession \{(.*?)\n\}", SCHEMA.read_text(), re.DOTALL)
+    assert node is not None
+    declared = re.search(rf"\b{field}:\s+enum\(([^)]*)\)", node[1])
+    assert declared is not None
+    return {v.strip() for v in declared[1].split(",")}
+
+
+def test_fanout_state_and_mode_admit_exactly_the_schema_enums():
+    """A runner reaches these tools through MCP, where the advertised enum is
+    what refuses a bad value before it is written. It has to match the node's
+    ``enum(...)`` in schema.pg, or one side accepts what the other refuses."""
+    params = {(tool, param): schema for tool, param, schema in _tool_properties()}
+    state, mode = _stored_enum("state"), _stored_enum("mode")
+
+    assert state == {"starting", "running", "exited", "crashed", "cancelled"}
+    assert mode == {"oneshot", "resume", "live"}
+    for tool in ("workflow_session_start", "workflow_session_update"):
+        assert _enum_values(params[(tool, "state")]) == state
+    # Ending takes the same values; `workflow_session_end` refuses the
+    # non-terminal ones itself.
+    assert _enum_values(params[("workflow_session_end", "state")]) == state
+    assert _enum_values(params[("workflow_session_start", "mode")]) == mode
+
+
+def test_a_session_cannot_move_hosts_or_worktrees():
+    """``host`` and ``cwd`` locate the harness's stored session for a resume.
+    They are set at start and nothing may change them afterwards."""
+    params = {(tool, param) for tool, param, _ in _tool_properties()}
+
+    assert {("workflow_session_start", "host"), ("workflow_session_start", "cwd")} <= (
+        params
+    )
+    assert ("workflow_session_update", "host") not in params
+    assert ("workflow_session_update", "cwd") not in params

@@ -1,0 +1,4 @@
+### Added
+
+- `WorkflowSession` records fan-out sessions: `task_slug`, `runner`, `harness`, `mode` (`oneshot`, `resume`, `live`), `harness_session_ref`, `host` and `cwd` (where the harness keeps that session, which a resume needs), `state` (`starting`, `running`, `exited`, `crashed`, `cancelled`), `event_log` (the path of the host-local JSONL log, not its content, secret-scanned since it may be a presigned URI) and `attach_endpoint` (no setter until live sessions exist), all optional. `workflow_session_start` takes them, the new `workflow_session_update` changes a running session's state, harness session ref and event log, and `workflow_session_end` takes a final `state`. A session ended without one keeps the state its runner recorded, so a Stop hook that closes the session first does not wipe it.
+- `workflow_session_list(task_slug=...)` and `witan session list --task <tk-slug>` list the sessions that worked a task, with their runner, harness and state.

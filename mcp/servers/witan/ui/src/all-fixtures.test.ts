@@ -98,7 +98,22 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	workflow_project_get: [],
 	workflow_project_status: [],
 	workflow_project_list: [],
-	workflow_session_list: ["session_id", "tools_used", "files_changed"],
+	// The fan-out fields come back from the by-project and by-task reads only.
+	workflow_session_list: [
+		"session_id",
+		"tools_used",
+		"files_changed",
+		"task_slug",
+		"runner",
+		"harness",
+		"mode",
+		"harness_session_ref",
+		"host",
+		"cwd",
+		"state",
+		"event_log",
+		"attach_endpoint",
+	],
 	// The seed sections, each present only when its seed was passed.
 	recall: ["memory", "topic", "symbol", "contract"],
 	// `topics` only with `include_topics`, which the UI always passes.

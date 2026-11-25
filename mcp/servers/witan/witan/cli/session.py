@@ -245,8 +245,8 @@ def session_sweep(
 
 
 @session_app.command(name="list")
-def session_list(project_slug: str) -> None:
-    """List a project's sessions, newest last.
+def session_list(project_slug: str | None = None, *, task: str | None = None) -> None:
+    """List a project's or a task's sessions, newest last.
 
     Under ``--output-format json|toml|yaml`` it prints
     ``workflow_session_list``'s rows as the tool returned them.
@@ -255,19 +255,26 @@ def session_list(project_slug: str) -> None:
     ----------
     project_slug:
         The ``wp-`` slug whose sessions to list.
+    task:
+        A ``tk-`` slug: list the sessions a runner started to work it, with
+        each one's runner, harness and state.
     """
+    if not (project_slug or task):
+        print_error("Pass a project slug, --task, or both.")
+        raise SystemExit(1)
     s = _srv()
     sessions = _fn(s.workflow_session_list)(
-        project_slug=project_slug, include_superseded=True
+        project_slug=project_slug, task_slug=task, include_superseded=True
     )
+    subject = " in ".join(x for x in (task, project_slug) if x)
     fmt = get_output_format()
     if fmt != "txt":
-        dump_record({"title": f"Sessions for {project_slug}", "rows": sessions}, fmt)
+        dump_record({"title": f"Sessions for {subject}", "rows": sessions}, fmt)
         return
     if not sessions:
-        console.print(f"[dim]No sessions for {project_slug}.[/dim]")
+        console.print(f"[dim]No sessions for {esc(subject)}.[/dim]")
         return
-    console.print(f"[bold]Sessions for {project_slug}[/bold] ({len(sessions)}):")
+    console.print(f"[bold]Sessions for {esc(subject)}[/bold] ({len(sessions)}):")
     for sess in sessions:
         # Unlike the aggregate views, this listing keeps superseded rows — it's
         # the view you reach for to see what `migrate dedupe-sessions` did.
@@ -285,3 +292,10 @@ def session_list(project_slug: str) -> None:
         # cut never lands inside an escape sequence.
         first = esc((summary[0] if summary else "(in progress)")[:80])
         console.print(f"  {sess['slug']}  ({esc(sess.get('phase'))}/{state})  {first}")
+        if sess.get("runner") or sess.get("harness"):
+            fanout = "  ".join(
+                f"{field}: {esc(sess[field])}"
+                for field in ("runner", "harness", "mode", "state", "event_log")
+                if sess.get(field)
+            )
+            console.print(f"      {fanout}")

@@ -1055,6 +1055,327 @@ def test_duplicate_sessions_are_excluded_from_the_trace(server, tmp_state_dir):
     assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 1
 
 
+# ── Fan-out sessions ─────────────────────────────────────────────────────────
+#
+# A `witan runner` records the session it launches for a task on the same
+# WorkflowSession every agent session uses, so project history and traces pick
+# it up without a second store.
+
+_FANOUT_START = {
+    "runner": "laptop/slot-1",
+    "harness": "claude",
+    "mode": "oneshot",
+    "host": "laptop.example",
+    "cwd": "/home/me/code/repo.worktrees/fanout-tk-x",
+    "state": "starting",
+    "event_log": "/home/me/.local/state/witan/fanout/ws-x.jsonl",
+}
+
+
+def _fanout_session(server, project_slug, task_slug, session_id=None):
+    return server.workflow_session_start(
+        project_slug=project_slug,
+        session_id=session_id or uuid.uuid4().hex,
+        phase="implementation",
+        task_slug=task_slug,
+        **_FANOUT_START,
+    )
+
+
+@requires_omnigraph
+def test_fanout_session_start_update_end_round_trip(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="fan out", description="d")
+    task = server.task_create("a task", "d", project_slug=proj["slug"])["slug"]
+    handle = _fanout_session(server, proj["slug"], task)
+    slug = handle["session_slug"]
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["slug"] == slug
+    assert row["task_slug"] == task
+    assert row["project_slug"] == proj["slug"]
+    assert {k: row[k] for k in _FANOUT_START} == _FANOUT_START
+    assert row["harness_session_ref"] is None
+    assert row["attach_endpoint"] is None
+
+    updated = server.workflow_session_update(
+        slug, state="running", harness_session_ref="claude-abc"
+    )
+    # Only what was passed changed; the rest is as start recorded it.
+    assert updated["state"] == "running"
+    assert updated["harness_session_ref"] == "claude-abc"
+    assert updated["runner"] == "laptop/slot-1"
+    assert updated["event_log"] == _FANOUT_START["event_log"]
+    # What a same-host resume checks against, fixed at start.
+    assert updated["host"] == "laptop.example"
+    assert updated["cwd"] == _FANOUT_START["cwd"]
+
+    server.workflow_session_end(slug, summary="worker exited", state="exited")
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["ended_at"]
+    assert row["summary"] == "worker exited"
+    assert row["state"] == "exited"
+    assert row["harness_session_ref"] == "claude-abc"
+    assert row["harness"] == "claude"
+
+
+@requires_omnigraph
+def test_session_list_by_task_keeps_each_attempt_and_scopes_to_the_task(
+    server, tmp_state_dir
+):
+    proj = server.workflow_project_create(title="attempts", description="d")
+    task = server.task_create("retried", "d", project_slug=proj["slug"])["slug"]
+    other = server.task_create("other", "d", project_slug=proj["slug"])["slug"]
+
+    first = _fanout_session(server, proj["slug"], task)
+    server.workflow_session_end(first["session_slug"], summary="x", state="crashed")
+    second = _fanout_session(server, proj["slug"], task)
+    _fanout_session(server, proj["slug"], other)
+    server.workflow_session_start(proj["slug"], uuid.uuid4().hex, "implementation")
+
+    rows = server.workflow_session_list(task_slug=task)
+    assert [r["slug"] for r in rows] == [
+        first["session_slug"],
+        second["session_slug"],
+    ]
+    assert [r["state"] for r in rows] == ["crashed", "starting"]
+    assert (
+        server.workflow_session_list(task_slug=task, open_only=True)[0]["slug"]
+        == (second["session_slug"])
+    )
+    assert server.workflow_session_list(task_slug=task, project_slug="wp-nope") == []
+
+
+@requires_omnigraph
+def test_session_update_changes_nothing_it_is_not_given(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="noop", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    slug = _fanout_session(server, proj["slug"], task)["session_slug"]
+
+    before = server.workflow_session_list(task_slug=task)
+    result = server.workflow_session_update(slug)
+    assert result["state"] == "starting"
+    assert server.workflow_session_list(task_slug=task) == before
+
+
+@requires_omnigraph
+def test_session_update_refuses_an_unknown_session(server, tmp_state_dir):
+    from witan import server as srv
+
+    with pytest.raises(srv.MissingReference, match="ws-nope"):
+        server.workflow_session_update("ws-nope", state="running")
+
+
+@requires_omnigraph
+@pytest.mark.parametrize("field", ["state", "mode"])
+def test_the_store_refuses_a_state_or_mode_outside_its_enum(
+    server, tmp_state_dir, field
+):
+    """In-process calls skip MCP's Literal check, so the schema enum is the
+    last line: a misspelled value must not land."""
+    proj = server.workflow_project_create(title="bad enum", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+
+    with pytest.raises(RuntimeError):
+        server.workflow_session_start(
+            project_slug=proj["slug"],
+            session_id=uuid.uuid4().hex,
+            phase="implementation",
+            task_slug=task,
+            **{field: "bogus"},
+        )
+    assert server.workflow_session_list(task_slug=task) == []
+
+
+@requires_omnigraph
+def test_session_end_refuses_a_state_that_is_not_terminal(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="not over", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    slug = _fanout_session(server, proj["slug"], task)["session_slug"]
+
+    with pytest.raises(ValueError, match="state must be one of"):
+        server.workflow_session_end(slug, summary="x", state="running")
+    # Refused before anything was written.
+    assert not server.workflow_session_list(task_slug=task)[0]["ended_at"]
+
+
+@requires_omnigraph
+def test_session_end_without_state_leaves_fanout_fields_alone(server, tmp_state_dir):
+    """The Stop hook and `session sweep` end a session with no state. A worker's
+    Stop hook can close the session before its runner sees the process exit, so
+    ending must not clear what the runner recorded."""
+    proj = server.workflow_project_create(title="hook first", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    slug = _fanout_session(server, proj["slug"], task)["session_slug"]
+    server.workflow_session_update(slug, state="running")
+
+    server.workflow_session_end(slug, summary="closed by the hook")
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["state"] == "running"
+    assert row["runner"] == "laptop/slot-1"
+
+    # The runner then records the exit on the already-ended session.
+    server.workflow_session_update(slug, state="exited")
+    assert server.workflow_session_list(task_slug=task)[0]["state"] == "exited"
+
+
+@requires_omnigraph
+def test_fanout_session_start_is_re_entrant_and_merges_fields(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="retry fanout", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    sid = uuid.uuid4().hex
+    first = _fanout_session(server, proj["slug"], task, session_id=sid)
+
+    # A retry that learned the harness ref in the meantime folds it in; one
+    # that omits the fan-out fields leaves them as they were.
+    again = server.workflow_session_start(
+        project_slug=proj["slug"],
+        session_id=sid,
+        phase="implementation",
+        harness_session_ref="claude-abc",
+    )
+    assert again["existed"] is True
+    assert again["session_slug"] == first["session_slug"]
+    server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["harness_session_ref"] == "claude-abc"
+    assert {k: row[k] for k in _FANOUT_START} == _FANOUT_START
+
+
+def _end_after_read(monkeypatch, server, query, slug):
+    """Land ``workflow_session_end(state="crashed")`` on ``slug`` right after
+    the first ``query`` read returns, so a write built from that read is stale."""
+    from witan import server as srv
+
+    real_read = srv.client.read
+    fired = []
+
+    def read(path, name, params=None):
+        rows = real_read(path, name, params)
+        if name == query and not fired:
+            fired.append(name)
+            server.workflow_session_end(slug, summary="crashed", state="crashed")
+        return rows
+
+    monkeypatch.setattr(srv.client, "read", read)
+
+
+@requires_omnigraph
+def test_session_update_keeps_a_state_an_end_recorded_in_between(
+    server, tmp_state_dir, monkeypatch
+):
+    """An update that only records the event log must not write back the
+    ``running`` it might have read before the end recorded ``crashed``."""
+    proj = server.workflow_project_create(title="end races update", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    slug = _fanout_session(server, proj["slug"], task)["session_slug"]
+    server.workflow_session_update(slug, state="running")
+
+    _end_after_read(monkeypatch, server, "get_workflow_session_fanout", slug)
+    server.workflow_session_update(slug, event_log="s3://logs/ws-x.jsonl")
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["state"] == "crashed"
+    assert row["event_log"] == "s3://logs/ws-x.jsonl"
+
+
+@requires_omnigraph
+def test_re_entrant_start_keeps_a_state_an_end_recorded_in_between(
+    server, tmp_state_dir, monkeypatch
+):
+    proj = server.workflow_project_create(title="end races start", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    sid = uuid.uuid4().hex
+    slug = _fanout_session(server, proj["slug"], task, session_id=sid)["session_slug"]
+
+    _end_after_read(monkeypatch, server, "sessions_for_key", slug)
+    server.workflow_session_start(
+        project_slug=proj["slug"],
+        session_id=sid,
+        phase="implementation",
+        harness_session_ref="claude-abc",
+    )
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["state"] == "crashed"
+    assert row["harness_session_ref"] == "claude-abc"
+
+
+@requires_omnigraph
+def test_stop_hook_auto_closes_a_fanout_session_and_keeps_its_fields(
+    server, tmp_state_dir, no_background_optimize, monkeypatch
+):
+    from witan import server as srv
+    from witan.cli import _common, hooks
+
+    proj = server.workflow_project_create(title="hooked fanout", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    sid = uuid.uuid4().hex
+    handle = _fanout_session(server, proj["slug"], task, session_id=sid)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    monkeypatch.setattr(_common, "_server", srv)
+
+    hooks.session_checkpoint()
+
+    [row] = server.workflow_session_list(task_slug=task)
+    assert row["slug"] == handle["session_slug"]
+    assert row["ended_at"]
+    assert "auto-closed by Stop hook" in row["summary"]
+    assert {k: row[k] for k in _FANOUT_START} == _FANOUT_START
+
+
+@requires_omnigraph
+def test_fanout_sessions_reach_the_corpus_trace(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="traced fanout", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    fan = _fanout_session(server, proj["slug"], task)
+    server.workflow_session_end(fan["session_slug"], summary="did it", state="exited")
+    manual = server.workflow_session_start(
+        proj["slug"], uuid.uuid4().hex, "implementation"
+    )
+    server.workflow_session_end(manual["session_slug"], summary="by hand")
+
+    done = server.workflow_project_complete(proj["slug"], outcome="delivered")
+    assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 2
+
+    mined = server.workflow_trace_mine(done["trace_slug"])
+    by_slug = {s["slug"]: s for s in mined["sessions"]}
+    assert by_slug[fan["session_slug"]]["task_slug"] == task
+    assert by_slug[fan["session_slug"]]["harness"] == "claude"
+    assert by_slug[fan["session_slug"]]["state"] == "exited"
+    assert by_slug[manual["session_slug"]]["task_slug"] is None
+
+
+@requires_omnigraph
+def test_session_list_cli_lists_a_tasks_sessions(server, tmp_state_dir, monkeypatch):
+    from witan.cli import session as session_cli
+
+    printed = _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="cli fanout", description="d")
+    task = server.task_create("t", "d", project_slug=proj["slug"])["slug"]
+    handle = _fanout_session(server, proj["slug"], task)
+
+    session_cli.session_list(task=task)
+
+    out = "\n".join(printed)
+    assert f"Sessions for {task}" in out
+    assert handle["session_slug"] in out
+    assert "runner: laptop/slot-1" in out
+    assert "harness: claude" in out
+    assert "state: starting" in out
+
+
+def test_session_list_cli_needs_a_project_or_a_task(monkeypatch):
+    from witan.cli import _common
+    from witan.cli import session as session_cli
+
+    monkeypatch.setattr(_common, "_server", object())
+    with pytest.raises(SystemExit):
+        session_cli.session_list()
+
+
 # ── workflow_project_update ──────────────────────────────────────────────────
 
 
