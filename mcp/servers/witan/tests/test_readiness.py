@@ -2,11 +2,37 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from witan import readiness
 
 
 def _iso(delta_seconds: int) -> str:
     return (datetime.now(UTC) + timedelta(seconds=delta_seconds)).isoformat()
+
+
+@pytest.fixture
+def fresh_lease():
+    """Re-read the lease from configuration, and again after the test."""
+    readiness.claim_lease_seconds.cache_clear()
+    yield
+    readiness.claim_lease_seconds.cache_clear()
+
+
+def test_lease_defaults_to_an_hour(fresh_lease):
+    assert readiness.claim_lease_seconds() == 3600
+    assert readiness.lease_expired(_iso(-3660))
+
+
+def test_configured_lease_decides_expiry(fresh_lease, monkeypatch):
+    monkeypatch.setenv("WITAN_CLAIM_LEASE_SECONDS", "7200")
+
+    assert readiness.claim_lease_seconds() == 7200
+    # Ninety minutes in: lapsed under the default, still held under two hours.
+    in_progress = {"status": "in_progress", "claimed_at": _iso(-5400)}
+    assert not readiness.lease_expired(in_progress["claimed_at"])
+    assert not readiness.status_pickable(in_progress)
+    assert readiness.lease_expired(_iso(-7260))
 
 
 def test_open_and_blocked_are_pickable():
@@ -22,7 +48,7 @@ def test_in_progress_pickable_only_when_lease_expired():
     fresh = {"status": "in_progress", "claimed_at": _iso(0)}
     stale = {
         "status": "in_progress",
-        "claimed_at": _iso(-(readiness.CLAIM_LEASE_SECONDS + 60)),
+        "claimed_at": _iso(-(readiness.claim_lease_seconds() + 60)),
     }
     assert not readiness.status_pickable(fresh)
     assert readiness.status_pickable(stale)
@@ -37,7 +63,7 @@ def test_lease_expired_tolerates_naive_timestamp():
     naive_recent = utc_now.replace(tzinfo=None).isoformat()
     assert readiness.lease_expired(naive_recent) is False
     naive_old = (
-        (utc_now - timedelta(seconds=readiness.CLAIM_LEASE_SECONDS + 60))
+        (utc_now - timedelta(seconds=readiness.claim_lease_seconds() + 60))
         .replace(tzinfo=None)
         .isoformat()
     )
@@ -69,7 +95,7 @@ def test_in_progress_unleased_and_stale_updated_at_is_reclaimable():
     task = {
         "status": "in_progress",
         "claimed_at": None,
-        "updated_at": _iso(-(readiness.CLAIM_LEASE_SECONDS + 60)),
+        "updated_at": _iso(-(readiness.claim_lease_seconds() + 60)),
     }
     assert readiness.status_pickable(task)
 
@@ -80,7 +106,7 @@ def test_claimed_at_takes_precedence_over_updated_at():
     task = {
         "status": "in_progress",
         "claimed_at": _iso(0),
-        "updated_at": _iso(-(readiness.CLAIM_LEASE_SECONDS + 60)),
+        "updated_at": _iso(-(readiness.claim_lease_seconds() + 60)),
     }
     assert not readiness.status_pickable(task)
 
@@ -102,7 +128,7 @@ def test_filter_ready_orders_by_priority_and_reclaims_expired():
             "slug": "tk-stale",
             "status": "in_progress",
             "priority": "p1",
-            "claimed_at": _iso(-(readiness.CLAIM_LEASE_SECONDS + 60)),
+            "claimed_at": _iso(-(readiness.claim_lease_seconds() + 60)),
         },
         {
             "slug": "tk-held",

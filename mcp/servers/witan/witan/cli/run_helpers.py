@@ -18,7 +18,6 @@ from .. import envelope, provenance
 from .. import repo as repo_module
 from ..config import Config
 from ..prompts import prompts_off
-from ..readiness import CLAIM_LEASE_SECONDS
 from ..session_state import SESSION_ID_ENV_VARS
 from ._common import (
     _fn,
@@ -289,9 +288,22 @@ def _run_prompt(
     t: dict,
     *,
     claimed: bool,
+    lease_seconds: int | None = None,
     memories: list[dict] | None = None,
     overlaps: list[dict] | None = None,
 ) -> str:
+    """The launched agent's prompt for one task.
+
+    :param t: The task record.
+    :param claimed: Whether the launch claimed the task for the agent.
+    :param lease_seconds: The lease the server reported on that claim, or
+        ``None`` when no claim was made (``--dry-run``) or the server predates
+        reporting one.
+    :param memories: Memories to show, in ``task_claim``'s shape.
+    :param overlaps: In-flight tasks sharing a symbol with this one.
+    :returns: The prompt text.
+    :rtype: str
+    """
     lines = [
         "Work on this task from the witan task graph and see it through to completion.",
         "",
@@ -316,14 +328,20 @@ def _run_prompt(
     # `--no-claim` agent working a task that still reads as unclaimed.
     #
     # The claimed branch names the lease window rather than promising exclusion
-    # outright: the claim is advisory and lapses after CLAIM_LEASE_SECONDS with
+    # outright: the claim is advisory and lapses after the server's lease with
     # nothing on the launch path renewing it, so a task worked for longer than
     # that reappears in `task_ready` under the agent's feet. Re-calling
     # `task_claim` renews it, which the agent can only do if it is told to.
-    lease_minutes = CLAIM_LEASE_SECONDS // 60
+    # The length comes from the claim, never a local constant: a deployment
+    # sets its own, and this process is only its client.
+    lapses = (
+        f"lapses after {lease_seconds // 60} minutes"
+        if lease_seconds
+        else "lapses after the lease task_claim reports as lease_seconds"
+    )
     held = (
         f"This task is claimed for you. The claim is a lease, not a lock: it "
-        f"lapses after {lease_minutes} minutes and nothing renews it for you, "
+        f"{lapses} and nothing renews it for you, "
         f"so if the work runs longer, call "
         f'task_claim(slug="{t["slug"]}", session_id="<your agent session id>") '
         f"again to renew — otherwise the task returns to ready work while you "
@@ -416,11 +434,10 @@ def _project_run_prompt(
             "else's work."
         ),
         (
-            f"A claim is a lease, not a lock: it lapses after "
-            f"{CLAIM_LEASE_SECONDS // 60} minutes and nothing renews it for you, "
-            f"so call "
-            f'task_claim(slug="tk-...", session_id="<your agent session id>") '
-            f"again to renew anything you are still working past that."
+            "A claim is a lease, not a lock: it lapses after the lease_seconds "
+            "task_claim returns and nothing renews it for you, so call "
+            'task_claim(slug="tk-...", session_id="<your agent session id>") '
+            "again to renew anything you are still working past that."
         ),
         'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
         'If you claim a task and then decide not to work it: task_release(slug="tk-...").',
@@ -678,6 +695,7 @@ def build_launch_spec(
         prompt = _run_prompt(
             record,
             claimed=claim,
+            lease_seconds=(claim_result or {}).get("lease_seconds"),
             memories=_prompt_memories(server, slug, claim_result),
             overlaps=(claim_result or {}).get("overlaps"),
         )
@@ -701,7 +719,7 @@ def build_launch_spec(
         env=env,
         unset_env=unset_env,
         # A handoff never claims: a prefilled prompt nobody submits would hold
-        # the lease for an hour, with no failed launch to release it on.
+        # the lease until it lapses, with no failed launch to release it on.
         handoff=claim_result is None
         and _handoff_allowed(workspace_folders, started_with_target),
         prompt=prompt,

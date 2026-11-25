@@ -1130,17 +1130,32 @@ def test_the_project_prompt_tells_the_agent_to_claim_before_starting():
 def test_the_task_prompt_says_the_task_is_already_claimed():
     from witan.cli.run_helpers import _run_prompt
 
-    prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"}, claimed=True)
+    prompt = _run_prompt(
+        {"slug": "tk-a", "title": "T", "type": "bug"}, claimed=True, lease_seconds=7200
+    )
 
     assert "claimed for you" in prompt
-    # The claim is a LEASE. It lapses after CLAIM_LEASE_SECONDS and nothing on
+    # The claim is a LEASE. It lapses after the server's lease and nothing on
     # the launch path renews it, so "nobody else will pick it up while you
     # work" was false for any task worked longer than that — the prompt has to
-    # say how to renew instead of promising exclusion.
-    assert "60 minutes" in prompt
+    # say how to renew instead of promising exclusion. The length is the one
+    # the claim reported, not a local constant.
+    assert "120 minutes" in prompt
     # With the session id, as the witan-task skill says: a renewal without it
     # is refused once an earlier one has recorded the session on the claim.
     assert 'task_claim(slug="tk-a", session_id=' in prompt
+    assert "again to renew" in prompt
+
+
+def test_the_task_prompt_points_at_lease_seconds_when_no_claim_reported_one():
+    from witan.cli.run_helpers import _run_prompt
+
+    # A dry run makes no claim, and a server that predates reporting the lease
+    # sends none; guessing a length here is what this prompt must not do.
+    prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"}, claimed=True)
+
+    assert "minutes" not in prompt
+    assert "lease_seconds" in prompt
     assert "again to renew" in prompt
 
 

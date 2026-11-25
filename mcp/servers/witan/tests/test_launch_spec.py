@@ -139,6 +139,15 @@ def test_a_task_spec_has_every_field_a_client_runs(folders):
     assert "WITAN_SESSION_ID" not in json.dumps(spec)
 
 
+def test_the_prompt_states_the_lease_the_server_reported(folders):
+    """A deployment sets its own lease; the launcher's process has no copy."""
+    here, _ = folders
+    claim = {**_CLAIMED, "lease_seconds": 7200}
+    spec = _spec(_Fake(task=_task(), claim=claim), folders=[here])
+
+    assert "lapses after 120 minutes" in spec["prompt"]
+
+
 def test_the_local_store_unsets_the_target_and_a_named_one_pins_it(folders):
     here, _ = folders
     fake = _Fake(task=_task(), claim=_CLAIMED)

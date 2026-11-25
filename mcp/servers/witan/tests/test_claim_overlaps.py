@@ -75,7 +75,7 @@ def test_open_closed_and_lapsed_tasks_are_not_in_flight(server, monkeypatch):
     closed = _held(server, [RUN], title="closed")
     server.task_close(closed["slug"], resolution="done")
     _held(server, [RUN], title="lapsed")
-    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: -1)
     task = _task(server, [RUN])
 
     assert server.task_claim(task["slug"])["overlaps"] == []

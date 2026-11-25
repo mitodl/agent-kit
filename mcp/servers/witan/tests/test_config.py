@@ -454,6 +454,65 @@ def test_rank_config_non_numeric_names_source(monkeypatch):
         load_rank_config()
 
 
+# ── load_claim_config ─────────────────────────────────────────────────────────
+
+
+def test_claim_lease_defaults_to_an_hour(monkeypatch, toml_file):
+    from witan.config import load_claim_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file(""))
+    assert load_claim_config().lease_seconds == 3600
+
+
+def test_claim_lease_env_beats_config_toml(monkeypatch, toml_file):
+    from witan.config import load_claim_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("[claims]\nlease_seconds = 1800"))
+    assert load_claim_config().lease_seconds == 1800
+    monkeypatch.setenv("WITAN_CLAIM_LEASE_SECONDS", "7200")
+    assert load_claim_config().lease_seconds == 7200
+
+
+@pytest.mark.parametrize("value", ["0", "-60", "two hours", "1.5"])
+def test_claim_lease_refuses_a_value_that_is_not_positive_whole_seconds(
+    monkeypatch, toml_file, value
+):
+    from witan.config import load_claim_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file(""))
+    monkeypatch.setenv("WITAN_CLAIM_LEASE_SECONDS", value)
+    with pytest.raises(ValueError, match="WITAN_CLAIM_LEASE_SECONDS"):
+        load_claim_config()
+
+
+def test_claim_lease_error_names_config_toml_when_it_supplied_the_value(
+    monkeypatch, toml_file
+):
+    from witan.config import load_claim_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("[claims]\nlease_seconds = 0"))
+    with pytest.raises(ValueError, match=r"\[claims\]\.lease_seconds"):
+        load_claim_config()
+
+
+def test_claim_lease_refuses_a_toml_boolean(monkeypatch, toml_file):
+    """Lax int parsing would otherwise read `true` as a one-second lease."""
+    from witan.config import load_claim_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("[claims]\nlease_seconds = true"))
+    with pytest.raises(ValueError, match=r"\[claims\]\.lease_seconds"):
+        load_claim_config()
+
+
+def test_the_hermetic_guard_clears_the_claim_lease_env_var():
+    """The server resolves it at import, before any test can unset it."""
+    from testsupport import hermetic
+
+    from witan.config import CLAIM_LEASE_ENV_VAR
+
+    assert CLAIM_LEASE_ENV_VAR in hermetic._CLEARED
+
+
 def test_rank_config_is_frozen():
     from witan.config import RankConfig
 
@@ -827,24 +886,32 @@ def test_default_config_toml_is_valid_and_fully_commented():
     """Every setting ships commented out — loading it must change nothing."""
     import tomllib
 
-    from witan.config import RankConfig, ScanConfig, ScreenConfig, default_config_toml
+    from witan.config import (
+        ClaimConfig,
+        RankConfig,
+        ScanConfig,
+        ScreenConfig,
+        default_config_toml,
+    )
 
     text = default_config_toml()
     parsed = tomllib.loads(text)
-    assert parsed == {"rank": {}, "scan": {}, "screen": {}}
+    assert parsed == {"rank": {}, "scan": {}, "screen": {}, "claims": {}}
     assert RankConfig(**parsed["rank"]) == RankConfig()
     assert ScanConfig(**parsed["scan"]) == ScanConfig()
     assert ScreenConfig(**parsed["screen"]) == ScreenConfig()
+    assert ClaimConfig(**parsed["claims"]) == ClaimConfig()
 
 
 def test_default_config_toml_reflects_actual_defaults():
     """Commented values must match the real defaults, not stale copy-paste."""
-    from witan.config import ScanConfig, default_config_toml
+    from witan.config import ClaimConfig, ScanConfig, default_config_toml
 
     text = default_config_toml()
     scan = ScanConfig()
     assert f'secret_action = "{scan.secret_action}"' in text
     assert f"enabled = {str(scan.enabled).lower()}" in text
+    assert f"lease_seconds = {ClaimConfig().lease_seconds}" in text
 
 
 # ── IdentityConfig / load_identity_config (ADR 0004) ─────────────────────────

@@ -112,6 +112,8 @@ _CLEARED = (
     "WITAN_RANK_W_INFERRED_EDGE",
     "WITAN_RANK_SURFACE_MIN_CONTENT",
     "WITAN_RANK_SURFACE_MIN_TITLE",
+    # Read at server import too, and decides every lease-expiry assertion.
+    "WITAN_CLAIM_LEASE_SECONDS",
     "WITAN_OPTIMIZE_INTERVAL",
     "WITAN_CLEANUP_INTERVAL",
     "WITAN_CODE_OPTIMIZE_INTERVAL",

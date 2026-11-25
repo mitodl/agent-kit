@@ -148,6 +148,7 @@ def test_install_default_config_writes_starter_file(tmp_path, monkeypatch):
         "rank": {},
         "scan": {},
         "screen": {},
+        "claims": {},
     }  # everything ships commented out
 
 

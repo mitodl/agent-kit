@@ -1022,7 +1022,7 @@ def test_expired_lease_is_reclaimable(server, monkeypatch):
 
     # Make any claim's lease count as elapsed immediately. The lease constant is
     # shared by task_ready and the context hook, so it lives in `readiness`.
-    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: -1)
 
     t = server.task_create(title="leasey", description="x")
     server.task_claim(t["slug"], assignee="agentA")
@@ -1652,7 +1652,7 @@ def test_close_accepts_a_claim_of_the_same_person(server, monkeypatch):
 def test_close_accepts_an_expired_lease(server, monkeypatch):
     from witan import readiness
 
-    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: -1)
     t = server.task_create(title="abandoned", description="x")
     server.task_claim(t["slug"], assignee="agentA")
 
@@ -1693,6 +1693,43 @@ def test_refused_claim_remedy_reports_when_the_lease_lapses(server):
 
 
 @requires_omnigraph
+def test_a_claim_reports_the_default_lease(server):
+    t = server.task_create(title="leased", description="x")
+    assert server.task_claim(t["slug"], assignee="agentA")["lease_seconds"] == 3600
+
+
+@requires_omnigraph
+def test_a_claim_reports_and_enforces_the_configured_lease(server, monkeypatch):
+    """A runner renews on a schedule derived from the lease the claim reports,
+    so the claim must report the same length readiness enforces."""
+    from datetime import UTC, datetime, timedelta
+
+    from witan import readiness
+    from witan import server as srv
+    from witan_core.timeutil import parse_timestamp
+
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: 7200)
+
+    t = server.task_create(title="two hours", description="x")
+    claim = server.task_claim(t["slug"], assignee="agentA")
+    assert claim["lease_seconds"] == 7200
+
+    # Ninety minutes in, the claim has lapsed under the old one-hour lease but
+    # not under this one: still held, not ready, refused to another holder.
+    started = datetime.now(UTC) - timedelta(minutes=90)
+    srv._update_task(
+        t["slug"], {"claimed_at": started.isoformat(timespec="milliseconds")}
+    )
+    assert t["slug"] not in {r["slug"] for r in server.task_ready()}
+    refused = server.task_claim(t["slug"], assignee="agentB")
+    assert refused["claimed"] is False
+    # Rebuilt from the stored stamp, which the store may re-serialize.
+    stored = parse_timestamp(server.task_get(t["slug"])["claimed_at"])
+    lapses_at = (stored + timedelta(seconds=7200)).isoformat()
+    assert f"lease lapses at {lapses_at}" in refused["remedy"]
+
+
+@requires_omnigraph
 def test_unleased_stale_in_progress_is_still_reclaimable(server, monkeypatch):
     """The abandonment recovery path must not regress: an in_progress task with
     no claimed_at whose updated_at is older than the lease window is genuinely
@@ -1700,7 +1737,7 @@ def test_unleased_stale_in_progress_is_still_reclaimable(server, monkeypatch):
     from witan import readiness
     from witan import server as srv
 
-    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: -1)
 
     t = server.task_create(title="abandoned ghost", description="x")
     srv._update_task(t["slug"], {"status": "in_progress", "claimed_at": None})

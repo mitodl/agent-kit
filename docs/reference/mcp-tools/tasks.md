@@ -158,7 +158,8 @@ Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
 
 Call it before starting a ready task so others see it is taken.
 Re-calling renews the lease; an expired lease makes the task reclaimable.
-Returns ``{"claimed": true, ...}``, or ``{"claimed": false, "reason":
+Returns ``{"claimed": true, "lease_seconds": ..., ...}`` (renew before
+``lease_seconds`` pass), or ``{"claimed": false, "reason":
 ...}`` when the task is closed, blocked, held (``held``/``lost_race``), or
 the graph stayed too busy (``contention``, safe to retry).
 

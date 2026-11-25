@@ -81,6 +81,7 @@ with a partial identity configuration rather than serving unauthenticated.
 | --- | --- | --- |
 | `WITAN_ACTOR` | — | Overrides the OIDC-derived identity. Intended for service accounts and the CI indexer, which authenticate as themselves rather than as a person. |
 | `WITAN_ACTOR_TOKENS_FILE` | — | Path to a mounted `{actor_id: token}` map. The server-side half of identity: it maps an authenticated caller to the actor recorded on the nodes they write. |
+| `WITAN_CLAIM_LEASE_SECONDS` | `3600` | Seconds a `task_claim` holds a task before it becomes reclaimable. Read by whichever process decides readiness: the deployed server for a remote target, the local process for a local store. A granted claim returns it as `lease_seconds`, so a client renews on the server's schedule rather than its own copy. Also `[claims].lease_seconds` in config.toml. Must be a positive whole number; anything else fails the server's start. |
 | `WITAN_GROUP_COMMIT` | `1` | Let concurrent writes from one actor to one deployed graph share an omnigraph commit (see `witan_core.group_commit`). Only writes over the HTTP transport are grouped. Set to `0`/`false`/`no`/`off` to commit every write on its own again. |
 | `WITAN_MCP_HOST` | `127.0.0.1` | Interface to bind for HTTP transports. Use `0.0.0.0` inside a container. |
 | `WITAN_MCP_PATH` | `/mcp` | URL path the MCP endpoint is served on. HTTP transports only. |

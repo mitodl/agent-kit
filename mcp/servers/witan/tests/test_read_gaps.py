@@ -269,7 +269,7 @@ def test_a_live_claim_reports_its_lease_as_unexpired(server):
 def test_a_lapsed_claim_is_marked_on_every_row_shape(server, monkeypatch):
     """`task_get`, `task_list` and `task_ready` must agree, since the board
     reads one and the detail pane the other."""
-    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: -1)
     task = server.task_create(title="t", description="x")
     server.task_claim(task["slug"], assignee="agentA")
 
@@ -304,7 +304,7 @@ def test_a_lapsed_claim_on_a_blocked_task_is_still_marked(server, monkeypatch):
     appears in Ready however stale its claim — which is the abandoned work
     most worth seeing, because something else is waiting on it.
     """
-    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+    monkeypatch.setattr(readiness, "claim_lease_seconds", lambda: -1)
     blocker = server.task_create(title="blocker", description="x")
     abandoned = server.task_create(title="abandoned", description="x")
     # Claimed first, blocked after — `task_claim` refuses a blocked task, and
@@ -357,7 +357,7 @@ def test_the_flag_falls_back_to_updated_at_when_a_row_has_no_claim():
         {
             "status": "in_progress",
             "claimed_at": None,
-            "updated_at": _iso(readiness.CLAIM_LEASE_SECONDS + 60),
+            "updated_at": _iso(readiness.claim_lease_seconds() + 60),
         }
     )
 
