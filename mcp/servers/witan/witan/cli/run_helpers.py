@@ -17,6 +17,7 @@ from .. import config as config_module
 from .. import envelope, provenance
 from .. import repo as repo_module
 from ..config import Config
+from ..harness.transport import agent_environ
 from ..prompts import prompts_off
 from ..readiness import CLAIM_LEASE_SECONDS
 from ..session_state import SESSION_ID_ENV_VARS
@@ -491,11 +492,6 @@ def launch_env(cfg: Config) -> tuple[dict[str, str], list[str]]:
     else:
         unset_env.append("WITAN_TARGET")
     return env, unset_env
-
-
-def agent_environ(env: dict[str, str], unset_env: Sequence[str]) -> dict[str, str]:
-    """This process's environment with ``unset_env`` removed and ``env`` set over it."""
-    return {k: v for k, v in os.environ.items() if k not in unset_env} | env
 
 
 def _launch_folder(
