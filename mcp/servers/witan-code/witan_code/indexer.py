@@ -1548,11 +1548,11 @@ def _reexport_edges(
     carry another), or a star import of the submodule, which takes the
     submodule's ``exports``. Only a direct submodule of the package counts:
     that is what makes ``pkg.name`` another name for ``pkg.sub.name``, which
-    ``code_find_references`` matches uses in other repos by. As at runtime, a
-    later import of a name replaces an earlier one, and a definition of the
-    name in the ``__init__`` itself replaces any import of it. Same batch rule
-    as the Calls edges: an edge between two files this run left alone was
-    never deleted.
+    ``code_find_references`` matches uses in other repos by. As at runtime,
+    whatever binds a name later wins: another import, a star import of any
+    module of the repo (one outside the repo binds names nothing here knows),
+    or a definition in the ``__init__`` itself. Same batch rule as the Calls
+    edges: an edge between two files this run left alone was never deleted.
     """
     exports: dict[str, frozenset[str]] = {}
 
@@ -1576,22 +1576,36 @@ def _reexport_edges(
         # Name on the package -> (submodule file, its name there), or None
         # once something that is not a sibling's definition took the name.
         bound: dict[str, tuple[str, str] | None] = {}
-        for imported in parsed.module_imports:
-            target = modules.find("python", imported.module, parsed.path)
+        definitions = [
+            (s.start_line, s.name)
+            for s in parsed.symbols
+            if s.kind != "module" and "." not in s.qualified_name
+        ]
+        # Stable, so the names of one import statement keep their order.
+        steps = sorted(
+            [(i.line, i) for i in parsed.module_imports] + definitions,
+            key=lambda step: step[0],
+        )
+        for _, step in steps:
+            if isinstance(step, str):
+                bound[step] = None
+                continue
+            target = modules.find("python", step.module, parsed.path)
             sibling = (
                 target is not None
                 and posixpath.dirname(target) == package
                 and Path(target).stem != "__init__"
             )
-            if imported.member is None:
-                if sibling:
-                    bound.update((name, (target, name)) for name in exports_of(target))
-            elif sibling and imported.member == imported.local:
-                bound[imported.local] = (target, imported.member)
+            if step.member is None:
+                if target is not None:
+                    bound.update(
+                        (name, (target, name) if sibling else None)
+                        for name in exports_of(target)
+                    )
+            elif sibling and step.member == step.local:
+                bound[step.local] = (target, step.member)
             else:
-                bound[imported.local] = None
-        for name in _top_level_names(parsed):
-            bound.pop(name, None)
+                bound[step.local] = None
         for target, name in sorted(filter(None, bound.values())):
             target_id = f"{prefix}{target}::{name}"
             if (parsed.path in batch or target in batch) and defined(target, target_id):

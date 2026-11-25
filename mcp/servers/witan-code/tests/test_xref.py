@@ -257,6 +257,61 @@ def test_only_a_literal_all_is_read(source, names):
     )
 
 
+SIBLINGS = {
+    "pkg/a.py": "def f():\n    pass\n\n\ndef _private():\n    pass\n",
+    "pkg/b.py": "def f():\n    pass\n",
+    "other/c.py": "def f():\n    pass\n",
+}
+
+
+def _reexports(init):
+    """The definitions ``pkg/__init__.py`` re-exports, every file parsed in
+    one batch."""
+    from pathlib import Path
+
+    from witan_code import indexer
+
+    files = {**SIBLINGS, "pkg/__init__.py": init}
+    spec = indexer._EXT_TO_SPEC[".py"]
+    parsed = {
+        rel: indexer._parse_file(
+            text.encode(), None, spec, REPO, f"{REPO}#{rel}", rel, "h"
+        )
+        for rel, text in files.items()
+    }
+    edges = indexer._reexport_edges(
+        list(parsed.values()),
+        parsed,
+        xref.ModuleIndex(files),
+        lambda rel, symbol_id: True,
+        Path("."),
+        REPO,
+        {},
+    )
+    return sorted(edge["to"].removeprefix(f"{REPO}#") for edge in edges)
+
+
+@pytest.mark.parametrize(
+    ("init", "exported"),
+    [
+        ("from .a import *\n", ["pkg/a.py::f"]),
+        ("from pkg.a import f\n", ["pkg/a.py::f"]),
+        ("from .a import f as g\n", []),
+        ("from .a import *\nfrom .b import *\n", ["pkg/b.py::f"]),
+        ("from .a import *\nfrom other.c import *\n", []),
+        ("from .a import *\nfrom other.c import f\n", []),
+        ("from .a import *\n\n\ndef f():\n    pass\n", []),
+        ("def f():\n    pass\n\n\nfrom .a import *\n", ["pkg/a.py::f"]),
+        ("def lazy():\n    from .a import f\n", []),
+    ],
+)
+def test_a_package_re_exports_what_binds_its_name_last(init, exported):
+    """A private name never travels with a star, and only a direct submodule's
+    definition is a re-export; anything else binding the name later takes it
+    away, as at runtime."""
+    assert _reexports(init) == exported
+
+
 def test_module_imports_are_the_top_level_from_imports_in_order():
     """A function's import, or one under `if`, binds nothing on the module."""
     root, raw = _module(
@@ -271,9 +326,9 @@ def test_module_imports_are_the_top_level_from_imports_in_order():
     a = xref.ModuleRef("src/pkg/a", exact=True)
     b = xref.ModuleRef("pkg/b", exact=False)
     assert xref.module_imports(root, raw, "src/pkg/__init__.py") == [
-        xref.ModuleImport(a, None, None),
-        xref.ModuleImport(b, "f", "f"),
-        xref.ModuleImport(b, "g", "h"),
+        xref.ModuleImport(a, None, None, 1),
+        xref.ModuleImport(b, "f", "f", 2),
+        xref.ModuleImport(b, "g", "h", 2),
     ]
 
 

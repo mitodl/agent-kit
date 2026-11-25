@@ -377,11 +377,13 @@ def _python_imports(root, raw: bytes, rel: str) -> dict[str, ImportBinding]:
 @dataclass(frozen=True)
 class ModuleImport:
     """One name a module-level ``from`` import binds: ``member`` of
-    ``module`` as ``local``, or both ``None`` for ``from module import *``."""
+    ``module`` as ``local``, or both ``None`` for ``from module import *``.
+    ``line`` is the statement's, 1-based."""
 
     module: ModuleRef
     member: str | None
     local: str | None
+    line: int
 
 
 def module_imports(root, raw: bytes, rel: str) -> list[ModuleImport]:
@@ -389,7 +391,9 @@ def module_imports(root, raw: bytes, rel: str) -> list[ModuleImport]:
 
     Only statements at the top of the module: an import inside a function, or
     under ``if TYPE_CHECKING:``, binds nothing on the module when it is
-    imported, so it is no re-export.
+    imported, so it is no re-export. One under any other ``if`` or a ``try``
+    may bind, but which branch runs is not known here, so those are skipped
+    too: a re-export missed rather than one claimed.
     """
     out: list[ModuleImport] = []
     for node in root.children:
@@ -398,8 +402,9 @@ def module_imports(root, raw: bytes, rel: str) -> list[ModuleImport]:
         module = _from_module(node.child_by_field_name("module_name"), raw, rel)
         if module is None:
             continue
+        line = node.start_point[0] + 1
         if any(c.type == "wildcard_import" for c in node.children):
-            out.append(ModuleImport(module, None, None))
+            out.append(ModuleImport(module, None, None, line))
             continue
         for name in node.children_by_field_name("name"):
             if name.type == "aliased_import":
@@ -407,7 +412,7 @@ def module_imports(root, raw: bytes, rel: str) -> list[ModuleImport]:
                 local = _text(name.child_by_field_name("alias"), raw)
             else:
                 member = local = _text(name, raw)
-            out.append(ModuleImport(module, member, local))
+            out.append(ModuleImport(module, member, local, line))
     return out
 
 
