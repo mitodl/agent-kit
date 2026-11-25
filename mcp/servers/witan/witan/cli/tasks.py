@@ -33,6 +33,7 @@ from ._common import (
 from .output import dump_record, get_output_format
 from .run_helpers import (
     _launch_agent,
+    _lease_length,
     _merge_prompts,
     _overlap_lines,
     _pick_items,
@@ -542,9 +543,12 @@ def task_claim_cmd(
         print_error(f"No task {slug!r}.")
         raise SystemExit(1)
     if result.get("claimed"):
+        # A deployment older than lease reporting grants the claim without it.
+        lease = result.get("lease_seconds")
+        lease_note = f", lease {_lease_length(lease)}" if lease is not None else ""
         console.print(
             f"[green]Claimed[/green] [bold]{slug}[/bold] "
-            f"(assignee={result.get('assignee')})"
+            f"(assignee={result.get('assignee')}{lease_note})"
         )
         for line in _overlap_lines(result.get("overlaps") or []):
             console.print(line, markup=False, emoji=False, highlight=False)
