@@ -186,7 +186,7 @@ changes, which the skeleton task owns.
   refactored into a function that returns the spec (section 3).
 
 A launch claim is always bare. The shared launch function (section 3) removes
-every name in `SESSION_ID_ENV_VARS` (`witan/session_state.py:51`) from its
+every name in `SESSION_ID_ENV_VARS` (`witan/session_state.py`) from its
 process's environment before it claims, so every launcher gets the same
 behavior: the language server, `witan task run` with or without `--emit-spec`,
 `witan acp`, and a Zed `tasks.json` task running `witan task run`. A launcher
@@ -266,7 +266,7 @@ object; neither parses CLI output.
   "argv": ["claude", "--model", "opus", "<prompt>"],
   "cwd": "/home/me/code/repo",
   "env": {"WITAN_TARGET": "prod", "WITAN_CLIENT_INSTANCE": "<fresh id>"},
-  "unset_env": ["CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO", "WITAN_CLIENT_INSTANCE"],
+  "unset_env": ["WITAN_SESSION_ID", "CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_PROJECT_DIR", "WITAN_REPO", "WITAN_CLIENT_INSTANCE"],
   "handoff": false,
   "prompt": "<prompt>",
   "agent": "claude",
@@ -371,7 +371,15 @@ The cost is that a client cannot tell which tasks a launched project session
 picked up. Until something needs that, a client shows the person's own
 `in_progress` tasks instead, from `witan.listMyWork`. `WITAN_SESSION_ID` as the runners project uses it
 (one id per worker slot, set by the runner) is a separate decision, and nothing
-here depends on it.
+here depends on it. It went into `SESSION_ID_ENV_VARS` for that use after
+this ADR was accepted, ahead of the harness ids for a claim's holder only: the
+workflow-session handle reads it after them (`HANDLE_SESSION_ID_ENV_VARS`), so
+a worker's handle stays keyed by the harness id its Stop hook resolves. A
+launch strips an inherited one like the other ids: the launcher before it
+claims, and the spec's `unset_env` for the agent. The hazard above still holds inside a
+worker: an agent started by hand from a worker's shell inherits the slot id
+and shares its claim holder, so a nested launch has to go through
+`witan task run`.
 
 #### Where a launch runs
 

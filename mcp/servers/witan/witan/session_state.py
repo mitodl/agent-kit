@@ -33,45 +33,81 @@ logger = get_logger("witan.session_state")
 
 STATE_FILE_PREFIX = "workflow-session-"
 
-# The agent-session id variables, in precedence order. Claude Code exports
-# CLAUDE_SESSION_ID into every process it launches (hooks, the stdio MCP server).
+# The agent-session id variables. Claude Code exports CLAUDE_SESSION_ID into
+# every process it launches (hooks, the stdio MCP server).
 # Pi exposes PI_SESSION_ID only to commands its `bash` tool runs, NOT to its own
 # process env (Pi core `dist/core/tools/bash.js` `resolveSpawnContext` sets it
 # per command from `ctx.sessionManager.getSessionId()`), so it reaches witan only
 # when something forwards it: the agent running `echo $PI_SESSION_ID` and passing
 # the value as an explicit argument, or the Pi workflow extension setting it on
-# the `witan session-checkpoint` child it spawns at shutdown. Claude comes first
-# so every existing Claude-keyed handle and holder string resolves exactly as
+# the `witan session-checkpoint` child it spawns at shutdown. Claude comes ahead
+# of Pi so every existing Claude-keyed handle and holder string resolves exactly as
 # before, even in a Claude session started from inside a Pi bash command.
 # Codex exports CODEX_SESSION_ID to the commands its shell tool runs
 # (codex-rs/core/src/exec_env.rs `inject_session_env`), and it is the same id
 # Codex puts in a hook's stdin `session_id`. Codex doesn't put that id in a
 # hook's environment (a hook only inherits whatever launched Codex), which is
 # why `witan session-checkpoint` reads it from stdin.
-SESSION_ID_ENV_VARS = ("CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID")
+HARNESS_SESSION_ID_ENV_VARS = ("CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID")
+
+# WITAN_SESSION_ID comes from whatever started the agent rather than from a
+# harness: a runner sets one per worker slot. An editor launch does not set one
+# (ADR 0012, "Why the spec carries no session id"), and its spec's `unset_env`
+# strips an inherited one along with the harness ids.
+RUNNER_SESSION_ID_ENV = "WITAN_SESSION_ID"
+
+# Precedence for a task claim's holder, and every id variable witan reads (a
+# launch strips all of them). The runner's id comes first, so parallel workers
+# under one author get distinct claim holders on every harness, including ones
+# that export no id of their own (Copilot, OpenCode) and workers that inherit
+# one harness id from whatever started the runner.
+SESSION_ID_ENV_VARS = (RUNNER_SESSION_ID_ENV, *HARNESS_SESSION_ID_ENV_VARS)
+
+# Precedence for the parked workflow-session handle and the provenance read
+# from it. The harness ids come first because that is what the handle is keyed
+# by: the skills tell the agent to pass its harness id to
+# `workflow_session_start`, Pi's checkpoint child carries only the Pi id, and
+# Codex's Stop hook reads its id from stdin. The runner's id comes last, so a
+# harness with no id of its own still gets one.
+HANDLE_SESSION_ID_ENV_VARS = (*HARNESS_SESSION_ID_ENV_VARS, RUNNER_SESSION_ID_ENV)
 
 
-def current_session_id(explicit: str | None = None) -> str:
-    """The calling agent session's id, or ``""`` when none is known.
-
-    Precedence: ``explicit`` (a caller-supplied value, e.g. an MCP tool's
-    ``session_id`` argument) > ``$CLAUDE_SESSION_ID`` > ``$PI_SESSION_ID`` >
-    ``$CODEX_SESSION_ID``.
-    Empty strings are treated as unset at every level, so an exported-but-empty
-    variable falls through to the next source rather than masking it.
-
-    Returns ``""`` rather than None so callers can pass the result straight to
-    :func:`read_handle` & co., which fail soft on an empty id. It is not
-    validated here — the handle functions reject unsafe ids themselves, and the
-    task-claim holder only digests the id.
-    """
+def _first_set(explicit: str | None, names: tuple[str, ...]) -> str:
     if explicit:
         return explicit
-    for name in SESSION_ID_ENV_VARS:
+    for name in names:
         value = os.environ.get(name)
         if value:
             return value
     return ""
+
+
+def current_session_id(explicit: str | None = None) -> str:
+    """The calling agent session's id, as the workflow-session handle keys it.
+
+    Precedence: ``explicit`` (a caller-supplied value, e.g. the Codex Stop
+    hook's payload id) > ``$CLAUDE_SESSION_ID`` > ``$PI_SESSION_ID`` >
+    ``$CODEX_SESSION_ID`` > ``$WITAN_SESSION_ID``.
+    Empty strings are treated as unset at every level, so an exported-but-empty
+    variable falls through to the next source rather than masking it. Returns
+    ``""`` when none is known.
+
+    Returns ``""`` rather than None so callers can pass the result straight to
+    :func:`read_handle` & co., which fail soft on an empty id. It is not
+    validated here — the handle functions reject unsafe ids themselves.
+    """
+    return _first_set(explicit, HANDLE_SESSION_ID_ENV_VARS)
+
+
+def claim_session_id(explicit: str | None = None) -> str:
+    """The calling agent session's id, as a task claim's holder qualifies it.
+
+    Precedence: ``explicit`` (e.g. ``task_claim``'s ``session_id`` argument) >
+    ``$WITAN_SESSION_ID`` > ``$CLAUDE_SESSION_ID`` > ``$PI_SESSION_ID`` >
+    ``$CODEX_SESSION_ID``, empty strings treated as unset. Returns ``""`` when
+    none is known. Only digested, so not validated.
+    """
+    return _first_set(explicit, SESSION_ID_ENV_VARS)
 
 
 # Session ids come from the environment (see SESSION_ID_ENV_VARS) and are interpolated

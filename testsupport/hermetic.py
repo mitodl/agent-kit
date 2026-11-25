@@ -153,6 +153,10 @@ _CLEARED = (
     # witan.session_state.current_session_id), so a suite run from inside a Pi
     # bash command would otherwise pick up the live Pi session. Codex's is the
     # last fallback, and is set in every command a Codex shell tool runs.
+    # WITAN_SESSION_ID outranks all three for a claim's holder (and is the
+    # handle's last fallback), and a runner sets it for every worker it
+    # starts, so a suite run by a worker would take that worker's id.
+    "WITAN_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "PI_SESSION_ID",
     "CODEX_SESSION_ID",

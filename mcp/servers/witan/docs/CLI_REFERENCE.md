@@ -100,7 +100,7 @@ Two arguments the deployed server cannot resolve for itself are filled in
 client-side before dispatch: `repo` (it has no git checkout) and `session_slug`
 (the protocol carries no session state, and a replica shares no filesystem with
 your agent). The latter comes from the handle `witan session start` parked under
-the agent session id (`$CLAUDE_SESSION_ID`, else `$PI_SESSION_ID`), so memories written remotely keep their `SessionProduced`
+the agent session id (`$CLAUDE_SESSION_ID`, else `$PI_SESSION_ID`, else `$CODEX_SESSION_ID`, else `$WITAN_SESSION_ID`), so memories written remotely keep their `SessionProduced`
 provenance. Pass either explicitly to override.
 
 ```bash

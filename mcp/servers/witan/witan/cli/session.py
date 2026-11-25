@@ -58,7 +58,7 @@ def session_start(
     session_id:
         Unique id for the session.
         Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else
-        ``$CODEX_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
+        ``$CODEX_SESSION_ID``, else ``$WITAN_SESSION_ID``, else a generated uuid. The Stop hook keys its state file on this.
     repo:
         Repo URI to scope the session to (default: auto-detected).
     tags:

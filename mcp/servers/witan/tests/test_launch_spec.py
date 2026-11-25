@@ -135,8 +135,10 @@ def test_a_task_spec_has_every_field_a_client_runs(folders):
     # The warning advises a session id, and a bare launch claim is the intent.
     assert "warning" not in spec["claim"]
     assert spec["claim"]["claimed_at"] == _CLAIMED["claimed_at"]
-    # No session id travels down (ADR 0012, "Why the spec carries no session id").
-    assert "WITAN_SESSION_ID" not in json.dumps(spec)
+    # No session id travels down (ADR 0012, "Why the spec carries no session
+    # id"): the runner's per-slot variable is only ever stripped.
+    assert "WITAN_SESSION_ID" not in json.dumps(spec["env"])
+    assert "WITAN_SESSION_ID" in spec["unset_env"]
 
 
 def test_the_prompt_states_the_lease_the_server_reported(folders):

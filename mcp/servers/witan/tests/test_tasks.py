@@ -1347,6 +1347,48 @@ def test_parallel_sessions_of_one_person_do_not_share_a_claim(server, monkeypatc
 
 
 @requires_omnigraph
+@pytest.mark.parametrize(
+    "harness_env",
+    [
+        # Copilot and OpenCode export no session id, so without the runner's id
+        # every worker claimed as the bare author and renewed the others' leases.
+        {},
+        # A runner started from inside a Claude session hands that one id to
+        # every worker; the slot id has to outrank it.
+        {"CLAUDE_SESSION_ID": "aaaaaaaa-1111-2222-3333-444444444444"},
+    ],
+    ids=["no-harness-id", "shared-claude-id"],
+)
+def test_runner_worker_slots_get_distinct_claim_holders(
+    server, monkeypatch, harness_env
+):
+    """Two workers a runner starts under one author, each with its own
+    ``$WITAN_SESSION_ID``, must not share a claim holder."""
+    from witan import server as srv
+    from witan.session_state import SESSION_ID_ENV_VARS
+
+    for name in SESSION_ID_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in harness_env.items():
+        monkeypatch.setenv(name, value)
+    t = server.task_create(title="two worker slots", description="x")
+
+    monkeypatch.setenv("WITAN_SESSION_ID", "runner-slot-1")
+    first = server.task_claim(t["slug"])
+    monkeypatch.setenv("WITAN_SESSION_ID", "runner-slot-2")
+    second = server.task_claim(t["slug"])
+
+    assert first["claimed"] is True
+    assert first["assignee"] == (
+        f"{srv._current_author()}#{srv._session_suffix('runner-slot-1')}"
+    )
+    assert second["claimed"] is False
+    assert second["reason"] == "held"
+    assert second["held_by"] == first["assignee"]
+    assert server.task_get(t["slug"])["assignee"] == first["assignee"]
+
+
+@requires_omnigraph
 def test_a_session_renews_a_bare_claim_its_person_made(server, monkeypatch):
     """``witan task run`` claims before launch, with no session id to give.
 

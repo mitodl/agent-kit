@@ -47,6 +47,9 @@ desc = "Optional AWS region supplied with `WITAN_S3_PROFILE`. Sets both `AWS_REG
 [section.vars.WITAN_AUTHOR]
 desc = "Attribution written to every node you create. Falls back to `git config user.name`, then `$USER`."
 
+[section.vars.WITAN_SESSION_ID]
+desc = "Agent session id for task claims, read ahead of `$CLAUDE_SESSION_ID`, `$PI_SESSION_ID` and `$CODEX_SESSION_ID` for a claim's holder (`<author>#<digest>`) and the CLI proxy's `session_id`. An explicit `session_id` argument still wins. The workflow-session handle reads it last, after the harness ids, so a harness with no id of its own still gets one. A runner sets one per worker slot so parallel workers under one author never share a claim. You do not set it yourself, and a `witan task run` launch strips an inherited one."
+
 [section.vars.WITAN_CONFIG]
 default = "~/.config/witan/config.toml"
 desc = "Path to the config file. Both `witan` and `witan code` read the same file. An empty or whitespace-only value counts as unset, so an unexpanded `$SOME_UNSET_VAR` does not silently redirect you to a file named `$SOME_UNSET_VAR`."
