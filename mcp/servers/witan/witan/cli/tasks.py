@@ -899,6 +899,7 @@ def task_run(
                 _run_prompt(
                     t,
                     claimed=claim,
+                    lease_seconds=claims.get(t["slug"], {}).get("lease_seconds"),
                     memories=_prompt_memories(s, t["slug"], claims.get(t["slug"])),
                     overlaps=claims.get(t["slug"], {}).get("overlaps"),
                 )

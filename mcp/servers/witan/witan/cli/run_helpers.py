@@ -334,11 +334,12 @@ def _run_prompt(
     # `task_claim` renews it, which the agent can only do if it is told to.
     # The length comes from the claim, never a local constant: a deployment
     # sets its own, and this process is only its client.
-    lapses = (
-        f"lapses after {lease_seconds // 60} minutes"
-        if lease_seconds
-        else "lapses after the lease task_claim reports as lease_seconds"
-    )
+    if lease_seconds is None:
+        lapses = "lapses after the lease task_claim reports as lease_seconds"
+    elif lease_seconds % 60 == 0:
+        lapses = f"lapses after {lease_seconds // 60} minutes"
+    else:
+        lapses = f"lapses after {lease_seconds} seconds"
     held = (
         f"This task is claimed for you. The claim is a lease, not a lock: it "
         f"{lapses} and nothing renews it for you, "

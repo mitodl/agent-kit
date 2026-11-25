@@ -1,5 +1,7 @@
 """End-to-end tests for CLI create subcommands and graph visualization."""
 
+import pytest
+
 from .conftest import requires_omnigraph
 
 
@@ -1159,6 +1161,26 @@ def test_the_task_prompt_points_at_lease_seconds_when_no_claim_reported_one():
     assert "again to renew" in prompt
 
 
+@pytest.mark.parametrize(
+    ("lease_seconds", "expected"),
+    [(7200, "lapses after 120 minutes"), (90, "lapses after 90 seconds")],
+)
+def test_the_task_prompt_states_a_lease_that_is_not_whole_minutes_in_seconds(
+    lease_seconds, expected
+):
+    from witan.cli.run_helpers import _run_prompt
+
+    # The server accepts any positive whole number of seconds; flooring to
+    # minutes would tell an agent holding a 90s lease it lapses after 1 minute.
+    prompt = _run_prompt(
+        {"slug": "tk-a", "title": "T", "type": "bug"},
+        claimed=True,
+        lease_seconds=lease_seconds,
+    )
+
+    assert expected in prompt
+
+
 def test_the_task_prompt_says_to_claim_when_run_did_not():
     from witan.cli.run_helpers import _run_prompt
 
@@ -1216,3 +1238,33 @@ def test_consolidated_no_claim_run_does_not_claim_to_have_claimed(server, monkey
         assert f'task_claim(slug="{t["slug"]}")' in prompt
         assert server.task_get(t["slug"])["status"] == "open"
     assert "claimed for you" not in prompt
+
+
+@requires_omnigraph
+def test_consolidated_claimed_run_states_each_claims_lease(server, monkeypatch):
+    """The consolidated launch holds a claim per task, so each prompt names its lease."""
+    from witan import config as cfg_module
+    from witan.cli import run_helpers, tasks
+
+    _patch_server(monkeypatch, server)
+    launched = []
+    monkeypatch.setattr(
+        run_helpers, "_launch_agent", lambda *a, **kw: launched.append(a)
+    )
+    monkeypatch.setattr(tasks, "_launch_agent", lambda *a, **kw: launched.append(a))
+    cfg = cfg_module.load()
+    monkeypatch.setattr(cfg_module, "load", lambda **kw: cfg)
+
+    picked = [
+        server.task_create(title="first", description="x"),
+        server.task_create(title="second", description="x"),
+    ]
+    monkeypatch.setattr(tasks, "_pick_items", lambda items, render: picked)
+    # "1" = consolidate into a single agent session.
+    monkeypatch.setattr(tasks.Prompt, "ask", lambda *a, **kw: "1")
+
+    tasks.task_run(claim=True)
+
+    prompt = launched[0][3]
+    assert prompt.count("lapses after 60 minutes") == len(picked)
+    assert "reports as lease_seconds" not in prompt
