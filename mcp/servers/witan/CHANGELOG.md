@@ -8,6 +8,54 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.55.0] - 2026-11-25
+
+### Added
+
+- The claim lease length is server configuration: `WITAN_CLAIM_LEASE_SECONDS`,
+  or `[claims].lease_seconds` in config.toml, defaulting to 3600. A value that
+  is not a positive whole number of seconds fails the server's start.
+- A granted `task_claim` returns `lease_seconds`, the lease the server
+  enforces, so a client renewing a lease schedules from the server's value.
+
+- A fan-out policy on workflow projects, the data a `witan runner` reads to
+  decide where to claim: `fanout_enabled`, `fanout_concurrency` (the cap on
+  runner-claimed tasks in flight across all runners, 1 when unset),
+  `fanout_harnesses` (any of `claude`, `pi`, `codex`, `copilot`, `opencode`;
+  unset allows any) and `fanout_labels` (labels a runner must advertise), with
+  `fanout_set_by` recording who last changed it. `workflow_project_create`
+  and `workflow_project_update` take all four, and `witan project create` /
+  `update` take `--fanout/--no-fanout`, `--fanout-concurrency`,
+  `--fanout-harness` and `--fanout-label`. Each field is written by its own
+  mutation, so an edit to one cannot turn fan-out back on from a stale read.
+- `workflow_project_list(fanout_enabled=True)` and `witan projects --fanout`
+  list the active projects with fan-out on. `witan.fanout.FanoutPolicy` reads
+  the policy off a project row and `admits` a runner's harnesses and labels;
+  a project that never set the policy reads as disabled, so a runner never
+  claims from it.
+
+### Changed
+
+- `witan lsp`'s `witan.runTask` (with `claim: false`) and `witan.runProject`
+  can now return `handoff: true`, when the editor's environment carries none
+  of `WITAN_TARGET`, `CLAUDE_PROJECT_DIR` or `WITAN_REPO`, the server was not
+  started with `--target`, and the window has one folder. The check reads the
+  editor's environment from witan-core's `CommandContext.editor_environ`
+  rather than this process's, which `serve()` has already stripped, so the VS
+  Code client offers its Copilot and Claude Code handoffs. Requires witan-core
+  0.62.0 or later.
+
+- `witan task run`'s prompt states the lease the claim reported instead of the
+  launcher's own 60-minute constant, and `witan project run`'s prompt points
+  the agent at `lease_seconds` in its own claim. A launcher talking to a
+  deployment no longer tells its agent the wrong lease.
+
+### Notes
+
+- The schema change is additive (five optional `WorkflowProject`
+  properties). A deployed graph needs the schema applied before the image
+  that writes them.
+
 ## [0.54.0] - 2026-11-24
 
 ### Added

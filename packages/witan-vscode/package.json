@@ -2,7 +2,7 @@
 	"name": "witan",
 	"displayName": "witan",
 	"description": "Ready work, task and project launches, and code-graph features from the witan language server.",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"publisher": "mitol",
 	"license": "BSD-3-Clause",
 	"repository": {
