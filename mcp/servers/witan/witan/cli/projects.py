@@ -11,7 +11,8 @@ from rich.prompt import Prompt
 from witan_core.client_instance import CLIENT_INSTANCE_ENV, new_client_instance
 
 from .. import config as cfg_module
-from .. import envelope, live_pr
+from .. import envelope, fanout, live_pr
+from ..fanout import Harness
 from ._common import (
     _STATUS_STYLE,
     ProjectStatusFilter,
@@ -55,6 +56,7 @@ def projects(
     repo: str | None = None,
     status: ProjectStatusFilter = "active",
     all_repos: bool = False,
+    fanout: bool = False,
     limit: int = 50,
 ) -> None:
     """List workflow projects (default: active in the current repo).
@@ -70,6 +72,8 @@ def projects(
         Filter by active | completed | abandoned, or all for every status.
     all_repos:
         Span every repo in the graph.
+    fanout:
+        Only active projects with fan-out enabled, the ones runners claim from.
     limit:
         Max rows.
     """
@@ -78,7 +82,14 @@ def projects(
     # The server reads status=None as every status; "all" is the CLI's
     # spelling of it, since an empty --status reaches the server as "".
     status_arg = None if status == "all" else status
-    rows = _fn(s.workflow_project_list)(status=status_arg, query=query, **repo_arg)
+    rows = _fn(s.workflow_project_list)(
+        # None, not False, when unset: the remote proxy drops None arguments,
+        # so a server older than the filter still answers a plain listing.
+        status=status_arg,
+        query=query,
+        fanout_enabled=fanout or None,
+        **repo_arg,
+    )
     rows = rows[:limit]
     matching = "" if query is None else f" matching '{query}'"
     detected_repo = (
@@ -112,12 +123,16 @@ def projects(
 
 
 def _print_envelope(p: dict) -> None:
-    """The project's autonomy envelope, in full, one item per line."""
+    """The project's autonomy envelope, in full, one item per line, then its
+    fan-out policy."""
     for key in envelope.KEYS:
         if p.get(key):
             console.print(f"  {esc(envelope.describe(p, key))}:")
             for item in p[key]:
                 console.print(f"    - {esc(item)}")
+    line = fanout.describe(p)
+    if line:
+        console.print(f"  {esc(line)}")
 
 
 def _project_show(slug: str) -> None:
@@ -388,6 +403,10 @@ def project_create(
     tags: list[str] | None = None,
     allow: list[str] | None = None,
     reserve: list[str] | None = None,
+    fanout: bool | None = None,
+    fanout_concurrency: int | None = None,
+    fanout_harness: list[Harness] | None = None,
+    fanout_label: list[str] | None = None,
 ) -> None:
     """Create a new workflow project.
 
@@ -411,6 +430,17 @@ def project_create(
         flag for each item; items are not comma-split.
     reserve:
         A decision kept for a human. Repeatable, like ``--allow``.
+    fanout:
+        Let ``witan runner`` processes claim this project's ready tasks.
+    fanout_concurrency:
+        Most runner-claimed tasks in flight at once, across all runners
+        (default 1).
+    fanout_harness:
+        A harness runners may start for this project. Repeatable; unset
+        allows any.
+    fanout_label:
+        A label a runner must advertise to claim from this project, e.g.
+        ``docker``. Repeatable.
     """
     s = _srv()
     repos = [repo] if repo else None
@@ -423,6 +453,10 @@ def project_create(
         tags=_split_csv(tags),
         preauthorized=allow,
         reserved_decisions=reserve,
+        fanout_enabled=fanout,
+        fanout_concurrency=fanout_concurrency,
+        fanout_harnesses=fanout_harness,
+        fanout_labels=fanout_label,
     )
     console.print(f"[green]Created project:[/green] [bold]{result['slug']}[/bold]")
     if result.get("repos"):
@@ -449,6 +483,10 @@ def project_update(
     status: str | None = None,
     allow: list[str] | None = None,
     reserve: list[str] | None = None,
+    fanout: bool | None = None,
+    fanout_concurrency: int | None = None,
+    fanout_harness: list[Harness] | None = None,
+    fanout_label: list[str] | None = None,
 ) -> None:
     """Correct a project's metadata after creation.
 
@@ -493,6 +531,17 @@ def project_update(
     reserve:
         Replace the decisions kept for a human. Repeatable;
         ``--empty-reserve`` clears the list.
+    fanout:
+        ``--fanout`` lets runners claim this project's ready tasks;
+        ``--no-fanout`` stops them.
+    fanout_concurrency:
+        Most runner-claimed tasks in flight at once, across all runners.
+    fanout_harness:
+        Replace the harnesses runners may start. Repeatable;
+        ``--empty-fanout-harness`` clears the list, which allows any.
+    fanout_label:
+        Replace the labels a runner must advertise. Repeatable;
+        ``--empty-fanout-label`` clears the list.
     """
     if status is not None and status not in ("active", "abandoned"):
         print_error(
@@ -519,6 +568,10 @@ def project_update(
         status=status,
         preauthorized=allow,
         reserved_decisions=reserve,
+        fanout_enabled=fanout,
+        fanout_concurrency=fanout_concurrency,
+        fanout_harnesses=fanout_harness,
+        fanout_labels=fanout_label,
     )
     if result is None:
         print_error(f"No project {slug}.")

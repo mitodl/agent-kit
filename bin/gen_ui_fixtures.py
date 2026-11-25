@@ -100,6 +100,10 @@ async def _seed(srv) -> dict[str, str]:
         description="A human-readable surface for the graph.",
         preauthorized=["Rebuild the UI bundle"],
         reserved_decisions=["Publishing a release"],
+        fanout_enabled=True,
+        fanout_concurrency=2,
+        fanout_harnesses=["claude", "pi"],
+        fanout_labels=["docker"],
     )
     epic = await call(
         "task_create",

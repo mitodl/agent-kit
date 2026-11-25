@@ -153,6 +153,15 @@ export interface WorkflowProjectCore {
 	 */
 	preauthorized_set_by: string | null;
 	reserved_decisions_set_by: string | null;
+	/** The fan-out policy runners read; `null` (never set) means off. */
+	fanout_enabled: boolean | null;
+	/** Cap on runner-claimed tasks in flight; `null` reads as 1. */
+	fanout_concurrency: number | null;
+	/** Harnesses a runner may start; `null` allows any. */
+	fanout_harnesses: string[] | null;
+	/** Labels a runner must advertise to claim from the project. */
+	fanout_labels: string[] | null;
+	fanout_set_by: string | null;
 }
 
 /** A row from `workflow_project_list`. */
@@ -604,6 +613,11 @@ const WORKFLOW_PROJECT_CORE: Record<string, Check> = {
 	reserved_decisions: strList,
 	preauthorized_set_by: nullable(str),
 	reserved_decisions_set_by: nullable(str),
+	fanout_enabled: nullable(bool),
+	fanout_concurrency: nullable(num),
+	fanout_harnesses: strList,
+	fanout_labels: strList,
+	fanout_set_by: nullable(str),
 };
 
 const WORKFLOW_PROJECT: Record<string, Check> = {

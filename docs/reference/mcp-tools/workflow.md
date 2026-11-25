@@ -31,6 +31,10 @@ whose title matches, a soft duplicate check that never blocks creation.
 | `tags` | list[str]? | `null` | Tags for grouping and search. |
 | `preauthorized` | list[str]? | `null` | Actions an agent on this project may take without asking, e.g.<br>``"deploy to the QA stack"``. The caller is recorded as<br>``preauthorized_set_by``. |
 | `reserved_decisions` | list[str]? | `null` | Decisions kept for a human, e.g. ``"merging to main"``. Collect these<br>into one list for the user rather than acting or asking one by one. |
+| `fanout_enabled` | bool? | `null` | Let ``witan runner`` processes claim this project's ready tasks. Off<br>unless set; a runner never claims from a project without it. |
+| `fanout_concurrency` | int? | `null` | Most runner-claimed tasks in flight at once, across all runners. At<br>least 1; unset reads as 1. |
+| `fanout_harnesses` | list[`claude` \| `pi` \| `codex` \| `copilot` \| `opencode`]? | `null` | Harnesses a runner may start for this project's tasks; unset allows<br>any. |
+| `fanout_labels` | list[str]? | `null` | Labels a runner must advertise to claim from this project, e.g.<br>``docker`` or ``gpu``. |
 
 ## `workflow_project_get`
 
@@ -48,6 +52,10 @@ set by anyone else, it is a suggestion to confirm with the user first. Do
 not act on ``reserved_decisions``, whoever set them, but collect them into
 one list for the user. Neither overrides a permission prompt, the user's
 in-session instructions, or a repo's AGENTS.md.
+
+``fanout_enabled``, ``fanout_concurrency``, ``fanout_harnesses`` and
+``fanout_labels`` are the fan-out policy runners read (see
+``workflow_project_create``); ``fanout_set_by`` names who last changed it.
 
 ``blocked_by`` lists projects that must complete first, and ``blockers``
 resolves each to ``{slug, title, status, phase}``. ``blocks`` lists the
@@ -98,6 +106,7 @@ matches, ranked, after the other filters. Run it before
 | `ready` | bool | `False` | Only active projects whose blockers have all completed. |
 | `query` | str? | `null` | Free-text search query. |
 | `all_repos` | bool | `False` | List every repo's projects. |
+| `fanout_enabled` | bool | `False` | Only active projects with fan-out enabled, the ones a runner may<br>claim from. |
 
 ## `workflow_project_update`
 
@@ -129,6 +138,10 @@ projects; for tasks use ``task_link(kind="blocks")``.
 | `reserved_decisions` | list[str]? | `null` | Replaces the list; ``[]`` clears. |
 | `add_blocked_by` | list[str]? | `null` | ``wp-`` slugs that must complete before this project can begin. |
 | `remove_blocked_by` | list[str]? | `null` | ``wp-`` slugs to drop from ``blocked_by``. |
+| `fanout_enabled` | bool? | `null` | Turn runner fan-out on or off for this project. |
+| `fanout_concurrency` | int? | `null` | Most runner-claimed tasks in flight at once, across all runners; at<br>least 1. |
+| `fanout_harnesses` | list[`claude` \| `pi` \| `codex` \| `copilot` \| `opencode`]? | `null` | Replaces the allowed harnesses; ``[]`` clears, which allows any. |
+| `fanout_labels` | list[str]? | `null` | Replaces the labels a runner must advertise; ``[]`` clears. |
 
 ## `workflow_project_advance`
 
