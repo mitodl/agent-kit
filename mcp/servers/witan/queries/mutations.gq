@@ -409,6 +409,8 @@ query insert_workflow_session(
     $harness: String?,
     $mode: String?,
     $harness_session_ref: String?,
+    $host: String?,
+    $cwd: String?,
     $state: String?,
     $event_log: String?
 ) {
@@ -427,6 +429,8 @@ query insert_workflow_session(
         harness: $harness,
         mode: $mode,
         harness_session_ref: $harness_session_ref,
+        host: $host,
+        cwd: $cwd,
         state: $state,
         event_log: $event_log
     }
@@ -473,6 +477,8 @@ query update_workflow_session_fanout(
     $harness: String?,
     $mode: String?,
     $harness_session_ref: String?,
+    $host: String?,
+    $cwd: String?,
     $state: String?,
     $event_log: String?,
     $attach_endpoint: String?
@@ -484,6 +490,8 @@ query update_workflow_session_fanout(
             harness: $harness,
             mode: $mode,
             harness_session_ref: $harness_session_ref,
+            host: $host,
+            cwd: $cwd,
             state: $state,
             event_log: $event_log,
             attach_endpoint: $attach_endpoint

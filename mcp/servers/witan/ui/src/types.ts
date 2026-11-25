@@ -216,6 +216,8 @@ export interface WorkflowSession {
 	harness?: string | null;
 	mode?: "oneshot" | "resume" | "live" | null;
 	harness_session_ref?: string | null;
+	host?: string | null;
+	cwd?: string | null;
 	state?: "starting" | "running" | "exited" | "crashed" | "cancelled" | null;
 	event_log?: string | null;
 	attach_endpoint?: string | null;
@@ -770,6 +772,8 @@ export function isWorkflowSession(value: unknown): value is WorkflowSession {
 			harness: nullable(str),
 			mode: nullable(oneOf("oneshot", "resume", "live")),
 			harness_session_ref: nullable(str),
+			host: nullable(str),
+			cwd: nullable(str),
 			state: nullable(
 				oneOf("starting", "running", "exited", "crashed", "cancelled"),
 			),

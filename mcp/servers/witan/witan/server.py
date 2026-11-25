@@ -5554,6 +5554,8 @@ _FANOUT_FIELDS = (
     "harness",
     "mode",
     "harness_session_ref",
+    "host",
+    "cwd",
     "state",
     "event_log",
     "attach_endpoint",
@@ -6971,6 +6973,8 @@ def workflow_session_start(
     harness: str | None = None,
     mode: SessionMode | None = None,
     harness_session_ref: str | None = None,
+    host: str | None = None,
+    cwd: str | None = None,
     state: SessionState | None = None,
     event_log: str | None = None,
 ) -> dict:
@@ -7012,7 +7016,8 @@ def workflow_session_start(
     task_slug:
         The ``tk-`` task a runner started this session to work.
     runner:
-        The runner that launched the session (host and slot).
+        A label for the runner and slot that launched the session. Not a
+        hostname; ``host`` is.
     harness:
         The coding harness running it, e.g. ``claude`` or ``pi``.
     mode:
@@ -7020,6 +7025,12 @@ def workflow_session_start(
         earlier harness session) or ``live`` (takes input while running).
     harness_session_ref:
         The harness's own session id, which resumes it on the same host.
+    host:
+        Hostname the harness runs on. A harness keeps its sessions per host,
+        so only this host can resume the session.
+    cwd:
+        The worktree path the harness runs in. A harness also keeps its
+        sessions per working directory, so a resume has to run here.
     state:
         Where the session's process is: ``starting``, ``running``, or
         ``exited``/``crashed``/``cancelled`` once it stopped.
@@ -7042,6 +7053,8 @@ def workflow_session_start(
         "harness": harness,
         "mode": mode,
         "harness_session_ref": harness_session_ref,
+        "host": host,
+        "cwd": cwd,
         "state": state,
         "event_log": event_log,
     }
@@ -7180,7 +7193,8 @@ def workflow_session_update(
     For a ``witan runner``: the harness's process changes state and reports its
     own session id after ``workflow_session_start`` has already been called.
     Only the fields passed change; omitted ones keep their stored value.
-    Works on an ended session too, since a Stop hook may close the session
+    ``host`` and ``cwd`` are set by ``workflow_session_start`` only, since a
+    session cannot move hosts or worktrees. Works on an ended session too, since a Stop hook may close the session
     before its runner sees the process exit. Returns the session's fan-out
     fields as stored after the update.
 

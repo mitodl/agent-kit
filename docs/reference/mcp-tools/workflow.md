@@ -227,10 +227,12 @@ session to work one task; an agent linking its own session omits them.
 | `tags` | list[str]? | `null` | Optional tags. |
 | `all_repos` | bool | `False` | Record the session under no repo; see instructions. |
 | `task_slug` | str? | `null` | The ``tk-`` task a runner started this session to work. |
-| `runner` | str? | `null` | The runner that launched the session (host and slot). |
+| `runner` | str? | `null` | A label for the runner and slot that launched the session. Not a<br>hostname; ``host`` is. |
 | `harness` | str? | `null` | The coding harness running it, e.g. ``claude`` or ``pi``. |
 | `mode` | `oneshot` \| `resume` \| `live`? | `null` | ``oneshot`` (one prompt run to completion), ``resume`` (continues an<br>earlier harness session) or ``live`` (takes input while running). |
 | `harness_session_ref` | str? | `null` | The harness's own session id, which resumes it on the same host. |
+| `host` | str? | `null` | Hostname the harness runs on. A harness keeps its sessions per host,<br>so only this host can resume the session. |
+| `cwd` | str? | `null` | The worktree path the harness runs in. A harness also keeps its<br>sessions per working directory, so a resume has to run here. |
 | `state` | `starting` \| `running` \| `exited` \| `crashed` \| `cancelled`? | `null` | Where the session's process is: ``starting``, ``running``, or<br>``exited``/``crashed``/``cancelled`` once it stopped. |
 | `event_log` | str? | `null` | Path or URI of the session's JSONL event log on the runner's host. |
 
@@ -241,7 +243,8 @@ Record a running fan-out session's progress.
 For a ``witan runner``: the harness's process changes state and reports its
 own session id after ``workflow_session_start`` has already been called.
 Only the fields passed change; omitted ones keep their stored value.
-Works on an ended session too, since a Stop hook may close the session
+``host`` and ``cwd`` are set by ``workflow_session_start`` only, since a
+session cannot move hosts or worktrees. Works on an ended session too, since a Stop hook may close the session
 before its runner sees the process exit. Returns the session's fan-out
 fields as stored after the update.
 

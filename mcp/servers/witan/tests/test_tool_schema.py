@@ -168,3 +168,15 @@ def test_fanout_state_and_mode_admit_exactly_the_schema_enums():
     # non-terminal ones itself.
     assert _enum_values(params[("workflow_session_end", "state")]) == state
     assert _enum_values(params[("workflow_session_start", "mode")]) == mode
+
+
+def test_a_session_cannot_move_hosts_or_worktrees():
+    """``host`` and ``cwd`` locate the harness's stored session for a resume.
+    They are set at start and nothing may change them afterwards."""
+    params = {(tool, param) for tool, param, _ in _tool_properties()}
+
+    assert {("workflow_session_start", "host"), ("workflow_session_start", "cwd")} <= (
+        params
+    )
+    assert ("workflow_session_update", "host") not in params
+    assert ("workflow_session_update", "cwd") not in params

@@ -1065,6 +1065,8 @@ _FANOUT_START = {
     "runner": "laptop/slot-1",
     "harness": "claude",
     "mode": "oneshot",
+    "host": "laptop.example",
+    "cwd": "/home/me/code/repo.worktrees/fanout-tk-x",
     "state": "starting",
     "event_log": "/home/me/.local/state/witan/fanout/ws-x.jsonl",
 }
@@ -1103,6 +1105,9 @@ def test_fanout_session_start_update_end_round_trip(server, tmp_state_dir):
     assert updated["harness_session_ref"] == "claude-abc"
     assert updated["runner"] == "laptop/slot-1"
     assert updated["event_log"] == _FANOUT_START["event_log"]
+    # What a same-host resume checks against, fixed at start.
+    assert updated["host"] == "laptop.example"
+    assert updated["cwd"] == _FANOUT_START["cwd"]
 
     server.workflow_session_end(slug, summary="worker exited", state="exited")
     [row] = server.workflow_session_list(task_slug=task)

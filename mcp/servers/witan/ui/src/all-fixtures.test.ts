@@ -108,6 +108,8 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 		"harness",
 		"mode",
 		"harness_session_ref",
+		"host",
+		"cwd",
 		"state",
 		"event_log",
 		"attach_endpoint",
