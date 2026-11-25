@@ -30,7 +30,7 @@ from .acp import (
     text,
     witan_meta,
 )
-from .base import Codec, Exit, SessionRef, SessionSpec, Unsupported
+from .base import Codec, Exit, SessionRef, Unsupported
 
 STDERR_TAIL_LINES = 50
 UNPARSED_LINE_CHARS = 2000
@@ -112,6 +112,11 @@ class StdioTransport:
             thread.join()
         return returncode
 
+    def kill(self) -> int:
+        """Kill the harness and reap it, for a session that can no longer drain it."""
+        self._proc.kill()
+        return self.wait()
+
     @property
     def stderr_tail(self) -> str:
         return "".join(self._stderr)
@@ -124,7 +129,11 @@ class EventLog:
     reads a running worker's last activity from this file.
     """
 
+    RESERVED_META = frozenset({"seq", "ts"})
+
     def __init__(self, path: Path, *, meta: Mapping[str, Any]) -> None:
+        if reserved := self.RESERVED_META & meta.keys():
+            raise ValueError(f"event log meta cannot set {sorted(reserved)}")
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._meta = dict(meta)
@@ -154,11 +163,14 @@ class EventLog:
 
 def read_event_log(path: Path) -> list[SessionNotification]:
     """Every notification in an event log, in the order written."""
-    return [
-        SessionNotification.model_validate_json(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    # Not splitlines(): it also splits on U+2028 and the like, which the
+    # writer leaves unescaped inside JSON strings.
+    with path.open(encoding="utf-8") as stream:
+        return [
+            SessionNotification.model_validate_json(line)
+            for line in stream
+            if line.strip()
+        ]
 
 
 class SubprocessSession:
@@ -166,9 +178,12 @@ class SubprocessSession:
 
     The pump writes each notification to the event log as it arrives, so the
     harness never stalls on a full stdout pipe and the log stays current
-    whether or not anyone iterates ``events()``. ``events()`` is
-    single-consumer and yields every notification from the start; ``wait()``
-    alone is enough for a runner that only wants the outcome.
+    whether or not anyone iterates ``events()``. When stdout closes, the pump
+    reaps the harness and writes the ``exited`` update, so a log reader sees
+    the end without the runner calling ``wait()``. ``events()`` is
+    single-consumer and yields every notification from the start through
+    ``exited``; ``wait()`` alone is enough for a runner that only wants the
+    outcome.
     """
 
     def __init__(
@@ -177,16 +192,17 @@ class SubprocessSession:
         ref: SessionRef,
         transport: StdioTransport,
         codec: Codec,
-        spec: SessionSpec,
+        log: EventLog,
         prompt: str,
         resumed: bool,
     ) -> None:
         self.ref = ref
         self._transport = transport
         self._codec = codec
-        self._log = EventLog(spec.event_log, meta={"harness": ref.harness, **spec.meta})
+        self._log = log
         self._queue: queue.SimpleQueue[SessionNotification | None] = queue.SimpleQueue()
         self._exit: Exit | None = None
+        self._failure: Exception | None = None
         self._emit(
             SessionInfoUpdate(
                 meta=witan_meta(
@@ -223,8 +239,38 @@ class SubprocessSession:
                     self.ref = replace(self.ref, harness_session_ref=reported)
                 for update in updates:
                     self._emit(update)
+            self._finish()
+        except Exception as exc:  # noqa: BLE001 -- re-raised by wait()
+            # Nothing drains stdout any more, so the harness would block on a
+            # full pipe; wait() raises this instead of returning an Exit.
+            self._failure = exc
+            self._transport.kill()
         finally:
+            self._log.close()
             self._queue.put(None)
+
+    def _finish(self) -> None:
+        returncode = self._transport.wait()
+        codec = self._codec
+        self._exit = Exit(
+            ref=self.ref,
+            returncode=returncode,
+            stop_reason=codec.stop_reason,
+            error=codec.error,
+            usage=dict(codec.usage),
+            stderr_tail=self._transport.stderr_tail,
+        )
+        self._emit(
+            SessionInfoUpdate(
+                meta=witan_meta(
+                    lifecycle="exited",
+                    returncode=returncode,
+                    stop_reason=codec.stop_reason,
+                    error=codec.error,
+                    usage=dict(codec.usage),
+                )
+            )
+        )
 
     def events(self) -> Iterator[SessionNotification]:
         while (notification := self._queue.get()) is not None:
@@ -245,36 +291,25 @@ class SubprocessSession:
                     description=line.rstrip("\n")[:UNPARSED_LINE_CHARS],
                 )
             ]
-        return self._codec.decode(record)
+        try:
+            return self._codec.decode(record)
+        # One record the codec can't read (e.g. a TodoWrite with a status
+        # outside ACP's) must not stop the pump that drains the harness.
+        except Exception as exc:  # noqa: BLE001 -- logged as a notice
+            return [
+                Notice(
+                    severity="error",
+                    title="harness output the codec could not decode",
+                    description=f"{type(exc).__name__}: {exc}"[:UNPARSED_LINE_CHARS],
+                )
+            ]
 
     def send(self, message: str) -> None:
         raise Unsupported(f"{self.ref.harness} has no live input in one-shot mode")
 
     def wait(self) -> Exit:
-        if self._exit is not None:
-            return self._exit
         self._pump.join()
-        returncode = self._transport.wait()
-        codec = self._codec
-        self._exit = Exit(
-            ref=self.ref,
-            returncode=returncode,
-            stop_reason=codec.stop_reason,
-            error=codec.error,
-            usage=dict(codec.usage),
-            stderr_tail=self._transport.stderr_tail,
-        )
-        self._log.write(
-            self.ref.harness_session_ref,
-            SessionInfoUpdate(
-                meta=witan_meta(
-                    lifecycle="exited",
-                    returncode=returncode,
-                    stop_reason=codec.stop_reason,
-                    error=codec.error,
-                    usage=dict(codec.usage),
-                )
-            ),
-        )
-        self._log.close()
+        if self._failure is not None:
+            raise self._failure
+        assert self._exit is not None
         return self._exit

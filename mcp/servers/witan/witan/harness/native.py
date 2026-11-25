@@ -16,7 +16,13 @@ from typing import Any, ClassVar
 
 from ..session_state import SESSION_ID_ENV_VARS
 from .base import Capability, Codec, ResumeUnavailable, SessionRef, SessionSpec
-from .transport import StdioTransport, SubprocessSession, agent_environ, this_host
+from .transport import (
+    EventLog,
+    StdioTransport,
+    SubprocessSession,
+    agent_environ,
+    this_host,
+)
 
 CLIP_CHARS = 4000
 """The most characters of tool input or output an event keeps. The event log
@@ -110,20 +116,30 @@ class CliAdapter(ABC):
     def _launch(
         self, argv: list[str], spec: SessionSpec, ref: SessionRef, *, resumed: bool
     ) -> SubprocessSession:
-        transport = StdioTransport(
-            argv,
-            cwd=ref.cwd,
-            env=agent_environ(
-                spec.env,
-                [*SESSION_ID_ENV_VARS, *self.parent_session_env, *spec.unset_env],
-            ),
-            stdin_text=self.stdin_prompt(spec),
-        )
-        return SubprocessSession(
-            ref=ref,
-            transport=transport,
-            codec=self.codec(ref.cwd),
-            spec=spec,
-            prompt=spec.prompt,
-            resumed=resumed,
-        )
+        # The log opens first, so a log that can't be written stops the run
+        # before there is a harness editing the worktree with no handle to it.
+        log = EventLog(spec.event_log, meta={"harness": self.name, **spec.meta})
+        transport: StdioTransport | None = None
+        try:
+            transport = StdioTransport(
+                argv,
+                cwd=ref.cwd,
+                env=agent_environ(
+                    spec.env,
+                    [*SESSION_ID_ENV_VARS, *self.parent_session_env, *spec.unset_env],
+                ),
+                stdin_text=self.stdin_prompt(spec),
+            )
+            return SubprocessSession(
+                ref=ref,
+                transport=transport,
+                codec=self.codec(ref.cwd),
+                log=log,
+                prompt=spec.prompt,
+                resumed=resumed,
+            )
+        except BaseException:
+            if transport is not None:
+                transport.kill()
+            log.close()
+            raise

@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -54,7 +55,7 @@ from witan.harness.acp import (
 )
 from witan.harness.claude import ClaudeCodec
 from witan.harness.pi import PiCodec
-from witan.harness.transport import this_host
+from witan.harness.transport import EventLog, this_host
 
 FIXTURES = Path(__file__).parent / "fixtures" / "harness"
 FIXTURE_CWD = Path("/work/wt")
@@ -596,3 +597,142 @@ def test_live_pi(tmp_path):
     _live_round_trip(
         PiAdapter(), _live_spec(tmp_path, os.environ.get("WITAN_HARNESS_LIVE_PI_MODEL"))
     )
+
+
+def _bad_todowrite_then(fixture: str, tmp_path: Path, pad_kib: int) -> Path:
+    """``fixture`` preceded by a TodoWrite the codec rejects and enough
+    output after it to fill a pipe nobody drains."""
+    bad = {
+        "type": "assistant",
+        "message": {
+            "id": "m",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "t-bad",
+                    "name": "TodoWrite",
+                    "input": {"todos": [{"content": "x", "status": "bogus"}]},
+                }
+            ],
+        },
+    }
+    pad = json.dumps({"type": "rate_limit_event", "pad": "x" * 1024}) + "\n"
+    path = tmp_path / "bad_then_start.jsonl"
+    path.write_text(
+        json.dumps(bad) + "\n" + pad * pad_kib + (FIXTURES / fixture).read_text()
+    )
+    return path
+
+
+def _wait_within(session, seconds: float):
+    outcome: dict = {}
+
+    def run() -> None:
+        try:
+            outcome["exit"] = session.wait()
+        except Exception as exc:  # noqa: BLE001 -- handed back to the test
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        pytest.fail(f"wait() did not return within {seconds}s")
+    return outcome
+
+
+def test_a_line_the_codec_rejects_is_a_notice_and_draining_continues(
+    stand_in, tmp_path
+):
+    executable, spec, _ = stand_in
+    fixture = _bad_todowrite_then("claude_start.jsonl", tmp_path, pad_kib=256)
+    session = ClaudeAdapter(executable).start(spec(str(fixture)))
+
+    outcome = _wait_within(session, 30)
+
+    assert outcome["exit"].ok, outcome["exit"]
+    notices = [
+        n.update
+        for n in read_event_log(spec(str(fixture)).event_log)
+        if isinstance(n.update, Notice)
+    ]
+    assert notices[0].severity == "error"
+    assert notices[0].title == "harness output the codec could not decode"
+    assert "ValidationError" in notices[0].description
+
+
+def test_a_pump_that_cannot_write_the_log_reaps_the_harness_and_raises(
+    stand_in, monkeypatch
+):
+    executable, spec, _ = stand_in
+    start_spec = spec("claude_start.jsonl")
+    start_spec = replace(start_spec, env={**start_spec.env, "STAND_IN_PAD_KIB": "256"})
+    original = EventLog.write
+
+    def write(self, session_id, update):
+        # started and the prompt are written before the pump runs.
+        if self._seq >= 2:
+            raise OSError(28, "No space left on device")
+        return original(self, session_id, update)
+
+    monkeypatch.setattr(EventLog, "write", write)
+    session = ClaudeAdapter(executable).start(start_spec)
+
+    outcome = _wait_within(session, 30)
+
+    assert isinstance(outcome["error"], OSError)
+    assert session._transport._proc.returncode is not None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(
+            lambda s, tmp: replace(s, event_log=tmp / "a-file" / "session.jsonl"),
+            id="unwritable-log",
+        ),
+        pytest.param(
+            lambda s, tmp: replace(s, meta={"seq": 7}),
+            id="reserved-meta-key",
+        ),
+    ],
+)
+def test_a_session_that_cannot_log_never_launches_the_harness(
+    stand_in, tmp_path, monkeypatch, change
+):
+    executable, spec, _ = stand_in
+    (tmp_path / "a-file").write_text("")
+
+    def popen(*args, **kwargs):
+        pytest.fail("the harness was launched")
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    with pytest.raises((OSError, ValueError)):
+        ClaudeAdapter(executable).start(change(spec("claude_start.jsonl"), tmp_path))
+
+
+def test_events_alone_see_the_exit_and_so_does_the_log(stand_in):
+    executable, spec, _ = stand_in
+    start_spec = spec("claude_start.jsonl")
+    session = ClaudeAdapter(executable).start(start_spec)
+
+    events = list(session.events())
+
+    assert events[-1].update.meta["witan"]["lifecycle"] == "exited"
+    logged = read_event_log(start_spec.event_log)
+    assert logged[-1].update.meta["witan"]["lifecycle"] == "exited"
+    assert session.wait().ok
+
+
+def test_a_line_separator_inside_a_record_does_not_split_it(stand_in):
+    executable, spec, _ = stand_in
+    start_spec = replace(spec("claude_start.jsonl"), prompt="one two\x85three")
+    ClaudeAdapter(executable).start(start_spec).wait()
+
+    prompts = [
+        n.update
+        for n in read_event_log(start_spec.event_log)
+        if isinstance(n.update, UserMessageChunk)
+    ]
+    assert prompts[0].content.text == "one two\x85three"
