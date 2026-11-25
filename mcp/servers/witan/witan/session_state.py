@@ -33,30 +33,44 @@ logger = get_logger("witan.session_state")
 
 STATE_FILE_PREFIX = "workflow-session-"
 
-# The agent-session id variables, in precedence order. Claude Code exports
-# CLAUDE_SESSION_ID into every process it launches (hooks, the stdio MCP server).
+# The agent-session id variables, in precedence order. WITAN_SESSION_ID comes
+# from whatever started the agent rather than from a harness: a runner sets one
+# per worker slot, so parallel workers under one author get distinct claim
+# holders on every harness, including ones that export no id of their own
+# (Copilot, OpenCode). It comes first so a runner's id decides the same way
+# under every harness. Unset, the order below is unchanged. An editor launch
+# does not set one (ADR 0012, "Why the spec carries no session id"), and its
+# spec's `unset_env` strips an inherited one along with the rest of this tuple.
+#
+# Claude Code exports CLAUDE_SESSION_ID into every process it launches (hooks,
+# the stdio MCP server).
 # Pi exposes PI_SESSION_ID only to commands its `bash` tool runs, NOT to its own
 # process env (Pi core `dist/core/tools/bash.js` `resolveSpawnContext` sets it
 # per command from `ctx.sessionManager.getSessionId()`), so it reaches witan only
 # when something forwards it: the agent running `echo $PI_SESSION_ID` and passing
 # the value as an explicit argument, or the Pi workflow extension setting it on
-# the `witan session-checkpoint` child it spawns at shutdown. Claude comes first
-# so every existing Claude-keyed handle and holder string resolves exactly as
+# the `witan session-checkpoint` child it spawns at shutdown. Claude comes ahead
+# of Pi so every existing Claude-keyed handle and holder string resolves exactly as
 # before, even in a Claude session started from inside a Pi bash command.
 # Codex exports CODEX_SESSION_ID to the commands its shell tool runs
 # (codex-rs/core/src/exec_env.rs `inject_session_env`), and it is the same id
 # Codex puts in a hook's stdin `session_id`. Codex doesn't put that id in a
 # hook's environment (a hook only inherits whatever launched Codex), which is
 # why `witan session-checkpoint` reads it from stdin.
-SESSION_ID_ENV_VARS = ("CLAUDE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID")
+SESSION_ID_ENV_VARS = (
+    "WITAN_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "PI_SESSION_ID",
+    "CODEX_SESSION_ID",
+)
 
 
 def current_session_id(explicit: str | None = None) -> str:
     """The calling agent session's id, or ``""`` when none is known.
 
     Precedence: ``explicit`` (a caller-supplied value, e.g. an MCP tool's
-    ``session_id`` argument) > ``$CLAUDE_SESSION_ID`` > ``$PI_SESSION_ID`` >
-    ``$CODEX_SESSION_ID``.
+    ``session_id`` argument) > ``$WITAN_SESSION_ID`` > ``$CLAUDE_SESSION_ID`` >
+    ``$PI_SESSION_ID`` > ``$CODEX_SESSION_ID``.
     Empty strings are treated as unset at every level, so an exported-but-empty
     variable falls through to the next source rather than masking it.
 

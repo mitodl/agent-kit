@@ -95,10 +95,10 @@ export default function workflowContextExtension(pi: ExtensionAPI): void {
  * The checkpoint child's env: Pi's own, plus this session's `PI_SESSION_ID`
  * so `witan session-checkpoint` finds the handle `workflow_session_start`
  * parked under it. Only the child's copy is touched. Every id variable witan
- * reads is dropped from that copy first: witan prefers `CLAUDE_SESSION_ID`, and
- * any of them inherited from an enclosing session (Claude Code, Codex's shell
- * tool, or a parent Pi's bash tool) names a different session than the one
- * shutting down. When the id is unavailable the child gets none, so the close
+ * reads is dropped from that copy first: witan prefers `WITAN_SESSION_ID`, then
+ * `CLAUDE_SESSION_ID`, and any of them inherited from an enclosing session
+ * (a runner's worker slot, Claude Code, Codex's shell tool, or a parent Pi's
+ * bash tool) names a different id than the one the handle is parked under. When the id is unavailable the child gets none, so the close
  * no-ops instead of closing the enclosing session's handle.
  */
 function checkpointEnv(ctx: any): NodeJS.ProcessEnv {
@@ -109,6 +109,7 @@ function checkpointEnv(ctx: any): NodeJS.ProcessEnv {
 		sessionId = undefined;
 	}
 	const env: NodeJS.ProcessEnv = { ...process.env };
+	delete env.WITAN_SESSION_ID;
 	delete env.CLAUDE_SESSION_ID;
 	delete env.PI_SESSION_ID;
 	delete env.CODEX_SESSION_ID;

@@ -799,8 +799,8 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _resolve_session_slug(self) -> str | None:
         # The handle `witan session start` (or the local stdio server) parked
-        # under the agent session id ($CLAUDE_SESSION_ID, else $PI_SESSION_ID —
-        # see session_state.current_session_id). Sending it makes memories written through the
+        # under the agent session id ($WITAN_SESSION_ID, else $CLAUDE_SESSION_ID,
+        # else $PI_SESSION_ID — see session_state.current_session_id). Sending it makes memories written through the
         # deployment carry SessionProduced provenance, which the server cannot
         # derive on its own — it shares neither the filesystem nor the session id.
         handle = session_state.read_handle(session_state.current_session_id())

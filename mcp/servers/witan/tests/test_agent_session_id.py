@@ -3,8 +3,8 @@
 Everything that keys on "the current agent session" — the parked workflow
 session handle, the Stop hook's auto-close, the local-stdio provenance and
 task-claim fallbacks, the remote proxy's injected ``session_id`` — resolves it
-through ``session_state.current_session_id``: an explicit value, else
-``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``.
+through ``session_state.current_session_id``: an explicit value, else a
+runner's ``$WITAN_SESSION_ID``, else ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else ``$CODEX_SESSION_ID``.
 Claude-keyed behaviour must be byte-identical to what it was before Pi was a
 source; Pi and Codex must get the same auto-close Claude does. Codex's Stop hook
 has no session variable, so ``witan session-checkpoint`` reads the id from the
@@ -65,6 +65,28 @@ def test_codex_id_is_the_last_fallback(monkeypatch):
 
     monkeypatch.setenv("PI_SESSION_ID", PI_SID)
     assert session_state.current_session_id() == PI_SID
+
+
+def test_a_runners_id_beats_every_harness_id(monkeypatch):
+    """A runner sets ``$WITAN_SESSION_ID`` per worker slot, and it has to decide
+    under every harness, including one that exports an id of its own."""
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+    monkeypatch.setenv("PI_SESSION_ID", PI_SID)
+    monkeypatch.setenv("CODEX_SESSION_ID", CODEX_SID)
+    assert session_state.current_session_id() == "slot-1"
+    assert session_state.current_session_id("explicit-1") == "explicit-1"
+
+    monkeypatch.setenv("WITAN_SESSION_ID", "")
+    assert session_state.current_session_id() == CLAUDE_SID
+
+
+def test_remote_proxy_sends_the_runners_id(monkeypatch):
+    from witan.remote.proxy import RemoteServerProxy
+
+    monkeypatch.setenv("WITAN_SESSION_ID", "slot-1")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CLAUDE_SID)
+    assert RemoteServerProxy._resolve_session_id(None) == "slot-1"
 
 
 def test_empty_values_fall_through(monkeypatch):
