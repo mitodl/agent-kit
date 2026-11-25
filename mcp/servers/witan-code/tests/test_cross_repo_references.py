@@ -153,6 +153,30 @@ def test_the_package_name_matches_only_a_definition_the_package_re_exports(
 
 
 @requires_stack
+def test_the_package_name_follows_the_import_that_binds_it_last(stores):
+    """Editing only the `__init__`: a later star import of `helpers` takes
+    `max_or_none` from `collections`, and a lazy import inside a function
+    re-exports nothing."""
+    from witan_code import indexer
+
+    cfg, _, lib = stores
+    init = lib / "src/common/mitol/common/utils/__init__.py"
+    init.write_text(
+        init.read_text()
+        + "from .helpers import *  # noqa: F403\n"
+        + "\n\ndef lazy():\n    from .collections import max_or_none\n"
+    )
+    indexer.index_path(init, repo_override=LIB, config=cfg)
+
+    assert _references(f"{UTILS}/collections.py::max_or_none") == []
+    assert _references(f"{UTILS}/helpers.py::max_or_none") == [
+        (APP, "courses/stats.py", 6, "best"),
+        (APP, "courses/stats.py", 10, "worst"),
+    ]
+    assert (APP, "courses/models.py", 7, "Course.stamp") in _references(NOW_IN_UTC)
+
+
+@requires_stack
 def test_editing_the_submodule_alone_keeps_the_package_re_export(stores):
     """Reindexing `collections.py` drops its symbols and the package's edges
     into them; the relink re-parses the `__init__` that names it."""

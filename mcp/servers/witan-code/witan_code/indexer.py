@@ -331,9 +331,9 @@ class ParsedFile:
     # package namespace (Python only); `_cross_file_records` keeps the ones
     # whose module is not a file of this repo
     name_uses: list[tuple[int, tuple[str, ...]]] = field(default_factory=list)
-    # modules the file star-imports, and the names a star import of the file
-    # takes (Python only), for a package's re-exports
-    star_imports: list[xref.ModuleRef] = field(default_factory=list)
+    # the file's module-level `from` imports in source order, and the names a
+    # star import of the file takes (Python only), for a package's re-exports
+    module_imports: list[xref.ModuleImport] = field(default_factory=list)
     exports: frozenset[str] = frozenset()
     # cross-repo interface bindings (env vars, packages, endpoints) in this file
     bindings: list[ParsedBinding] = field(default_factory=list)
@@ -1543,12 +1543,14 @@ def _reexport_edges(
     """Imports edges from a Python package's ``__init__`` to the definitions
     it re-exports from its own submodules.
 
-    A re-export is ``from .sub import name`` or ``from pkg.sub import name``
-    (``as`` the same name, since an edge cannot carry another), or a star
-    import of the submodule, which takes the submodule's ``exports``. Only a
-    direct submodule of the package counts: that is what makes
-    ``pkg.name`` another name for ``pkg.sub.name``, which
-    ``code_find_references`` matches uses in other repos by. Same batch rule
+    A re-export is a module-level ``from .sub import name`` or
+    ``from pkg.sub import name`` (``as`` the same name, since an edge cannot
+    carry another), or a star import of the submodule, which takes the
+    submodule's ``exports``. Only a direct submodule of the package counts:
+    that is what makes ``pkg.name`` another name for ``pkg.sub.name``, which
+    ``code_find_references`` matches uses in other repos by. As at runtime, a
+    later import of a name replaces an earlier one, and a definition of the
+    name in the ``__init__`` itself replaces any import of it. Same batch rule
     as the Calls edges: an edge between two files this run left alone was
     never deleted.
     """
@@ -1571,26 +1573,29 @@ def _reexport_edges(
         if parsed.language != "python" or Path(parsed.path).stem != "__init__":
             continue
         package = posixpath.dirname(parsed.path)
-        sources = [
-            (binding.module, binding.member)
-            for local, binding in parsed.import_bindings.items()
-            if binding.member == local
-        ] + [(module, None) for module in parsed.star_imports]
-        for module, member in sources:
-            target = modules.find("python", module, parsed.path)
-            if (
-                target is None
-                or posixpath.dirname(target) != package
-                or Path(target).stem == "__init__"
-                or (parsed.path not in batch and target not in batch)
-            ):
-                continue
-            names = [member] if member else sorted(exports_of(target))
-            edges.extend(
-                _edge("Imports", parsed.file_id, f"{prefix}{target}::{name}")
-                for name in names
-                if defined(target, f"{prefix}{target}::{name}")
+        # Name on the package -> (submodule file, its name there), or None
+        # once something that is not a sibling's definition took the name.
+        bound: dict[str, tuple[str, str] | None] = {}
+        for imported in parsed.module_imports:
+            target = modules.find("python", imported.module, parsed.path)
+            sibling = (
+                target is not None
+                and posixpath.dirname(target) == package
+                and Path(target).stem != "__init__"
             )
+            if imported.member is None:
+                if sibling:
+                    bound.update((name, (target, name)) for name in exports_of(target))
+            elif sibling and imported.member == imported.local:
+                bound[imported.local] = (target, imported.member)
+            else:
+                bound[imported.local] = None
+        for name in _top_level_names(parsed):
+            bound.pop(name, None)
+        for target, name in sorted(filter(None, bound.values())):
+            target_id = f"{prefix}{target}::{name}"
+            if (parsed.path in batch or target in batch) and defined(target, target_id):
+                edges.append(_edge("Imports", parsed.file_id, target_id))
     return edges
 
 
@@ -1706,7 +1711,7 @@ def _parse_file(
                 xref.dotted_name(chain, absolute[chain[0]])
             )
         ]
-        parsed.star_imports = xref.star_imports(root, raw, rel)
+        parsed.module_imports = xref.module_imports(root, raw, rel)
         # A star import takes `__all__` when the module declares one, else its
         # public names. Only defs are symbols here, which is all a reader asks
         # about; a public name the module itself imported is never one of them.

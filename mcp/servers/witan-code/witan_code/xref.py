@@ -11,7 +11,7 @@ Calls through an instance (``obj.method()``), re-exports (a package
 ``__init__.py`` importing a name from a submodule), star imports, ``require()``
 and path aliases are not followed. The indexer does record a Python package's
 re-exports, explicit and star, as Imports edges of their own
-(``indexer._reexport_edges``), from :func:`star_imports` and
+(``indexer._reexport_edges``), from :func:`module_imports` and
 :func:`declared_all`.
 """
 
@@ -374,15 +374,40 @@ def _python_imports(root, raw: bytes, rel: str) -> dict[str, ImportBinding]:
     return out
 
 
-def star_imports(root, raw: bytes, rel: str) -> list[ModuleRef]:
-    """The modules a Python file star-imports (``from pkg.mod import *``)."""
-    out: list[ModuleRef] = []
-    for node in _walk(root, ("import_from_statement",)):
-        if not any(c.type == "wildcard_import" for c in node.children):
+@dataclass(frozen=True)
+class ModuleImport:
+    """One name a module-level ``from`` import binds: ``member`` of
+    ``module`` as ``local``, or both ``None`` for ``from module import *``."""
+
+    module: ModuleRef
+    member: str | None
+    local: str | None
+
+
+def module_imports(root, raw: bytes, rel: str) -> list[ModuleImport]:
+    """A Python file's module-level ``from`` imports, in source order.
+
+    Only statements at the top of the module: an import inside a function, or
+    under ``if TYPE_CHECKING:``, binds nothing on the module when it is
+    imported, so it is no re-export.
+    """
+    out: list[ModuleImport] = []
+    for node in root.children:
+        if node.type != "import_from_statement":
             continue
         module = _from_module(node.child_by_field_name("module_name"), raw, rel)
-        if module is not None:
-            out.append(module)
+        if module is None:
+            continue
+        if any(c.type == "wildcard_import" for c in node.children):
+            out.append(ModuleImport(module, None, None))
+            continue
+        for name in node.children_by_field_name("name"):
+            if name.type == "aliased_import":
+                member = _text(name.child_by_field_name("name"), raw)
+                local = _text(name.child_by_field_name("alias"), raw)
+            else:
+                member = local = _text(name, raw)
+            out.append(ModuleImport(module, member, local))
     return out
 
 

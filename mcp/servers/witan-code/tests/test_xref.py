@@ -257,11 +257,23 @@ def test_only_a_literal_all_is_read(source, names):
     )
 
 
-def test_star_imports_resolve_relative_and_absolute_modules():
-    root, raw = _module("from .a import *\nfrom pkg.b import *\nfrom c import d\n")
-    assert xref.star_imports(root, raw, "src/pkg/__init__.py") == [
-        xref.ModuleRef("src/pkg/a", exact=True),
-        xref.ModuleRef("pkg/b", exact=False),
+def test_module_imports_are_the_top_level_from_imports_in_order():
+    """A function's import, or one under `if`, binds nothing on the module."""
+    root, raw = _module(
+        "from .a import *\n"
+        "from pkg.b import f, g as h\n"
+        "import c\n"
+        "if TYPE_CHECKING:\n"
+        "    from .d import T\n"
+        "def lazy():\n"
+        "    from .e import k\n"
+    )
+    a = xref.ModuleRef("src/pkg/a", exact=True)
+    b = xref.ModuleRef("pkg/b", exact=False)
+    assert xref.module_imports(root, raw, "src/pkg/__init__.py") == [
+        xref.ModuleImport(a, None, None),
+        xref.ModuleImport(b, "f", "f"),
+        xref.ModuleImport(b, "g", "h"),
     ]
 
 
