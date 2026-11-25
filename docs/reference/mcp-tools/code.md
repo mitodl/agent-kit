@@ -71,6 +71,13 @@ Find symbols that reference or call ``symbol_id`` (incoming edges).
 Supersets code_callers (references includes calls); use code_callers when
 you want calls only. Heuristic — may miss or over-report.
 
+For a definition in a shared package namespace (``mitol.*``) the rows also
+hold its uses in other indexed repos, from the cross-repo bridge. Each
+names the enclosing symbol, with ``start_line`` and ``end_line`` the line
+of the use, and at most 200 are listed. A use is any load of the name (a
+call, a base class, a constant), imported by its module path or through
+the parent package that re-exports it.
+
 *Read-only.*
 
 | Parameter | Type | Default | Description |

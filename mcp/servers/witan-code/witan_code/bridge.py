@@ -6,7 +6,10 @@ and a bridge failure can't corrupt a per-repo store that already succeeded.
 """
 
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from witan_core import now_iso
 from witan_core.observability import get_logger
@@ -17,6 +20,7 @@ from .bridge_extractors import (
     ParsedBinding,
     adjust_confidence,
     canonical_symbol,
+    consumed_package,
     parse_symbol,
 )
 from .graph import OmnigraphClient, check_writable
@@ -43,11 +47,24 @@ _PURGE_BATCH_SIZE = 128
 logger = get_logger("witan.code.bridge")
 
 
+@dataclass(frozen=True)
+class ExternalUse:
+    """One use of a name imported from another repo's package namespace: an
+    ``ExternalUse`` row (bridge-schema.pg). ``line`` is 1-based."""
+
+    file: str
+    line: int
+    symbol_id: str | None
+    target: str
+    language: str
+
+
 def write_bindings(
     bindings: list[ParsedBinding],
     repo: str,
     cfg: cfg_module.Config,
     *,
+    external_uses: Sequence[ExternalUse] = (),
     full_repo: bool,
     touched_files: tuple[str, ...] = (),
     identity: package_map.PackageIdentity | None = None,
@@ -96,10 +113,16 @@ def write_bindings(
     *checkouts* of the same repo apart. Both are needed and they compose in
     that order — actor first, so ownership stays a prefix of the name.
 
+    ``external_uses`` are the parsed files' uses of other repos' names. A
+    file's stored uses are replaced whenever its bindings would be: those in
+    the purge set, which covers a file that left the repo even when it never
+    carried a binding (``from mitol import common`` matches no package
+    consumer), because the files are read from the stored uses themselves.
+
     Returns the number of binding records written.
     """
     # Skip creating the store for a contract-less repo on its first index.
-    if not bindings and not bridge_store(cfg).exists(cfg):
+    if not bindings and not external_uses and not bridge_store(cfg).exists(cfg):
         return 0
 
     identity = identity or package_map.fallback_identity(repo)
@@ -137,6 +160,7 @@ def write_bindings(
     )
     repo_symbol_rows = _read_repo_symbols(client) if has_endpoint_consumers else []
 
+    use_files = _stored_use_files(client, repo)
     purge_files = set(touched_files) | {b.file for b in bindings}
     if full_repo and (indexed_files is not None or base is not None):
 
@@ -150,6 +174,10 @@ def write_bindings(
             for r in all_rows
             if r.get("repo") == repo and r.get("file") and _gone(r["file"])
         }
+        purge_files |= {rel for rel in use_files or () if _gone(rel)}
+    # Only the files that hold uses get a delete for them: a delete costs about
+    # as much as a binding delete, and most files hold none.
+    use_purge = purge_files if use_files is None else purge_files & use_files
     # One commit for the whole purge, not one per file: this runs over every
     # touched file on each index, and a commit apiece fragments the bridge store
     # the same way the per-file deletes did the per-repo one. Chunked because a
@@ -169,6 +197,14 @@ def write_bindings(
             *(
                 ("bridge.gq", "delete_bindings_in_file", {"repo": repo, "file": rel})
                 for rel in sorted(purge_files)
+            ),
+            *(
+                (
+                    "bridge.gq",
+                    "delete_external_uses_in_file",
+                    {"repo": repo, "file": rel},
+                )
+                for rel in sorted(use_purge)
             ),
             ("bridge.gq", "delete_repo_symbols", {"repo": repo}),
         ],
@@ -254,8 +290,136 @@ def write_bindings(
     records.extend(_symbol_table_records(repo, surviving, adjusted))
     if full_repo:
         records.append(_package_map_record(identity, repo))
+    # Deduped apart from the bindings: two uses of one name on one line share
+    # a slug, and a load carrying a slug twice is refused whole.
+    records.extend(_dedupe([_external_use_record(u, repo) for u in external_uses]))
     client.load(records, mode="merge")
     return n_bindings
+
+
+def _stored_use_files(client: OmnigraphClient, repo: str) -> set[str] | None:
+    """The files ``repo``'s stored uses are in, or ``None`` when the read fails.
+
+    Through a deployed witan the read runs that server's copy of the query,
+    which one older than this release lacks. Failing the bridge write over it
+    would freeze the branch's bindings too, so the caller instead deletes uses
+    in every file it purges and cannot find the uses of a file that left the
+    repo with no binding, until the server is upgraded.
+    """
+    try:
+        rows = client.read("bridge.gq", "external_use_files", {"repo": repo})
+    except Exception:  # a deployment older than the query
+        # Warning: the write goes on, but a deleted file's uses outlive it.
+        logger.warning("witan.code.bridge.external_use_files_failed", exc_info=True)
+        return None
+    return {r["file"] for r in rows}
+
+
+def _external_use_record(use: ExternalUse, repo: str) -> dict:
+    return {
+        "type": "ExternalUse",
+        "data": {
+            "slug": f"{repo}|{use.file}|{use.line}|{use.target}",
+            "repo": repo,
+            "file": use.file,
+            "line": use.line,
+            "symbol_id": use.symbol_id,
+            "target": use.target,
+            "language": use.language,
+            "indexed_at": now_iso(),
+        },
+    }
+
+
+class PackageAlias(NamedTuple):
+    """The name a package's re-export gives a definition in its submodule.
+
+    ``name`` is valid only when one of ``init_files`` (the package's
+    ``__init__``, by CodeFile id) has an Imports edge to ``exported``, the
+    definition's top-level symbol: the indexer writes one for each name the
+    package re-exports from that submodule (``indexer._reexport_edges``).
+    """
+
+    init_files: tuple[str, ...]
+    exported: str
+    name: str
+
+
+def imported_as(symbol_id: str) -> list[str]:
+    """The dotted name another repo imports the definition ``symbol_id`` by
+    through its own module, for matching ``ExternalUse.target``: the module
+    path from the namespace root. Empty outside the shared package
+    namespaces. A module symbol (``::<module>``) is the module's own name.
+
+    :func:`package_alias` gives the package's name for it, when it has one.
+    """
+    found = _module_path(symbol_id)
+    if found is None:
+        return []
+    module, _, qualified_name = found
+    if qualified_name == "<module>":
+        return [".".join(module)]
+    return [".".join((*module, qualified_name))]
+
+
+def package_alias(symbol_id: str) -> PackageAlias | None:
+    """The name the definition ``symbol_id`` has if its package re-exports it,
+    and what says whether it does.
+
+    ol-django's packages re-export some submodules
+    (``mitol/common/utils/__init__.py`` star-imports ``datetime``, so
+    ``now_in_utc`` is also ``mitol.common.utils.now_in_utc``) but not every
+    one (``helpers`` is not star-imported, so its ``max_or_none`` is not
+    ``mitol.common.utils.max_or_none``, which is ``collections``'). Only a
+    definition in a submodule file (not a package's own ``__init__``) under a
+    package inside the namespace has one. A method's is its class's, since
+    re-exporting the class re-exports the method with it.
+    """
+    found = _module_path(symbol_id)
+    if found is None:
+        return None
+    module, path, qualified_name = found
+    package = module[:-1]
+    if (
+        qualified_name == "<module>"
+        or path.rpartition("/")[2].startswith("__init__.")
+        or not consumed_package(".".join(package))
+    ):
+        return None
+    repo = symbol_id.partition("#")[0]
+    directory = path.rpartition("/")[0]
+    top = qualified_name.partition(".")[0]
+    return PackageAlias(
+        init_files=tuple(
+            f"{repo}#{directory}/__init__.{suffix}" for suffix in ("py", "pyi")
+        ),
+        exported=f"{repo}#{path}::{top}",
+        name=".".join((*package, qualified_name)),
+    )
+
+
+def _module_path(symbol_id: str) -> tuple[list[str], str, str] | None:
+    """``(dotted module parts, file path, qualified name)`` of a Python
+    definition under the shared package namespaces, else ``None``."""
+    _, _, rest = symbol_id.partition("#")
+    path, _, qualified_name = rest.partition("::")
+    stem, dot, suffix = path.rpartition(".")
+    if not dot or suffix not in ("py", "pyi") or not qualified_name:
+        return None
+    parts = stem.split("/")
+    if parts[-1] == "__init__":
+        parts.pop()
+    module = next(
+        (
+            parts[start:]
+            for start in range(len(parts))
+            if consumed_package(".".join(parts[start:]))
+        ),
+        None,
+    )
+    if module is None:
+        return None
+    return module, path, qualified_name
 
 
 # Binding role → symbol-table role. Providers export contract surface;

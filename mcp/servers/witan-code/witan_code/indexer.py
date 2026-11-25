@@ -15,6 +15,7 @@ import functools
 import hashlib
 import importlib
 import os
+import posixpath
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -107,7 +108,9 @@ _PENDING_CONTENT_HASH = "pending"
 #
 # 1: every row written before the version was recorded (`index_version` null).
 # 2: cross-file Calls edges through imports (#654, #674).
-INDEX_VERSION = 2
+# 3: uses of another repo's package names (ExternalUse rows in the bridge), and
+#    a Python package's re-exports as Imports edges.
+INDEX_VERSION = 3
 
 
 class _StoredFile(NamedTuple):
@@ -324,6 +327,14 @@ class ParsedFile:
     import_bindings: dict[str, xref.ImportBinding] = field(default_factory=dict)
     # (enclosing_qualified_name, callee name chain), for the same languages
     call_chains: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+    # (line, name chain) for each load of a name imported from a shared
+    # package namespace (Python only); `_cross_file_records` keeps the ones
+    # whose module is not a file of this repo
+    name_uses: list[tuple[int, tuple[str, ...]]] = field(default_factory=list)
+    # the file's module-level `from` imports in source order, and the names a
+    # star import of the file takes (Python only), for a package's re-exports
+    module_imports: list[xref.ModuleImport] = field(default_factory=list)
+    exports: frozenset[str] = frozenset()
     # cross-repo interface bindings (env vars, packages, endpoints) in this file
     bindings: list[ParsedBinding] = field(default_factory=list)
 
@@ -768,7 +779,7 @@ def index_paths(
             stats.purged += 1
         touched_files.append(rel)
 
-    records += _cross_file_records(
+    cross_file, external_uses = _cross_file_records(
         client,
         parsed_files,
         base=base,
@@ -778,6 +789,7 @@ def index_paths(
         relink=None if force and full_repo else repo_root,
         stats=stats,
     )
+    records += cross_file
 
     with _write_phase(
         "delete of stale rows",
@@ -824,6 +836,7 @@ def index_paths(
             bindings,
             slug,
             cfg,
+            external_uses=external_uses,
             full_repo=full_repo,
             touched_files=tuple(touched_files),
             identity=package_map.load(base, slug),
@@ -1397,8 +1410,9 @@ def _cross_file_records(
     dropped: set[str],
     relink: Path | None,
     stats: IndexStats,
-) -> list[dict]:
-    """Calls/References edges from these files into other files of the repo.
+) -> tuple[list[dict], list[bridge_module.ExternalUse]]:
+    """Calls/References edges from these files into other files of the repo,
+    and the uses these files make of another repo's names.
 
     Resolved through each file's imports (:mod:`witan_code.xref`) against
     every file the store holds once this run lands: the ones parsed here, plus
@@ -1419,6 +1433,13 @@ def _cross_file_records(
     that changed on disk since it was indexed is skipped: its stored symbols no
     longer match a fresh parse, and its own reindex links it. A forced
     full-repo run passes ``None``, since it parses every caller anyway.
+
+    A use of another repo's name is a load of a name imported from a shared
+    package namespace (``bridge_extractors.consumed_package``) whose module is
+    no file of this repo, which is what tells a consumer's
+    ``from mitol.common.utils import now_in_utc`` from ol-django's own. Only
+    the parsed files' uses are returned, since only their stored uses are
+    purged (``bridge.write_bindings``); a re-linked file keeps its own.
     """
     prefix = f"{slug}#"
     batch = {p.path: p for p in parsed_files}
@@ -1486,9 +1507,110 @@ def _cross_file_records(
             if defined(resolved[0], target_id) and defined(parsed.path, origin.id):
                 records.append(_edge("Calls", origin.id, target_id))
                 records.append(_edge("References", origin.id, target_id))
+    records += _reexport_edges(linking, batch, modules, defined, base, slug, existing)
     records = _dedupe(records)
     stats.edges += len(records)
-    return records
+
+    uses: list[bridge_module.ExternalUse] = []
+    for parsed in parsed_files:
+        top_level = _top_level_names(parsed)
+        for line, chain in parsed.name_uses:
+            if chain[0] in top_level:
+                continue
+            binding = parsed.import_bindings[chain[0]]
+            uses.extend(
+                bridge_module.ExternalUse(
+                    file=parsed.path,
+                    line=line,
+                    symbol_id=_symbol_at_line(parsed, line),
+                    target=target,
+                    language=parsed.language,
+                )
+                for target in xref.external_names(chain, binding, modules)
+            )
+    return records, uses
+
+
+def _reexport_edges(
+    linking: list[ParsedFile],
+    batch: dict[str, ParsedFile],
+    modules: xref.ModuleIndex,
+    defined: Callable[[str, str], bool],
+    base: Path,
+    slug: str,
+    existing: dict[str, _StoredFile],
+) -> list[dict]:
+    """Imports edges from a Python package's ``__init__`` to the definitions
+    it re-exports from its own submodules.
+
+    A re-export is a module-level ``from .sub import name`` or
+    ``from pkg.sub import name`` (``as`` the same name, since an edge cannot
+    carry another), or a star import of the submodule, which takes the
+    submodule's ``exports``. Only a direct submodule of the package counts:
+    that is what makes ``pkg.name`` another name for ``pkg.sub.name``, which
+    ``code_find_references`` matches uses in other repos by. As at runtime,
+    whatever binds a name later wins: another import, a star import of any
+    module of the repo (one outside the repo binds names nothing here knows),
+    or a definition in the ``__init__`` itself. Same batch rule as the Calls
+    edges: an edge between two files this run left alone was never deleted.
+    """
+    exports: dict[str, frozenset[str]] = {}
+
+    def exports_of(rel: str) -> frozenset[str]:
+        """From this run's parse, else from the checkout's copy of the file,
+        whose names ``defined`` then holds to the stored symbols."""
+        if rel not in exports:
+            sub = batch.get(rel)
+            if sub is None:
+                result = _parse_for_index(base / rel, base, slug, existing, force=True)
+                sub = result[0] if result else None
+            exports[rel] = sub.exports if sub else frozenset()
+        return exports[rel]
+
+    prefix = f"{slug}#"
+    edges: list[dict] = []
+    for parsed in linking:
+        if parsed.language != "python" or Path(parsed.path).stem != "__init__":
+            continue
+        package = posixpath.dirname(parsed.path)
+        # Name on the package -> (submodule file, its name there), or None
+        # once something that is not a sibling's definition took the name.
+        bound: dict[str, tuple[str, str] | None] = {}
+        definitions = [
+            (s.start_line, s.name)
+            for s in parsed.symbols
+            if s.kind != "module" and "." not in s.qualified_name
+        ]
+        # Stable, so the names of one import statement keep their order.
+        steps = sorted(
+            [(i.line, i) for i in parsed.module_imports] + definitions,
+            key=lambda step: step[0],
+        )
+        for _, step in steps:
+            if isinstance(step, str):
+                bound[step] = None
+                continue
+            target = modules.find("python", step.module, parsed.path)
+            sibling = (
+                target is not None
+                and posixpath.dirname(target) == package
+                and Path(target).stem != "__init__"
+            )
+            if step.member is None:
+                if target is not None:
+                    bound.update(
+                        (name, (target, name) if sibling else None)
+                        for name in exports_of(target)
+                    )
+            elif sibling and step.member == step.local:
+                bound[step.local] = (target, step.member)
+            else:
+                bound[step.local] = None
+        for target, name in sorted(filter(None, bound.values())):
+            target_id = f"{prefix}{target}::{name}"
+            if (parsed.path in batch or target in batch) and defined(target, target_id):
+                edges.append(_edge("Imports", parsed.file_id, target_id))
+    return edges
 
 
 # The file types xref resolves imports in, for the relink's word search.
@@ -1587,6 +1709,32 @@ def _parse_file(
             parsed.imports.add(_node_text(node, raw))
     if spec.name in xref.LANGUAGES:
         parsed.import_bindings = xref.imports(spec.name, root, raw, rel)
+    if spec.name == "python":
+        # Filtered before the walk, which costs about a quarter of a parse and
+        # finds nothing in a file with no import from the shared namespace.
+        absolute = {
+            name: binding
+            for name, binding in parsed.import_bindings.items()
+            if not binding.module.exact
+            and bridge_extractors.shared_namespace(binding.module.path.split("/")[0])
+        }
+        parsed.name_uses = [
+            (line, chain)
+            for line, chain in xref.name_uses(root, raw, absolute)
+            if bridge_extractors.consumed_package(
+                xref.dotted_name(chain, absolute[chain[0]])
+            )
+        ]
+        parsed.module_imports = xref.module_imports(root, raw, rel)
+        # A star import takes `__all__` when the module declares one, else its
+        # public names. Only defs are symbols here, which is all a reader asks
+        # about; a public name the module itself imported is never one of them.
+        declared = xref.declared_all(root, raw)
+        parsed.exports = (
+            declared
+            if declared is not None
+            else frozenset(n for n in _top_level_names(parsed) if not n.startswith("_"))
+        )
 
     # Cross-repo interface bindings (env vars, packages, endpoint consumers).
     # Attribute each to its enclosing symbol by line containment.

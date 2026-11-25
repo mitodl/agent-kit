@@ -11,7 +11,7 @@ from witan_core import caching
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 
-from . import bridge_extractors, elicit, indexer, ingest, stitch, views
+from . import bridge, bridge_extractors, elicit, indexer, ingest, stitch, views
 from . import config as cfg_module
 from . import identity as identity_module
 from . import repo as repo_module
@@ -567,6 +567,13 @@ async def code_find_references(
     Supersets code_callers (references includes calls); use code_callers when
     you want calls only. Heuristic — may miss or over-report.
 
+    For a definition in a shared package namespace (``mitol.*``) the rows also
+    hold its uses in other indexed repos, from the cross-repo bridge. Each
+    names the enclosing symbol, with ``start_line`` and ``end_line`` the line
+    of the use, and at most 200 are listed. A use is any load of the name (a
+    call, a base class, a constant), imported by its module path or through
+    the parent package that re-exports it.
+
     Parameters
     ----------
     symbol_id:
@@ -583,7 +590,68 @@ async def code_find_references(
     refs = client.read("code_read.gq", "referencers", {"id": symbol_id})
     callers = client.read("code_read.gq", "callers", {"id": symbol_id})
     seen = {r["slug"] for r in refs}
-    return _as_symbol_id(refs + [c for c in callers if c["slug"] not in seen])
+    return _as_symbol_id(
+        refs + [c for c in callers if c["slug"] not in seen]
+    ) + _external_uses(symbol_id, branch, client)
+
+
+#: Uses from other repos ``code_find_references`` lists, as many as the
+#: ``referencers`` query returns. The bridge read's own limit is a ceiling.
+_EXTERNAL_USES_LIMIT = 200
+
+
+def _external_uses(
+    symbol_id: str, branch: str | None, repo_client: OmnigraphClient
+) -> list[dict]:
+    """Uses of ``symbol_id`` in other repos (``ExternalUse`` rows), in
+    ``code_find_references``' row shape.
+
+    By its module path, and by its package's name for it when ``repo_client``
+    (the definition repo's graph) holds the package's re-export of it.
+    """
+    targets = bridge.imported_as(symbol_id)
+    if not targets:
+        return []
+    client = _bridge_client(repo=symbol_id.split("#", 1)[0], branch=branch)
+    if client is None:
+        return []
+    alias = bridge.package_alias(symbol_id)
+    if alias is not None:
+        importers = repo_client.read(
+            "code_read.gq", "importing_files", {"id": alias.exported}
+        )
+        if any(row["slug"] in alias.init_files for row in importers):
+            targets.append(alias.name)
+    try:
+        rows = client.read(
+            "bridge.gq", "external_uses_by_targets", {"targets": targets}
+        )
+    except Exception:  # a bridge or deployment from before ExternalUse
+        # The in-repo rows are already read; losing them to this one would
+        # turn an upgrade into a Find References that fails outright.
+        logger.warning("witan.code.references.external_uses_failed", exc_info=True)
+        return []
+    out: dict[tuple[str, str, int], dict] = {}
+    for row in rows:
+        key = (row["repo"], row["file"], row["line"])
+        if key in out:
+            continue  # the module path and the package's re-export on one line
+        if len(out) == _EXTERNAL_USES_LIMIT:
+            break
+        file_id = f"{row['repo']}#{row['file']}"
+        enclosing = row["symbol_id"] or f"{file_id}::<module>"
+        qualified_name = enclosing.partition("::")[2]
+        out[key] = {
+            "symbol_id": enclosing,
+            "repo": row["repo"],
+            "file_id": file_id,
+            "name": qualified_name.rpartition(".")[2],
+            "qualified_name": qualified_name,
+            "kind": None,
+            "start_line": row["line"],
+            "end_line": row["line"],
+        }
+    return list(out.values())
 
 
 # Each value is also the name of the code_read.gq query that answers it.

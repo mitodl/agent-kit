@@ -472,7 +472,7 @@ indexer first).
 | Tool | Returns |
 |------|---------|
 | `code_find_definition(name)` / `code_find_definition(symbol_id=...)` | symbols whose name / qualified name matches (at most 50 per repo), or the one symbol with that exact id |
-| `code_find_references(symbol_id, branch=None)` | incoming `References` + `Calls` |
+| `code_find_references(symbol_id, branch=None)` | incoming `References` + `Calls`, plus uses in other repos of a `mitol.*` definition (at most 200, from the bridge) |
 | `code_callers(symbol_id, direction="callers", branch=None)` | incoming `Calls`; `direction="callees"` for outgoing |
 | `code_impact(symbol_id, max_depth=5, max_nodes=200, branch=None)` | transitive callers via BFS |
 | `code_symbols_in_file(path)` | symbols defined in a file |
@@ -580,9 +580,11 @@ target's graph, at its own checkout branch:
 - hover on a line that reads or sets an env var, calls or serves an endpoint,
   imports a package or names a service: who provides and who consumes it;
 - go to definition across indexed repos, and find references in the
-  definition's own repo (the code graph records no symbol-level use across
-  repos). A definition in a repo no workspace folder has checked out is named
-  in the hover instead (repo, path and line), with its references;
+  definition's own repo plus, for a definition in a shared package namespace
+  (`mitol.*`), its uses in other indexed repos. A definition in a repo no
+  workspace folder has checked out is named in the hover instead (repo, path
+  and line), with its references, and hovering a definition's own line names
+  its uses in repos no folder has open;
 - an Information diagnostic on the first line when the folder's repo, or its branch,
   has no index (reads then show the default branch).
 

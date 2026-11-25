@@ -151,6 +151,21 @@ query callees($id: String) {
     limit 200
 }
 
+// Incoming Imports: the files that import $id. A Python package's __init__
+// has one to each definition it re-exports from a submodule, which is what
+// code_find_references asks before matching uses of the package's name for it.
+
+query importing_files($id: String) {
+    match {
+        $target: Symbol { slug: $id }
+        $f: CodeFile
+        $f imports $target
+    }
+    return { $f.slug }
+    order { $f.slug asc }
+    limit 200
+}
+
 // Incoming Calls + References: anything that uses $id.
 
 query referencers($id: String) {

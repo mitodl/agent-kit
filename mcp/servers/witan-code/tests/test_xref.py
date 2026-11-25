@@ -130,6 +130,208 @@ def test_a_ts_import_of_the_repo_root_reaches_its_index(importer, spec, index):
         assert got == (index, member)
 
 
+# ── Uses of another repo's names, no store ────────────────────────
+
+USES = """\
+from mitol.common.utils import now_in_utc
+from mitol.common import models
+
+
+class Course(models.Base):
+    def stamp(self, now_in_utc=None, *, flag: int = 0):
+        return f(now_in_utc=now_in_utc)
+"""
+
+
+def _uses(files):
+    from witan_code import indexer
+
+    parsed = indexer._parse_file(
+        USES.encode(), None, indexer._EXT_TO_SPEC[".py"], REPO, "f", "app.py", "h"
+    )
+    modules = xref.ModuleIndex(files)
+    return [
+        (line, name)
+        for line, chain in parsed.name_uses
+        for name in xref.external_names(
+            chain, parsed.import_bindings[chain[0]], modules
+        )
+    ]
+
+
+def test_every_load_of_an_imported_name_is_a_use_and_naming_one_is_not():
+    """The base class counts, and so does each step down it, since nothing
+    here knows where the imported object ends. A parameter or keyword
+    argument named like the import is not a use; the value passed is."""
+    assert _uses({"app.py"}) == [
+        (5, "mitol.common.models"),
+        (5, "mitol.common.models.Base"),
+        (7, "mitol.common.utils.now_in_utc"),
+    ]
+
+
+def test_a_name_whose_module_is_in_the_repo_is_not_a_use_of_another_repo():
+    assert _uses({"app.py", "src/mitol/common/models.py"}) == [
+        (7, "mitol.common.utils.now_in_utc"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("symbol_id", "names"),
+    [
+        (
+            "r#src/common/mitol/common/utils/datetime.py::now_in_utc",
+            ["mitol.common.utils.datetime.now_in_utc"],
+        ),
+        ("r#src/mitol/common/models.py::Base.save", ["mitol.common.models.Base.save"]),
+        ("r#src/mitol/common/__init__.py::thing", ["mitol.common.thing"]),
+        ("r#src/mitol/common/utils/__init__.py::<module>", ["mitol.common.utils"]),
+        ("r#app/views.py::f", []),
+        ("r#src/mitol/common/x.ts::f", []),
+    ],
+)
+def test_a_definition_is_imported_as_its_module_path(symbol_id, names):
+    from witan_code import bridge
+
+    assert bridge.imported_as(symbol_id) == names
+
+
+def test_a_package_name_is_checked_against_the_package_init():
+    """A method's is its class's: re-exporting the class carries it."""
+    from witan_code import bridge
+
+    alias = bridge.package_alias("r#src/mitol/common/models.py::Base.save")
+    assert alias == bridge.PackageAlias(
+        init_files=(
+            "r#src/mitol/common/__init__.py",
+            "r#src/mitol/common/__init__.pyi",
+        ),
+        exported="r#src/mitol/common/models.py::Base",
+        name="mitol.common.Base.save",
+    )
+
+
+@pytest.mark.parametrize(
+    "symbol_id",
+    [
+        "r#src/mitol/common/__init__.py::thing",  # the package's own
+        "r#src/mitol/common/utils/datetime.py::<module>",
+        "r#src/mitol/common.py::f",  # `mitol` is the namespace, not a package
+        "r#app/views.py::f",
+    ],
+)
+def test_some_definitions_have_no_package_name(symbol_id):
+    from witan_code import bridge
+
+    assert bridge.package_alias(symbol_id) is None
+
+
+def _module(source):
+    from tree_sitter import Parser
+
+    from witan_code import indexer
+
+    raw = source.encode()
+    spec = indexer._EXT_TO_SPEC[".py"]
+    root = Parser(indexer._ts_language(spec.grammar)).parse(raw).root_node
+    return root, raw
+
+
+@pytest.mark.parametrize(
+    ("source", "names"),
+    [
+        ("x = 1\n", None),
+        ("__all__ = [\"f\", 'g']\n", {"f", "g"}),
+        ("__all__ = ('f',)\n", {"f"}),
+        ("__all__ = ['f']\n__all__ += ['g']\n", set()),
+        ("__all__ = [f'{x}']\n", set()),
+        ("__all__ = [name]\n", set()),
+        ("__all__ = names()\n", set()),
+    ],
+)
+def test_only_a_literal_all_is_read(source, names):
+    """Any other form names nothing, so a star import of it re-exports
+    nothing rather than names the module may not export."""
+    assert xref.declared_all(*_module(source)) == (
+        None if names is None else frozenset(names)
+    )
+
+
+SIBLINGS = {
+    "pkg/a.py": "def f():\n    pass\n\n\ndef _private():\n    pass\n",
+    "pkg/b.py": "def f():\n    pass\n",
+    "other/c.py": "def f():\n    pass\n",
+}
+
+
+def _reexports(init):
+    """The definitions ``pkg/__init__.py`` re-exports, every file parsed in
+    one batch."""
+    from pathlib import Path
+
+    from witan_code import indexer
+
+    files = {**SIBLINGS, "pkg/__init__.py": init}
+    spec = indexer._EXT_TO_SPEC[".py"]
+    parsed = {
+        rel: indexer._parse_file(
+            text.encode(), None, spec, REPO, f"{REPO}#{rel}", rel, "h"
+        )
+        for rel, text in files.items()
+    }
+    edges = indexer._reexport_edges(
+        list(parsed.values()),
+        parsed,
+        xref.ModuleIndex(files),
+        lambda rel, symbol_id: True,
+        Path("."),
+        REPO,
+        {},
+    )
+    return sorted(edge["to"].removeprefix(f"{REPO}#") for edge in edges)
+
+
+@pytest.mark.parametrize(
+    ("init", "exported"),
+    [
+        ("from .a import *\n", ["pkg/a.py::f"]),
+        ("from pkg.a import f\n", ["pkg/a.py::f"]),
+        ("from .a import f as g\n", []),
+        ("from .a import *\nfrom .b import *\n", ["pkg/b.py::f"]),
+        ("from .a import *\nfrom other.c import *\n", []),
+        ("from .a import *\nfrom other.c import f\n", []),
+        ("from .a import *\n\n\ndef f():\n    pass\n", []),
+        ("def f():\n    pass\n\n\nfrom .a import *\n", ["pkg/a.py::f"]),
+        ("def lazy():\n    from .a import f\n", []),
+    ],
+)
+def test_a_package_re_exports_what_binds_its_name_last(init, exported):
+    """A private name never travels with a star, and only a direct submodule's
+    definition is a re-export; anything else binding the name later takes it
+    away, as at runtime."""
+    assert _reexports(init) == exported
+
+
+def test_module_imports_are_the_top_level_from_imports_in_order():
+    """A function's import, or one under `if`, binds nothing on the module."""
+    root, raw = _module(
+        "from .a import *\n"
+        "from pkg.b import f, g as h\n"
+        "import c\n"
+        "if TYPE_CHECKING:\n"
+        "    from .d import T\n"
+        "def lazy():\n"
+        "    from .e import k\n"
+    )
+    a = xref.ModuleRef("src/pkg/a", exact=True)
+    b = xref.ModuleRef("pkg/b", exact=False)
+    assert xref.module_imports(root, raw, "src/pkg/__init__.py") == [
+        xref.ModuleImport(a, None, None, 1),
+        xref.ModuleImport(b, "f", "f", 2),
+        xref.ModuleImport(b, "g", "h", 2),
+    ]
+
+
 # ── Through the indexer and code_callers ──────────────────────────
 
 B_PY = """\
@@ -233,7 +435,7 @@ def _index_as_an_indexer_before_cross_file_calls(base, monkeypatch):
 
     with monkeypatch.context() as old:
         old.setattr(indexer, "_file_records", without_index_version)
-        old.setattr(indexer, "_cross_file_records", lambda *a, **k: [])
+        old.setattr(indexer, "_cross_file_records", lambda *a, **k: ([], []))
         _index(base)
     assert not _callers("pkg/b.py::target") & CROSS_FILE_CALLERS
 

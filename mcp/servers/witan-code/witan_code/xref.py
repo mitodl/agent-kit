@@ -9,7 +9,10 @@ It is still syntactic. A call resolves when its callee is an imported name, or
 an attribute chain rooted at one (``mod.func()``, ``pkg.mod.Cls.method()``).
 Calls through an instance (``obj.method()``), re-exports (a package
 ``__init__.py`` importing a name from a submodule), star imports, ``require()``
-and path aliases are not followed.
+and path aliases are not followed. The indexer does record a Python package's
+re-exports, explicit and star, as Imports edges of their own
+(``indexer._reexport_edges``), from :func:`module_imports` and
+:func:`declared_all`.
 """
 
 import posixpath
@@ -117,6 +120,121 @@ def resolve_call(
     return None
 
 
+def external_names(
+    chain: tuple[str, ...], binding: ImportBinding, modules: "ModuleIndex"
+) -> list[str]:
+    """The dotted names ``chain`` uses, when its import names no repo file.
+
+    ``chain`` is a Python name chain rooted at the local name ``binding``
+    binds. ``now_in_utc`` after ``from mitol.common.utils.datetime import
+    now_in_utc`` gives ``mitol.common.utils.datetime.now_in_utc``;
+    ``utils.now_in_utc`` after ``from mitol.common import utils`` gives
+    ``mitol.common.utils`` and ``mitol.common.utils.now_in_utc``. Each
+    attribute step is a name of its own because nothing here knows where the
+    imported object ends: ``Base.objects`` uses ``Base``, and
+    ``Cls.method()`` uses ``Cls.method``, and a reader matches a definition
+    against one exact name.
+
+    Empty when the import is relative, or any module along the chain is a file
+    of this repo: that use is the same-repo pass's to link, which is also what
+    keeps a library's uses of its own modules out.
+    """
+    if binding.module.exact:
+        return []
+    names = _member_chain(chain, binding)
+    for depth in range(len(names) + 1):
+        if modules.has_python_module(binding.module.child(names[:depth])):
+            return []
+    module = tuple(binding.module.path.split("/"))
+    return [".".join((*module, *names[:depth])) for depth in range(1, len(names) + 1)]
+
+
+def dotted_name(chain: tuple[str, ...], binding: ImportBinding) -> str:
+    """The whole of ``chain`` as one dotted name under ``binding``'s module,
+    the longest of :func:`external_names`, without asking the repo."""
+    return ".".join((*binding.module.path.split("/"), *_member_chain(chain, binding)))
+
+
+def _member_chain(chain: tuple[str, ...], binding: ImportBinding) -> tuple[str, ...]:
+    """``chain`` below ``binding``'s module: the member it imports, then the
+    attributes taken on it."""
+    return chain[1:] if binding.member is None else (binding.member, *chain[1:])
+
+
+def name_uses(
+    root, raw: bytes, names: Iterable[str]
+) -> list[tuple[int, tuple[str, ...]]]:
+    """``(line, name chain)`` for every load of one of ``names`` in a Python file.
+
+    A load is any appearance of the name outside an import statement other
+    than as a name being defined or a keyword argument's name: a call, a base
+    class, a decorator, an annotation, a constant passed as a value. The chain
+    runs down the attribute accesses on it, so ``models.Base.objects`` gives
+    ``("models", "Base", "objects")``. ``line`` is 1-based.
+
+    Syntactic, like the rest of this module: a parameter's own name is not a
+    use, but a load of a parameter or local that shadows an imported name
+    still counts as one.
+    """
+    wanted = frozenset(names)
+    out: list[tuple[int, tuple[str, ...]]] = []
+    if not wanted:
+        return out
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type in _PY_IMPORT_NODES:
+            continue
+        if node.type == "identifier":
+            text = _text(node, raw)
+            if text in wanted and not _defines(node):
+                chain = [text]
+                cur = node
+                while (
+                    cur.parent is not None
+                    and cur.parent.type == "attribute"
+                    and cur.parent.child_by_field_name("object") == cur
+                ):
+                    cur = cur.parent
+                    chain.append(_text(cur.child_by_field_name("attribute"), raw))
+                out.append((node.start_point[0] + 1, tuple(chain)))
+            continue
+        stack.extend(reversed(node.children))
+    return out
+
+
+_PY_IMPORT_NODES = frozenset(
+    {"import_statement", "import_from_statement", "future_import_statement"}
+)
+
+# (parent node type, field) pairs whose identifier names something rather
+# than loading it. The `attribute` field is a member, not a name in scope.
+_PY_DEFINING_FIELDS = frozenset(
+    {
+        ("attribute", "attribute"),
+        ("keyword_argument", "name"),
+        ("function_definition", "name"),
+        ("class_definition", "name"),
+        ("default_parameter", "name"),
+        ("typed_default_parameter", "name"),
+    }
+)
+# Parents whose bare identifier children are parameter names.
+_PY_PARAMETER_LISTS = frozenset({"parameters", "lambda_parameters", "typed_parameter"})
+
+
+def _defines(node) -> bool:
+    parent = node.parent
+    if parent is None:
+        return False
+    if parent.type in _PY_PARAMETER_LISTS:
+        return True
+    return any(
+        parent.type == kind and parent.child_by_field_name(field) == node
+        for kind, field in _PY_DEFINING_FIELDS
+    )
+
+
 def _submodule(
     binding: ImportBinding, modules: "ModuleIndex", language: str, importer: str
 ) -> ModuleRef | None:
@@ -141,6 +259,11 @@ class ModuleIndex:
             matches = self._python_roots().get(ref.path, [])
             return _nearest(matches, importer)
         return self._first(_js_candidates(ref.path))
+
+    def has_python_module(self, ref: ModuleRef) -> bool:
+        """Whether any repo file is the absolute module ``ref``, under any
+        import root. Unlike :meth:`find`, two candidates are still a match."""
+        return ref.path in self._python_roots()
 
     def _first(self, candidates: Iterable[str]) -> str | None:
         return next((c for c in candidates if c in self._paths), None)
@@ -249,6 +372,82 @@ def _python_imports(root, raw: bytes, rel: str) -> dict[str, ImportBinding]:
                 member = local = _text(name, raw)
             out[local] = ImportBinding(module, member)
     return out
+
+
+@dataclass(frozen=True)
+class ModuleImport:
+    """One name a module-level ``from`` import binds: ``member`` of
+    ``module`` as ``local``, or both ``None`` for ``from module import *``.
+    ``line`` is the statement's, 1-based."""
+
+    module: ModuleRef
+    member: str | None
+    local: str | None
+    line: int
+
+
+def module_imports(root, raw: bytes, rel: str) -> list[ModuleImport]:
+    """A Python file's module-level ``from`` imports, in source order.
+
+    Only statements at the top of the module: an import inside a function, or
+    under ``if TYPE_CHECKING:``, binds nothing on the module when it is
+    imported, so it is no re-export. One under any other ``if`` or a ``try``
+    may bind, but which branch runs is not known here, so those are skipped
+    too: a re-export missed rather than one claimed.
+    """
+    out: list[ModuleImport] = []
+    for node in root.children:
+        if node.type != "import_from_statement":
+            continue
+        module = _from_module(node.child_by_field_name("module_name"), raw, rel)
+        if module is None:
+            continue
+        line = node.start_point[0] + 1
+        if any(c.type == "wildcard_import" for c in node.children):
+            out.append(ModuleImport(module, None, None, line))
+            continue
+        for name in node.children_by_field_name("name"):
+            if name.type == "aliased_import":
+                member = _text(name.child_by_field_name("name"), raw)
+                local = _text(name.child_by_field_name("alias"), raw)
+            else:
+                member = local = _text(name, raw)
+            out.append(ModuleImport(module, member, local, line))
+    return out
+
+
+def declared_all(root, raw: bytes) -> frozenset[str] | None:
+    """The names a Python module's ``__all__`` lists, ``None`` without one.
+
+    Only one module-level ``__all__ = [...]`` (or a tuple) of plain string
+    literals is read. Any other ``__all__`` statement (a second assignment,
+    ``+=``, a computed value) gives the empty set, so a reader that follows a
+    star import through this follows nothing it cannot vouch for.
+    """
+    assignments = []
+    for statement in root.children:
+        if statement.type != "expression_statement":
+            continue
+        for node in statement.children:
+            if node.type not in ("assignment", "augmented_assignment"):
+                continue
+            left = node.child_by_field_name("left")
+            if left is not None and _text(left, raw) == "__all__":
+                assignments.append(node)
+    if not assignments:
+        return None
+    if len(assignments) != 1 or assignments[0].type != "assignment":
+        return frozenset()
+    value = assignments[0].child_by_field_name("right")
+    if value is None or value.type not in ("list", "tuple"):
+        return frozenset()
+    names = set()
+    for item in value.named_children:
+        parts = [c for c in item.named_children if c.type == "string_content"]
+        if item.type != "string" or len(parts) != 1 or len(item.named_children) != 3:
+            return frozenset()  # not a plain literal: an f-string, a name, ...
+        names.add(_text(parts[0], raw))
+    return frozenset(names)
 
 
 def _absolute(dotted: str) -> ModuleRef:

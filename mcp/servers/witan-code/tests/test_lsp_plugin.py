@@ -41,6 +41,15 @@ RL = "https://github.com/test/lib"
 
 ADDED = SERVICE + "\n\ndef added():\n    return helper()\n"
 
+# A shared library package (ol-django's layout) and an app file that uses it,
+# for references across repos.
+LIB_MITOL = {
+    "src/mitol/common/__init__.py": "",
+    "src/mitol/common/utils/__init__.py": "from .datetime import *  # noqa: F403\n",
+    "src/mitol/common/utils/datetime.py": "def now_in_utc():\n    return 1\n",
+}
+STAMPS = "from mitol.common.utils import now_in_utc\n\n\ndef stamp():\n    return now_in_utc()\n"
+
 
 def _checkout(path: Path) -> Path:
     path.mkdir(parents=True)
@@ -69,10 +78,16 @@ def seed(tmp_path_factory) -> Seed:
     root = tmp_path_factory.mktemp("graph")
     code_dir = root / "code"
     app = _repo(
-        root / "app", RA, {"app/service.py": SERVICE, "app/settings.py": SETTINGS}
+        root / "app",
+        RA,
+        {
+            "app/service.py": SERVICE,
+            "app/settings.py": SETTINGS,
+            "app/stamps.py": STAMPS,
+        },
     )
     infra = _repo(root / "infra", RI, {"Pulumi.QA.yaml": PULUMI})
-    lib = _repo(root / "lib", RL, {"lib/maths.py": COMPUTE})
+    lib = _repo(root / "lib", RL, {"lib/maths.py": COMPUTE, **LIB_MITOL})
     feature = root / "app-feature"
     git(app, "worktree", "add", "-q", "-b", "feature", str(feature))
     (feature / "app" / "service.py").write_text(ADDED)
@@ -456,6 +471,38 @@ def test_references_read_the_folders_own_branch(graph):
         async with lsp_session(_host(), [graph.app, graph.feature]) as session:
             assert await references(session, graph.app) == [4]
             assert await references(session, graph.feature) == [4, 17]
+
+    run(go())
+
+
+@requires_stack
+def test_references_on_a_library_definition_reach_another_repo(graph):
+    """The app imports `now_in_utc` through the package that re-exports it.
+    With the app open, references on the library's definition land on that
+    use; without it, the hover on the definition names it."""
+    datetime = graph.lib / "src" / "mitol" / "common" / "utils" / "datetime.py"
+    stamps = graph.app / "app" / "stamps.py"
+
+    async def references(session):
+        return await session.client.text_document_references_async(
+            types.ReferenceParams(
+                text_document=_doc(datetime),
+                position=_at(0, 5),
+                context=types.ReferenceContext(include_declaration=False),
+            )
+        )
+
+    async def go():
+        async with lsp_session(_host(), [graph.lib, graph.app]) as session:
+            [loc] = await references(session)
+            assert (loc.uri, loc.range.start.line) == (stamps.as_uri(), 4)
+            assert "not open here" not in await _hover(session, datetime, 0, 5)
+        async with lsp_session(_host(), [graph.lib]) as session:
+            assert not await references(session)
+            text = await _hover(session, datetime, 0, 5)
+            assert "Referenced from repos not open here" in text
+            assert escape_markdown(f"{RA} app/stamps.py:5 stamp") in text
+            assert await _hover(session, datetime, 1, 5) is None
 
     run(go())
 
