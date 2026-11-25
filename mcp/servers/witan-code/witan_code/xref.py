@@ -117,6 +117,121 @@ def resolve_call(
     return None
 
 
+def external_names(
+    chain: tuple[str, ...], binding: ImportBinding, modules: "ModuleIndex"
+) -> list[str]:
+    """The dotted names ``chain`` uses, when its import names no repo file.
+
+    ``chain`` is a Python name chain rooted at the local name ``binding``
+    binds. ``now_in_utc`` after ``from mitol.common.utils.datetime import
+    now_in_utc`` gives ``mitol.common.utils.datetime.now_in_utc``;
+    ``utils.now_in_utc`` after ``from mitol.common import utils`` gives
+    ``mitol.common.utils`` and ``mitol.common.utils.now_in_utc``. Each
+    attribute step is a name of its own because nothing here knows where the
+    imported object ends: ``Base.objects`` uses ``Base``, and
+    ``Cls.method()`` uses ``Cls.method``, and a reader matches a definition
+    against one exact name.
+
+    Empty when the import is relative, or any module along the chain is a file
+    of this repo: that use is the same-repo pass's to link, which is also what
+    keeps a library's uses of its own modules out.
+    """
+    if binding.module.exact:
+        return []
+    names = _member_chain(chain, binding)
+    for depth in range(len(names) + 1):
+        if modules.has_python_module(binding.module.child(names[:depth])):
+            return []
+    module = tuple(binding.module.path.split("/"))
+    return [".".join((*module, *names[:depth])) for depth in range(1, len(names) + 1)]
+
+
+def dotted_name(chain: tuple[str, ...], binding: ImportBinding) -> str:
+    """The whole of ``chain`` as one dotted name under ``binding``'s module,
+    the longest of :func:`external_names`, without asking the repo."""
+    return ".".join((*binding.module.path.split("/"), *_member_chain(chain, binding)))
+
+
+def _member_chain(chain: tuple[str, ...], binding: ImportBinding) -> tuple[str, ...]:
+    """``chain`` below ``binding``'s module: the member it imports, then the
+    attributes taken on it."""
+    return chain[1:] if binding.member is None else (binding.member, *chain[1:])
+
+
+def name_uses(
+    root, raw: bytes, names: Iterable[str]
+) -> list[tuple[int, tuple[str, ...]]]:
+    """``(line, name chain)`` for every load of one of ``names`` in a Python file.
+
+    A load is any appearance of the name outside an import statement other
+    than as a name being defined or a keyword argument's name: a call, a base
+    class, a decorator, an annotation, a constant passed as a value. The chain
+    runs down the attribute accesses on it, so ``models.Base.objects`` gives
+    ``("models", "Base", "objects")``. ``line`` is 1-based.
+
+    Syntactic, like the rest of this module: a parameter's own name is not a
+    use, but a load of a parameter or local that shadows an imported name
+    still counts as one.
+    """
+    wanted = frozenset(names)
+    out: list[tuple[int, tuple[str, ...]]] = []
+    if not wanted:
+        return out
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type in _PY_IMPORT_NODES:
+            continue
+        if node.type == "identifier":
+            text = _text(node, raw)
+            if text in wanted and not _defines(node):
+                chain = [text]
+                cur = node
+                while (
+                    cur.parent is not None
+                    and cur.parent.type == "attribute"
+                    and cur.parent.child_by_field_name("object") == cur
+                ):
+                    cur = cur.parent
+                    chain.append(_text(cur.child_by_field_name("attribute"), raw))
+                out.append((node.start_point[0] + 1, tuple(chain)))
+            continue
+        stack.extend(reversed(node.children))
+    return out
+
+
+_PY_IMPORT_NODES = frozenset(
+    {"import_statement", "import_from_statement", "future_import_statement"}
+)
+
+# (parent node type, field) pairs whose identifier names something rather
+# than loading it. The `attribute` field is a member, not a name in scope.
+_PY_DEFINING_FIELDS = frozenset(
+    {
+        ("attribute", "attribute"),
+        ("keyword_argument", "name"),
+        ("function_definition", "name"),
+        ("class_definition", "name"),
+        ("default_parameter", "name"),
+        ("typed_default_parameter", "name"),
+    }
+)
+# Parents whose bare identifier children are parameter names.
+_PY_PARAMETER_LISTS = frozenset({"parameters", "lambda_parameters", "typed_parameter"})
+
+
+def _defines(node) -> bool:
+    parent = node.parent
+    if parent is None:
+        return False
+    if parent.type in _PY_PARAMETER_LISTS:
+        return True
+    return any(
+        parent.type == kind and parent.child_by_field_name(field) == node
+        for kind, field in _PY_DEFINING_FIELDS
+    )
+
+
 def _submodule(
     binding: ImportBinding, modules: "ModuleIndex", language: str, importer: str
 ) -> ModuleRef | None:
@@ -141,6 +256,11 @@ class ModuleIndex:
             matches = self._python_roots().get(ref.path, [])
             return _nearest(matches, importer)
         return self._first(_js_candidates(ref.path))
+
+    def has_python_module(self, ref: ModuleRef) -> bool:
+        """Whether any repo file is the absolute module ``ref``, under any
+        import root. Unlike :meth:`find`, two candidates are still a match."""
+        return ref.path in self._python_roots()
 
     def _first(self, candidates: Iterable[str]) -> str | None:
         return next((c for c in candidates if c in self._paths), None)

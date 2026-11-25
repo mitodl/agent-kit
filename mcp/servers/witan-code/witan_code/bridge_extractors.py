@@ -236,10 +236,25 @@ _TS_ENV = (
 # namespace child of `mitol`, so the importable name is the join key on both
 # sides (see `_python_package_providers`).
 _PY_NAMESPACE = "mitol"
+_PY_PKG_NAME = rf"{_PY_NAMESPACE}\.[a-z0-9_]+"
 _PY_PKG = re.compile(
-    rf"\b(?:from|import)\s+({_PY_NAMESPACE}\.[a-z0-9_]+)"
-    rf"|include\(\s*[\"']({_PY_NAMESPACE}\.[a-z0-9_]+)"
+    rf"\b(?:from|import)\s+({_PY_PKG_NAME})|include\(\s*[\"']({_PY_PKG_NAME})"
 )
+_PY_PKG_DOTTED = re.compile(rf"({_PY_PKG_NAME})(?:\.|$)")
+
+
+def consumed_package(dotted: str) -> str | None:
+    """The shared package a dotted Python name falls under, or ``None``.
+
+    The same package names the consumer bindings above are extracted for, so a
+    name under ``mitol.common`` gives ``mitol.common`` and a name outside the
+    shared namespaces gives ``None``. The indexer records cross-repo symbol
+    uses (``bridge.ExternalUse``) only for names this accepts.
+    """
+    match = _PY_PKG_DOTTED.match(dotted)
+    return match.group(1) if match else None
+
+
 _TS_PKG = re.compile(r"(?:from|require\()\s*[\"'](@mitodl/[A-Za-z0-9._-]+)")
 
 # Endpoint consumer path literals (string/template literals that look like API

@@ -107,7 +107,8 @@ _PENDING_CONTENT_HASH = "pending"
 #
 # 1: every row written before the version was recorded (`index_version` null).
 # 2: cross-file Calls edges through imports (#654, #674).
-INDEX_VERSION = 2
+# 3: uses of another repo's package names (ExternalUse rows in the bridge).
+INDEX_VERSION = 3
 
 
 class _StoredFile(NamedTuple):
@@ -324,6 +325,10 @@ class ParsedFile:
     import_bindings: dict[str, xref.ImportBinding] = field(default_factory=dict)
     # (enclosing_qualified_name, callee name chain), for the same languages
     call_chains: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+    # (line, name chain) for each load of a name imported from a shared
+    # package namespace (Python only); `_cross_file_records` keeps the ones
+    # whose module is not a file of this repo
+    name_uses: list[tuple[int, tuple[str, ...]]] = field(default_factory=list)
     # cross-repo interface bindings (env vars, packages, endpoints) in this file
     bindings: list[ParsedBinding] = field(default_factory=list)
 
@@ -768,7 +773,7 @@ def index_paths(
             stats.purged += 1
         touched_files.append(rel)
 
-    records += _cross_file_records(
+    cross_file, external_uses = _cross_file_records(
         client,
         parsed_files,
         base=base,
@@ -778,6 +783,7 @@ def index_paths(
         relink=None if force and full_repo else repo_root,
         stats=stats,
     )
+    records += cross_file
 
     with _write_phase(
         "delete of stale rows",
@@ -824,6 +830,7 @@ def index_paths(
             bindings,
             slug,
             cfg,
+            external_uses=external_uses,
             full_repo=full_repo,
             touched_files=tuple(touched_files),
             identity=package_map.load(base, slug),
@@ -1397,8 +1404,9 @@ def _cross_file_records(
     dropped: set[str],
     relink: Path | None,
     stats: IndexStats,
-) -> list[dict]:
-    """Calls/References edges from these files into other files of the repo.
+) -> tuple[list[dict], list[bridge_module.ExternalUse]]:
+    """Calls/References edges from these files into other files of the repo,
+    and the uses these files make of another repo's names.
 
     Resolved through each file's imports (:mod:`witan_code.xref`) against
     every file the store holds once this run lands: the ones parsed here, plus
@@ -1419,6 +1427,13 @@ def _cross_file_records(
     that changed on disk since it was indexed is skipped: its stored symbols no
     longer match a fresh parse, and its own reindex links it. A forced
     full-repo run passes ``None``, since it parses every caller anyway.
+
+    A use of another repo's name is a load of a name imported from a shared
+    package namespace (``bridge_extractors.consumed_package``) whose module is
+    no file of this repo, which is what tells a consumer's
+    ``from mitol.common.utils import now_in_utc`` from ol-django's own. Only
+    the parsed files' uses are returned, since only their stored uses are
+    purged (``bridge.write_bindings``); a re-linked file keeps its own.
     """
     prefix = f"{slug}#"
     batch = {p.path: p for p in parsed_files}
@@ -1488,7 +1503,25 @@ def _cross_file_records(
                 records.append(_edge("References", origin.id, target_id))
     records = _dedupe(records)
     stats.edges += len(records)
-    return records
+
+    uses: list[bridge_module.ExternalUse] = []
+    for parsed in parsed_files:
+        top_level = _top_level_names(parsed)
+        for line, chain in parsed.name_uses:
+            if chain[0] in top_level:
+                continue
+            binding = parsed.import_bindings[chain[0]]
+            uses.extend(
+                bridge_module.ExternalUse(
+                    file=parsed.path,
+                    line=line,
+                    symbol_id=_symbol_at_line(parsed, line),
+                    target=target,
+                    language=parsed.language,
+                )
+                for target in xref.external_names(chain, binding, modules)
+            )
+    return records, uses
 
 
 # The file types xref resolves imports in, for the relink's word search.
@@ -1587,6 +1620,19 @@ def _parse_file(
             parsed.imports.add(_node_text(node, raw))
     if spec.name in xref.LANGUAGES:
         parsed.import_bindings = xref.imports(spec.name, root, raw, rel)
+    if spec.name == "python":
+        absolute = {
+            name: binding
+            for name, binding in parsed.import_bindings.items()
+            if not binding.module.exact
+        }
+        parsed.name_uses = [
+            (line, chain)
+            for line, chain in xref.name_uses(root, raw, absolute)
+            if bridge_extractors.consumed_package(
+                xref.dotted_name(chain, absolute[chain[0]])
+            )
+        ]
 
     # Cross-repo interface bindings (env vars, packages, endpoint consumers).
     # Attribute each to its enclosing symbol by line containment.

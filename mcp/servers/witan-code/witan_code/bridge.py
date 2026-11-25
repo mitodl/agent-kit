@@ -6,6 +6,8 @@ and a bridge failure can't corrupt a per-repo store that already succeeded.
 """
 
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from witan_core import now_iso
@@ -17,6 +19,7 @@ from .bridge_extractors import (
     ParsedBinding,
     adjust_confidence,
     canonical_symbol,
+    consumed_package,
     parse_symbol,
 )
 from .graph import OmnigraphClient, check_writable
@@ -43,11 +46,24 @@ _PURGE_BATCH_SIZE = 128
 logger = get_logger("witan.code.bridge")
 
 
+@dataclass(frozen=True)
+class ExternalUse:
+    """One use of a name imported from another repo's package namespace: an
+    ``ExternalUse`` row (bridge-schema.pg). ``line`` is 1-based."""
+
+    file: str
+    line: int
+    symbol_id: str | None
+    target: str
+    language: str
+
+
 def write_bindings(
     bindings: list[ParsedBinding],
     repo: str,
     cfg: cfg_module.Config,
     *,
+    external_uses: Sequence[ExternalUse] = (),
     full_repo: bool,
     touched_files: tuple[str, ...] = (),
     identity: package_map.PackageIdentity | None = None,
@@ -96,10 +112,16 @@ def write_bindings(
     *checkouts* of the same repo apart. Both are needed and they compose in
     that order — actor first, so ownership stays a prefix of the name.
 
+    ``external_uses`` are the parsed files' uses of other repos' names. A
+    file's stored uses are replaced whenever its bindings would be: those in
+    the purge set, which covers a file that left the repo even when it never
+    carried a binding (``from mitol import common`` matches no package
+    consumer), because the files are read from the stored uses themselves.
+
     Returns the number of binding records written.
     """
     # Skip creating the store for a contract-less repo on its first index.
-    if not bindings and not bridge_store(cfg).exists(cfg):
+    if not bindings and not external_uses and not bridge_store(cfg).exists(cfg):
         return 0
 
     identity = identity or package_map.fallback_identity(repo)
@@ -137,6 +159,12 @@ def write_bindings(
     )
     repo_symbol_rows = _read_repo_symbols(client) if has_endpoint_consumers else []
 
+    # Only the files that hold uses get a delete for them: a delete costs about
+    # as much as the binding deletes below, and most files hold none.
+    use_files = {
+        r["file"]
+        for r in client.read("bridge.gq", "external_use_files", {"repo": repo})
+    }
     purge_files = set(touched_files) | {b.file for b in bindings}
     if full_repo and (indexed_files is not None or base is not None):
 
@@ -150,6 +178,7 @@ def write_bindings(
             for r in all_rows
             if r.get("repo") == repo and r.get("file") and _gone(r["file"])
         }
+        purge_files |= {rel for rel in use_files if _gone(rel)}
     # One commit for the whole purge, not one per file: this runs over every
     # touched file on each index, and a commit apiece fragments the bridge store
     # the same way the per-file deletes did the per-repo one. Chunked because a
@@ -169,6 +198,14 @@ def write_bindings(
             *(
                 ("bridge.gq", "delete_bindings_in_file", {"repo": repo, "file": rel})
                 for rel in sorted(purge_files)
+            ),
+            *(
+                (
+                    "bridge.gq",
+                    "delete_external_uses_in_file",
+                    {"repo": repo, "file": rel},
+                )
+                for rel in sorted(purge_files & use_files)
             ),
             ("bridge.gq", "delete_repo_symbols", {"repo": repo}),
         ],
@@ -254,8 +291,67 @@ def write_bindings(
     records.extend(_symbol_table_records(repo, surviving, adjusted))
     if full_repo:
         records.append(_package_map_record(identity, repo))
+    # Deduped apart from the bindings: two uses of one name on one line share
+    # a slug, and a load carrying a slug twice is refused whole.
+    records.extend(_dedupe([_external_use_record(u, repo) for u in external_uses]))
     client.load(records, mode="merge")
     return n_bindings
+
+
+def _external_use_record(use: ExternalUse, repo: str) -> dict:
+    return {
+        "type": "ExternalUse",
+        "data": {
+            "slug": f"{repo}|{use.file}|{use.line}|{use.target}",
+            "repo": repo,
+            "file": use.file,
+            "line": use.line,
+            "symbol_id": use.symbol_id,
+            "target": use.target,
+            "language": use.language,
+            "indexed_at": now_iso(),
+        },
+    }
+
+
+def imported_as(symbol_id: str) -> list[str]:
+    """Every dotted name another repo can import the definition ``symbol_id``
+    as, for matching ``ExternalUse.target``. Empty outside the shared package
+    namespaces.
+
+    The module path from the namespace root, and for a definition in a
+    package's submodule the package's too, because ol-django's packages
+    re-export their submodules (``mitol/common/utils/__init__.py`` star-imports
+    ``datetime``, so ``now_in_utc`` is imported as both
+    ``mitol.common.utils.datetime.now_in_utc`` and
+    ``mitol.common.utils.now_in_utc``). A module symbol (``::<module>``) is the
+    module's own dotted name.
+    """
+    _, _, rest = symbol_id.partition("#")
+    path, _, qualified_name = rest.partition("::")
+    stem, dot, suffix = path.rpartition(".")
+    if not dot or suffix not in ("py", "pyi") or not qualified_name:
+        return []
+    parts = stem.split("/")
+    package = parts[-1] == "__init__"
+    if package:
+        parts.pop()
+    module = next(
+        (
+            parts[start:]
+            for start in range(len(parts))
+            if consumed_package(".".join(parts[start:]))
+        ),
+        None,
+    )
+    if module is None:
+        return []
+    if qualified_name == "<module>":
+        return [".".join(module)]
+    names = [".".join((*module, qualified_name))]
+    if not package and consumed_package(".".join(module[:-1])):
+        names.append(".".join((*module[:-1], qualified_name)))
+    return names
 
 
 # Binding role → symbol-table role. Providers export contract surface;

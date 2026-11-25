@@ -130,6 +130,75 @@ def test_a_ts_import_of_the_repo_root_reaches_its_index(importer, spec, index):
         assert got == (index, member)
 
 
+# ── Uses of another repo's names, no store ────────────────────────
+
+USES = """\
+from mitol.common.utils import now_in_utc
+from mitol.common import models
+
+
+class Course(models.Base):
+    def stamp(self, now_in_utc=None, *, flag: int = 0):
+        return f(now_in_utc=now_in_utc)
+"""
+
+
+def _uses(files):
+    from witan_code import indexer
+
+    parsed = indexer._parse_file(
+        USES.encode(), None, indexer._EXT_TO_SPEC[".py"], REPO, "f", "app.py", "h"
+    )
+    modules = xref.ModuleIndex(files)
+    return [
+        (line, name)
+        for line, chain in parsed.name_uses
+        for name in xref.external_names(
+            chain, parsed.import_bindings[chain[0]], modules
+        )
+    ]
+
+
+def test_every_load_of_an_imported_name_is_a_use_and_naming_one_is_not():
+    """The base class counts, and so does each step down it, since nothing
+    here knows where the imported object ends. A parameter or keyword
+    argument named like the import is not a use; the value passed is."""
+    assert _uses({"app.py"}) == [
+        (5, "mitol.common.models"),
+        (5, "mitol.common.models.Base"),
+        (7, "mitol.common.utils.now_in_utc"),
+    ]
+
+
+def test_a_name_whose_module_is_in_the_repo_is_not_a_use_of_another_repo():
+    assert _uses({"app.py", "src/mitol/common/models.py"}) == [
+        (7, "mitol.common.utils.now_in_utc"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("symbol_id", "names"),
+    [
+        (
+            "r#src/common/mitol/common/utils/datetime.py::now_in_utc",
+            ["mitol.common.utils.datetime.now_in_utc", "mitol.common.utils.now_in_utc"],
+        ),
+        (
+            "r#src/mitol/common/models.py::Base.save",
+            ["mitol.common.models.Base.save", "mitol.common.Base.save"],
+        ),
+        ("r#src/mitol/common/__init__.py::thing", ["mitol.common.thing"]),
+        ("r#src/mitol/common/utils/__init__.py::<module>", ["mitol.common.utils"]),
+        ("r#app/views.py::f", []),
+        ("r#src/mitol/common/x.ts::f", []),
+    ],
+)
+def test_a_definition_is_imported_as_its_module_path_and_its_packages(symbol_id, names):
+    from witan_code import bridge
+
+    assert bridge.imported_as(symbol_id) == names
+
+
 # ── Through the indexer and code_callers ──────────────────────────
 
 B_PY = """\

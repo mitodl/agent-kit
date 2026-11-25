@@ -22,10 +22,13 @@ The features, from ADR 0012's feature map:
   actions.
 - Hover on a line holding an env var, endpoint, package or service binding:
   who provides and who consumes it, with repo, file and line.
-- Definition across indexed repos, and references within the definition's
-  repo (each repo's graph holds only its own edges). A location in a repo
-  that no workspace folder has checked out cannot be opened, so the hover
-  names it instead (repo, path and line).
+- Definition and references across indexed repos. References are the
+  definition repo's own edges, plus, for a definition in a shared package
+  namespace (``mitol.*``), its uses in other repos from the bridge. A
+  location in a repo that no workspace folder has checked out cannot be
+  opened, so the hover names it instead (repo, path and line): on the
+  identifier for a definition elsewhere, and on a definition's own line for
+  its uses elsewhere.
 - One Information diagnostic on line 0 when the folder's repo, or its branch,
   has no index.
 
@@ -511,13 +514,34 @@ class CodePlugin(Plugin):
         self, ctx: Context, uri: str, line: int, character: int
     ) -> Iterator[str]:
         """Definitions under the cursor that no workspace folder has checked
-        out, and their references: what ``definition`` and ``references``
-        cannot return as a location."""
+        out, and their references; or, on a definition's own line, its
+        references in repos no folder has checked out: what ``definition``
+        and ``references`` cannot return as a location.
+
+        Only on the definition's line for the second, so hovering a name
+        elsewhere does not read its references too."""
+        targets = self._targets(ctx, uri, line, character)
         away = [
             t
-            for t in self._targets(ctx, uri, line, character)
+            for t in targets
             if self._location(ctx, t["repo"], _rel(t), t["start_line"]) is None
         ]
+        rel = self._document(ctx, uri)
+        here = [
+            t
+            for t in targets
+            if (t["repo"], _rel(t), t["start_line"]) == (ctx.folder.repo, rel, line + 1)
+        ]
+        uses = [
+            (r["repo"], _rel(r), r["start_line"], r["qualified_name"])
+            for t in here
+            for r in self._references(ctx, t)
+            if self._location(ctx, r["repo"], _rel(r), r["start_line"]) is None
+        ]
+        if uses:
+            yield "Referenced from repos not open here:\n\n" + "\n".join(
+                self._listed(ctx, uses)
+            )
         if not away:
             return
         yield "Defined in a repo not open here:\n\n" + "\n".join(
