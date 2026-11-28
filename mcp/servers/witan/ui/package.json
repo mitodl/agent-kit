@@ -24,12 +24,12 @@
 		"vis-network": "^10.1.2"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.6.8",
+		"@biomejs/biome": "2.6.9",
 		"jsdom": "31.0.1",
 		"typescript": "7.0.2",
 		"vite": "8.3.8",
 		"vite-plugin-singlefile": "2.3.4",
-		"vitest": "5.1.1"
+		"vitest": "5.1.2"
 	},
 	"overrides": {
 		"zod": "^4.6.6"
